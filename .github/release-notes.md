@@ -1,67 +1,73 @@
-# PaperQuay 0.1.26-mikutea.1 — Unofficial fork test build
+# PaperQuay 0.1.26-mikutea.2 — Unofficial fork build
 
-> This is an unofficial modified build from the `mikutea/PaperQuay` fork. It contains the proposed changes from upstream PR [#20](https://github.com/WangQrkkk/PaperQuay/pull/20) and is not endorsed or authorized by the upstream PaperQuay maintainers. Use it for testing and manual installation only.
+> This is an unofficial modified build from the `mikutea/PaperQuay` fork. It is not endorsed by the upstream PaperQuay maintainers. Source review is tracked in the fork's [PR #1](https://github.com/mikutea/PaperQuay/pull/1); no new PR for this release is being submitted upstream.
 
 ## Downloads
 
-This fork release provides Windows x64 artifacts:
+Windows x64 artifacts:
 
 - `.exe`: NSIS installer
 - `.msi`: MSI installer
-- `.zip`: unpacked portable directory
+- `.zip`: portable directory whose root contains `PaperQuay.exe`
 - `SHA256SUMS.txt`: SHA-256 checksums for all three packages
+
+The binaries are not code-signed. Windows SmartScreen may show an unrecognized-app warning; verify the published SHA-256 before running them.
 
 ## Changes
 
-- MinerU batch parsing now discovers PDFs from the complete library instead of only papers already opened in Reader.
-- Reader preferences show the processable-PDF count, progress, status, and actionable errors.
-- Manual and automatic starts share a preflight lock, preventing duplicate batch uploads.
-- Native-library refreshes are authoritative, so deleted papers and stale attachment paths are excluded.
-- OCR fallback is reserved for empty structured output; authentication, network, timeout, HTTP 429, and server errors are not retried as OCR.
-- HTTP 429 stops the current run after in-flight work settles, and MinerU full-library concurrency is capped at 2.
-- Successful cache writes update library parsed status; cache-write failures are surfaced instead of counted as success.
+- MinerU batch parsing discovers every processable PDF in the authoritative local library, including papers not previously opened in Reader.
+- Adds an opt-in full-library English-to-Chinese translation action and an optional automatic pipeline: MinerU → overview → translation.
+- English detection fails closed for Chinese, non-English, bilingual, short, or ambiguous material.
+- Translation caches are bound to exact structured source fingerprints; stale and legacy caches are not reused as completed work.
+- Translation resumes completed blocks after cancellation or cache-write failure, preserves the active request result, and stops promptly while waiting for an RPM slot.
+- Shared request pacing, 429 stop behavior, progress, pause/cancel controls, and source-bound cache recovery are covered by regression tests.
+
+Personal device-to-device library synchronization is intentionally not an application feature and is not included in these binaries.
 
 ## Verification
 
-- TypeScript `--noEmit` check passed.
-- Full test suite passed: 182/182.
-- Production web build and Windows x64 Electron packaging passed.
+- Full test suite: 209/209 passed.
+- TypeScript check and production Vite build passed.
+- Windows x64 Electron packaging passed.
 
 ## Source and licensing
 
-Corresponding source is available at tag `app-v0.1.26-mikutea.1` in the [mikutea/PaperQuay fork](https://github.com/mikutea/PaperQuay). Original copyright and AGPL-3.0-only notices are retained. The PaperQuay name and branding remain subject to the upstream trademark notice.
+Corresponding source is available at tag `app-v0.1.26-mikutea.2` in the [mikutea/PaperQuay fork](https://github.com/mikutea/PaperQuay). Original copyright and AGPL-3.0-only notices are retained. The PaperQuay name and branding remain subject to the upstream trademark notice.
 
 ---
 
-# PaperQuay 0.1.26-mikutea.1 — 非官方 fork 测试构建
+# PaperQuay 0.1.26-mikutea.2 — 非官方 fork 构建
 
-> 这是 `mikutea/PaperQuay` fork 提供的非官方修改版，包含上游 PR [#20](https://github.com/WangQrkkk/PaperQuay/pull/20) 的候选修复，不代表 PaperQuay 上游维护者认可、授权或背书。仅建议用于测试和手动安装。
+> 这是 `mikutea/PaperQuay` fork 提供的非官方修改版，不代表 PaperQuay 上游维护者认可或背书。源码审查保留在 fork 内部 [PR #1](https://github.com/mikutea/PaperQuay/pull/1)；本版本不再向上游提交新的 PR。
 
 ## 下载
 
-本 fork Release 提供 Windows x64 构建：
+Windows x64 构建：
 
 - `.exe`：NSIS 安装包
 - `.msi`：MSI 安装包
-- `.zip`：免安装解压目录
+- `.zip`：根目录直接包含 `PaperQuay.exe` 的免安装版
 - `SHA256SUMS.txt`：上述三个包的 SHA-256 校验值
+
+这些二进制文件未做代码签名，Windows SmartScreen 可能提示“无法识别的应用”；运行前请核对发布页中的 SHA-256。
 
 ## 本次变更
 
-- MinerU 批处理改为读取完整文库 PDF，不再局限于阅读器中已经打开过的论文。
-- 设置页会显示可处理 PDF 数量、进度、状态与可操作错误，不再出现视觉上的“按钮无响应”。
-- 自动和手动启动共用预检互斥锁，避免重复提交同一批文献。
-- 文库刷新采用权威快照，已删除论文和旧附件路径不会重新进入批次。
-- OCR 回退仅用于结构化结果为空；认证、网络、超时、HTTP 429 和服务端错误不会误触发 OCR 重试。
-- HTTP 429 会在当前并发任务结束后停止本轮，全库 MinerU 并发安全上限为 2。
-- 缓存写入成功后同步文库解析状态；缓存写入失败会明确报错，不会被计为成功。
+- MinerU 批处理按权威本地文库发现全部可处理 PDF，包括此前未在阅读器中打开的论文。
+- 新增显式开启的全库英文论文中译，以及可选自动流水线：MinerU → 概览 → 翻译。
+- 语言门禁采用失败关闭策略，中文、其他外语、双语、短文本与歧义文本不会误送英文翻译。
+- 译文缓存绑定结构化正文源指纹，旧版或正文已变化的缓存不会被误当作已完成结果。
+- 取消或缓存写入失败后可从已完成块续传；当前请求返回结果会保留，RPM 等待中的取消会立即生效。
+- 共享请求限速、HTTP 429 停止、进度、暂停/取消和源绑定缓存恢复均有回归测试。
+
+两台个人设备之间的文献同步明确不是应用功能，也不包含在本软件二进制中。
 
 ## 验证
 
-- TypeScript `--noEmit` 检查通过。
-- 完整测试 182/182 通过。
-- 生产前端构建与 Windows x64 Electron 打包通过。
+- 完整测试 209/209 通过。
+- TypeScript 检查与生产 Vite 构建通过。
+- Windows x64 Electron 打包通过。
 
 ## 源码与许可
 
-对应源码位于 [mikutea/PaperQuay](https://github.com/mikutea/PaperQuay) 的 `app-v0.1.26-mikutea.1` 标签。保留原始版权与 AGPL-3.0-only 许可声明；PaperQuay 名称和品牌仍受上游商标说明约束。
+对应源码位于 [mikutea/PaperQuay](https://github.com/mikutea/PaperQuay) 的 `app-v0.1.26-mikutea.2` 标签。保留原始版权与 AGPL-3.0-only 许可声明；PaperQuay 名称和品牌仍受上游商标说明约束。
