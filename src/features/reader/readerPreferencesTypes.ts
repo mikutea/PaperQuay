@@ -38,6 +38,10 @@ export interface ReaderPreferencesWindowProps {
   zoteroApiKey: string;
   zoteroUserId: string;
   libraryLoading: boolean;
+  mineruBatchCandidateCount: number;
+  mineruBatchHydrating?: boolean;
+  statusMessage?: string;
+  errorMessage?: string;
   translating?: boolean;
   translatedCount?: number;
   onSettingChange: ReaderSettingsChangeHandler;

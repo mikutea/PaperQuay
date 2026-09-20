@@ -21,7 +21,7 @@ import {
   buildRagSourceOptions,
   buildSummaryLanguageOptions,
   buildSummarySourceOptions,
-  clampBatchConcurrency,
+  clampMineruBatchConcurrency,
   resolveModelPreset,
   type PreferencesSectionKey,
 } from './readerShared';
@@ -53,6 +53,10 @@ interface ReaderPreferencesContentProps
     | 'zoteroApiKey'
     | 'zoteroUserId'
     | 'libraryLoading'
+    | 'mineruBatchCandidateCount'
+    | 'mineruBatchHydrating'
+    | 'statusMessage'
+    | 'errorMessage'
     | 'translating'
     | 'onSettingChange'
     | 'onNativeLibrarySettingsChange'
@@ -206,6 +210,10 @@ export function ReaderPreferencesContent({
   zoteroApiKey,
   zoteroUserId,
   libraryLoading,
+  mineruBatchCandidateCount,
+  mineruBatchHydrating = false,
+  statusMessage = '',
+  errorMessage = '',
   translating = false,
   onSettingChange,
   onNativeLibrarySettingsChange,
@@ -620,6 +628,21 @@ export function ReaderPreferencesContent({
 
       {activeSection === 'mineru' ? (
         <>
+          {errorMessage ? (
+            <div
+              role="alert"
+              className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm leading-6 text-rose-700"
+            >
+              {errorMessage}
+            </div>
+          ) : statusMessage ? (
+            <div
+              role="status"
+              className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm leading-6 text-sky-700"
+            >
+              {statusMessage}
+            </div>
+          ) : null}
           <SettingsField
             label="MinerU API Token"
             description={
@@ -703,6 +726,14 @@ export function ReaderPreferencesContent({
             )}
           >
             <div className="space-y-3">
+              <div className="rounded-2xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-800">
+                {mineruBatchHydrating
+                  ? l('正在加载完整文库…', 'Loading the full library…')
+                  : l(
+                      `已发现 ${mineruBatchCandidateCount} 份可处理 PDF`,
+                      `${mineruBatchCandidateCount} processable PDFs found`,
+                    )}
+              </div>
               <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_140px]">
                 <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
                   <div className="text-sm font-medium text-slate-900">
@@ -710,21 +741,21 @@ export function ReaderPreferencesContent({
                   </div>
                   <div className="mt-1 text-xs leading-5 text-slate-500">
                     {l(
-                      '控制批量 MinerU 解析的并发度，数值过高可能导致限流或性能波动。',
-                      'Controls batch MinerU parse concurrency. Values that are too high may cause rate limits or unstable performance.',
+                      '控制批量 MinerU 解析的并发度；全库任务安全上限为 2。',
+                      'Controls batch MinerU parse concurrency; full-library runs are capped at 2 for safety.',
                     )}
                   </div>
                 </div>
                 <SettingsInput
                   type="number"
                   min={1}
-                  max={8}
+                  max={2}
                   step={1}
                   value={String(settings.libraryBatchConcurrency)}
                   onChange={(event) =>
                     onSettingChange(
                       'libraryBatchConcurrency',
-                      clampBatchConcurrency(Number(event.target.value)),
+                      clampMineruBatchConcurrency(Number(event.target.value)),
                     )
                   }
                 />
@@ -742,12 +773,20 @@ export function ReaderPreferencesContent({
                 <button
                   type="button"
                   onClick={onBatchMineruParse}
-                  disabled={batchMineruRunning}
+                  disabled={
+                    batchMineruRunning ||
+                    mineruBatchHydrating ||
+                    mineruBatchCandidateCount === 0
+                  }
                   className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-800 disabled:opacity-60"
                 >
                   {batchMineruRunning
                     ? l('处理中...', 'Processing...')
-                    : l('启动 MinerU 批量解析', 'Start MinerU Batch Parse')}
+                    : mineruBatchHydrating
+                      ? l('正在加载文库…', 'Loading library…')
+                      : mineruBatchCandidateCount === 0
+                        ? l('没有可处理的 PDF', 'No processable PDFs')
+                        : l('启动 MinerU 批量解析', 'Start MinerU Batch Parse')}
                 </button>
                 {batchMineruRunning ? (
                   <button

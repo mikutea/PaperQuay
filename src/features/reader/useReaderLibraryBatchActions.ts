@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { runMineruCloudParse } from '../../services/desktop';
 import { resolveSummaryOutputLanguage } from '../../services/summarySource';
 import { buildMineruCachePaths } from '../../utils/mineruCache';
+import { runMineruCloudParseWithOcrFallback } from './mineruOcrFallback';
 import {
   clampBatchConcurrency,
+  clampMineruBatchConcurrency,
+  buildAuthoritativeLibraryBatchItems,
   EMPTY_BATCH_PROGRESS,
   getAutoParseAttemptKey,
   getAutoSummaryAttemptKey,
+  isMineruRateLimitError,
   sleep,
   type BatchProgressState,
 } from './readerShared';
@@ -22,6 +25,7 @@ interface UseReaderLibraryBatchActionsOptions
     | 'generateLibraryPreview'
     | 'itemParseStatusMap'
     | 'l'
+    | 'loadLibraryBatchItems'
     | 'mineruApiToken'
     | 'saveLibraryMineruParseCache'
     | 'setError'
@@ -54,6 +58,7 @@ export function useReaderLibraryBatchActions({
   generateLibraryPreview,
   itemParseStatusMap,
   l,
+  loadLibraryBatchItems,
   mineruApiToken,
   saveLibraryMineruParseCache,
   setError,
@@ -65,6 +70,7 @@ export function useReaderLibraryBatchActions({
 }: UseReaderLibraryBatchActionsOptions): UseReaderLibraryBatchActionsResult {
   const autoMineruAttemptedRef = useRef<Set<string>>(new Set());
   const autoSummaryAttemptedRef = useRef<Set<string>>(new Set());
+  const batchMineruStartingRef = useRef(false);
   const batchMineruRunningRef = useRef(false);
   const batchSummaryRunningRef = useRef(false);
   const batchMineruPausedRef = useRef(false);
@@ -87,8 +93,15 @@ export function useReaderLibraryBatchActions({
     async (options?: { auto?: boolean }) => {
       const auto = options?.auto ?? false;
 
-      if (batchMineruRunningRef.current) {
+      if (batchMineruStartingRef.current || batchMineruRunningRef.current) {
         return;
+      }
+
+      batchMineruStartingRef.current = true;
+
+      if (!auto) {
+        setError('');
+        setStatusMessage(l('正在刷新完整文库…', 'Refreshing the full library…'));
       }
 
       if (!mineruApiToken.trim()) {
@@ -97,19 +110,37 @@ export function useReaderLibraryBatchActions({
           setError(l('缺少 MinerU API Token', 'MinerU API Token is missing'));
           setStatusMessage(l('缺少 MinerU API Token', 'MinerU API Token is missing'));
         }
+        batchMineruStartingRef.current = false;
         return;
       }
 
-      if (allKnownItems.length === 0) {
+      let batchItems = allKnownItems;
+
+      try {
+        const libraryItems = await loadLibraryBatchItems();
+        batchItems = buildAuthoritativeLibraryBatchItems(allKnownItems, libraryItems);
+      } catch (nextError) {
+        const message =
+          nextError instanceof Error
+            ? nextError.message
+            : l('加载批处理文库失败', 'Failed to load the library for batch processing');
+        setError(message);
+        setStatusMessage(message);
+        batchMineruStartingRef.current = false;
+        return;
+      }
+
+      if (batchItems.length === 0) {
         if (!auto) {
           setStatusMessage(
             l('当前没有可解析的文献', 'No documents are available for parsing'),
           );
         }
+        batchMineruStartingRef.current = false;
         return;
       }
 
-      const candidates = allKnownItems.filter((item) => {
+      const candidates = batchItems.filter((item) => {
         const attemptKey = getAutoParseAttemptKey(item);
         return !(auto && autoMineruAttemptedRef.current.has(attemptKey));
       });
@@ -123,12 +154,14 @@ export function useReaderLibraryBatchActions({
             ),
           );
         }
+        batchMineruStartingRef.current = false;
         return;
       }
 
-      const concurrency = clampBatchConcurrency(settings.libraryBatchConcurrency);
+      const concurrency = clampMineruBatchConcurrency(settings.libraryBatchConcurrency);
 
       batchMineruRunningRef.current = true;
+      batchMineruStartingRef.current = false;
       batchMineruPausedRef.current = false;
       batchMineruCancelRequestedRef.current = false;
       setBatchMineruRunning(true);
@@ -152,6 +185,7 @@ export function useReaderLibraryBatchActions({
       let completedCount = 0;
       let successCount = 0;
       let lastErrorMessage = '';
+      let rateLimited = false;
       let cursor = 0;
 
       const waitForResumeOrCancel = async () => {
@@ -215,6 +249,13 @@ export function useReaderLibraryBatchActions({
                   existingParse.path,
                   l('已复用已有的 MinerU 结果', 'Reused the existing MinerU result'),
                 );
+                if (item.source === 'native-library') {
+                  window.dispatchEvent(
+                    new CustomEvent('paperquay:native-mineru-status-updated', {
+                      detail: { paperId: item.itemKey, mineruParsed: true },
+                    }),
+                  );
+                }
                 existingCount += 1;
                 successCount += 1;
                 continue;
@@ -230,7 +271,7 @@ export function useReaderLibraryBatchActions({
               const cachePaths = settings.mineruCacheDir.trim()
                 ? buildMineruCachePaths(settings.mineruCacheDir.trim(), item)
                 : null;
-              const result = await runMineruCloudParse({
+              const parseResult = await runMineruCloudParseWithOcrFallback({
                 apiToken: mineruApiToken.trim(),
                 apiBaseUrl: settings.mineruApiBaseUrl,
                 pdfPath,
@@ -242,8 +283,17 @@ export function useReaderLibraryBatchActions({
                 isOcr: false,
                 timeoutSecs: 900,
                 pollIntervalSecs: 5,
+              }, () => {
+                if (!auto) {
+                  setStatusMessage(
+                    l(
+                      `普通解析未返回可用结构，正在以 OCR 重试：${currentLabel}`,
+                      `No usable structure was returned. Retrying with OCR: ${currentLabel}`,
+                    ),
+                  );
+                }
               });
-              const jsonText = result.contentJsonText ?? result.middleJsonText;
+              const { result, jsonText } = parseResult;
 
               if (!jsonText?.trim()) {
                 throw new Error(
@@ -265,7 +315,7 @@ export function useReaderLibraryBatchActions({
                 dataId: result.dataId,
                 fileName: result.fileName,
                 zipEntries: result.zipEntries,
-              }).catch(() => null);
+              });
 
               const resolvedJsonPath =
                 result.contentJsonPath ||
@@ -283,6 +333,13 @@ export function useReaderLibraryBatchActions({
                 : l('已完成 MinerU 解析', 'MinerU parsing finished');
 
               syncLibraryParsedState(item, jsonText, resolvedJsonPath, status);
+              if (item.source === 'native-library') {
+                window.dispatchEvent(
+                  new CustomEvent('paperquay:native-mineru-status-updated', {
+                    detail: { paperId: item.itemKey, mineruParsed: true },
+                  }),
+                );
+              }
               parsedCount += 1;
               successCount += 1;
             } catch (nextError) {
@@ -291,6 +348,10 @@ export function useReaderLibraryBatchActions({
                 nextError instanceof Error
                   ? nextError.message
                   : l('MinerU 解析失败', 'MinerU parsing failed');
+              if (isMineruRateLimitError(nextError)) {
+                rateLimited = true;
+                batchMineruCancelRequestedRef.current = true;
+              }
             } finally {
               completedCount += 1;
               autoMineruAttemptedRef.current.add(attemptKey);
@@ -318,7 +379,12 @@ export function useReaderLibraryBatchActions({
           skipped: skippedCount,
           failed: failedCount,
           currentLabel:
-            wasCancelled
+            rateLimited
+              ? l(
+                  `MinerU 触发限流，已停止本轮；已完成 ${completedCount}/${candidates.length}`,
+                  `MinerU rate limit reached; stopped this run after ${completedCount}/${candidates.length}`,
+                )
+              : wasCancelled
               ? l(
                   `MinerU 批处理已取消，已完成 ${completedCount}/${candidates.length}`,
                   `MinerU batch cancelled after ${completedCount}/${candidates.length}`,
@@ -338,7 +404,12 @@ export function useReaderLibraryBatchActions({
         }
 
         setStatusMessage(
-          batchMineruCancelRequestedRef.current
+          rateLimited
+            ? l(
+                `MinerU 触发限流，已停止本轮：新增 ${parsedCount}，复用 ${existingCount}，跳过 ${skippedCount}，失败 ${failedCount}`,
+                `MinerU rate limit reached; stopped this run: parsed ${parsedCount}, reused ${existingCount}, skipped ${skippedCount}, failed ${failedCount}`,
+              )
+            : batchMineruCancelRequestedRef.current
             ? l(
                 `MinerU 批处理已取消：新增 ${parsedCount}，复用 ${existingCount}，跳过 ${skippedCount}，失败 ${failedCount}`,
                 `MinerU batch cancelled: parsed ${parsedCount}, reused ${existingCount}, skipped ${skippedCount}, failed ${failedCount}`,
@@ -354,6 +425,7 @@ export function useReaderLibraryBatchActions({
       allKnownItems,
       findExistingMineruJson,
       l,
+      loadLibraryBatchItems,
       mineruApiToken,
       saveLibraryMineruParseCache,
       setError,
