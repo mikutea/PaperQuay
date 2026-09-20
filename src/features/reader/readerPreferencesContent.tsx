@@ -1133,8 +1133,8 @@ export function ReaderPreferencesContent({
           <SettingsField
             label={l('文库英文论文批量翻译', 'Batch Translate English Papers')}
             description={l(
-              '只处理已完成 MinerU 解析且正文可靠判定为英文的论文，固定翻译为中文；中文、语言不明确和已有完整中文缓存的论文会跳过。',
-              'Only MinerU-parsed papers whose body is confidently English are translated to Chinese; Chinese, uncertain-language, and fully cached papers are skipped.',
+              '逐篇串行处理已完成 MinerU 解析且正文可靠判定为英文的论文；每篇内部按“每批块数”合并请求，并发固定为 1。中文、语言不明确和已有完整中文缓存的论文会跳过并显示最近原因。',
+              'MinerU-parsed English papers are processed one at a time. Blocks within each paper are grouped by Blocks Per Batch with concurrency fixed at 1. Chinese, uncertain-language, and fully cached papers are skipped with the latest reason shown.',
             )}
           >
             <div className="space-y-3">
@@ -1246,7 +1246,10 @@ export function ReaderPreferencesContent({
                   }
                 />
                 <div className="text-[11px] leading-5 text-slate-400">
-                  {l('填 0 表示不限制，由软件直接发送请求。', 'Use 0 for unlimited requests.')}
+                  {l(
+                    '填 0 时，单篇手动翻译不限制；文库批量翻译自动使用安全上限 12 次/分钟。',
+                    'With 0, manual single-paper translation is unlimited; library batch translation uses a safe limit of 12 requests per minute.',
+                  )}
                 </div>
               </div>
             </div>
