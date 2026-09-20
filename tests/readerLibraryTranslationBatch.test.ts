@@ -1,11 +1,41 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { classifyStructuredDocumentLanguage } from '../src/features/reader/readerLibraryTranslationBatch.ts';
+import {
+  classifyStructuredDocumentLanguage,
+  resolveLibraryTranslationExecutionOptions,
+  SAFE_LIBRARY_TRANSLATION_REQUESTS_PER_MINUTE,
+} from '../src/features/reader/readerLibraryTranslationBatch.ts';
 
 function repeat(value: string, count: number): string {
   return Array.from({ length: count }, () => value).join(' ');
 }
+
+test('library translation is sequential per paper while batching blocks per request', () => {
+  assert.deepEqual(
+    resolveLibraryTranslationExecutionOptions({
+      translationBatchSize: 10,
+      translationRequestsPerMinute: 0,
+    }),
+    {
+      batchSize: 10,
+      concurrency: 1,
+      requestsPerMinute: SAFE_LIBRARY_TRANSLATION_REQUESTS_PER_MINUTE,
+    },
+  );
+
+  assert.deepEqual(
+    resolveLibraryTranslationExecutionOptions({
+      translationBatchSize: 25,
+      translationRequestsPerMinute: 30,
+    }),
+    {
+      batchSize: 25,
+      concurrency: 1,
+      requestsPerMinute: 30,
+    },
+  );
+});
 
 test('English structured text is eligible for the English-to-Chinese library batch', () => {
   const evidence = classifyStructuredDocumentLanguage({

@@ -9,6 +9,7 @@ import { createTranslationRequestRateLimiter } from './readerTranslation';
 import { buildTranslationSourceMetadata } from './readerTranslationSource';
 import {
   getAutoEnglishTranslationAttemptKey,
+  resolveLibraryTranslationExecutionOptions,
   type LibraryTranslationRunOptions,
   type LibraryTranslationRunResult,
 } from './readerLibraryTranslationBatch';
@@ -641,8 +642,12 @@ export function useReaderLibraryBatchActions({
         return;
       }
 
+      const translationExecutionOptions = resolveLibraryTranslationExecutionOptions({
+        translationBatchSize: settings.translationBatchSize,
+        translationRequestsPerMinute: settings.translationRequestsPerMinute,
+      });
       const waitForTranslationRequestSlot = createTranslationRequestRateLimiter(
-        settings.translationRequestsPerMinute,
+        translationExecutionOptions.requestsPerMinute,
       );
       const rateLimitAbortController = new AbortController();
       batchTranslationRateLimitAbortControllerRef.current?.abort();
@@ -670,6 +675,7 @@ export function useReaderLibraryBatchActions({
       let skippedCount = 0;
       let failedCount = 0;
       let rateLimited = false;
+      let lastSkippedReason = '';
 
       const waitForResumeOrCancel = async () => {
         while (
@@ -693,6 +699,7 @@ export function useReaderLibraryBatchActions({
           skipped: skippedCount,
           failed: failedCount,
           currentLabel,
+          lastSkippedReason,
         });
       };
 
@@ -718,10 +725,10 @@ export function useReaderLibraryBatchActions({
 
           try {
             const result = await runLibraryItemTranslation(item, {
-              batchSize: 1,
+              batchSize: translationExecutionOptions.batchSize,
               beforeRequest: () =>
                 waitForTranslationRequestSlot(rateLimitAbortController.signal),
-              concurrency: 1,
+              concurrency: translationExecutionOptions.concurrency,
               englishOnly: true,
               quiet: true,
               sourceLanguage: 'English',
@@ -732,8 +739,11 @@ export function useReaderLibraryBatchActions({
 
             if (result.status === 'success') {
               succeededCount += 1;
-            } else if (result.status === 'skipped' || result.status === 'cancelled') {
+            } else if (result.status === 'skipped') {
               skippedCount += 1;
+              lastSkippedReason = result.message;
+            } else if (result.status === 'cancelled') {
+              batchTranslationCancelRequestedRef.current = true;
             } else {
               failedCount += 1;
             }
@@ -779,6 +789,7 @@ export function useReaderLibraryBatchActions({
           succeeded: succeededCount,
           skipped: skippedCount,
           failed: failedCount,
+          lastSkippedReason,
           currentLabel: rateLimited
             ? l(
                 `翻译服务触发 429 限流，已停止本轮；已完成 ${completedCount}/${candidates.length}`,
@@ -828,6 +839,7 @@ export function useReaderLibraryBatchActions({
       setPreferencesOpen,
       setStatusMessage,
       settings.translationRequestsPerMinute,
+      settings.translationBatchSize,
       translationConfigurationKey,
       translationConfigured,
     ],

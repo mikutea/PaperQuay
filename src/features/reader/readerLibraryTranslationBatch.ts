@@ -41,6 +41,36 @@ export interface LibraryTranslationRunOptions {
   waitForResumeOrCancel?: () => Promise<boolean>;
 }
 
+export const SAFE_LIBRARY_TRANSLATION_REQUESTS_PER_MINUTE = 12;
+
+export function resolveLibraryTranslationExecutionOptions({
+  translationBatchSize,
+  translationRequestsPerMinute,
+}: {
+  translationBatchSize: number;
+  translationRequestsPerMinute: number;
+}): {
+  batchSize: number;
+  concurrency: 1;
+  requestsPerMinute: number;
+} {
+  const normalizedBatchSize = Number.isFinite(translationBatchSize)
+    ? Math.trunc(translationBatchSize)
+    : 10;
+  const normalizedRequestsPerMinute = Number.isFinite(translationRequestsPerMinute)
+    ? Math.trunc(translationRequestsPerMinute)
+    : 0;
+
+  return {
+    batchSize: Math.min(50, Math.max(1, normalizedBatchSize)),
+    concurrency: 1,
+    requestsPerMinute:
+      normalizedRequestsPerMinute > 0
+        ? Math.min(600, normalizedRequestsPerMinute)
+        : SAFE_LIBRARY_TRANSLATION_REQUESTS_PER_MINUTE,
+  };
+}
+
 const HAN_CHARACTER_PATTERN = /\p{Script=Han}/gu;
 const LATIN_CHARACTER_PATTERN = /\p{Script=Latin}/gu;
 const LATIN_WORD_PATTERN = /\p{Script=Latin}+(?:['’\-]\p{Script=Latin}+)*/gu;

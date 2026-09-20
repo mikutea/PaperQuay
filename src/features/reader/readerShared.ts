@@ -598,6 +598,7 @@ export interface BatchProgressState {
   skipped: number;
   failed: number;
   currentLabel: string;
+  lastSkippedReason?: string;
 }
 
 export interface MineruCacheManifest {

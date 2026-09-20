@@ -112,6 +112,12 @@ export function BatchProgressCard({
       {progress.currentLabel ? (
         <div className="mt-2 truncate text-xs text-slate-500">{progress.currentLabel}</div>
       ) : null}
+      {progress.lastSkippedReason ? (
+        <div className="mt-1 text-xs leading-5 text-amber-700 dark:text-amber-300">
+          {pickLocaleText(locale, '最近跳过原因：', 'Latest skip reason: ')}
+          {progress.lastSkippedReason}
+        </div>
+      ) : null}
     </div>
   );
 }
