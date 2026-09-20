@@ -1,57 +1,69 @@
-# PaperQuay v{{VERSION}}
+# PaperQuay 0.1.26-mikutea.3 — Unofficial integrated fork build
 
-PaperQuay is an open-source AI paper workspace for literature management, PDF reading, paper overview generation, full-text translation, inline notes, Zotero import, Agent workflows, and local RAG.
+> This is an unofficial modified build from the `mikutea/PaperQuay` fork. It is not endorsed by the upstream PaperQuay maintainers. The fork integration branch and `main` combine the fixes proposed upstream in PRs [#18](https://github.com/WangQrkkk/PaperQuay/pull/18), [#19](https://github.com/WangQrkkk/PaperQuay/pull/19), and [#20](https://github.com/WangQrkkk/PaperQuay/pull/20).
 
 ## Downloads
 
-Download the native installer for your operating system from the Assets section below.
+Windows x64 artifacts:
 
-| Platform | Recommended asset |
-| --- | --- |
-| Windows | `.exe` installer or `.msi` package |
-| macOS | `.dmg` package for Apple Silicon or Intel |
-| Linux | Electron desktop package such as `.AppImage`, `.deb`, or `.tar.gz` |
+- `.exe`: NSIS installer
+- `.msi`: MSI installer
+- `.zip`: portable directory whose root contains `PaperQuay.exe`
+- `SHA256SUMS.txt`: SHA-256 checksums for all three packages
 
-## Highlights
+The binaries are not code-signed. Windows SmartScreen may show an unrecognized-app warning; verify the published SHA-256 before running them.
 
-- Per-paper AI conversations now survive app restarts. The active session and preset are restored, and tab switches or app shutdown flush pending history without replacing it with an empty session.
-- Full-document translations now persist reliably across restarts, including when a custom MinerU cache directory is used. Cache writes are serialized and atomic, and storage failures are shown instead of being silently ignored.
-- WebDAV backup is substantially more reliable: Nutstore-friendly request pacing, `Retry-After` handling, transient-error retries, streamed uploads, adaptive timeouts, detailed failed-object reporting, progress updates, and cleanup of temporary snapshots.
-- Review Word export now supports editable OMML equations, localized Chinese/English headings, correct first-line indentation, richer references, missing-image fallbacks, and figures placed alongside relevant model-generated content.
-- Review generation now keeps completed sections when another writing task fails, reports failed tasks individually, and processes the full queued workload before offering resume.
+## Integrated fixes
 
-## Notes
+- Restores readable MinerU structured-reading content in dark mode by removing the light radial background image and applying explicit dark text colors to lists and table captions.
+- Adds optional `query: ` / `passage: ` embedding input prefixes across Reader QA, Agent context, semantic reranking, and indexed RAG content while preserving plain-text compatibility by default.
+- Runs MinerU batches against every processable PDF in the authoritative library, including papers that have not previously been opened in Reader.
+- Adds opt-in, resumable English-to-Chinese full-library translation with conservative language detection, source-bound caches, shared rate limiting, and pause/cancel/progress controls.
 
-- AI features require your own compatible model endpoint and API key in Settings.
-- WebDAV has no universal cross-provider byte-range resume protocol. PaperQuay now streams files and retries at object level so interrupted jobs can continue without re-uploading completed objects on the next backup.
-- Release assets are generated automatically by GitHub Actions.
+Personal device-to-device library synchronization is intentionally not an application feature and is not included in these binaries.
+
+## Verification
+
+- Full test suite: 216/216 passed on the integrated commit graph.
+- TypeScript check and production Vite build passed.
+- Windows x64 Electron packaging is performed by the release workflow before publication.
+
+## Source and licensing
+
+Corresponding source is available at tag `app-v0.1.26-mikutea.3` in the [mikutea/PaperQuay fork](https://github.com/mikutea/PaperQuay). Original copyright and AGPL-3.0-only notices are retained. The PaperQuay name and branding remain subject to the upstream trademark notice.
 
 ---
 
-# PaperQuay v{{VERSION}} 中文说明
+# PaperQuay 0.1.26-mikutea.3 — 非官方集成版
 
-PaperQuay 是一个开源 AI 论文工作台，覆盖文献管理、PDF 阅读、论文概览生成、全文翻译、内联笔记、Zotero 导入、Agent 工作流和本地 RAG。
+> 这是 `mikutea/PaperQuay` fork 提供的非官方修改版，不代表 PaperQuay 上游维护者认可或背书。fork 的集成分支与 `main` 同时包含向上游提交的 [#18](https://github.com/WangQrkkk/PaperQuay/pull/18)、[#19](https://github.com/WangQrkkk/PaperQuay/pull/19) 和 [#20](https://github.com/WangQrkkk/PaperQuay/pull/20) 三项修复。
 
-## 下载说明
+## 下载
 
-请在下方 Assets 区域选择与你的操作系统对应的安装包。
+Windows x64 构建：
 
-| 平台 | 推荐安装包 |
-| --- | --- |
-| Windows | `.exe` 安装包或 `.msi` 安装包 |
-| macOS | Apple Silicon 或 Intel 对应的 `.dmg` 安装包 |
-| Linux | `.AppImage`、`.deb` 或 `.tar.gz` 桌面安装包 |
+- `.exe`：NSIS 安装包
+- `.msi`：MSI 安装包
+- `.zip`：根目录直接包含 `PaperQuay.exe` 的免安装版
+- `SHA256SUMS.txt`：上述三个包的 SHA-256 校验值
 
-## 本次更新
+这些二进制文件未做代码签名，Windows SmartScreen 可能提示“无法识别的应用”；运行前请核对发布页中的 SHA-256。
 
-- 文献问答会话现在会按论文持久化保存，重启软件后可恢复当前会话、历史对话和预设；切换标签页或退出时会及时落盘，不再被空白“新对话”覆盖。
-- 全文翻译结果可在重启后可靠恢复，包括使用自定义 MinerU 缓存目录的场景；缓存改为串行原子写入，读写失败会明确提示，不再静默丢失。
-- WebDAV 备份可靠性显著提升：针对坚果云限制进行请求节流，支持 `Retry-After`、瞬时错误重试、流式上传、自适应超时、失败对象与服务端响应明细、进度反馈，以及异常后的临时快照清理。
-- 综述 Word 导出支持可编辑 OMML 公式、中英文节标题、正确首行缩进、更完整的参考文献信息、缺图容错，并可把图片插入模型生成的相关正文位置。
-- 综述生成任务不再因单项失败而中止队列；已完成章节会保留，失败任务会单独上报，全部排队任务处理后仍可继续生成。
+## 集成修复
 
-## 备注
+- 深色模式下移除 MinerU 结构化阅读区遗留的浅色径向背景，并为列表和表格标题补充明确的深色文字样式，恢复正文可读性。
+- 为 Reader 问答、Agent 上下文、语义重排和 RAG 索引增加可选的 `query: ` / `passage: ` 向量输入前缀；默认仍保持原有纯文本兼容模式。
+- MinerU 批处理按权威本地文库发现全部可处理 PDF，包括此前未在阅读器中打开的论文。
+- 新增显式开启、可续跑的全库英文论文中译，并提供保守语言识别、源指纹缓存、共享限速、进度与暂停/取消控制。
 
-- AI 功能需要在设置中自行配置兼容模型接口和 API Key。
-- WebDAV 没有跨服务商统一的分块断点续传协议。本版本采用流式上传与对象级重试，后续备份可跳过已完成且未变化的对象。
-- Release 资源由 GitHub Actions 自动生成。
+两台个人设备之间的文献同步明确不是应用功能，也不包含在本软件二进制中。
+
+## 验证
+
+- 集成提交图上的完整测试 216/216 通过。
+- TypeScript 检查与生产 Vite 构建通过。
+- Windows x64 Electron 打包由发行工作流完成，并在发布前作为门禁。
+
+## 源码与许可
+
+对应源码位于 [mikutea/PaperQuay](https://github.com/mikutea/PaperQuay) 的 `app-v0.1.26-mikutea.3` 标签。保留原始版权与 AGPL-3.0-only 许可声明；PaperQuay 名称和品牌仍受上游商标说明约束。

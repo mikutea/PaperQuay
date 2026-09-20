@@ -49,6 +49,20 @@ test("English-library auto translation remains opt-in", async () => {
   );
 });
 
+test("embedding input format defaults to plain and accepts query-passage", async () => {
+  const { normalizeReaderSettings } = await loadReaderShared();
+
+  assert.equal(normalizeReaderSettings().embeddingInputFormat, "plain");
+  assert.equal(
+    normalizeReaderSettings({ embeddingInputFormat: "query-passage" }).embeddingInputFormat,
+    "query-passage",
+  );
+  assert.equal(
+    normalizeReaderSettings({ embeddingInputFormat: "unsupported" as never }).embeddingInputFormat,
+    "plain",
+  );
+});
+
 test("normalizeReaderSettings migrates review writing model preset from overview preset", async () => {
   const { normalizeReaderSettings } = await loadReaderShared();
   const settings = normalizeReaderSettings({
