@@ -70,15 +70,21 @@ export interface ReaderPreferencesWindowProps {
   onCancelTranslate?: (() => void) | null;
   onClearTranslations?: (() => void) | null;
   onBatchMineruParse: () => void;
+  onBatchTranslateEnglish: () => void;
   onBatchGenerateSummaries: () => void;
   onToggleBatchMineruPause: () => void;
   onCancelBatchMineru: () => void;
+  onToggleBatchTranslationPause: () => void;
+  onCancelBatchTranslation: () => void;
   onToggleBatchSummaryPause: () => void;
   onCancelBatchSummary: () => void;
   batchMineruRunning?: boolean;
+  batchTranslationRunning?: boolean;
   batchSummaryRunning?: boolean;
   batchMineruPaused?: boolean;
+  batchTranslationPaused?: boolean;
   batchSummaryPaused?: boolean;
   batchMineruProgress: BatchProgressState;
+  batchTranslationProgress: BatchProgressState;
   batchSummaryProgress: BatchProgressState;
 }

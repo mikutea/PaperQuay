@@ -468,12 +468,17 @@ function Reader({ workspaceActive = true }: ReaderProps) {
     batchMineruPaused,
     batchMineruProgress,
     batchMineruRunning,
+    batchTranslationPaused,
+    batchTranslationProgress,
+    batchTranslationRunning,
     batchSummaryPaused,
     batchSummaryProgress,
     batchSummaryRunning,
     handleBatchGenerateSummaries,
     handleBatchMineruParse,
+    handleBatchTranslateEnglish,
     handleCancelBatchMineru,
+    handleCancelBatchTranslation,
     handleCancelBatchSummary,
     handleNativeLibraryGenerateSummary,
     handleNativeLibraryMineruParse,
@@ -485,6 +490,7 @@ function Reader({ workspaceActive = true }: ReaderProps) {
     handleListLlmModels,
     handleTestLlmConnection,
     handleToggleBatchMineruPause,
+    handleToggleBatchTranslationPause,
     handleToggleBatchSummaryPause,
     handleWindowClose,
     handleWindowMinimize,
@@ -1005,16 +1011,22 @@ function Reader({ workspaceActive = true }: ReaderProps) {
           onCancelTranslate={activeReaderBridge?.onCancelTranslate}
           onClearTranslations={activeReaderBridge?.onClearTranslations}
           onBatchMineruParse={() => void handleBatchMineruParse()}
+          onBatchTranslateEnglish={() => void handleBatchTranslateEnglish()}
           onBatchGenerateSummaries={() => void handleBatchGenerateSummaries()}
           onToggleBatchMineruPause={handleToggleBatchMineruPause}
           onCancelBatchMineru={handleCancelBatchMineru}
+          onToggleBatchTranslationPause={handleToggleBatchTranslationPause}
+          onCancelBatchTranslation={handleCancelBatchTranslation}
           onToggleBatchSummaryPause={handleToggleBatchSummaryPause}
           onCancelBatchSummary={handleCancelBatchSummary}
           batchMineruRunning={batchMineruRunning}
+          batchTranslationRunning={batchTranslationRunning}
           batchSummaryRunning={batchSummaryRunning}
           batchMineruPaused={batchMineruPaused}
+          batchTranslationPaused={batchTranslationPaused}
           batchSummaryPaused={batchSummaryPaused}
           batchMineruProgress={batchMineruProgress}
+          batchTranslationProgress={batchTranslationProgress}
           batchSummaryProgress={batchSummaryProgress}
         />
       </div>

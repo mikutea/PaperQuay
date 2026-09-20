@@ -176,6 +176,7 @@ export const DEFAULT_SETTINGS: ReaderSettings = {
   uiLanguage: 'zh-CN',
   autoLoadSiblingJson: false,
   autoMineruParse: false,
+  autoTranslateEnglishLibrary: false,
   autoGenerateSummary: false,
   localRagEnabled: true,
   localRagTopK: 6,
@@ -582,6 +583,8 @@ export interface TranslationCacheEnvelope {
   targetLanguage: string;
   translatedAt: string;
   translations: TranslationMap;
+  sourceFingerprint?: string;
+  blockSourceFingerprints?: Record<string, string>;
 }
 
 export interface BatchProgressState {
@@ -758,6 +761,7 @@ export function normalizeReaderSettings(value?: Partial<ReaderSettings> | null):
   return {
     ...merged,
     uiLanguage: merged.uiLanguage === 'en-US' ? 'en-US' : 'zh-CN',
+    autoTranslateEnglishLibrary: merged.autoTranslateEnglishLibrary === true,
     localRagEnabled: merged.localRagEnabled !== false,
     localRagTopK: clampLocalRagTopK(merged.localRagTopK),
     ragSourceMode: normalizeRagSourceMode(merged.ragSourceMode),
