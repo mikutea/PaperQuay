@@ -27,3 +27,14 @@ test('Windows packages include the runtime dependency and sandbox ACL installer 
   assert.match(installerScript, /icacls\.exe/i);
   assert.doesNotMatch(installerScript, /(?:disable-gpu-sandbox|no-sandbox)/i);
 });
+
+test('release workflow verifies the ASAR and publishes updater-compatible Windows assets', () => {
+  const workflow = fs.readFileSync(
+    path.join(projectRoot, '.github', 'workflows', 'release.yml'),
+    'utf8',
+  );
+
+  assert.match(workflow, /electron:verify-package/);
+  assert.match(workflow, /win-x64-portable\.zip/);
+  assert.match(workflow, /SHA256SUMS\.txt/);
+});
