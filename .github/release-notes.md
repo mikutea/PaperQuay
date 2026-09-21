@@ -27,7 +27,7 @@ Personal device-to-device library synchronization is intentionally not an applic
 
 ## Verification
 
-- Full test suite: 212/212 passed on the integrated commit graph.
+- Full test suite: 213/213 passed on the integrated commit graph.
 - TypeScript check and production Vite build passed.
 - Windows x64 Electron packaging and packaged-runtime smoke verification are performed by the release workflow before publication.
 
@@ -66,7 +66,7 @@ Windows x64 构建：
 
 ## 验证
 
-- 集成提交图上的完整测试 212/212 通过。
+- 集成提交图上的完整测试 213/213 通过。
 - TypeScript 检查与生产 Vite 构建通过。
 - Windows x64 Electron 打包与发行物运行时烟雾测试由发行工作流完成，并在发布前作为门禁。
 
