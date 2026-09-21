@@ -1,7 +1,7 @@
 {
   "name": "paperquay",
   "private": true,
-  "version": "0.1.26-mikutea.4",
+  "version": "0.1.26-mikutea.5",
   "description": "AI-assisted desktop literature reader and library manager.",
   "author": {
     "name": "PaperQuay Developers",
@@ -15,6 +15,7 @@
     "dev": "node electron/dev.cjs",
     "electron:dev": "node electron/dev.cjs",
     "build": "tsc && vite build",
+    "electron:verify-package": "node electron/verifyPackagedApp.cjs",
     "preview": "vite preview --host 127.0.0.1 --port 4173",
     "electron:build": "npm run build && node electron/build.cjs"
   },
@@ -52,6 +53,7 @@
     "temml": "^0.13.3"
   },
   "devDependencies": {
+    "@electron/asar": "^3.4.1",
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
@@ -126,6 +128,7 @@
       "node_modules/lodash.escaperegexp/**/*",
       "node_modules/lodash.isequal/**/*",
       "node_modules/mathml2omml/**/*",
+      "node_modules/pako/**/*",
       "node_modules/pizzip/**/*",
       "node_modules/temml/**/*",
       "node_modules/@xmldom/xmldom/**/*",
@@ -158,6 +161,7 @@
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
+      "include": "packaging/windows/installer.nsh",
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "PaperQuay"

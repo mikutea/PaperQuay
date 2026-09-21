@@ -158,6 +158,37 @@ jobs:
           set -o pipefail
           node electron/build.cjs ${{ matrix.args }} 2>&1 | tee electron-build.log
 
+      - name: Verify packaged runtime dependencies
+        shell: bash
+        run: |
+          asar_path="$(find release -type f -name app.asar -print -quit)"
+          test -n "$asar_path"
+          npm run electron:verify-package -- "$asar_path"
+
+      - name: Build Windows portable archive and checksums
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $version = '${{ needs.create-release.outputs.version }}'
+          $portableName = "PaperQuay-$version-win-x64-portable.zip"
+          Compress-Archive -Path 'release/win-unpacked/*' -DestinationPath "release/$portableName" -CompressionLevel Optimal
+
+          $assets = Get-ChildItem -LiteralPath release -File | Where-Object {
+            $_.Extension -in @('.exe', '.msi', '.zip')
+          } | Sort-Object Name
+          if ($assets.Count -lt 3) {
+            throw 'Windows release did not produce the installer, MSI, and portable ZIP assets.'
+          }
+
+          $checksumLines = foreach ($asset in $assets) {
+            '{0}  {1}' -f (Get-FileHash -Algorithm SHA256 -LiteralPath $asset.FullName).Hash.ToLowerInvariant(), $asset.Name
+          }
+          [System.IO.File]::WriteAllLines(
+            (Join-Path $PWD 'release/SHA256SUMS.txt'),
+            $checksumLines,
+            [System.Text.UTF8Encoding]::new($false)
+          )
+
       - name: Report Electron build failure
         if: failure()
         shell: bash
@@ -191,6 +222,7 @@ jobs:
             release/*.deb
             release/*.tar.gz
             release/*.blockmap
+            release/SHA256SUMS.txt
             release/stable*.yml
           if-no-files-found: error
 
@@ -212,6 +244,7 @@ jobs:
               /\.deb$/i,
               /\.tar\.gz$/i,
               /\.blockmap$/i,
+              /^SHA256SUMS\.txt$/i,
               /^stable.*\.yml$/i,
             ];
 
