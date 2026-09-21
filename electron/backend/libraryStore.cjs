@@ -9,8 +9,33 @@ const SYSTEM_CATEGORIES = [
   ['system-favorites', 'Favorites', 'favorites', 3],
 ];
 
-function createAppPaths(app) {
-  const dataDir = path.join(app.getPath('userData'), 'PaperQuay');
+function resolveAppDataDir(app, runtime = {}) {
+  const env = runtime.env ?? process.env;
+  const platform = runtime.platform ?? process.platform;
+  const pathApi = platform === 'win32' ? path.win32 : path;
+  const configuredDataDir = String(env.PAPERQUAY_DATA_DIR ?? '').trim();
+
+  if (configuredDataDir) {
+    return pathApi.resolve(configuredDataDir);
+  }
+
+  if (app.isPackaged && platform === 'win32') {
+    const executableDir = pathApi.dirname(app.getPath('exe'));
+
+    // The maintained Windows deployment uses <root>\App\PaperQuay.exe and
+    // keeps its durable state in the sibling <root>\Data directory. Resolve
+    // that layout before userData so --user-data-dir cannot accidentally
+    // produce <root>\Data\PaperQuay and hide the real library/configuration.
+    if (pathApi.basename(executableDir).toLowerCase() === 'app') {
+      return pathApi.join(pathApi.dirname(executableDir), 'Data');
+    }
+  }
+
+  return pathApi.join(app.getPath('userData'), 'PaperQuay');
+}
+
+function createAppPaths(app, runtime) {
+  const dataDir = resolveAppDataDir(app, runtime);
 
   return {
     dataDir,
@@ -256,6 +281,7 @@ module.exports = {
   normalizeAuthor,
   normalizeTag,
   paperMatches,
+  resolveAppDataDir,
   sortPapers,
   webdavView,
 };

@@ -100,6 +100,9 @@ export function BatchProgressCard({
       </div>
       <div className="mt-2 flex flex-wrap gap-3 text-xs text-slate-500">
         <span>{pickLocaleText(locale, `成功 ${progress.succeeded}`, `Succeeded ${progress.succeeded}`)}</span>
+        {progress.reused ? (
+          <span>{pickLocaleText(locale, `复用 ${progress.reused}`, `Reused ${progress.reused}`)}</span>
+        ) : null}
         <span>{pickLocaleText(locale, `跳过 ${progress.skipped}`, `Skipped ${progress.skipped}`)}</span>
         <span>{pickLocaleText(locale, `失败 ${progress.failed}`, `Failed ${progress.failed}`)}</span>
         {progress.paused ? (

@@ -11,14 +11,14 @@ function repeat(value: string, count: number): string {
   return Array.from({ length: count }, () => value).join(' ');
 }
 
-test('library translation is sequential per paper while batching blocks per request', () => {
+test('library translation is sequential and checkpoints every model request', () => {
   assert.deepEqual(
     resolveLibraryTranslationExecutionOptions({
       translationBatchSize: 10,
       translationRequestsPerMinute: 0,
     }),
     {
-      batchSize: 10,
+      batchSize: 1,
       concurrency: 1,
       requestsPerMinute: SAFE_LIBRARY_TRANSLATION_REQUESTS_PER_MINUTE,
     },
@@ -30,7 +30,7 @@ test('library translation is sequential per paper while batching blocks per requ
       translationRequestsPerMinute: 30,
     }),
     {
-      batchSize: 25,
+      batchSize: 1,
       concurrency: 1,
       requestsPerMinute: 30,
     },

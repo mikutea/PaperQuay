@@ -17,6 +17,7 @@ const {
 const { formatEmbeddingInput } = require('./embeddingInput.cjs');
 
 const TEST_MODEL_TIMEOUT_MS = 20_000;
+const TRANSLATION_REQUEST_TIMEOUT_MS = 10 * 60_000;
 
 const REQUEST_PAPER_CONTEXT_TOOL_NAME = 'request_paper_context';
 const PAPER_SKILL_DECISION_TOOL_NAME = 'paper_skill_decision';
@@ -868,10 +869,14 @@ function createAiCommands(context) {
     },
 
     async translate_text_openai_compatible({ options }) {
-      const data = await openAiChat(options, [
-        { role: 'system', content: buildAcademicTranslationPrompt(options) },
-        { role: 'user', content: options.text },
-      ]);
+      const data = await openAiChat(
+        options,
+        [
+          { role: 'system', content: buildAcademicTranslationPrompt(options) },
+          { role: 'user', content: options.text },
+        ],
+        { timeoutMs: TRANSLATION_REQUEST_TIMEOUT_MS },
+      );
       return cleanTranslationText(pickChatText(data));
     },
 

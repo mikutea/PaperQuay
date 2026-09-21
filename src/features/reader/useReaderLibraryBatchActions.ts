@@ -665,6 +665,7 @@ export function useReaderLibraryBatchActions({
         total: candidates.length,
         completed: 0,
         succeeded: 0,
+        reused: 0,
         skipped: 0,
         failed: 0,
         currentLabel: candidates[0]?.item.title ?? '',
@@ -672,6 +673,7 @@ export function useReaderLibraryBatchActions({
 
       let completedCount = 0;
       let succeededCount = 0;
+      let reusedCount = 0;
       let skippedCount = 0;
       let failedCount = 0;
       let rateLimited = false;
@@ -696,6 +698,7 @@ export function useReaderLibraryBatchActions({
           total: candidates.length,
           completed: completedCount,
           succeeded: succeededCount,
+          reused: reusedCount,
           skipped: skippedCount,
           failed: failedCount,
           currentLabel,
@@ -739,6 +742,8 @@ export function useReaderLibraryBatchActions({
 
             if (result.status === 'success') {
               succeededCount += 1;
+            } else if (result.status === 'cached') {
+              reusedCount += 1;
             } else if (result.status === 'skipped') {
               skippedCount += 1;
               lastSkippedReason = result.message;
@@ -787,6 +792,7 @@ export function useReaderLibraryBatchActions({
           total: candidates.length,
           completed: completedCount,
           succeeded: succeededCount,
+          reused: reusedCount,
           skipped: skippedCount,
           failed: failedCount,
           lastSkippedReason,
@@ -812,17 +818,17 @@ export function useReaderLibraryBatchActions({
         setStatusMessage(
           rateLimited
             ? l(
-                `翻译服务触发 429 限流，已停止本轮：成功 ${succeededCount}，跳过 ${skippedCount}，失败 ${failedCount}`,
-                `Translation hit a 429 rate limit and stopped: succeeded ${succeededCount}, skipped ${skippedCount}, failed ${failedCount}`,
+                `翻译服务触发 429 限流，已停止本轮：成功 ${succeededCount}，复用 ${reusedCount}，跳过 ${skippedCount}，失败 ${failedCount}`,
+                `Translation hit a 429 rate limit and stopped: succeeded ${succeededCount}, reused ${reusedCount}, skipped ${skippedCount}, failed ${failedCount}`,
               )
             : batchTranslationCancelRequestedRef.current
               ? l(
-                  `英文论文批量翻译已取消：成功 ${succeededCount}，跳过 ${skippedCount}，失败 ${failedCount}`,
-                  `English-paper batch translation cancelled: succeeded ${succeededCount}, skipped ${skippedCount}, failed ${failedCount}`,
+                  `英文论文批量翻译已取消：成功 ${succeededCount}，复用 ${reusedCount}，跳过 ${skippedCount}，失败 ${failedCount}`,
+                  `English-paper batch translation cancelled: succeeded ${succeededCount}, reused ${reusedCount}, skipped ${skippedCount}, failed ${failedCount}`,
                 )
               : l(
-                  `英文论文批量翻译完成：成功 ${succeededCount}，跳过 ${skippedCount}，失败 ${failedCount}`,
-                  `English-paper batch translation finished: succeeded ${succeededCount}, skipped ${skippedCount}, failed ${failedCount}`,
+                  `英文论文批量翻译完成：成功 ${succeededCount}，复用 ${reusedCount}，跳过 ${skippedCount}，失败 ${failedCount}`,
+                  `English-paper batch translation finished: succeeded ${succeededCount}, reused ${reusedCount}, skipped ${skippedCount}, failed ${failedCount}`,
                 ),
         );
       }

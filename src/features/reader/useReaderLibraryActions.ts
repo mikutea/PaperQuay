@@ -689,7 +689,7 @@ export function useReaderLibraryActions({
             setStatusMessage(message);
           }
           return {
-            status: 'skipped',
+            status: 'cached',
             translatedCount: blocksToTranslate.length,
             totalBlocks: blocksToTranslate.length,
             message,
