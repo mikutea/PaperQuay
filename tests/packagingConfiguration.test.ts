@@ -1,0 +1,29 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+
+const projectRoot = path.resolve(import.meta.dirname, '..');
+
+test('Windows packages include the runtime dependency and sandbox ACL installer hook', () => {
+  const packageJson = JSON.parse(
+    fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8'),
+  ) as {
+    build: {
+      files: string[];
+      nsis: { include?: string };
+    };
+  };
+
+  assert.ok(packageJson.build.files.includes('node_modules/pako/**/*'));
+  assert.equal(packageJson.build.nsis.include, 'packaging/windows/installer.nsh');
+
+  const installerScript = fs.readFileSync(
+    path.join(projectRoot, 'packaging', 'windows', 'installer.nsh'),
+    'utf8',
+  );
+
+  assert.match(installerScript, /S-1-15-2-2:\(OI\)\(CI\)\(RX\)/);
+  assert.match(installerScript, /icacls\.exe/i);
+  assert.doesNotMatch(installerScript, /(?:disable-gpu-sandbox|no-sandbox)/i);
+});

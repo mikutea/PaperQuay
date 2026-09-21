@@ -158,6 +158,13 @@ jobs:
           set -o pipefail
           node electron/build.cjs ${{ matrix.args }} 2>&1 | tee electron-build.log
 
+      - name: Verify packaged runtime dependencies
+        shell: bash
+        run: |
+          asar_path="$(find release -type f -name app.asar -print -quit)"
+          test -n "$asar_path"
+          npm run electron:verify-package -- "$asar_path"
+
       - name: Report Electron build failure
         if: failure()
         shell: bash
