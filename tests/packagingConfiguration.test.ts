@@ -37,4 +37,6 @@ test('release workflow verifies the ASAR and publishes updater-compatible Window
   assert.match(workflow, /electron:verify-package/);
   assert.match(workflow, /win-x64-portable\.zip/);
   assert.match(workflow, /SHA256SUMS\.txt/);
+  assert.equal(workflow.match(/prerelease:\s*true/g)?.length, 3);
+  assert.doesNotMatch(workflow, /prerelease:\s*false/);
 });
