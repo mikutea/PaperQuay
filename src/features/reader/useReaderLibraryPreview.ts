@@ -550,10 +550,12 @@ export function useReaderLibraryPreview({
     async (
       item: WorkspaceItem,
       blocks: PositionedMineruBlock[],
+      mineruSourcePath?: string,
     ) =>
       buildLibraryPreviewSummaryRequest({
         item,
         blocks,
+        mineruSourcePath,
         settings,
         l,
       }),
@@ -683,7 +685,11 @@ export function useReaderLibraryPreview({
       let resolvedSourceKey = '';
       try {
         const previewContext = await loadLibraryPreviewBlocks(item);
-        const summaryRequest = await resolveLibraryPreviewSummaryRequest(item, previewContext.blocks);
+        const summaryRequest = await resolveLibraryPreviewSummaryRequest(
+          item,
+          previewContext.blocks,
+          previewContext.mineruSourcePath,
+        );
         const {
           summaryInputs,
           sourceKey,

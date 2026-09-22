@@ -4,6 +4,23 @@ import type { WorkspaceItemSource } from '../../types/reader';
 import type { LiteraturePaperTaskState } from '../../types/library';
 import { guessSiblingMarkdownPath } from '../../utils/mineruCache.ts';
 
+export function buildMineruFallbackSummarySourceKey({
+  workspaceId,
+  promptVersion,
+  language,
+  sourcePath,
+  blockCount,
+}: {
+  workspaceId: string;
+  promptVersion: string;
+  language: string;
+  sourcePath?: string;
+  blockCount: number;
+}): string {
+  const sourceIdentity = sourcePath?.trim() ? `::${sourcePath.trim()}` : '';
+  return `${workspaceId}::${promptVersion}::${language}::mineru-markdown::blocks${sourceIdentity}::${blockCount}`;
+}
+
 function matchingJsonBackedMineruSource(readerSuffix: string, batchSuffix: string): boolean {
   const marker = '::mineru-markdown::';
   const readerMarkerIndex = readerSuffix.indexOf(marker);
@@ -16,7 +33,9 @@ function matchingJsonBackedMineruSource(readerSuffix: string, batchSuffix: strin
   if (!readerSource || !batchSource || readerSource[2] !== batchSource[2] ||
     !/(?:^|[\\/])(?:content_list(?:_v2)?|middle)\.json$/i.test(readerSource[1])) return false;
 
-  return batchSource[1] === 'blocks' ||
+  // The blocks fallback can only reuse a Reader summary when both parsed the
+  // same JSON path. A bare block count cannot identify the source document.
+  return batchSource[1] === `blocks::${readerSource[1]}` ||
     batchSource[1] === guessSiblingMarkdownPath(readerSource[1]);
 }
 

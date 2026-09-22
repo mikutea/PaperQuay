@@ -566,6 +566,7 @@ export interface LibraryPreviewLoadResult {
   currentJsonName: string;
   statusMessage: string;
   pdfPath?: string;
+  mineruSourcePath?: string;
   markdownText?: string;
 }
 
