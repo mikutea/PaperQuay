@@ -14,7 +14,8 @@ import {
   type LibraryTranslationRunResult,
 } from './readerLibraryTranslationBatch';
 import { onPaperTranslationReleased } from './readerTranslationLock';
-import { mapPreviewItemsWithConcurrency } from './readerPreviewWork';
+import { createDeferredAutoTranslationRetry } from './readerAutoTranslationRetry';
+import { mapPreviewItemsWithConcurrency, waitForBatchResumeOrCancel } from './readerPreviewWork';
 import {
   clampBatchConcurrency,
   clampMineruBatchConcurrency,
@@ -103,6 +104,7 @@ export function useReaderLibraryBatchActions({
   const autoMineruAttemptedRef = useRef<Set<string>>(new Set());
   const autoMineruRateLimitedRef = useRef(false);
   const autoTranslationAttemptedRef = useRef<Set<string>>(new Set());
+  const deferredAutoTranslationRetryRef = useRef(createDeferredAutoTranslationRetry());
   const autoSummaryAttemptedRef = useRef<Set<string>>(new Set());
   const batchMineruStartingRef = useRef(false);
   const batchMineruRunningRef = useRef(false);
@@ -619,6 +621,7 @@ export function useReaderLibraryBatchActions({
       }
 
       batchTranslationCancelRequestedRef.current = pendingManualSummaryRef.current;
+      batchTranslationPausedRef.current = false;
       batchTranslationRunningRef.current = true;
       setBatchTranslationRunning(true);
       setBatchTranslationProgress({
@@ -629,14 +632,28 @@ export function useReaderLibraryBatchActions({
       });
       const finishDiscovery = () => {
         batchTranslationRunningRef.current = false;
+        batchTranslationPausedRef.current = false;
         setBatchTranslationRunning(false);
+        setBatchTranslationPaused(false);
         setBatchTranslationProgress((current) => ({
           ...current,
           running: false,
+          paused: false,
           cancelRequested: batchTranslationCancelRequestedRef.current,
+          currentLabel: batchTranslationCancelRequestedRef.current
+            ? l('英文论文检查已取消', 'English-paper inspection cancelled')
+            : current.currentLabel,
         }));
+        if (!auto && batchTranslationCancelRequestedRef.current) {
+          setStatusMessage(l('英文论文检查已取消', 'English-paper inspection cancelled'));
+        }
         releaseBatchCoordinator('translation');
       };
+      const waitForTranslationResumeOrCancel = () => waitForBatchResumeOrCancel(
+        () => batchTranslationPausedRef.current,
+        () => batchTranslationCancelRequestedRef.current,
+        sleep,
+      );
 
       let preparedItems: Array<{
         attemptKey: string;
@@ -650,6 +667,9 @@ export function useReaderLibraryBatchActions({
             batchItems,
             1,
             async (item) => {
+              if (!(await waitForTranslationResumeOrCancel())) {
+                return null;
+              }
               try {
                 const preview = await loadLibraryPreviewBlocks(item);
                 const sourceBlocks = preview.blocks
@@ -705,8 +725,11 @@ export function useReaderLibraryBatchActions({
       }
 
       const candidates = preparedItems.filter(
-        ({ attemptKey }) =>
-          !(auto && autoTranslationAttemptedRef.current.has(attemptKey)),
+        ({ attemptKey, item }) =>
+          !(auto && (
+            autoTranslationAttemptedRef.current.has(attemptKey) ||
+            !deferredAutoTranslationRetryRef.current.canAttempt(item.workspaceId)
+          )),
       );
 
       if (candidates.length === 0) {
@@ -733,11 +756,9 @@ export function useReaderLibraryBatchActions({
       batchTranslationRateLimitAbortControllerRef.current?.abort();
       batchTranslationRateLimitAbortControllerRef.current = rateLimitAbortController;
 
-      batchTranslationPausedRef.current = false;
-      setBatchTranslationPaused(false);
       setBatchTranslationProgress({
         running: true,
-        paused: false,
+        paused: batchTranslationPausedRef.current,
         cancelRequested: false,
         total: candidates.length,
         completed: 0,
@@ -757,16 +778,7 @@ export function useReaderLibraryBatchActions({
       let serviceUnavailable = false;
       let lastSkippedReason = '';
 
-      const waitForResumeOrCancel = async () => {
-        while (
-          batchTranslationPausedRef.current &&
-          !batchTranslationCancelRequestedRef.current
-        ) {
-          await sleep(120);
-        }
-
-        return !batchTranslationCancelRequestedRef.current;
-      };
+      const waitForResumeOrCancel = waitForTranslationResumeOrCancel;
 
       const updateProgress = (currentLabel: string) => {
         setBatchTranslationProgress({
@@ -828,6 +840,9 @@ export function useReaderLibraryBatchActions({
               skippedCount += 1;
               lastSkippedReason = result.message;
               markAttempted = false;
+              if (auto) {
+                deferredAutoTranslationRetryRef.current.defer(item.workspaceId);
+              }
             } else if (result.status === 'skipped') {
               skippedCount += 1;
               lastSkippedReason = result.message;
@@ -1008,6 +1023,41 @@ export function useReaderLibraryBatchActions({
       }
 
       const concurrency = clampBatchConcurrency(settings.libraryBatchConcurrency);
+      batchSummaryRunningRef.current = true;
+      batchSummaryPausedRef.current = false;
+      batchSummaryCancelRequestedRef.current = false;
+      setBatchSummaryRunning(true);
+      setBatchSummaryPaused(false);
+      setBatchSummaryProgress({
+        ...EMPTY_BATCH_PROGRESS,
+        running: true,
+        total: batchItems.length,
+        currentLabel: l('正在检查概览候选…', 'Checking overview candidates…'),
+      });
+      const finishSummaryDiscovery = () => {
+        batchSummaryRunningRef.current = false;
+        batchSummaryPausedRef.current = false;
+        setBatchSummaryRunning(false);
+        setBatchSummaryPaused(false);
+        setBatchSummaryProgress((current) => ({
+          ...current,
+          running: false,
+          paused: false,
+          cancelRequested: batchSummaryCancelRequestedRef.current,
+          currentLabel: batchSummaryCancelRequestedRef.current
+            ? l('概览候选检查已取消', 'Overview candidate check cancelled')
+            : current.currentLabel,
+        }));
+        if (!auto && batchSummaryCancelRequestedRef.current) {
+          setStatusMessage(l('概览候选检查已取消', 'Overview candidate check cancelled'));
+        }
+        releaseBatchCoordinator('summary');
+      };
+      const waitForSummaryResumeOrCancel = () => waitForBatchResumeOrCancel(
+        () => batchSummaryPausedRef.current,
+        () => batchSummaryCancelRequestedRef.current,
+        sleep,
+      );
       let preparedCandidates: Array<{
         attemptKey: string;
         hasParse: boolean;
@@ -1018,6 +1068,9 @@ export function useReaderLibraryBatchActions({
           batchItems,
           Math.min(concurrency, 4),
           async (item) => {
+            if (!(await waitForSummaryResumeOrCancel())) {
+              return null;
+            }
             const parseResult =
               settings.summarySourceMode === 'mineru-markdown'
                 ? await findExistingMineruJson(item)
@@ -1036,7 +1089,10 @@ export function useReaderLibraryBatchActions({
               attemptKey,
             };
           },
-        );
+          () => !batchSummaryCancelRequestedRef.current,
+        ).then((items) => items.filter(
+          (candidate): candidate is NonNullable<typeof candidate> => candidate !== null,
+        ));
       } catch (nextError) {
         const message =
           nextError instanceof Error
@@ -1046,7 +1102,12 @@ export function useReaderLibraryBatchActions({
           setError(message);
           setStatusMessage(message);
         }
-        releaseBatchCoordinator('summary');
+        finishSummaryDiscovery();
+        return;
+      }
+
+      if (batchSummaryCancelRequestedRef.current) {
+        finishSummaryDiscovery();
         return;
       }
       const candidates = preparedCandidates.filter(
@@ -1062,18 +1123,13 @@ export function useReaderLibraryBatchActions({
             ),
           );
         }
-        releaseBatchCoordinator('summary');
+        finishSummaryDiscovery();
         return;
       }
 
-      batchSummaryRunningRef.current = true;
-      batchSummaryPausedRef.current = false;
-      batchSummaryCancelRequestedRef.current = false;
-      setBatchSummaryRunning(true);
-      setBatchSummaryPaused(false);
       setBatchSummaryProgress({
         running: true,
-        paused: false,
+        paused: batchSummaryPausedRef.current,
         cancelRequested: false,
         total: candidates.length,
         completed: 0,
@@ -1089,13 +1145,7 @@ export function useReaderLibraryBatchActions({
       let completedCount = 0;
       let cursor = 0;
 
-      const waitForResumeOrCancel = async () => {
-        while (batchSummaryPausedRef.current && !batchSummaryCancelRequestedRef.current) {
-          await sleep(120);
-        }
-
-        return batchSummaryCancelRequestedRef.current;
-      };
+      const waitForResumeOrCancel = async () => !(await waitForSummaryResumeOrCancel());
 
       const updateProgress = (currentLabel: string) => {
         setBatchSummaryProgress({
@@ -1408,8 +1458,12 @@ export function useReaderLibraryBatchActions({
   }, [l, setStatusMessage]);
 
   useEffect(() => {
-    return onPaperTranslationReleased(() => {
-      if (settings.autoTranslateEnglishLibrary && !batchCoordinatorRef.current) {
+    return onPaperTranslationReleased((workspaceId) => {
+      const releasedDeferred = deferredAutoTranslationRetryRef.current.release(workspaceId);
+      if (
+        settings.autoTranslateEnglishLibrary &&
+        (releasedDeferred || !batchCoordinatorRef.current)
+      ) {
         setAutoPipelineResumeGeneration((current) => current + 1);
       }
     });
@@ -1501,9 +1555,6 @@ export function useReaderLibraryBatchActions({
   }, [
     allKnownItems,
     autoPipelineResumeGeneration,
-    batchMineruRunning,
-    batchSummaryRunning,
-    batchTranslationRunning,
     configHydrated,
     handleBatchGenerateSummaries,
     handleBatchMineruParse,

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { mapPreviewItemsWithConcurrency } from '../src/features/reader/readerPreviewWork.ts';
+import { mapPreviewItemsWithConcurrency, waitForBatchResumeOrCancel } from '../src/features/reader/readerPreviewWork.ts';
 
 test('preview hydration keeps a bounded number of lookups in flight', async () => {
   let active = 0;
@@ -53,4 +53,43 @@ test('full-library translation discovery checks every paper sequentially without
   assert.equal(result.length, 120);
   assert.deepEqual(result.filter((item) => item !== null).map((item) => item!.index),
     items.filter((item) => item % 2 === 0));
+});
+
+test('discovery waits while paused and cancellation stops remaining lookups', async () => {
+  let paused = true;
+  let cancelled = false;
+  let waits = 0;
+  const started: number[] = [];
+  const result = await mapPreviewItemsWithConcurrency(
+    [0, 1, 2, 3],
+    1,
+    async (item) => {
+      const canContinue = await waitForBatchResumeOrCancel(
+        () => paused,
+        () => cancelled,
+        async () => {
+          waits += 1;
+          paused = false;
+        },
+      );
+      if (!canContinue) return null;
+      started.push(item);
+      if (item === 0) cancelled = true;
+      return item;
+    },
+    () => !cancelled,
+  );
+  assert.equal(waits, 1);
+  assert.deepEqual(started, [0]);
+  assert.deepEqual(result, [0]);
+});
+
+test('cancel unblocks paused discovery before another lookup', async () => {
+  let cancelled = false;
+  const canContinue = await waitForBatchResumeOrCancel(
+    () => true,
+    () => cancelled,
+    async () => { cancelled = true; },
+  );
+  assert.equal(canContinue, false);
 });

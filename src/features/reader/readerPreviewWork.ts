@@ -17,3 +17,14 @@ export async function mapPreviewItemsWithConcurrency<T, R>(
 
   return results.filter((_, index) => index in results);
 }
+
+export async function waitForBatchResumeOrCancel(
+  isPaused: () => boolean,
+  isCancelled: () => boolean,
+  wait: (milliseconds: number) => Promise<void>,
+): Promise<boolean> {
+  while (isPaused() && !isCancelled()) {
+    await wait(120);
+  }
+  return !isCancelled();
+}
