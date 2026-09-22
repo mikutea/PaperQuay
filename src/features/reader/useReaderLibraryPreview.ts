@@ -657,6 +657,7 @@ export function useReaderLibraryPreview({
       ): Promise<boolean> => persistOverviewIfCurrent({
         isCurrent: isCurrentRequest,
         cacheAlreadyVerified,
+        summaryText: formatPaperSummaryForLibrary(summary),
         saveCache: () => savePreviewSummary(item, sourceKey, summary),
         saveNative: () => persistNativeLibraryOverview(item, summary, sourceKey),
       });

@@ -39,15 +39,20 @@ export async function enqueueOverviewWrite<T>(
 export async function persistOverviewIfCurrent({
   isCurrent,
   cacheAlreadyVerified = false,
+  summaryText,
   saveCache,
   saveNative,
 }: {
   isCurrent: () => boolean;
   cacheAlreadyVerified?: boolean;
+  summaryText: string;
   saveCache: () => Promise<void>;
   saveNative: () => Promise<void>;
 }): Promise<boolean> {
   if (!isCurrent()) return false;
+  if (!summaryText.trim()) {
+    throw new Error('The generated overview contains no usable content.');
+  }
   if (!cacheAlreadyVerified) {
     await saveCache();
     if (!isCurrent()) return false;

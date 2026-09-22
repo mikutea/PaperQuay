@@ -12,16 +12,33 @@ import {
   sourceKeyAfterOverviewFailure,
 } from '../src/features/reader/readerBatchResults.ts';
 
+test('empty model and cached overviews fail before any persistence or success count', async () => {
+  const summaryText = '';
+  for (const cacheAlreadyVerified of [false, true]) {
+    let writes = 0;
+    await assert.rejects(persistOverviewIfCurrent({
+      isCurrent: () => true,
+      cacheAlreadyVerified,
+      summaryText,
+      saveCache: async () => { writes += 1; },
+      saveNative: async () => { writes += 1; },
+    }), /no usable content/);
+    assert.equal(writes, 0);
+  }
+});
+
 test('history overview must be saved before being counted as reusable', async () => {
   const steps: string[] = [];
   assert.equal(await persistOverviewIfCurrent({
     isCurrent: () => true,
+    summaryText: 'Overview content',
     saveCache: async () => { steps.push('verified-cache'); },
     saveNative: async () => { steps.push('native-noop'); },
   }), true);
   assert.deepEqual(steps, ['verified-cache', 'native-noop']);
   await assert.rejects(persistOverviewIfCurrent({
     isCurrent: () => true,
+    summaryText: 'Overview content',
     saveCache: async () => { throw new Error('cache unavailable'); },
     saveNative: async () => { throw new Error('must not reach'); },
   }), /cache unavailable/);
@@ -32,6 +49,7 @@ test('a superseded overview cannot commit success or start a stale native save',
   let nativeSaves = 0;
   assert.equal(await persistOverviewIfCurrent({
     isCurrent: () => current,
+    summaryText: 'Overview content',
     saveCache: async () => { current = false; },
     saveNative: async () => { nativeSaves += 1; },
   }), false);
@@ -39,6 +57,7 @@ test('a superseded overview cannot commit success or start a stale native save',
   current = true;
   assert.equal(await persistOverviewIfCurrent({
     isCurrent: () => current,
+    summaryText: 'Overview content',
     cacheAlreadyVerified: true,
     saveCache: async () => { throw new Error('already verified'); },
     saveNative: async () => { nativeSaves += 1; current = false; },
