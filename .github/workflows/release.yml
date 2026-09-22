@@ -175,9 +175,13 @@ jobs:
         run: |
           $version = '${{ needs.create-release.outputs.version }}'
           $portableName = "PaperQuay-$version-win-x64-portable.zip"
-          Copy-Item -LiteralPath 'packaging/windows/portable/Start-PaperQuay.cmd' -Destination 'release/win-unpacked/Start-PaperQuay.cmd'
-          Copy-Item -LiteralPath 'packaging/windows/portable/README.txt' -Destination 'release/win-unpacked/README-portable.txt'
-          Compress-Archive -Path 'release/win-unpacked/*' -DestinationPath "release/$portableName" -CompressionLevel Optimal
+          $portableStage = 'release/portable-stage'
+          $appPayload = Join-Path $portableStage 'PaperQuay-app'
+          New-Item -ItemType Directory -Path $appPayload -Force | Out-Null
+          Copy-Item -Path 'release/win-unpacked/*' -Destination $appPayload -Recurse
+          Copy-Item -LiteralPath 'packaging/windows/portable/Start-PaperQuay.cmd' -Destination $portableStage
+          Copy-Item -LiteralPath 'packaging/windows/portable/README.txt' -Destination (Join-Path $portableStage 'README-portable.txt')
+          Compress-Archive -Path "$portableStage/*" -DestinationPath "release/$portableName" -CompressionLevel Optimal
 
           $assets = Get-ChildItem -LiteralPath release -File | Where-Object {
             $_.Extension -in @('.exe', '.msi', '.zip')

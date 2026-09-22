@@ -59,6 +59,13 @@ function updateSupportText(status: AppUpdateStatus | null, l: ReaderPreferencesL
     );
   }
 
+  if (status.autoUpdateUnsupportedReason === 'windows-msi') {
+    return l(
+      'MSI 安装版请从 fork 发行页手动下载新版 MSI 安装；此处不运行 NSIS 安装更新。',
+      'For the MSI installation, download the new MSI from the fork release page. NSIS installation is disabled here.',
+    );
+  }
+
   return l('当前平台需要手动下载新版', 'This platform requires manual downloads');
 }
 

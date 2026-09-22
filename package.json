@@ -81,6 +81,7 @@
     "zustand": "^5.0.12"
   },
   "build": {
+    "msiProjectCreated": "packaging/windows/msiProjectCreated.cjs",
     "appId": "dev.paperquay.app",
     "productName": "PaperQuay",
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",

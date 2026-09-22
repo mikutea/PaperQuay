@@ -14,6 +14,7 @@ import {
   type LibraryTranslationRunResult,
 } from './readerLibraryTranslationBatch';
 import { onPaperTranslationReleased } from './readerTranslationLock';
+import { mapPreviewItemsWithConcurrency } from './readerPreviewWork';
 import {
   clampBatchConcurrency,
   clampMineruBatchConcurrency,
@@ -617,6 +618,26 @@ export function useReaderLibraryBatchActions({
         return;
       }
 
+      batchTranslationCancelRequestedRef.current = pendingManualSummaryRef.current;
+      batchTranslationRunningRef.current = true;
+      setBatchTranslationRunning(true);
+      setBatchTranslationProgress({
+        ...EMPTY_BATCH_PROGRESS,
+        running: true,
+        total: batchItems.length,
+        currentLabel: l('正在逐篇检查结构化正文…', 'Checking structured text one paper at a time…'),
+      });
+      const finishDiscovery = () => {
+        batchTranslationRunningRef.current = false;
+        setBatchTranslationRunning(false);
+        setBatchTranslationProgress((current) => ({
+          ...current,
+          running: false,
+          cancelRequested: batchTranslationCancelRequestedRef.current,
+        }));
+        releaseBatchCoordinator('translation');
+      };
+
       let preparedItems: Array<{
         attemptKey: string;
         item: WorkspaceItem;
@@ -625,8 +646,10 @@ export function useReaderLibraryBatchActions({
 
       try {
         preparedItems = (
-          await Promise.all(
-            batchItems.map(async (item) => {
+          await mapPreviewItemsWithConcurrency(
+            batchItems,
+            1,
+            async (item) => {
               try {
                 const preview = await loadLibraryPreviewBlocks(item);
                 const sourceBlocks = preview.blocks
@@ -649,7 +672,8 @@ export function useReaderLibraryBatchActions({
               } catch {
                 return null;
               }
-            }),
+            },
+            () => !batchTranslationCancelRequestedRef.current,
           )
         ).filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null);
       } catch (nextError) {
@@ -661,7 +685,12 @@ export function useReaderLibraryBatchActions({
           setError(message);
           setStatusMessage(message);
         }
-        releaseBatchCoordinator('translation');
+        finishDiscovery();
+        return;
+      }
+
+      if (batchTranslationCancelRequestedRef.current) {
+        finishDiscovery();
         return;
       }
 
@@ -671,7 +700,7 @@ export function useReaderLibraryBatchActions({
       ].join('\u001e');
 
       if (auto && autoTranslationBlockedSignatureRef.current === runSignature) {
-        releaseBatchCoordinator('translation');
+        finishDiscovery();
         return;
       }
 
@@ -689,7 +718,7 @@ export function useReaderLibraryBatchActions({
             ),
           );
         }
-        releaseBatchCoordinator('translation');
+        finishDiscovery();
         return;
       }
 
@@ -704,10 +733,7 @@ export function useReaderLibraryBatchActions({
       batchTranslationRateLimitAbortControllerRef.current?.abort();
       batchTranslationRateLimitAbortControllerRef.current = rateLimitAbortController;
 
-      batchTranslationRunningRef.current = true;
       batchTranslationPausedRef.current = false;
-      batchTranslationCancelRequestedRef.current = pendingManualSummaryRef.current;
-      setBatchTranslationRunning(true);
       setBatchTranslationPaused(false);
       setBatchTranslationProgress({
         running: true,
@@ -988,8 +1014,10 @@ export function useReaderLibraryBatchActions({
         item: WorkspaceItem;
       }>;
       try {
-        preparedCandidates = await Promise.all(
-          batchItems.map(async (item) => {
+        preparedCandidates = await mapPreviewItemsWithConcurrency(
+          batchItems,
+          Math.min(concurrency, 4),
+          async (item) => {
             const parseResult =
               settings.summarySourceMode === 'mineru-markdown'
                 ? await findExistingMineruJson(item)
@@ -1007,7 +1035,7 @@ export function useReaderLibraryBatchActions({
               hasParse,
               attemptKey,
             };
-          }),
+          },
         );
       } catch (nextError) {
         const message =

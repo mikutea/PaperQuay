@@ -9,6 +9,7 @@ const UPDATE_CHANNEL = 'stable';
 const RELEASES_API_URL = `https://api.github.com/repos/${UPDATE_REPOSITORY.owner}/${UPDATE_REPOSITORY.repo}/releases?per_page=100`;
 const FORK_TAG_PATTERN = /^app-v\d+\.\d+\.\d+-mikutea\.\d+$/;
 const NSIS_INSTALL_MARKER = '.paperquay-nsis-install';
+const MSI_INSTALL_MARKER = '.paperquay-msi-install';
 
 function cleanVersion(value) {
   const text = String(value ?? '').trim().replace(/^app-v/i, '').replace(/^v/i, '');
@@ -70,7 +71,11 @@ function getAutoUpdateSupport(app, runtime = { platform: process.platform, execu
   }
 
   if (runtime.platform === 'win32') {
-    if (!fs.existsSync(path.join(path.dirname(runtime.executablePath), NSIS_INSTALL_MARKER))) {
+    const executableDirectory = path.dirname(runtime.executablePath);
+    if (fs.existsSync(path.join(executableDirectory, MSI_INSTALL_MARKER))) {
+      return { supported: false, reason: 'windows-msi' };
+    }
+    if (!fs.existsSync(path.join(executableDirectory, NSIS_INSTALL_MARKER))) {
       return { supported: false, reason: 'windows-portable' };
     }
     return {

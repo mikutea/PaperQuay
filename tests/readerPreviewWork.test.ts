@@ -37,3 +37,20 @@ test('superseded preview hydration does not start remaining lookups', async () =
   assert.deepEqual(started, [0]);
   assert.deepEqual(result, [0]);
 });
+
+test('full-library translation discovery checks every paper sequentially without retaining previews', async () => {
+  const items = Array.from({ length: 120 }, (_, index) => index);
+  let inFlight = 0;
+  let peak = 0;
+  const result = await mapPreviewItemsWithConcurrency(items, 1, async (item) => {
+    inFlight += 1;
+    peak = Math.max(peak, inFlight);
+    await Promise.resolve();
+    inFlight -= 1;
+    return item % 2 === 0 ? { index: item } : null;
+  });
+  assert.equal(peak, 1);
+  assert.equal(result.length, 120);
+  assert.deepEqual(result.filter((item) => item !== null).map((item) => item!.index),
+    items.filter((item) => item % 2 === 0));
+});

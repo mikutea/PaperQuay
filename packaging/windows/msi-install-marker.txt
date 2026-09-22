@@ -1,0 +1,1 @@
+PaperQuay fork MSI installation marker. The NSIS auto-updater must not replace this installation.

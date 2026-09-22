@@ -86,6 +86,11 @@ test('Windows portable builds cannot invoke the NSIS updater', () => {
     });
     writeFileSync(path.join(dir, '.paperquay-nsis-install'), 'test');
     assert.equal(getAutoUpdateSupport({ isPackaged: true }, runtime).supported, true);
+    writeFileSync(path.join(dir, '.paperquay-msi-install'), 'test');
+    assert.deepEqual(getAutoUpdateSupport({ isPackaged: true }, runtime), {
+      supported: false,
+      reason: 'windows-msi',
+    });
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
