@@ -46,6 +46,7 @@ import {
 import { countTranslatedBlocks } from './readerTranslation';
 import {
   enqueueOverviewWrite,
+  overviewSourceKeysMatch,
   persistOverviewIfCurrent,
   saveVerifiedLibraryOverview,
   selectUsableOverview,
@@ -150,8 +151,7 @@ export function useReaderLibraryPreview({
   summaryModelPreset,
 }: UseReaderLibraryPreviewOptions): UseReaderLibraryPreviewResult {
   const libraryPreviewRequestIdRef = useRef<Record<string, number>>({});
-  const savedNativeSummaryKeysRef = useRef<Set<string>>(new Set());
-  const pendingNativeSummarySavesRef = useRef<Map<string, Promise<void>>>(new Map());
+  const lastSavedNativeSummaryKeysRef = useRef<Map<string, string>>(new Map());
   const nativeOverviewWriteChainsRef = useRef<Map<string, Promise<unknown>>>(new Map());
   const overviewCacheWriteChainsRef = useRef<Map<string, Promise<unknown>>>(new Map());
 
@@ -197,40 +197,25 @@ export function useReaderLibraryPreview({
 
       const saveKey = `${item.itemKey}::${sourceKey || 'overview'}::${textSignature(summaryText)}`;
 
-      if (savedNativeSummaryKeysRef.current.has(saveKey)) {
-        return;
-      }
-
-      let pendingSave = pendingNativeSummarySavesRef.current.get(saveKey);
-      if (!pendingSave) {
-        pendingSave = enqueueOverviewWrite(nativeOverviewWriteChainsRef.current, item.itemKey, async () => {
-          const updatedPaper = await saveVerifiedLibraryOverview(
-            summaryText,
-            () => updateLibraryPaper({
-              paperId: item.itemKey,
-              aiSummary: summaryText,
-            }),
-          );
-          savedNativeSummaryKeysRef.current.add(saveKey);
-          window.dispatchEvent(
-            new CustomEvent('paperquay:native-summary-updated', {
-              detail: {
-                paperId: updatedPaper.id,
-                aiSummary: updatedPaper.aiSummary,
-              },
-            }),
-          );
-        });
-        pendingNativeSummarySavesRef.current.set(saveKey, pendingSave);
-      }
-
-      try {
-        await pendingSave;
-      } finally {
-        if (pendingNativeSummarySavesRef.current.get(saveKey) === pendingSave) {
-          pendingNativeSummarySavesRef.current.delete(saveKey);
-        }
-      }
+      await enqueueOverviewWrite(nativeOverviewWriteChainsRef.current, item.itemKey, async () => {
+        if (lastSavedNativeSummaryKeysRef.current.get(item.itemKey) === saveKey) return;
+        const updatedPaper = await saveVerifiedLibraryOverview(
+          summaryText,
+          () => updateLibraryPaper({
+            paperId: item.itemKey,
+            aiSummary: summaryText,
+          }),
+        );
+        lastSavedNativeSummaryKeysRef.current.set(item.itemKey, saveKey);
+        window.dispatchEvent(
+          new CustomEvent('paperquay:native-summary-updated', {
+            detail: {
+              paperId: updatedPaper.id,
+              aiSummary: updatedPaper.aiSummary,
+            },
+          }),
+        );
+      });
     },
     [],
   );
@@ -706,9 +691,16 @@ export function useReaderLibraryPreview({
           errorMessage,
         } = summaryRequest;
         resolvedSourceKey = sourceKey;
+        const history = loadPaperHistory(item.workspaceId);
         const historySummary = selectUsableOverview(
-          loadPaperHistory(item.workspaceId)?.paperSummarySourceKey === sourceKey
-            ? loadPaperHistory(item.workspaceId)?.paperSummary ?? null
+          overviewSourceKeysMatch({
+            itemKey: item.itemKey,
+            workspaceId: item.workspaceId,
+            localPdfPath: item.localPdfPath,
+            storedKey: history?.paperSummarySourceKey ?? '',
+            resolvedKey: sourceKey,
+          })
+            ? history?.paperSummary ?? null
             : null,
           formatPaperSummaryForLibrary,
         );
@@ -720,10 +712,16 @@ export function useReaderLibraryPreview({
           cachedState?.summary,
           formatPaperSummaryForLibrary,
         );
+        const stateSourceMatches = overviewSourceKeysMatch({
+          itemKey: item.itemKey,
+          workspaceId: item.workspaceId,
+          localPdfPath: item.localPdfPath,
+          storedKey: cachedState?.sourceKey ?? '',
+          resolvedKey: sourceKey,
+        });
         const preferRetainedSummary = shouldPreferRetainedOverview({
           hasUsableSummary: Boolean(reusableStateSummary),
-          retainedSourceKey: cachedState?.sourceKey ?? '',
-          resolvedSourceKey: sourceKey,
+          sourceKeysMatch: stateSourceMatches,
           operation: cachedState?.operation,
         });
 
@@ -810,7 +808,7 @@ export function useReaderLibraryPreview({
           return 'loaded';
         }
 
-        if (!force && reusableStateSummary && cachedState?.sourceKey === sourceKey) {
+        if (!force && reusableStateSummary && stateSourceMatches) {
           availableSummary = reusableStateSummary;
           if (!await persistIfCurrent(reusableStateSummary, sourceKey)) return 'skipped';
           setLibraryPreviewStates((current) => ({
@@ -886,6 +884,9 @@ export function useReaderLibraryPreview({
           }));
           return 'skipped';
         }
+
+        // Non-native overviews have no library database target. Fail before a paid model call.
+        shouldWriteOverviewCache(item.source, settings.mineruCacheDir);
 
         setLibraryPreviewStates((current) => ({
           ...current,

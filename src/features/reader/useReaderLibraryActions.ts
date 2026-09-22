@@ -42,7 +42,7 @@ import {
   type BatchProgressState,
 } from './readerShared';
 import { isPaperPipelineBusy } from './paperTaskState';
-import { resolveVerifiedTranslationStatus } from './readerBatchResults';
+import { assertTranslationCacheDestination, resolveVerifiedTranslationStatus } from './readerBatchResults';
 import {
   writeLibraryTranslationCache,
 } from './readerLibraryPreview';
@@ -747,6 +747,14 @@ export function useReaderLibraryActions({
             message,
           };
         }
+
+        assertTranslationCacheDestination(
+          settings.mineruCacheDir,
+          l(
+            '请先设置 MinerU 缓存目录再开始全文翻译；尚未发送模型请求。',
+            'Set the MinerU cache directory before full translation; no model request was sent.',
+          ),
+        );
 
         if (Object.keys(resumedTranslations).length > 0) {
           setLibraryTranslationSnapshots((current) => ({

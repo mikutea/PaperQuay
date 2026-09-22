@@ -3,19 +3,54 @@ import type { BatchProgressState, LibraryPreviewOutcome } from './readerShared';
 import type { WorkspaceItemSource } from '../../types/reader';
 import type { LiteraturePaperTaskState } from '../../types/library';
 
+export function overviewSourceKeysMatch({
+  itemKey,
+  workspaceId,
+  localPdfPath,
+  storedKey,
+  resolvedKey,
+}: {
+  itemKey: string;
+  workspaceId: string;
+  localPdfPath?: string | null;
+  storedKey: string;
+  resolvedKey: string;
+}): boolean {
+  if (!storedKey || !resolvedKey) return false;
+  if (storedKey === resolvedKey) return true;
+  const readerPrefix = `${itemKey}::`;
+  const batchPrefix = `${workspaceId}::`;
+  if (!storedKey.startsWith(readerPrefix) || !resolvedKey.startsWith(batchPrefix)) return false;
+  const readerSuffix = storedKey.slice(readerPrefix.length);
+  const batchSuffix = resolvedKey.slice(batchPrefix.length);
+  if (readerSuffix === batchSuffix) return true;
+  const marker = '::pdf-text::';
+  const markerIndex = readerSuffix.indexOf(marker);
+  const pdfPath = localPdfPath?.trim() ?? '';
+  if (!pdfPath || markerIndex < 0 || batchSuffix.slice(0, markerIndex + marker.length) !==
+    readerSuffix.slice(0, markerIndex + marker.length)) return false;
+  const readerPdfIdentity = readerSuffix.slice(markerIndex + marker.length);
+  const batchPdfIdentity = batchSuffix.slice(markerIndex + marker.length);
+  const batchPathPrefix = `${pdfPath}::`;
+  return readerPdfIdentity === `local:${pdfPath}` &&
+    batchPdfIdentity.startsWith(batchPathPrefix) &&
+    /^\d+$/.test(batchPdfIdentity.slice(batchPathPrefix.length));
+}
+
+export function assertTranslationCacheDestination(cacheDir: string, message: string): void {
+  if (!cacheDir.trim()) throw new Error(message);
+}
+
 export function shouldPreferRetainedOverview({
   hasUsableSummary,
-  retainedSourceKey,
-  resolvedSourceKey,
+  sourceKeysMatch,
   operation,
 }: {
   hasUsableSummary: boolean;
-  retainedSourceKey: string;
-  resolvedSourceKey: string;
+  sourceKeysMatch: boolean;
   operation: Pick<LiteraturePaperTaskState, 'kind' | 'status'> | null | undefined;
 }): boolean {
-  return hasUsableSummary && Boolean(resolvedSourceKey) &&
-    retainedSourceKey === resolvedSourceKey &&
+  return hasUsableSummary && sourceKeysMatch &&
     operation?.kind === 'overview' && operation.status === 'error';
 }
 

@@ -2,9 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  assertTranslationCacheDestination,
   classifyOverviewBatchOutcome,
   countVerifiedBatchResults,
   enqueueOverviewWrite,
+  overviewSourceKeysMatch,
   persistOverviewIfCurrent,
   resolveVerifiedTranslationStatus,
   saveVerifiedLibraryOverview,
@@ -14,30 +16,81 @@ import {
   sourceKeyAfterOverviewFailure,
 } from '../src/features/reader/readerBatchResults.ts';
 
+test('Reader and batch overview keys match the same native source without matching another source', () => {
+  const base = {
+    itemKey: 'paper-1',
+    workspaceId: 'native-library:paper-1',
+    localPdfPath: 'D:/papers/one.pdf',
+  };
+  assert.equal(overviewSourceKeysMatch({
+    ...base,
+    storedKey: 'paper-1::summary-prompt-v4::Chinese::mineru-markdown::D:/cache/full.md::12',
+    resolvedKey: 'native-library:paper-1::summary-prompt-v4::Chinese::mineru-markdown::D:/cache/full.md::12',
+  }), true);
+  assert.equal(overviewSourceKeysMatch({
+    ...base,
+    storedKey: 'paper-1::summary-prompt-v4::Chinese::pdf-text::local:D:/papers/one.pdf',
+    resolvedKey: 'native-library:paper-1::summary-prompt-v4::Chinese::pdf-text::D:/papers/one.pdf::12345',
+  }), true);
+  assert.equal(overviewSourceKeysMatch({
+    ...base,
+    storedKey: 'paper-2::summary-prompt-v4::Chinese::pdf-text::local:D:/papers/one.pdf',
+    resolvedKey: 'native-library:paper-1::summary-prompt-v4::Chinese::pdf-text::D:/papers/one.pdf::12345',
+  }), false);
+  assert.equal(overviewSourceKeysMatch({
+    ...base,
+    storedKey: 'paper-1::summary-prompt-v4::English::pdf-text::local:D:/papers/one.pdf',
+    resolvedKey: 'native-library:paper-1::summary-prompt-v4::Chinese::pdf-text::D:/papers/one.pdf::12345',
+  }), false);
+  assert.equal(overviewSourceKeysMatch({
+    ...base,
+    storedKey: 'paper-1::summary-prompt-v4::Chinese::pdf-text::local:D:/papers/other.pdf',
+    resolvedKey: 'native-library:paper-1::summary-prompt-v4::Chinese::pdf-text::D:/papers/one.pdf::12345',
+  }), false);
+});
+
+test('translation refuses an absent cache destination before paid work', () => {
+  assert.throws(
+    () => assertTranslationCacheDestination('  ', 'no cache, no request'),
+    /no cache, no request/,
+  );
+  assert.doesNotThrow(() => assertTranslationCacheDestination('D:/cache', 'missing'));
+});
+
+test('native overview deduplication tracks the current saved version, not every past key', async () => {
+  const pending = new Map<string, Promise<unknown>>();
+  const current = new Map<string, string>();
+  const writes: string[] = [];
+  const persist = (key: string) => enqueueOverviewWrite(pending, 'paper-1', async () => {
+    if (current.get('paper-1') === key) return;
+    writes.push(key);
+    current.set('paper-1', key);
+  });
+  await Promise.all([persist('source-A'), persist('source-B'), persist('source-A')]);
+  assert.deepEqual(writes, ['source-A', 'source-B', 'source-A']);
+  assert.equal(current.get('paper-1'), 'source-A');
+});
+
 test('a valid unsaved overview B takes precedence over older history or cache A', () => {
   const retry = { kind: 'overview' as const, status: 'error' as const };
   assert.equal(shouldPreferRetainedOverview({
     hasUsableSummary: true,
-    retainedSourceKey: 'source-1',
-    resolvedSourceKey: 'source-1',
+    sourceKeysMatch: true,
     operation: retry,
   }), true);
   assert.equal(shouldPreferRetainedOverview({
     hasUsableSummary: false,
-    retainedSourceKey: 'source-1',
-    resolvedSourceKey: 'source-1',
+    sourceKeysMatch: true,
     operation: retry,
   }), false);
   assert.equal(shouldPreferRetainedOverview({
     hasUsableSummary: true,
-    retainedSourceKey: 'old-source',
-    resolvedSourceKey: 'source-1',
+    sourceKeysMatch: false,
     operation: retry,
   }), false);
   assert.equal(shouldPreferRetainedOverview({
     hasUsableSummary: true,
-    retainedSourceKey: 'source-1',
-    resolvedSourceKey: 'source-1',
+    sourceKeysMatch: true,
     operation: { kind: 'overview', status: 'success' },
   }), false);
 });
