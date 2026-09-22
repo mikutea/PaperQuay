@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   buildTranslationSourceMetadata,
   selectReusableCachedTranslations,
+  selectReusableSessionTranslations,
 } from '../src/features/reader/readerTranslationSource.ts';
 
 const sourceBlocks = [
@@ -59,4 +60,21 @@ test('legacy cache remains readable data but is never trusted as a complete sour
   );
 
   assert.deepEqual(reusable, {});
+});
+
+test('English batch retry reuses session translations after a failed cache save only for the same source and target', () => {
+  const snapshot = {
+    ...buildTranslationSourceMetadata(sourceBlocks),
+    targetLanguage: 'Chinese',
+    translations: {
+      'section-1': '游客与居民共享一个乡村广场。',
+      'section-2': '该模型评估若干治理情景。',
+    },
+  };
+  assert.deepEqual(selectReusableSessionTranslations(snapshot, sourceBlocks, 'Chinese'), snapshot.translations);
+  assert.deepEqual(selectReusableSessionTranslations(snapshot, sourceBlocks, 'English'), {});
+  assert.deepEqual(selectReusableSessionTranslations(snapshot, [
+    sourceBlocks[0],
+    { ...sourceBlocks[1], text: 'The model now evaluates a changed source.' },
+  ], 'Chinese'), {});
 });

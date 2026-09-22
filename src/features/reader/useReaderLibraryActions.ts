@@ -42,6 +42,7 @@ import {
   type BatchProgressState,
 } from './readerShared';
 import { isPaperPipelineBusy } from './paperTaskState';
+import { assertTranslationCacheDestination, resolveVerifiedTranslationStatus } from './readerBatchResults';
 import {
   writeLibraryTranslationCache,
 } from './readerLibraryPreview';
@@ -56,6 +57,7 @@ import { readTranslationCache } from './readerTranslationCache';
 import {
   buildTranslationSourceMetadata,
   selectReusableCachedTranslations,
+  selectReusableSessionTranslations,
 } from './readerTranslationSource';
 import {
   classifyStructuredDocumentLanguage,
@@ -223,6 +225,34 @@ export function useReaderLibraryActions({
         targetLanguage: targetLanguage ?? settings.translationTargetLanguage,
       }),
     [settings.mineruCacheDir, settings.translationTargetLanguage],
+  );
+
+  const saveAndVerifyLibraryTranslations = useCallback(
+    async (
+      item: WorkspaceItem,
+      translations: TranslationMap,
+      sourceLanguage: string,
+      targetLanguage: string,
+      sourceBlocks: TranslationBlockInput[],
+    ) => {
+      const savedCachePath = await saveLibraryTranslationCache(
+        item,
+        translations,
+        { sourceLanguage, targetLanguage },
+        sourceBlocks,
+      );
+      if (!savedCachePath) {
+        throw new Error('Translation cache path is unavailable.');
+      }
+      const savedCache = await readExistingLibraryTranslations(item, targetLanguage);
+      const verifiedTranslations = selectReusableCachedTranslations(savedCache, sourceBlocks);
+      if (Object.entries(translations).some(
+        ([blockId, translatedText]) => verifiedTranslations[blockId] !== translatedText.trim(),
+      )) {
+        throw new Error('The saved translation cache does not contain every translated block.');
+      }
+    },
+    [readExistingLibraryTranslations, saveLibraryTranslationCache],
   );
 
   const runLibraryItemMineruParse = useCallback(
@@ -652,10 +682,11 @@ export function useReaderLibraryActions({
           cachedTranslationResult,
           blocksToTranslate,
         );
-        const reusableSnapshotTranslations =
-          !options.englishOnly && currentSnapshot?.targetLanguage === targetLanguage
-            ? selectReusableCachedTranslations(currentSnapshot, blocksToTranslate)
-            : {};
+        const reusableSnapshotTranslations = selectReusableSessionTranslations(
+          currentSnapshot,
+          blocksToTranslate,
+          targetLanguage,
+        );
         const resumedTranslations = mergeReaderTranslations(
           reusableCachedTranslations,
           reusableSnapshotTranslations,
@@ -667,6 +698,15 @@ export function useReaderLibraryActions({
         const sourceMetadata = buildTranslationSourceMetadata(blocksToTranslate);
 
         if (pendingBlocks.length === 0) {
+          if (Object.keys(reusableCachedTranslations).length !== blocksToTranslate.length) {
+            await saveAndVerifyLibraryTranslations(
+              item,
+              resumedTranslations,
+              sourceLanguage,
+              targetLanguage,
+              blocksToTranslate,
+            );
+          }
           const message = l(
             `已跳过：${targetLanguage} 全文缓存完整（${blocksToTranslate.length} 个结构块）`,
             `Skipped: the complete ${targetLanguage} cache already covers ${blocksToTranslate.length} structured blocks`,
@@ -709,6 +749,14 @@ export function useReaderLibraryActions({
             message,
           };
         }
+
+        assertTranslationCacheDestination(
+          settings.mineruCacheDir,
+          l(
+            '请先设置 MinerU 缓存目录再开始全文翻译；尚未发送模型请求。',
+            'Set the MinerU cache directory before full translation; no model request was sent.',
+          ),
+        );
 
         if (Object.keys(resumedTranslations).length > 0) {
           setLibraryTranslationSnapshots((current) => ({
@@ -806,42 +854,39 @@ export function useReaderLibraryActions({
           },
         }));
 
-        let cacheStatusSuffix = '';
-
-        try {
-          const savedCachePath = await saveLibraryTranslationCache(
-            item,
-            translations,
-            {
+        const translatedCount = Object.keys(translations).length;
+        let cacheSaveFailed = false;
+        if (translatedCount > 0) {
+          try {
+            await saveAndVerifyLibraryTranslations(
+              item,
+              translations,
               sourceLanguage,
               targetLanguage,
-            },
-            blocksToTranslate,
-          );
-
-          if (!savedCachePath) {
-            cacheStatusSuffix = l('，仅保存在当前会话', ', kept in the current session only');
+              blocksToTranslate,
+            );
+          } catch (cacheError) {
+            cacheSaveFailed = true;
+            console.warn('Failed to verify saved library translation cache', cacheError);
           }
-        } catch (cacheError) {
-          cacheStatusSuffix = l(
-            '，缓存写入失败，已保存在当前会话',
-            ', cache write failed and the result is kept in the current session',
-          );
-          console.warn('Failed to save library translation cache', cacheError);
         }
 
-        const translatedCount = Object.keys(translations).length;
         const failedCount = result.failedBlocks.length;
-        const runStatus: LibraryTranslationRunResult['status'] = result.rateLimited
-          ? 'rate-limited'
-          : result.serviceUnavailable
-            ? 'service-unavailable'
-            : result.cancelled
-              ? 'cancelled'
-              : failedCount > 0
-                ? 'partial'
-                : 'success';
-        const translationFinishedMessage = result.rateLimited
+        const runStatus: LibraryTranslationRunResult['status'] = resolveVerifiedTranslationStatus({
+          rateLimited: result.rateLimited,
+          serviceUnavailable: result.serviceUnavailable,
+          cancelled: result.cancelled,
+          cacheSaveFailed,
+          translatedCount,
+          totalBlocks: blocksToTranslate.length,
+          failedBlocks: failedCount,
+        });
+        const translationFinishedMessage = cacheSaveFailed
+          ? l(
+              `译文缓存未能确认保存；当前会话保留了 ${translatedCount} 段，本次不计为完成`,
+              `Translation cache could not be verified; ${translatedCount} blocks remain in this session and this run is not complete`,
+            )
+          : result.rateLimited
           ? l(
               `翻译服务触发 429 限流，已保存 ${translatedCount} 段译文并停止本轮`,
               `Translation hit a 429 rate limit. Saved ${translatedCount} blocks and stopped this run`,
@@ -851,24 +896,30 @@ export function useReaderLibraryActions({
                 `翻译服务不可用，已保存 ${translatedCount} 段译文并停止本轮`,
                 `Translation service unavailable. Saved ${translatedCount} blocks and stopped this run`,
               )
-            : result.cancelled
+          : result.cancelled
               ? l(
-                  `全文翻译已取消，已保存 ${translatedCount} 段译文${cacheStatusSuffix}`,
-                  `Full translation cancelled. Saved ${translatedCount} translated blocks${cacheStatusSuffix}`,
+                  `全文翻译已取消，已保存 ${translatedCount} 段译文`,
+                  `Full translation cancelled. Saved ${translatedCount} translated blocks`,
                 )
-              : failedCount > 0
+              : runStatus === 'failed'
+                ? l('全文翻译未生成可保存的译文', 'Full translation produced no savable content')
+                : runStatus === 'partial'
                 ? l(
-                    `全文翻译已部分完成，已保存 ${translatedCount} 段译文，剩余 ${failedCount} 段可稍后重试${cacheStatusSuffix}`,
-                    `Full translation partially completed. Saved ${translatedCount} translated blocks, with ${failedCount} remaining for retry${cacheStatusSuffix}`,
+                    `全文翻译已部分完成，已保存 ${translatedCount} 段译文，剩余 ${Math.max(failedCount, blocksToTranslate.length - translatedCount)} 段可稍后重试`,
+                    `Full translation partially completed. Saved ${translatedCount} translated blocks, with ${Math.max(failedCount, blocksToTranslate.length - translatedCount)} remaining for retry`,
                   )
                 : l(
-                    `全文翻译完成，已生成 ${translatedCount} 段译文${cacheStatusSuffix}`,
-                    `Full translation complete. Generated ${translatedCount} translated blocks${cacheStatusSuffix}`,
+                    `全文翻译完成，已验证保存 ${translatedCount} 段译文`,
+                    `Full translation complete. Verified ${translatedCount} saved blocks`,
                   );
         const operationError =
-          runStatus === 'partial' || runStatus === 'rate-limited' || runStatus === 'service-unavailable'
-            ? sanitizeTranslationErrorMessage(result.failureMessages[0], l, 'document')
-            : '';
+          cacheSaveFailed
+            ? translationFinishedMessage
+            : runStatus === 'partial' || runStatus === 'rate-limited' || runStatus === 'service-unavailable'
+              ? sanitizeTranslationErrorMessage(result.failureMessages[0], l, 'document')
+              : runStatus === 'failed'
+                ? translationFinishedMessage
+                : '';
 
         setLibraryPreviewStates((current) => ({
           ...current,
@@ -878,7 +929,7 @@ export function useReaderLibraryActions({
             error: operationError,
             operation: createPaperTaskState(
               'translation',
-              runStatus === 'success' || runStatus === 'cancelled' ? 'success' : 'error',
+              runStatus === 'success' ? 'success' : 'error',
               translationFinishedMessage,
               translatedCount,
               blocksToTranslate.length,
@@ -937,6 +988,7 @@ export function useReaderLibraryActions({
       translationModelPreset,
       updateLibraryPreviewOperation,
       readExistingLibraryTranslations,
+      saveAndVerifyLibraryTranslations,
     ],
   );
   const {

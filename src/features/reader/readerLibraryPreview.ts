@@ -39,6 +39,7 @@ import {
   type MineruCacheManifest,
   type SummaryCacheEnvelope,
 } from './readerShared';
+import { buildMineruFallbackSummarySourceKey } from './readerBatchResults';
 import { writeTranslationCache } from './readerTranslationCache';
 
 type LocaleTextFn = (zh: string, en: string) => string;
@@ -251,6 +252,7 @@ export async function loadReaderLibraryPreviewBlocks({
             blocks,
             currentPdfName: pdfName,
             currentJsonName: getFileNameFromPath(candidatePath),
+            mineruSourcePath: candidatePath,
             statusMessage: l(
               `已从缓存加载 ${blocks.length} 个结构块`,
               `Loaded ${blocks.length} structured blocks from cache`,
@@ -276,6 +278,7 @@ export async function loadReaderLibraryPreviewBlocks({
           blocks,
           currentPdfName: pdfName,
           currentJsonName: getFileNameFromPath(siblingJsonPath),
+          mineruSourcePath: siblingJsonPath,
           statusMessage: l(
             `已从同目录 JSON 加载 ${blocks.length} 个结构块`,
             `Loaded ${blocks.length} structured blocks from the sibling JSON`,
@@ -303,6 +306,7 @@ export async function loadReaderLibraryPreviewBlocks({
         blocks,
         currentPdfName: pdfName,
         currentJsonName: getFileNameFromPath(markdownPath),
+        mineruSourcePath: markdownPath,
         statusMessage: l(
           `已从 MinerU Markdown 加载 ${blocks.length} 个结构块`,
           `Loaded ${blocks.length} structured blocks from MinerU Markdown`,
@@ -333,11 +337,13 @@ export async function loadReaderLibraryPreviewBlocks({
 export async function buildLibraryPreviewSummaryRequest({
   item,
   blocks,
+  mineruSourcePath,
   settings,
   l,
 }: {
   item: WorkspaceItem;
   blocks: PositionedMineruBlock[];
+  mineruSourcePath?: string;
   settings: Pick<
     ReaderSettings,
     'autoLoadSiblingJson' | 'mineruCacheDir' | 'summaryOutputLanguage' | 'summarySourceMode' | 'uiLanguage'
@@ -432,7 +438,13 @@ export async function buildLibraryPreviewSummaryRequest({
 
   return {
     summaryInputs,
-    sourceKey: `${item.workspaceId}::${SUMMARY_PROMPT_VERSION}::${summaryLanguage}::mineru-markdown::blocks::${blocks.length}`,
+    sourceKey: buildMineruFallbackSummarySourceKey({
+      workspaceId: item.workspaceId,
+      promptVersion: SUMMARY_PROMPT_VERSION,
+      language: summaryLanguage,
+      sourcePath: mineruSourcePath,
+      blockCount: blocks.length,
+    }),
     documentText,
     errorMessage: '',
   };

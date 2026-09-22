@@ -6,6 +6,7 @@ import type { WorkspaceItem } from '../../types/reader';
 import { buildMineruCachePaths } from '../../utils/mineruCache';
 import { runMineruCloudParseWithOcrFallback } from './mineruOcrFallback';
 import { createTranslationRequestRateLimiter } from './readerTranslation';
+import { classifyOverviewBatchOutcome } from './readerBatchResults';
 import { buildTranslationSourceMetadata } from './readerTranslationSource';
 import {
   getAutoEnglishTranslationAttemptKey,
@@ -919,10 +920,7 @@ export function useReaderLibraryBatchActions({
                   `英文论文批量翻译已取消，已完成 ${completedCount}/${candidates.length}`,
                   `English-paper batch translation cancelled after ${completedCount}/${candidates.length}`,
                 )
-              : l(
-                  `英文论文批量翻译进度 ${completedCount}/${candidates.length}`,
-                  `English-paper batch translation progress ${completedCount}/${candidates.length}`,
-                ),
+              : '',
         });
         releaseBatchCoordinator('translation');
       }
@@ -1140,6 +1138,7 @@ export function useReaderLibraryBatchActions({
       });
 
       let succeededCount = 0;
+      let reusedCount = 0;
       let skippedCount = 0;
       let failedCount = 0;
       let completedCount = 0;
@@ -1155,6 +1154,7 @@ export function useReaderLibraryBatchActions({
           total: candidates.length,
           completed: completedCount,
           succeeded: succeededCount,
+          reused: reusedCount,
           skipped: skippedCount,
           failed: failedCount,
           currentLabel,
@@ -1207,10 +1207,13 @@ export function useReaderLibraryBatchActions({
                 allowGenerate: true,
               });
 
-              if (outcome === 'failed') {
+              const bucket = classifyOverviewBatchOutcome(outcome);
+              if (bucket === 'failed') {
                 failedCount += 1;
-              } else if (outcome === 'skipped') {
+              } else if (bucket === 'skipped') {
                 skippedCount += 1;
+              } else if (bucket === 'reused') {
+                reusedCount += 1;
               } else {
                 succeededCount += 1;
               }
@@ -1238,6 +1241,7 @@ export function useReaderLibraryBatchActions({
           total: candidates.length,
           completed: completedCount,
           succeeded: succeededCount,
+          reused: reusedCount,
           skipped: skippedCount,
           failed: failedCount,
           currentLabel:
@@ -1246,12 +1250,7 @@ export function useReaderLibraryBatchActions({
                   `批量概览已取消，已完成 ${completedCount}/${candidates.length}`,
                   `Batch overview cancelled after ${completedCount}/${candidates.length}`,
                 )
-              : candidates.length > 0
-                ? l(
-                    `批量概览进度 ${completedCount}/${candidates.length}`,
-                    `Batch overview progress ${completedCount}/${candidates.length}`,
-                  )
-                : '',
+              : '',
         });
         releaseBatchCoordinator('summary');
       }
@@ -1260,12 +1259,12 @@ export function useReaderLibraryBatchActions({
         setStatusMessage(
           batchSummaryCancelRequestedRef.current
             ? l(
-                `概览批处理已取消：成功 ${succeededCount}，跳过 ${skippedCount}，失败 ${failedCount}`,
-                `Overview batch cancelled: succeeded ${succeededCount}, skipped ${skippedCount}, failed ${failedCount}`,
+                `概览批处理已取消：新生成并保存 ${succeededCount}，缓存验证并保存 ${reusedCount}，跳过 ${skippedCount}，失败 ${failedCount}`,
+                `Overview batch cancelled: generated and saved ${succeededCount}, cached and verified ${reusedCount}, skipped ${skippedCount}, failed ${failedCount}`,
               )
             : l(
-                `概览批处理完成：成功 ${succeededCount}，跳过 ${skippedCount}，失败 ${failedCount}`,
-                `Overview batch finished: succeeded ${succeededCount}, skipped ${skippedCount}, failed ${failedCount}`,
+                `概览批处理完成：新生成并保存 ${succeededCount}，缓存验证并保存 ${reusedCount}，跳过 ${skippedCount}，失败 ${failedCount}`,
+                `Overview batch finished: generated and saved ${succeededCount}, cached and verified ${reusedCount}, skipped ${skippedCount}, failed ${failedCount}`,
               ),
         );
       }

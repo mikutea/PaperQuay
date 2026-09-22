@@ -44,6 +44,16 @@ import {
   writePreviewSummaryCache,
 } from './readerLibraryPreview';
 import { countTranslatedBlocks } from './readerTranslation';
+import {
+  enqueueOverviewWrite,
+  overviewSourceKeysMatch,
+  persistOverviewIfCurrent,
+  saveVerifiedLibraryOverview,
+  selectUsableOverview,
+  shouldPreferRetainedOverview,
+  shouldWriteOverviewCache,
+  sourceKeyAfterOverviewFailure,
+} from './readerBatchResults';
 import { readTranslationCache } from './readerTranslationCache';
 import { mapPreviewItemsWithConcurrency } from './readerPreviewWork';
 import type {
@@ -141,7 +151,9 @@ export function useReaderLibraryPreview({
   summaryModelPreset,
 }: UseReaderLibraryPreviewOptions): UseReaderLibraryPreviewResult {
   const libraryPreviewRequestIdRef = useRef<Record<string, number>>({});
-  const savedNativeSummaryKeysRef = useRef<Set<string>>(new Set());
+  const lastSavedNativeSummaryKeysRef = useRef<Map<string, string>>(new Map());
+  const nativeOverviewWriteChainsRef = useRef<Map<string, Promise<unknown>>>(new Map());
+  const overviewCacheWriteChainsRef = useRef<Map<string, Promise<unknown>>>(new Map());
 
   const [libraryPreviewStates, setLibraryPreviewStates] = useState<
     Record<string, LibraryPreviewState>
@@ -183,30 +195,27 @@ export function useReaderLibraryPreview({
 
       const summaryText = formatPaperSummaryForLibrary(summary);
 
-      if (!summaryText) {
-        return;
-      }
-
       const saveKey = `${item.itemKey}::${sourceKey || 'overview'}::${textSignature(summaryText)}`;
 
-      if (savedNativeSummaryKeysRef.current.has(saveKey)) {
-        return;
-      }
-
-      savedNativeSummaryKeysRef.current.add(saveKey);
-      const updatedPaper = await updateLibraryPaper({
-        paperId: item.itemKey,
-        aiSummary: summaryText,
+      await enqueueOverviewWrite(nativeOverviewWriteChainsRef.current, item.itemKey, async () => {
+        if (lastSavedNativeSummaryKeysRef.current.get(item.itemKey) === saveKey) return;
+        const updatedPaper = await saveVerifiedLibraryOverview(
+          summaryText,
+          () => updateLibraryPaper({
+            paperId: item.itemKey,
+            aiSummary: summaryText,
+          }),
+        );
+        lastSavedNativeSummaryKeysRef.current.set(item.itemKey, saveKey);
+        window.dispatchEvent(
+          new CustomEvent('paperquay:native-summary-updated', {
+            detail: {
+              paperId: updatedPaper.id,
+              aiSummary: updatedPaper.aiSummary,
+            },
+          }),
+        );
       });
-
-      window.dispatchEvent(
-        new CustomEvent('paperquay:native-summary-updated', {
-          detail: {
-            paperId: updatedPaper.id,
-            aiSummary: updatedPaper.aiSummary,
-          },
-        }),
-      );
     },
     [],
   );
@@ -217,7 +226,24 @@ export function useReaderLibraryPreview({
         payload.item,
         payload.summary,
         payload.sourceKey ?? 'overview',
-      ).catch(() => undefined);
+      ).catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        setLibraryPreviewStates((current) => {
+          if (payload.sourceKey && current[payload.item.workspaceId]?.sourceKey !== payload.sourceKey) {
+            return current;
+          }
+          return {
+            ...current,
+            [payload.item.workspaceId]: {
+              ...(current[payload.item.workspaceId] ?? EMPTY_LIBRARY_PREVIEW_STATE),
+              loading: false,
+              error: message,
+              operation: createPaperTaskState('overview', 'error', message),
+              statusMessage: message,
+            },
+          };
+        });
+      });
     }
 
     if (payload.item.source === 'native-library' && payload.hasBlocks) {
@@ -259,7 +285,7 @@ export function useReaderLibraryPreview({
         },
       };
     });
-  }, [persistNativeLibraryOverview]);
+  }, [createPaperTaskState, persistNativeLibraryOverview]);
 
   const findExistingMineruJson = useCallback(
     async (item: WorkspaceItem) =>
@@ -524,10 +550,12 @@ export function useReaderLibraryPreview({
     async (
       item: WorkspaceItem,
       blocks: PositionedMineruBlock[],
+      mineruSourcePath?: string,
     ) =>
       buildLibraryPreviewSummaryRequest({
         item,
         blocks,
+        mineruSourcePath,
         settings,
         l,
       }),
@@ -549,13 +577,27 @@ export function useReaderLibraryPreview({
       item: WorkspaceItem,
       sourceKey: string,
       summary: PaperSummary,
-    ) =>
-      writePreviewSummaryCache({
-        item,
-        mineruCacheDir: settings.mineruCacheDir,
-        sourceKey,
-        summary,
-      }),
+    ) => {
+      if (!shouldWriteOverviewCache(item.source, settings.mineruCacheDir)) {
+        return;
+      }
+      await enqueueOverviewWrite(overviewCacheWriteChainsRef.current, item.itemKey, async () => {
+        await writePreviewSummaryCache({
+          item,
+          mineruCacheDir: settings.mineruCacheDir,
+          sourceKey,
+          summary,
+        });
+        const verified = await readSavedPreviewSummary({
+          item,
+          mineruCacheDir: settings.mineruCacheDir,
+          sourceKey,
+        });
+        if (JSON.stringify(verified) !== JSON.stringify(summary)) {
+          throw new Error('The saved overview cache could not be verified.');
+        }
+      });
+    },
     [settings.mineruCacheDir],
   );
 
@@ -571,11 +613,11 @@ export function useReaderLibraryPreview({
       const cachedState = libraryPreviewStates[item.workspaceId];
 
       if (!force && cachedState) {
-        if (cachedState.loading || cachedState.summary) {
-          return 'loaded';
+        if (cachedState.loading) {
+          return 'skipped';
         }
 
-        if (cachedState.hasBlocks && !allowGenerate) {
+        if (cachedState.hasBlocks && !allowGenerate && !cachedState.summary) {
           setLibraryPreviewStates((current) => ({
             ...current,
             [item.workspaceId]: {
@@ -596,6 +638,18 @@ export function useReaderLibraryPreview({
 
       const requestId = (libraryPreviewRequestIdRef.current[item.workspaceId] ?? 0) + 1;
       libraryPreviewRequestIdRef.current[item.workspaceId] = requestId;
+      const isCurrentRequest = () => libraryPreviewRequestIdRef.current[item.workspaceId] === requestId;
+      const persistIfCurrent = async (
+        summary: PaperSummary,
+        sourceKey: string,
+        cacheAlreadyVerified = false,
+      ): Promise<boolean> => persistOverviewIfCurrent({
+        isCurrent: isCurrentRequest,
+        cacheAlreadyVerified,
+        summaryText: formatPaperSummaryForLibrary(summary),
+        saveCache: () => savePreviewSummary(item, sourceKey, summary),
+        saveNative: () => persistNativeLibraryOverview(item, summary, sourceKey),
+      });
 
       setLibraryPreviewStates((current) => ({
         ...current,
@@ -627,20 +681,53 @@ export function useReaderLibraryPreview({
         },
       }));
 
+      let availableSummary: PaperSummary | null = null;
+      let resolvedSourceKey = '';
       try {
         const previewContext = await loadLibraryPreviewBlocks(item);
-        const summaryRequest = await resolveLibraryPreviewSummaryRequest(item, previewContext.blocks);
+        const summaryRequest = await resolveLibraryPreviewSummaryRequest(
+          item,
+          previewContext.blocks,
+          previewContext.mineruSourcePath,
+        );
         const {
           summaryInputs,
           sourceKey,
           documentText,
           errorMessage,
         } = summaryRequest;
-        const historySummary =
-          loadPaperHistory(item.workspaceId)?.paperSummarySourceKey === sourceKey
-            ? loadPaperHistory(item.workspaceId)?.paperSummary ?? null
-            : null;
-        const cachedSummary = force ? null : await tryLoadSavedPreviewSummary(item, sourceKey);
+        resolvedSourceKey = sourceKey;
+        const history = loadPaperHistory(item.workspaceId);
+        const historySummary = selectUsableOverview(
+          overviewSourceKeysMatch({
+            itemKey: item.itemKey,
+            workspaceId: item.workspaceId,
+            storedKey: history?.paperSummarySourceKey ?? '',
+            resolvedKey: sourceKey,
+          })
+            ? history?.paperSummary ?? null
+            : null,
+          formatPaperSummaryForLibrary,
+        );
+        const cachedSummary = selectUsableOverview(
+          force ? null : await tryLoadSavedPreviewSummary(item, sourceKey),
+          formatPaperSummaryForLibrary,
+        );
+        const reusableStateSummary = selectUsableOverview(
+          cachedState?.summary,
+          formatPaperSummaryForLibrary,
+        );
+        const stateSourceMatches = overviewSourceKeysMatch({
+          itemKey: item.itemKey,
+          workspaceId: item.workspaceId,
+          storedKey: cachedState?.sourceKey ?? '',
+          resolvedKey: sourceKey,
+        });
+        const preferRetainedSummary = shouldPreferRetainedOverview({
+          hasUsableSummary: Boolean(reusableStateSummary),
+          sourceKeysMatch: stateSourceMatches,
+          operation: cachedState?.operation,
+        });
 
         if (libraryPreviewRequestIdRef.current[item.workspaceId] !== requestId) {
           return 'skipped';
@@ -667,7 +754,9 @@ export function useReaderLibraryPreview({
           return 'skipped';
         }
 
-        if (!force && historySummary) {
+        if (!force && historySummary && !preferRetainedSummary) {
+          availableSummary = historySummary;
+          if (!await persistIfCurrent(historySummary, sourceKey)) return 'skipped';
           setLibraryPreviewStates((current) => ({
             ...current,
             [item.workspaceId]: {
@@ -691,11 +780,12 @@ export function useReaderLibraryPreview({
               sourceKey,
             },
           }));
-          void persistNativeLibraryOverview(item, historySummary, sourceKey).catch(() => undefined);
           return 'loaded';
         }
 
-        if (!force && cachedSummary) {
+        if (!force && cachedSummary && !preferRetainedSummary) {
+          availableSummary = cachedSummary;
+          if (!await persistIfCurrent(cachedSummary, sourceKey, true)) return 'skipped';
           setLibraryPreviewStates((current) => ({
             ...current,
             [item.workspaceId]: {
@@ -719,7 +809,24 @@ export function useReaderLibraryPreview({
               sourceKey,
             },
           }));
-          void persistNativeLibraryOverview(item, cachedSummary, sourceKey).catch(() => undefined);
+          return 'loaded';
+        }
+
+        if (!force && reusableStateSummary && stateSourceMatches) {
+          availableSummary = reusableStateSummary;
+          if (!await persistIfCurrent(reusableStateSummary, sourceKey)) return 'skipped';
+          setLibraryPreviewStates((current) => ({
+            ...current,
+            [item.workspaceId]: {
+              ...cachedState,
+              loading: false,
+              operation: allowGenerate
+                ? createPaperTaskState(
+                    'overview', 'success', l('已验证并保存当前概览', 'Current overview verified and saved'), 100, 100,
+                  )
+                : cachedState.operation ?? null,
+            },
+          }));
           return 'loaded';
         }
 
@@ -758,26 +865,6 @@ export function useReaderLibraryPreview({
           return 'skipped';
         }
 
-        if (!force && cachedState?.summary && cachedState.sourceKey === sourceKey) {
-          setLibraryPreviewStates((current) => ({
-            ...current,
-            [item.workspaceId]: {
-              ...cachedState,
-              loading: false,
-              operation: allowGenerate
-                ? createPaperTaskState(
-                    'overview',
-                    'success',
-                    l('已加载当前概览', 'Loaded the current overview'),
-                    100,
-                    100,
-                  )
-                : cachedState.operation ?? null,
-            },
-          }));
-          return 'loaded';
-        }
-
         if (!allowGenerate) {
           setLibraryPreviewStates((current) => ({
             ...current,
@@ -801,6 +888,9 @@ export function useReaderLibraryPreview({
           }));
           return 'skipped';
         }
+
+        // Non-native overviews have no library database target. Fail before a paid model call.
+        shouldWriteOverviewCache(item.source, settings.mineruCacheDir);
 
         setLibraryPreviewStates((current) => ({
           ...current,
@@ -836,7 +926,11 @@ export function useReaderLibraryPreview({
           return 'skipped';
         }
 
-        await savePreviewSummary(item, sourceKey, summary).catch(() => undefined);
+        if (!selectUsableOverview(summary, formatPaperSummaryForLibrary)) {
+          throw new Error('The generated overview contains no usable content.');
+        }
+        availableSummary = summary;
+        if (!await persistIfCurrent(summary, sourceKey)) return 'skipped';
 
         setLibraryPreviewStates((current) => ({
           ...current,
@@ -859,7 +953,6 @@ export function useReaderLibraryPreview({
             sourceKey,
           },
         }));
-        void persistNativeLibraryOverview(item, summary, sourceKey).catch(() => undefined);
         return 'generated';
       } catch (nextError) {
         if (libraryPreviewRequestIdRef.current[item.workspaceId] !== requestId) {
@@ -869,7 +962,7 @@ export function useReaderLibraryPreview({
         setLibraryPreviewStates((current) => ({
           ...current,
           [item.workspaceId]: {
-            summary: null,
+            summary: availableSummary,
             loading: false,
             error:
               nextError instanceof Error
@@ -891,7 +984,11 @@ export function useReaderLibraryPreview({
               (item.localPdfPath ? getFileNameFromPath(item.localPdfPath) : noPdfLoadedText),
             currentJsonName: libraryPreviewStates[item.workspaceId]?.currentJsonName ?? notLoadedText,
             statusMessage: l('生成预览概览失败', 'Failed to generate the preview overview'),
-            sourceKey: libraryPreviewStates[item.workspaceId]?.sourceKey ?? '',
+            sourceKey: sourceKeyAfterOverviewFailure(
+              Boolean(availableSummary),
+              resolvedSourceKey,
+              current[item.workspaceId]?.sourceKey ?? '',
+            ),
           },
         }));
         return 'failed';

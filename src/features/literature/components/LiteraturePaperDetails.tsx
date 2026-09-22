@@ -440,27 +440,27 @@ function TaskStatusPanel({
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-3">
             <div className="truncate text-sm font-semibold">{state.label}</div>
-            {hasProgress ? (
+            {hasProgress && state.status !== 'error' ? (
               <div className="shrink-0 text-xs font-semibold">
-                {completed}/{total}
+                {state.kind === 'overview' ? `${Math.round(ratio)}%` : `${completed}/${total}`}
               </div>
             ) : null}
           </div>
           <div className="mt-1 line-clamp-2 text-xs leading-5 opacity-80">
             {state.message}
           </div>
-          <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-black/[0.08] dark:bg-white/10">
-            <div
-              className={[
-                'h-full rounded-full transition-all duration-300',
-                state.status === 'running' && !hasProgress ? 'animate-pulse' : '',
-                tone === 'rose' ? 'bg-rose-500' : '',
-                tone === 'emerald' ? 'bg-emerald-500' : '',
-                tone === 'teal' ? 'bg-teal-500' : '',
-              ].join(' ')}
-              style={{ width: state.status === 'error' ? '100%' : `${ratio}%` }}
-            />
-          </div>
+          {state.status !== 'error' ? (
+            <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-black/[0.08] dark:bg-white/10">
+              <div
+                className={[
+                  'h-full rounded-full transition-all duration-300',
+                  state.status === 'running' && !hasProgress ? 'animate-pulse' : '',
+                  tone === 'emerald' ? 'bg-emerald-500' : 'bg-teal-500',
+                ].join(' ')}
+                style={{ width: `${ratio}%` }}
+              />
+            </div>
+          ) : null}
         </div>
       </div>
     </div>

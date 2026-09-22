@@ -1,0 +1,286 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import {
+  assertTranslationCacheDestination,
+  buildMineruFallbackSummarySourceKey,
+  classifyOverviewBatchOutcome,
+  countVerifiedBatchResults,
+  enqueueOverviewWrite,
+  overviewSourceKeysMatch,
+  persistOverviewIfCurrent,
+  resolveVerifiedTranslationStatus,
+  saveVerifiedLibraryOverview,
+  selectUsableOverview,
+  shouldWriteOverviewCache,
+  shouldPreferRetainedOverview,
+  sourceKeyAfterOverviewFailure,
+} from '../src/features/reader/readerBatchResults.ts';
+
+test('Reader and batch overview keys reuse comparable sources but never path-only PDF identities', () => {
+  const base = {
+    itemKey: 'paper-1',
+    workspaceId: 'native-library:paper-1',
+  };
+  assert.equal(overviewSourceKeysMatch({
+    ...base,
+    storedKey: 'paper-1::summary-prompt-v4::Chinese::mineru-markdown::D:/cache/full.md::12',
+    resolvedKey: 'native-library:paper-1::summary-prompt-v4::Chinese::mineru-markdown::D:/cache/full.md::12',
+  }), true);
+  const jsonBackedReaderKey = 'paper-1::summary-prompt-v4::Chinese::mineru-markdown::D:/cache/content_list_v2.json::12';
+  const fallbackKey = buildMineruFallbackSummarySourceKey({
+    workspaceId: base.workspaceId,
+    promptVersion: 'summary-prompt-v4',
+    language: 'Chinese',
+    sourcePath: 'D:/cache/content_list_v2.json',
+    blockCount: 12,
+  });
+  assert.equal(fallbackKey, 'native-library:paper-1::summary-prompt-v4::Chinese::mineru-markdown::blocks::D:/cache/content_list_v2.json::12');
+  assert.equal(overviewSourceKeysMatch({
+    ...base,
+    storedKey: jsonBackedReaderKey,
+    resolvedKey: 'native-library:paper-1::summary-prompt-v4::Chinese::mineru-markdown::D:/cache/full.md::12',
+  }), true);
+  assert.equal(overviewSourceKeysMatch({
+    ...base,
+    storedKey: jsonBackedReaderKey,
+    resolvedKey: fallbackKey,
+  }), true);
+  for (const resolvedKey of [
+    'native-library:paper-1::summary-prompt-v4::Chinese::mineru-markdown::blocks::12',
+    'native-library:paper-1::summary-prompt-v4::Chinese::mineru-markdown::blocks::D:/other/content_list_v2.json::12',
+    'native-library:paper-1::summary-prompt-v4::Chinese::mineru-markdown::D:/other/full.md::12',
+    'native-library:paper-1::summary-prompt-v4::Chinese::mineru-markdown::D:/cache/full.md::13',
+    'native-library:paper-1::summary-prompt-v4::English::mineru-markdown::D:/cache/full.md::12',
+  ]) {
+    assert.equal(overviewSourceKeysMatch({ ...base, storedKey: jsonBackedReaderKey, resolvedKey }), false);
+  }
+  assert.equal(overviewSourceKeysMatch({
+    ...base,
+    storedKey: 'paper-1::summary-prompt-v4::Chinese::pdf-text::local:D:/papers/one.pdf',
+    resolvedKey: 'native-library:paper-1::summary-prompt-v4::Chinese::pdf-text::D:/papers/one.pdf::12345',
+  }), false);
+  assert.equal(overviewSourceKeysMatch({
+    ...base,
+    storedKey: 'paper-1::summary-prompt-v4::Chinese::pdf-text::local:D:/papers/one.pdf',
+    resolvedKey: 'native-library:paper-1::summary-prompt-v4::Chinese::pdf-text::D:/papers/one.pdf::54321',
+  }), false);
+  const verifiedBatchPdfKey = 'native-library:paper-1::summary-prompt-v4::Chinese::pdf-text::D:/papers/one.pdf::54321';
+  assert.equal(overviewSourceKeysMatch({ ...base, storedKey: verifiedBatchPdfKey, resolvedKey: verifiedBatchPdfKey }), true);
+  assert.equal(overviewSourceKeysMatch({
+    ...base,
+    storedKey: 'paper-2::summary-prompt-v4::Chinese::pdf-text::local:D:/papers/one.pdf',
+    resolvedKey: 'native-library:paper-1::summary-prompt-v4::Chinese::pdf-text::D:/papers/one.pdf::12345',
+  }), false);
+  assert.equal(overviewSourceKeysMatch({
+    ...base,
+    storedKey: 'paper-1::summary-prompt-v4::English::pdf-text::local:D:/papers/one.pdf',
+    resolvedKey: 'native-library:paper-1::summary-prompt-v4::Chinese::pdf-text::D:/papers/one.pdf::12345',
+  }), false);
+  assert.equal(overviewSourceKeysMatch({
+    ...base,
+    storedKey: 'paper-1::summary-prompt-v4::Chinese::pdf-text::local:D:/papers/other.pdf',
+    resolvedKey: 'native-library:paper-1::summary-prompt-v4::Chinese::pdf-text::D:/papers/one.pdf::12345',
+  }), false);
+});
+
+test('translation refuses an absent cache destination before paid work', () => {
+  assert.throws(
+    () => assertTranslationCacheDestination('  ', 'no cache, no request'),
+    /no cache, no request/,
+  );
+  assert.doesNotThrow(() => assertTranslationCacheDestination('D:/cache', 'missing'));
+});
+
+test('native overview deduplication tracks the current saved version, not every past key', async () => {
+  const pending = new Map<string, Promise<unknown>>();
+  const current = new Map<string, string>();
+  const writes: string[] = [];
+  const persist = (key: string) => enqueueOverviewWrite(pending, 'paper-1', async () => {
+    if (current.get('paper-1') === key) return;
+    writes.push(key);
+    current.set('paper-1', key);
+  });
+  await Promise.all([persist('source-A'), persist('source-B'), persist('source-A')]);
+  assert.deepEqual(writes, ['source-A', 'source-B', 'source-A']);
+  assert.equal(current.get('paper-1'), 'source-A');
+});
+
+test('a valid unsaved overview B takes precedence over older history or cache A', () => {
+  const retry = { kind: 'overview' as const, status: 'error' as const };
+  assert.equal(shouldPreferRetainedOverview({
+    hasUsableSummary: true,
+    sourceKeysMatch: true,
+    operation: retry,
+  }), true);
+  assert.equal(shouldPreferRetainedOverview({
+    hasUsableSummary: false,
+    sourceKeysMatch: true,
+    operation: retry,
+  }), false);
+  assert.equal(shouldPreferRetainedOverview({
+    hasUsableSummary: true,
+    sourceKeysMatch: false,
+    operation: retry,
+  }), false);
+  assert.equal(shouldPreferRetainedOverview({
+    hasUsableSummary: true,
+    sourceKeysMatch: true,
+    operation: { kind: 'overview', status: 'success' },
+  }), false);
+});
+
+test('invalid cached, history, and session summaries are never retained for retry', () => {
+  const format = (summary: { content?: string }) => summary.content?.trim() ?? '';
+  const valid = { content: 'A usable overview' };
+  assert.equal(selectUsableOverview(valid, format), valid);
+  assert.equal(selectUsableOverview({ content: '  ' }, format), null);
+  assert.equal(selectUsableOverview({}, format), null);
+  assert.equal(selectUsableOverview(null, format), null);
+  assert.equal(selectUsableOverview({ content: 'broken' }, () => { throw new Error('malformed'); }), null);
+});
+
+test('empty model and cached overviews fail before any persistence or success count', async () => {
+  const summaryText = '';
+  for (const cacheAlreadyVerified of [false, true]) {
+    let writes = 0;
+    await assert.rejects(persistOverviewIfCurrent({
+      isCurrent: () => true,
+      cacheAlreadyVerified,
+      summaryText,
+      saveCache: async () => { writes += 1; },
+      saveNative: async () => { writes += 1; },
+    }), /no usable content/);
+    assert.equal(writes, 0);
+  }
+});
+
+test('history overview must be saved before being counted as reusable', async () => {
+  const steps: string[] = [];
+  assert.equal(await persistOverviewIfCurrent({
+    isCurrent: () => true,
+    summaryText: 'Overview content',
+    saveCache: async () => { steps.push('verified-cache'); },
+    saveNative: async () => { steps.push('native-noop'); },
+  }), true);
+  assert.deepEqual(steps, ['verified-cache', 'native-noop']);
+  await assert.rejects(persistOverviewIfCurrent({
+    isCurrent: () => true,
+    summaryText: 'Overview content',
+    saveCache: async () => { throw new Error('cache unavailable'); },
+    saveNative: async () => { throw new Error('must not reach'); },
+  }), /cache unavailable/);
+});
+
+test('a superseded overview cannot commit success or start a stale native save', async () => {
+  let current = true;
+  let nativeSaves = 0;
+  assert.equal(await persistOverviewIfCurrent({
+    isCurrent: () => current,
+    summaryText: 'Overview content',
+    saveCache: async () => { current = false; },
+    saveNative: async () => { nativeSaves += 1; },
+  }), false);
+  assert.equal(nativeSaves, 0);
+  current = true;
+  assert.equal(await persistOverviewIfCurrent({
+    isCurrent: () => current,
+    summaryText: 'Overview content',
+    cacheAlreadyVerified: true,
+    saveCache: async () => { throw new Error('already verified'); },
+    saveNative: async () => { nativeSaves += 1; current = false; },
+  }), false);
+  assert.equal(nativeSaves, 1);
+});
+
+test('overlapping overview writes for one paper are serialized, even after failures', async () => {
+  const pendingWrites = new Map<string, Promise<unknown>>();
+  const steps: string[] = [];
+  let releaseFirst!: () => void;
+  let signalStarted!: () => void;
+  const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const firstStarted = new Promise<void>((resolve) => { signalStarted = resolve; });
+  const first = enqueueOverviewWrite(pendingWrites, 'paper-1', async () => {
+    steps.push('first-start');
+    signalStarted();
+    await firstGate;
+    steps.push('first-end');
+    throw new Error('first failed');
+  });
+  const second = enqueueOverviewWrite(pendingWrites, 'paper-1', async () => {
+    steps.push('second-start');
+    return 'saved';
+  });
+  await firstStarted;
+  assert.deepEqual(steps, ['first-start']);
+  releaseFirst();
+  await assert.rejects(first, /first failed/);
+  assert.equal(await second, 'saved');
+  assert.deepEqual(steps, ['first-start', 'first-end', 'second-start']);
+  assert.equal(pendingWrites.size, 0);
+});
+
+test('a generated but unsaved overview retains its source key for a save-only retry', () => {
+  assert.equal(sourceKeyAfterOverviewFailure(true, 'new-source', ''), 'new-source');
+  assert.equal(sourceKeyAfterOverviewFailure(true, 'new-source', 'old-source'), 'new-source');
+  assert.equal(sourceKeyAfterOverviewFailure(false, 'new-source', 'old-source'), 'old-source');
+  assert.equal(sourceKeyAfterOverviewFailure(true, '', 'old-source'), 'old-source');
+});
+
+test('native library remains a verified overview save target without a cache path', () => {
+  assert.equal(shouldWriteOverviewCache('native-library', ''), false);
+  assert.equal(shouldWriteOverviewCache('native-library', '  '), false);
+  assert.equal(shouldWriteOverviewCache('native-library', 'D:/cache'), true);
+  assert.throws(() => shouldWriteOverviewCache('standalone', ''), /cache directory/);
+  assert.throws(() => shouldWriteOverviewCache('zotero-local', ''), /cache directory/);
+});
+
+test('only saved or verified overviews contribute to confirmed batch results', () => {
+  assert.equal(classifyOverviewBatchOutcome('generated'), 'succeeded');
+  assert.equal(classifyOverviewBatchOutcome('loaded'), 'reused');
+  assert.equal(classifyOverviewBatchOutcome('skipped'), 'skipped');
+  assert.equal(classifyOverviewBatchOutcome('failed'), 'failed');
+  assert.equal(countVerifiedBatchResults({ succeeded: 2, reused: 3 }), 5);
+  assert.equal(countVerifiedBatchResults({ succeeded: 2 }), 2);
+});
+
+test('overview success requires a nonempty result and confirmed library write', async () => {
+  let saved = false;
+  await assert.rejects(
+    saveVerifiedLibraryOverview('', async () => { saved = true; return { aiSummary: '' }; }),
+    /no usable content/,
+  );
+  assert.equal(saved, false);
+  await assert.rejects(
+    saveVerifiedLibraryOverview('Saved overview', async () => ({ aiSummary: null })),
+    /did not confirm/,
+  );
+  await assert.rejects(
+    saveVerifiedLibraryOverview('Saved overview', async () => { throw new Error('disk full'); }),
+    /disk full/,
+  );
+  assert.deepEqual(
+    await saveVerifiedLibraryOverview('Saved overview', async () => ({ aiSummary: 'Saved overview' })),
+    { aiSummary: 'Saved overview' },
+  );
+});
+
+test('translation cannot succeed if its cache was not verified after writing', () => {
+  const base = {
+    rateLimited: false,
+    serviceUnavailable: false,
+    cancelled: false,
+    cacheSaveFailed: false,
+    translatedCount: 10,
+    totalBlocks: 10,
+    failedBlocks: 0,
+  };
+
+  assert.equal(resolveVerifiedTranslationStatus(base), 'success');
+  assert.equal(resolveVerifiedTranslationStatus({ ...base, cacheSaveFailed: true }), 'failed');
+  assert.equal(resolveVerifiedTranslationStatus({ ...base, translatedCount: 0 }), 'failed');
+  assert.equal(resolveVerifiedTranslationStatus({ ...base, translatedCount: 9 }), 'partial');
+  assert.equal(resolveVerifiedTranslationStatus({ ...base, failedBlocks: 1 }), 'partial');
+  assert.equal(resolveVerifiedTranslationStatus({ ...base, cancelled: true }), 'cancelled');
+  assert.equal(resolveVerifiedTranslationStatus({ ...base, rateLimited: true }), 'rate-limited');
+});
