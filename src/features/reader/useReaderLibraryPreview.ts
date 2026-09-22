@@ -44,7 +44,7 @@ import {
   writePreviewSummaryCache,
 } from './readerLibraryPreview';
 import { countTranslatedBlocks } from './readerTranslation';
-import { saveVerifiedLibraryOverview } from './readerBatchResults';
+import { saveVerifiedLibraryOverview, shouldWriteOverviewCache } from './readerBatchResults';
 import { readTranslationCache } from './readerTranslationCache';
 import { mapPreviewItemsWithConcurrency } from './readerPreviewWork';
 import type {
@@ -581,8 +581,8 @@ export function useReaderLibraryPreview({
       sourceKey: string,
       summary: PaperSummary,
     ) => {
-      if (!settings.mineruCacheDir.trim()) {
-        throw new Error('The overview cache directory is not configured.');
+      if (!shouldWriteOverviewCache(item.source, settings.mineruCacheDir)) {
+        return;
       }
       await writePreviewSummaryCache({
         item,

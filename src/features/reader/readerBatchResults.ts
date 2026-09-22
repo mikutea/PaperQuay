@@ -1,5 +1,15 @@
 import type { LibraryTranslationRunStatus } from './readerLibraryTranslationBatch';
 import type { BatchProgressState, LibraryPreviewOutcome } from './readerShared';
+import type { WorkspaceItemSource } from '../../types/reader';
+
+export function shouldWriteOverviewCache(
+  source: WorkspaceItemSource,
+  cacheDir: string,
+): boolean {
+  if (cacheDir.trim()) return true;
+  if (source === 'native-library') return false;
+  throw new Error('The overview cache directory is not configured.');
+}
 
 export function countVerifiedBatchResults(
   progress: Pick<BatchProgressState, 'succeeded' | 'reused'>,

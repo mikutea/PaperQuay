@@ -6,7 +6,16 @@ import {
   countVerifiedBatchResults,
   resolveVerifiedTranslationStatus,
   saveVerifiedLibraryOverview,
+  shouldWriteOverviewCache,
 } from '../src/features/reader/readerBatchResults.ts';
+
+test('native library remains a verified overview save target without a cache path', () => {
+  assert.equal(shouldWriteOverviewCache('native-library', ''), false);
+  assert.equal(shouldWriteOverviewCache('native-library', '  '), false);
+  assert.equal(shouldWriteOverviewCache('native-library', 'D:/cache'), true);
+  assert.throws(() => shouldWriteOverviewCache('standalone', ''), /cache directory/);
+  assert.throws(() => shouldWriteOverviewCache('zotero-local', ''), /cache directory/);
+});
 
 test('only saved or verified overviews contribute to confirmed batch results', () => {
   assert.equal(classifyOverviewBatchOutcome('generated'), 'succeeded');
