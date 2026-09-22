@@ -97,3 +97,13 @@ export function selectReusableCachedTranslations(
 
   return reusable;
 }
+
+export function selectReusableSessionTranslations(
+  snapshot: (SourceBoundTranslationCache & { targetLanguage: string }) | null | undefined,
+  sourceBlocks: TranslationBlockInput[],
+  targetLanguage: string,
+): TranslationMap {
+  return snapshot?.targetLanguage === targetLanguage
+    ? selectReusableCachedTranslations(snapshot, sourceBlocks)
+    : {};
+}

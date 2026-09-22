@@ -57,6 +57,7 @@ import { readTranslationCache } from './readerTranslationCache';
 import {
   buildTranslationSourceMetadata,
   selectReusableCachedTranslations,
+  selectReusableSessionTranslations,
 } from './readerTranslationSource';
 import {
   classifyStructuredDocumentLanguage,
@@ -681,10 +682,11 @@ export function useReaderLibraryActions({
           cachedTranslationResult,
           blocksToTranslate,
         );
-        const reusableSnapshotTranslations =
-          !options.englishOnly && currentSnapshot?.targetLanguage === targetLanguage
-            ? selectReusableCachedTranslations(currentSnapshot, blocksToTranslate)
-            : {};
+        const reusableSnapshotTranslations = selectReusableSessionTranslations(
+          currentSnapshot,
+          blocksToTranslate,
+          targetLanguage,
+        );
         const resumedTranslations = mergeReaderTranslations(
           reusableCachedTranslations,
           reusableSnapshotTranslations,

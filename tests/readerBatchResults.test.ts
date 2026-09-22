@@ -26,6 +26,24 @@ test('Reader and batch overview keys reuse comparable sources but never path-onl
     storedKey: 'paper-1::summary-prompt-v4::Chinese::mineru-markdown::D:/cache/full.md::12',
     resolvedKey: 'native-library:paper-1::summary-prompt-v4::Chinese::mineru-markdown::D:/cache/full.md::12',
   }), true);
+  const jsonBackedReaderKey = 'paper-1::summary-prompt-v4::Chinese::mineru-markdown::D:/cache/content_list_v2.json::12';
+  assert.equal(overviewSourceKeysMatch({
+    ...base,
+    storedKey: jsonBackedReaderKey,
+    resolvedKey: 'native-library:paper-1::summary-prompt-v4::Chinese::mineru-markdown::D:/cache/full.md::12',
+  }), true);
+  assert.equal(overviewSourceKeysMatch({
+    ...base,
+    storedKey: jsonBackedReaderKey,
+    resolvedKey: 'native-library:paper-1::summary-prompt-v4::Chinese::mineru-markdown::blocks::12',
+  }), true);
+  for (const resolvedKey of [
+    'native-library:paper-1::summary-prompt-v4::Chinese::mineru-markdown::D:/other/full.md::12',
+    'native-library:paper-1::summary-prompt-v4::Chinese::mineru-markdown::D:/cache/full.md::13',
+    'native-library:paper-1::summary-prompt-v4::English::mineru-markdown::D:/cache/full.md::12',
+  ]) {
+    assert.equal(overviewSourceKeysMatch({ ...base, storedKey: jsonBackedReaderKey, resolvedKey }), false);
+  }
   assert.equal(overviewSourceKeysMatch({
     ...base,
     storedKey: 'paper-1::summary-prompt-v4::Chinese::pdf-text::local:D:/papers/one.pdf',

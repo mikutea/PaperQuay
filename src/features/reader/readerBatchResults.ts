@@ -2,6 +2,23 @@ import type { LibraryTranslationRunStatus } from './readerLibraryTranslationBatc
 import type { BatchProgressState, LibraryPreviewOutcome } from './readerShared';
 import type { WorkspaceItemSource } from '../../types/reader';
 import type { LiteraturePaperTaskState } from '../../types/library';
+import { guessSiblingMarkdownPath } from '../../utils/mineruCache.ts';
+
+function matchingJsonBackedMineruSource(readerSuffix: string, batchSuffix: string): boolean {
+  const marker = '::mineru-markdown::';
+  const readerMarkerIndex = readerSuffix.indexOf(marker);
+  if (readerMarkerIndex < 0 ||
+    batchSuffix.slice(0, readerMarkerIndex + marker.length) !==
+      readerSuffix.slice(0, readerMarkerIndex + marker.length)) return false;
+
+  const readerSource = readerSuffix.slice(readerMarkerIndex + marker.length).match(/^(.*)::(\d+)$/);
+  const batchSource = batchSuffix.slice(readerMarkerIndex + marker.length).match(/^(.*)::(\d+)$/);
+  if (!readerSource || !batchSource || readerSource[2] !== batchSource[2] ||
+    !/(?:^|[\\/])(?:content_list(?:_v2)?|middle)\.json$/i.test(readerSource[1])) return false;
+
+  return batchSource[1] === 'blocks' ||
+    batchSource[1] === guessSiblingMarkdownPath(readerSource[1]);
+}
 
 export function overviewSourceKeysMatch({
   itemKey,
@@ -24,7 +41,7 @@ export function overviewSourceKeysMatch({
   // The Reader PDF key contains only a path, while the batch key includes byte length.
   // A replaced PDF cannot be proven identical from the Reader key, even at the same path.
   if (readerSuffix.includes('::pdf-text::') || batchSuffix.includes('::pdf-text::')) return false;
-  return readerSuffix === batchSuffix;
+  return readerSuffix === batchSuffix || matchingJsonBackedMineruSource(readerSuffix, batchSuffix);
 }
 
 export function assertTranslationCacheDestination(cacheDir: string, message: string): void {
