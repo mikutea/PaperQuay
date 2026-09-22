@@ -37,6 +37,10 @@ jobs:
               ? context.ref.replace('refs/tags/', '')
               : `app-v${packageJson.version}`;
             const version = tagName.replace(/^app-v/, '');
+            if (version !== packageJson.version) {
+              core.setFailed(`Release tag ${tagName} does not match package.json version ${packageJson.version}.`);
+              return;
+            }
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const releaseName = `PaperQuay v${version}`;

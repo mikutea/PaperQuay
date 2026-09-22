@@ -46,6 +46,7 @@ import { emitLibraryMetadataEnrichRequest } from '../literature/libraryEvents';
 import ReaderPreferencesWindow from './ReaderPreferencesWindow';
 import { useReaderLibraryActions } from './useReaderLibraryActions';
 import { useReaderLibraryPreview } from './useReaderLibraryPreview';
+import { SupersededLibraryRefreshError, shouldReportLibraryRefreshError } from './readerLibraryRefresh';
 import { useReaderSettings } from './useReaderSettings';
 import { useReaderZoteroSync } from './useReaderZoteroSync';
 import {
@@ -238,7 +239,7 @@ function Reader({ workspaceActive = true }: ReaderProps) {
       sortDirection: 'desc',
     });
     if (generation !== nativeLibraryLoadGenerationRef.current) {
-      throw new Error('An older library refresh was superseded by a newer request.');
+      throw new SupersededLibraryRefreshError();
     }
     const hydratedItems = createNativeLibraryWorkspaceItems(
       papers,
@@ -269,7 +270,7 @@ function Reader({ workspaceActive = true }: ReaderProps) {
 
     void loadNativeLibraryBatchItems()
       .catch((nextError) => {
-        if (cancelled) {
+        if (!shouldReportLibraryRefreshError(nextError, cancelled)) {
           return;
         }
 

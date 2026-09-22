@@ -168,7 +168,8 @@ function selectLatestForkRelease(releases) {
       FORK_TAG_PATTERN.test(String(release.tag_name ?? '')) &&
       Array.isArray(release.assets) &&
       release.assets.some((asset) => asset.name === 'stable.yml') &&
-      release.assets.some((asset) => /^PaperQuay-.*-win-x64\.exe$/i.test(String(asset.name ?? ''))),
+      release.assets.some((asset) =>
+        asset.name === `PaperQuay-${String(release.tag_name).slice(5)}-win-x64.exe`),
     )
     .map(normalizeRelease)
     .filter(Boolean)

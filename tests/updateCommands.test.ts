@@ -61,6 +61,12 @@ test('selectLatestForkRelease ignores upstream, draft, and incomplete releases',
   const selected = selectLatestForkRelease([
     release('app-v0.1.26-mikutea.9'),
     release('app-v0.1.26-mikutea.10'),
+    release('app-v0.1.26-mikutea.13', {
+      assets: [
+        { name: 'stable.yml', browser_download_url: 'https://example.com/stable.yml' },
+        { name: 'PaperQuay-0.1.26-mikutea.12-win-x64.exe', browser_download_url: 'https://example.com/setup.exe' },
+      ],
+    }),
     release('app-v0.1.26-mikutea.11', { draft: true }),
     release('app-v0.1.26-mikutea.12', { assets: [] }),
     release('app-v9.9.9-upstream.1'),
