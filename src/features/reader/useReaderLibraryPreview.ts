@@ -696,7 +696,6 @@ export function useReaderLibraryPreview({
           overviewSourceKeysMatch({
             itemKey: item.itemKey,
             workspaceId: item.workspaceId,
-            localPdfPath: item.localPdfPath,
             storedKey: history?.paperSummarySourceKey ?? '',
             resolvedKey: sourceKey,
           })
@@ -715,7 +714,6 @@ export function useReaderLibraryPreview({
         const stateSourceMatches = overviewSourceKeysMatch({
           itemKey: item.itemKey,
           workspaceId: item.workspaceId,
-          localPdfPath: item.localPdfPath,
           storedKey: cachedState?.sourceKey ?? '',
           resolvedKey: sourceKey,
         });

@@ -16,11 +16,10 @@ import {
   sourceKeyAfterOverviewFailure,
 } from '../src/features/reader/readerBatchResults.ts';
 
-test('Reader and batch overview keys match the same native source without matching another source', () => {
+test('Reader and batch overview keys reuse comparable sources but never path-only PDF identities', () => {
   const base = {
     itemKey: 'paper-1',
     workspaceId: 'native-library:paper-1',
-    localPdfPath: 'D:/papers/one.pdf',
   };
   assert.equal(overviewSourceKeysMatch({
     ...base,
@@ -31,7 +30,14 @@ test('Reader and batch overview keys match the same native source without matchi
     ...base,
     storedKey: 'paper-1::summary-prompt-v4::Chinese::pdf-text::local:D:/papers/one.pdf',
     resolvedKey: 'native-library:paper-1::summary-prompt-v4::Chinese::pdf-text::D:/papers/one.pdf::12345',
-  }), true);
+  }), false);
+  assert.equal(overviewSourceKeysMatch({
+    ...base,
+    storedKey: 'paper-1::summary-prompt-v4::Chinese::pdf-text::local:D:/papers/one.pdf',
+    resolvedKey: 'native-library:paper-1::summary-prompt-v4::Chinese::pdf-text::D:/papers/one.pdf::54321',
+  }), false);
+  const verifiedBatchPdfKey = 'native-library:paper-1::summary-prompt-v4::Chinese::pdf-text::D:/papers/one.pdf::54321';
+  assert.equal(overviewSourceKeysMatch({ ...base, storedKey: verifiedBatchPdfKey, resolvedKey: verifiedBatchPdfKey }), true);
   assert.equal(overviewSourceKeysMatch({
     ...base,
     storedKey: 'paper-2::summary-prompt-v4::Chinese::pdf-text::local:D:/papers/one.pdf',

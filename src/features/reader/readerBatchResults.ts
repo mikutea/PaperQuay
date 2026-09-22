@@ -6,13 +6,11 @@ import type { LiteraturePaperTaskState } from '../../types/library';
 export function overviewSourceKeysMatch({
   itemKey,
   workspaceId,
-  localPdfPath,
   storedKey,
   resolvedKey,
 }: {
   itemKey: string;
   workspaceId: string;
-  localPdfPath?: string | null;
   storedKey: string;
   resolvedKey: string;
 }): boolean {
@@ -23,18 +21,10 @@ export function overviewSourceKeysMatch({
   if (!storedKey.startsWith(readerPrefix) || !resolvedKey.startsWith(batchPrefix)) return false;
   const readerSuffix = storedKey.slice(readerPrefix.length);
   const batchSuffix = resolvedKey.slice(batchPrefix.length);
-  if (readerSuffix === batchSuffix) return true;
-  const marker = '::pdf-text::';
-  const markerIndex = readerSuffix.indexOf(marker);
-  const pdfPath = localPdfPath?.trim() ?? '';
-  if (!pdfPath || markerIndex < 0 || batchSuffix.slice(0, markerIndex + marker.length) !==
-    readerSuffix.slice(0, markerIndex + marker.length)) return false;
-  const readerPdfIdentity = readerSuffix.slice(markerIndex + marker.length);
-  const batchPdfIdentity = batchSuffix.slice(markerIndex + marker.length);
-  const batchPathPrefix = `${pdfPath}::`;
-  return readerPdfIdentity === `local:${pdfPath}` &&
-    batchPdfIdentity.startsWith(batchPathPrefix) &&
-    /^\d+$/.test(batchPdfIdentity.slice(batchPathPrefix.length));
+  // The Reader PDF key contains only a path, while the batch key includes byte length.
+  // A replaced PDF cannot be proven identical from the Reader key, even at the same path.
+  if (readerSuffix.includes('::pdf-text::') || batchSuffix.includes('::pdf-text::')) return false;
+  return readerSuffix === batchSuffix;
 }
 
 export function assertTranslationCacheDestination(cacheDir: string, message: string): void {
