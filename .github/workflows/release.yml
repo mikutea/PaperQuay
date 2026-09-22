@@ -171,6 +171,8 @@ jobs:
         run: |
           $version = '${{ needs.create-release.outputs.version }}'
           $portableName = "PaperQuay-$version-win-x64-portable.zip"
+          Copy-Item -LiteralPath 'packaging/windows/portable/Start-PaperQuay.cmd' -Destination 'release/win-unpacked/Start-PaperQuay.cmd'
+          Copy-Item -LiteralPath 'packaging/windows/portable/README.txt' -Destination 'release/win-unpacked/README-portable.txt'
           Compress-Archive -Path 'release/win-unpacked/*' -DestinationPath "release/$portableName" -CompressionLevel Optimal
 
           $assets = Get-ChildItem -LiteralPath release -File | Where-Object {

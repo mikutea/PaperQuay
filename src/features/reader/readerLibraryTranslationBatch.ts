@@ -18,6 +18,7 @@ export type LibraryTranslationRunStatus =
   | 'cached'
   | 'partial'
   | 'skipped'
+  | 'busy'
   | 'cancelled'
   | 'rate-limited'
   | 'service-unavailable'

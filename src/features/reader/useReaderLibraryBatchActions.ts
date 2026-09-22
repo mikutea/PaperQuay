@@ -13,6 +13,7 @@ import {
   type LibraryTranslationRunOptions,
   type LibraryTranslationRunResult,
 } from './readerLibraryTranslationBatch';
+import { onPaperTranslationReleased } from './readerTranslationLock';
 import {
   clampBatchConcurrency,
   clampMineruBatchConcurrency,
@@ -99,6 +100,7 @@ export function useReaderLibraryBatchActions({
   translationConfigured,
 }: UseReaderLibraryBatchActionsOptions): UseReaderLibraryBatchActionsResult {
   const autoMineruAttemptedRef = useRef<Set<string>>(new Set());
+  const autoMineruRateLimitedRef = useRef(false);
   const autoTranslationAttemptedRef = useRef<Set<string>>(new Set());
   const autoSummaryAttemptedRef = useRef<Set<string>>(new Set());
   const batchMineruStartingRef = useRef(false);
@@ -115,6 +117,7 @@ export function useReaderLibraryBatchActions({
   const batchCoordinatorRef = useRef<LibraryBatchKind | null>(null);
   const activeBatchAutoRef = useRef(false);
   const pendingManualSummaryRef = useRef(false);
+  const manualSummaryPreemptingTranslationRef = useRef(false);
   const suppressAutoPipelineRef = useRef(false);
   const manualSummaryActionRef = useRef<(() => Promise<void>) | null>(null);
   const autoTranslationBlockedSignatureRef = useRef<string | null>(null);
@@ -125,6 +128,7 @@ export function useReaderLibraryBatchActions({
   const [batchMineruRunning, setBatchMineruRunning] = useState(false);
   const [batchTranslationRunning, setBatchTranslationRunning] = useState(false);
   const [batchSummaryRunning, setBatchSummaryRunning] = useState(false);
+  const [autoPipelineResumeGeneration, setAutoPipelineResumeGeneration] = useState(0);
   const [batchMineruPaused, setBatchMineruPaused] = useState(false);
   const [batchTranslationPaused, setBatchTranslationPaused] = useState(false);
   const [batchSummaryPaused, setBatchSummaryPaused] = useState(false);
@@ -149,6 +153,7 @@ export function useReaderLibraryBatchActions({
               batchMineruCancelRequestedRef.current = true;
               batchMineruPausedRef.current = false;
             } else if (batchCoordinatorRef.current === 'translation') {
+              manualSummaryPreemptingTranslationRef.current = true;
               batchTranslationCancelRequestedRef.current = true;
               batchTranslationPausedRef.current = false;
             }
@@ -187,7 +192,13 @@ export function useReaderLibraryBatchActions({
           void manualSummaryActionRef.current?.();
         }, 0);
       } else if (kind === 'summary') {
+        const resumeAutoPipeline = suppressAutoPipelineRef.current;
         suppressAutoPipelineRef.current = false;
+        manualSummaryPreemptingTranslationRef.current = false;
+        if (resumeAutoPipeline) {
+          autoPipelineRerunRequestedRef.current = true;
+          setAutoPipelineResumeGeneration((current) => current + 1);
+        }
       }
     }
   }, []);
@@ -195,6 +206,13 @@ export function useReaderLibraryBatchActions({
   const handleBatchMineruParse = useCallback(
     async (options?: { auto?: boolean }) => {
       const auto = options?.auto ?? false;
+
+      if (auto && autoMineruRateLimitedRef.current) {
+        return;
+      }
+      if (!auto) {
+        autoMineruRateLimitedRef.current = false;
+      }
 
       if (batchMineruStartingRef.current || batchMineruRunningRef.current) {
         return;
@@ -461,6 +479,7 @@ export function useReaderLibraryBatchActions({
                   : l('MinerU 解析失败', 'MinerU parsing failed');
               if (isMineruRateLimitError(nextError)) {
                 rateLimited = true;
+                autoMineruRateLimitedRef.current = true;
                 batchMineruCancelRequestedRef.current = true;
               }
             } finally {
@@ -759,6 +778,7 @@ export function useReaderLibraryBatchActions({
           }
           updateProgress(currentLabel);
 
+          let markAttempted = true;
           try {
             const result = await runLibraryItemTranslation(item, {
               batchSize: translationExecutionOptions.batchSize,
@@ -778,11 +798,18 @@ export function useReaderLibraryBatchActions({
               succeededCount += 1;
             } else if (result.status === 'cached') {
               reusedCount += 1;
+            } else if (result.status === 'busy') {
+              skippedCount += 1;
+              lastSkippedReason = result.message;
+              markAttempted = false;
             } else if (result.status === 'skipped') {
               skippedCount += 1;
               lastSkippedReason = result.message;
             } else if (result.status === 'cancelled') {
               batchTranslationCancelRequestedRef.current = true;
+              if (manualSummaryPreemptingTranslationRef.current) {
+                markAttempted = false;
+              }
             } else {
               failedCount += 1;
             }
@@ -798,7 +825,9 @@ export function useReaderLibraryBatchActions({
             failedCount += 1;
           } finally {
             completedCount += 1;
-            autoTranslationAttemptedRef.current.add(candidate.attemptKey);
+            if (markAttempted) {
+              autoTranslationAttemptedRef.current.add(candidate.attemptKey);
+            }
             updateProgress(currentLabel);
           }
 
@@ -809,7 +838,8 @@ export function useReaderLibraryBatchActions({
       } finally {
         const wasCancelled =
           batchTranslationCancelRequestedRef.current && !rateLimited && !serviceUnavailable;
-        if (rateLimited || serviceUnavailable || wasCancelled) {
+        if (rateLimited || serviceUnavailable ||
+            (wasCancelled && !manualSummaryPreemptingTranslationRef.current)) {
           autoTranslationBlockedSignatureRef.current = runSignature;
         }
         batchTranslationRunningRef.current = false;
@@ -922,7 +952,23 @@ export function useReaderLibraryBatchActions({
         return;
       }
 
-      if (allKnownItems.length === 0) {
+      let batchItems = allKnownItems;
+      try {
+        const libraryItems = await loadLibraryBatchItems();
+        batchItems = buildAuthoritativeLibraryBatchItems(allKnownItems, libraryItems);
+      } catch (nextError) {
+        const message = nextError instanceof Error
+          ? nextError.message
+          : l('加载批处理文库失败', 'Failed to load the library for batch processing');
+        if (!auto) {
+          setError(message);
+          setStatusMessage(message);
+        }
+        releaseBatchCoordinator('summary');
+        return;
+      }
+
+      if (batchItems.length === 0) {
         if (!auto) {
           setStatusMessage(
             l(
@@ -943,7 +989,7 @@ export function useReaderLibraryBatchActions({
       }>;
       try {
         preparedCandidates = await Promise.all(
-          allKnownItems.map(async (item) => {
+          batchItems.map(async (item) => {
             const parseResult =
               settings.summarySourceMode === 'mineru-markdown'
                 ? await findExistingMineruJson(item)
@@ -1152,6 +1198,7 @@ export function useReaderLibraryBatchActions({
       findExistingMineruJson,
       generateLibraryPreview,
       l,
+      loadLibraryBatchItems,
       releaseBatchCoordinator,
       setError,
       setPreferencesOpen,
@@ -1333,7 +1380,16 @@ export function useReaderLibraryBatchActions({
   }, [l, setStatusMessage]);
 
   useEffect(() => {
+    return onPaperTranslationReleased(() => {
+      if (settings.autoTranslateEnglishLibrary && !batchCoordinatorRef.current) {
+        setAutoPipelineResumeGeneration((current) => current + 1);
+      }
+    });
+  }, [settings.autoTranslateEnglishLibrary]);
+
+  useEffect(() => {
     autoMineruAttemptedRef.current.clear();
+    autoMineruRateLimitedRef.current = false;
   }, [
     mineruApiToken,
     settings.mineruApiBaseUrl,
@@ -1416,6 +1472,7 @@ export function useReaderLibraryBatchActions({
     })();
   }, [
     allKnownItems,
+    autoPipelineResumeGeneration,
     batchMineruRunning,
     batchSummaryRunning,
     batchTranslationRunning,

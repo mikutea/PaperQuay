@@ -21,7 +21,7 @@ import {
   buildRagSourceOptions,
   buildSummaryLanguageOptions,
   buildSummarySourceOptions,
-  clampMineruBatchConcurrency,
+  clampBatchConcurrency,
   resolveModelPreset,
   type PreferencesSectionKey,
 } from './readerShared';
@@ -753,21 +753,21 @@ export function ReaderPreferencesContent({
                   </div>
                   <div className="mt-1 text-xs leading-5 text-slate-500">
                     {l(
-                      '控制批量 MinerU 解析的并发度；全库任务安全上限为 2。',
-                      'Controls batch MinerU parse concurrency; full-library runs are capped at 2 for safety.',
+                      '概览任务可设为 1–8；MinerU 解析运行时仍最多并发 2 项。',
+                      'Overview batches can use 1–8; MinerU parsing remains capped at 2 at runtime.',
                     )}
                   </div>
                 </div>
                 <SettingsInput
                   type="number"
                   min={1}
-                  max={2}
+                  max={8}
                   step={1}
                   value={String(settings.libraryBatchConcurrency)}
                   onChange={(event) =>
                     onSettingChange(
                       'libraryBatchConcurrency',
-                      clampMineruBatchConcurrency(Number(event.target.value)),
+                      clampBatchConcurrency(Number(event.target.value)),
                     )
                   }
                 />
@@ -787,8 +787,7 @@ export function ReaderPreferencesContent({
                   onClick={onBatchMineruParse}
                   disabled={
                     batchMineruRunning ||
-                    mineruBatchHydrating ||
-                    mineruBatchCandidateCount === 0
+                    mineruBatchHydrating
                   }
                   className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-800 disabled:opacity-60"
                 >
@@ -797,7 +796,7 @@ export function ReaderPreferencesContent({
                     : mineruBatchHydrating
                       ? l('正在加载文库…', 'Loading library…')
                       : mineruBatchCandidateCount === 0
-                        ? l('没有可处理的 PDF', 'No processable PDFs')
+                        ? l('刷新文库并启动解析', 'Refresh library and start parsing')
                         : l('启动 MinerU 批量解析', 'Start MinerU Batch Parse')}
                 </button>
                 {batchMineruRunning ? (

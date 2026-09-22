@@ -52,6 +52,13 @@ function updateSupportText(status: AppUpdateStatus | null, l: ReaderPreferencesL
     return l('开发环境仅检查 GitHub 最新版本', 'Development mode checks the latest GitHub version only');
   }
 
+  if (status.autoUpdateUnsupportedReason === 'windows-portable') {
+    return l(
+      '免安装版请使用已验证的 fork 更新脚本或手动下载新版 ZIP；此处不运行 NSIS 安装更新。',
+      'For the portable build, use the verified fork updater or download a new ZIP. NSIS installation is disabled here.',
+    );
+  }
+
   return l('当前平台需要手动下载新版', 'This platform requires manual downloads');
 }
 
@@ -191,8 +198,8 @@ export function ReaderPreferencesUpdateSection({
     <SettingsField
       label={l('软件更新', 'Software Updates')}
       description={l(
-        'Windows 和 Linux AppImage 可自动下载并安装；macOS 当前提供更新检查和手动下载。',
-        'Windows and Linux AppImage can download and install updates automatically. macOS currently checks and opens manual downloads.',
+        'Windows NSIS 安装版和 Linux AppImage 可自动下载并安装；免安装版与 macOS 可检查并手动下载。',
+        'Windows NSIS installers and Linux AppImage can download and install automatically. Portable builds and macOS check updates for manual download.',
       )}
     >
       <div className="space-y-4">

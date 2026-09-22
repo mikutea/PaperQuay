@@ -49,6 +49,25 @@ test("English-library auto translation remains opt-in", async () => {
   );
 });
 
+test("summary concurrency is independent of the MinerU two-job limit", async () => {
+  const { normalizeReaderSettings } = await loadReaderShared();
+  assert.equal(normalizeReaderSettings({ libraryBatchConcurrency: 8 }).libraryBatchConcurrency, 8);
+});
+
+test("credential revision changes on a key change without exposing the key", async () => {
+  const { credentialRevision } = await loadReaderShared();
+  assert.notEqual(credentialRevision('first-secret'), credentialRevision('second-secret'));
+  assert.equal(credentialRevision('first-secret'), credentialRevision('first-secret'));
+  assert.doesNotMatch(credentialRevision('first-secret'), /first-secret/);
+});
+
+test("unchanged native-library hydration keeps the previous collection", async () => {
+  const { sameNativeLibraryWorkspaceItems } = await loadReaderShared();
+  const first = { workspaceId: 'native-library:a', itemKey: 'a', title: 'Paper', creators: '', year: 2024, attachmentFilename: 'paper.pdf', localPdfPath: 'D:/paper.pdf' };
+  assert.equal(sameNativeLibraryWorkspaceItems([first] as never, [{ ...first }] as never), true);
+  assert.equal(sameNativeLibraryWorkspaceItems([first] as never, [{ ...first, localPdfPath: 'D:/moved.pdf' }] as never), false);
+});
+
 test("embedding input format defaults to plain and accepts query-passage", async () => {
   const { normalizeReaderSettings } = await loadReaderShared();
 

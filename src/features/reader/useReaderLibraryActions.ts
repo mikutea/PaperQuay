@@ -36,6 +36,7 @@ import { buildMineruCachePaths } from '../../utils/mineruCache';
 import {
   createNativeLibraryWorkspaceItem,
   createStandaloneItem,
+  credentialRevision,
   getModelRuntimeConfig,
   EMPTY_LIBRARY_PREVIEW_STATE,
   type BatchProgressState,
@@ -63,6 +64,7 @@ import {
 } from './readerLibraryTranslationBatch';
 import type { UseReaderLibraryActionsOptions } from './readerLibraryActionTypes';
 import { useReaderLibraryBatchActions } from './useReaderLibraryBatchActions';
+import { tryAcquirePaperTranslation } from './readerTranslationLock';
 
 export interface UseReaderLibraryActionsResult {
   batchMineruPaused: boolean;
@@ -502,6 +504,18 @@ export function useReaderLibraryActions({
         return emptyResult('failed', message);
       }
 
+      const releasePaperTranslation = tryAcquirePaperTranslation(item.workspaceId);
+      if (!releasePaperTranslation) {
+        const message = l(
+          '已跳过：此论文正在另一处翻译，请稍后重试。',
+          'Skipped: this paper is being translated elsewhere. Retry later.',
+        );
+        if (!quiet) {
+          setStatusMessage(message);
+        }
+        return emptyResult('busy', message);
+      }
+
       if (!quiet) {
         setError('');
       }
@@ -904,6 +918,8 @@ export function useReaderLibraryActions({
           },
         }));
         return emptyResult(options.signal?.aborted ? 'cancelled' : 'failed', message);
+      } finally {
+        releasePaperTranslation();
       }
     },
     [
@@ -964,6 +980,7 @@ export function useReaderLibraryActions({
       translationModelPreset?.id ?? '',
       translationModelPreset?.baseUrl.trim() ?? '',
       translationModelPreset?.model.trim() ?? '',
+      credentialRevision(translationModelPreset?.apiKey ?? ''),
       translationModelPreset?.apiMode ?? '',
       settings.translationRequestsPerMinute,
       getModelRuntimeConfig(settings, 'translation').reasoningEffort ?? '',

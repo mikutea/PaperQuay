@@ -224,7 +224,31 @@ test('translation service outages stop a serial batch after its first failed req
   assert.deepEqual(requestedBlockIds, ['a']);
   assert.deepEqual(result.failedBlocks.map((block) => block.blockId), ['a', 'b']);
   assert.equal(isTranslationServiceUnavailableError(Object.assign(new Error('HTTP 503'), { status: 503 })), true);
+  assert.equal(isTranslationServiceUnavailableError(new Error('The operation was aborted due to timeout')), true);
+  assert.equal(isTranslationServiceUnavailableError(new Error('HTTP 400: context exceeds 500 tokens')), false);
+  assert.equal(isTranslationServiceUnavailableError(new Error('status code 500: server unavailable')), true);
   assert.equal(isTranslationServiceUnavailableError(new Error('Translation output was not valid JSON')), false);
+});
+
+test('serial translation stops after the first timeout instead of retrying every paper block', async () => {
+  const requestedBlockIds: string[] = [];
+  const result = await translateBlocksBestEffort({
+    apiKey: 'test-key',
+    baseUrl: 'http://127.0.0.1:3344/v1',
+    batchSize: 1,
+    blocks: [{ blockId: 'a', text: 'Alpha' }, { blockId: 'b', text: 'Beta' }],
+    concurrency: 1,
+    model: 'test-model',
+    sourceLanguage: 'English',
+    stopOnServiceUnavailable: true,
+    targetLanguage: 'Chinese',
+    translateBatch: async (options) => {
+      requestedBlockIds.push(options.blocks[0]?.blockId ?? '');
+      throw new Error('The operation was aborted due to timeout');
+    },
+  });
+  assert.equal(result.serviceUnavailable, true);
+  assert.deepEqual(requestedBlockIds, ['a']);
 });
 
 test('translateBlocksBestEffort keeps prior single-block results when a later request is rate limited', async () => {

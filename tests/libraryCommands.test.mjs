@@ -25,6 +25,26 @@ function createAppPaths() {
   };
 }
 
+test('library_list_all_papers does not truncate a full-library task at 1000 papers', async () => {
+  const appPaths = createAppPaths();
+  const papers = Array.from({ length: 1001 }, (_, index) => ({
+    id: `paper-${index}`,
+    title: `Paper ${index}`,
+    sortOrder: index,
+    importedAt: index,
+  }));
+  const commands = createLibraryCommands({
+    appPaths,
+    store: { load: () => ({ papers, categories: [] }) },
+  });
+  try {
+    assert.equal((await commands.library_list_papers({ request: { limit: 2000 } })).length, 1000);
+    assert.equal((await commands.library_list_all_papers()).length, 1001);
+  } finally {
+    rmSync(appPaths.dataDir, { recursive: true, force: true });
+  }
+});
+
 test('library_update_settings migrates stored PDFs into the new storage directory', async () => {
   const appPaths = createAppPaths();
   let store = null;
