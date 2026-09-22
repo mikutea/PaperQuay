@@ -1,6 +1,23 @@
 import type { LibraryTranslationRunStatus } from './readerLibraryTranslationBatch';
 import type { BatchProgressState, LibraryPreviewOutcome } from './readerShared';
 import type { WorkspaceItemSource } from '../../types/reader';
+import type { LiteraturePaperTaskState } from '../../types/library';
+
+export function shouldPreferRetainedOverview({
+  hasUsableSummary,
+  retainedSourceKey,
+  resolvedSourceKey,
+  operation,
+}: {
+  hasUsableSummary: boolean;
+  retainedSourceKey: string;
+  resolvedSourceKey: string;
+  operation: Pick<LiteraturePaperTaskState, 'kind' | 'status'> | null | undefined;
+}): boolean {
+  return hasUsableSummary && Boolean(resolvedSourceKey) &&
+    retainedSourceKey === resolvedSourceKey &&
+    operation?.kind === 'overview' && operation.status === 'error';
+}
 
 export function shouldWriteOverviewCache(
   source: WorkspaceItemSource,

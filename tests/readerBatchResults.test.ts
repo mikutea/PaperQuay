@@ -10,8 +10,37 @@ import {
   saveVerifiedLibraryOverview,
   selectUsableOverview,
   shouldWriteOverviewCache,
+  shouldPreferRetainedOverview,
   sourceKeyAfterOverviewFailure,
 } from '../src/features/reader/readerBatchResults.ts';
+
+test('a valid unsaved overview B takes precedence over older history or cache A', () => {
+  const retry = { kind: 'overview' as const, status: 'error' as const };
+  assert.equal(shouldPreferRetainedOverview({
+    hasUsableSummary: true,
+    retainedSourceKey: 'source-1',
+    resolvedSourceKey: 'source-1',
+    operation: retry,
+  }), true);
+  assert.equal(shouldPreferRetainedOverview({
+    hasUsableSummary: false,
+    retainedSourceKey: 'source-1',
+    resolvedSourceKey: 'source-1',
+    operation: retry,
+  }), false);
+  assert.equal(shouldPreferRetainedOverview({
+    hasUsableSummary: true,
+    retainedSourceKey: 'old-source',
+    resolvedSourceKey: 'source-1',
+    operation: retry,
+  }), false);
+  assert.equal(shouldPreferRetainedOverview({
+    hasUsableSummary: true,
+    retainedSourceKey: 'source-1',
+    resolvedSourceKey: 'source-1',
+    operation: { kind: 'overview', status: 'success' },
+  }), false);
+});
 
 test('invalid cached, history, and session summaries are never retained for retry', () => {
   const format = (summary: { content?: string }) => summary.content?.trim() ?? '';

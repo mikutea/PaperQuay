@@ -49,6 +49,7 @@ import {
   persistOverviewIfCurrent,
   saveVerifiedLibraryOverview,
   selectUsableOverview,
+  shouldPreferRetainedOverview,
   shouldWriteOverviewCache,
   sourceKeyAfterOverviewFailure,
 } from './readerBatchResults';
@@ -719,6 +720,12 @@ export function useReaderLibraryPreview({
           cachedState?.summary,
           formatPaperSummaryForLibrary,
         );
+        const preferRetainedSummary = shouldPreferRetainedOverview({
+          hasUsableSummary: Boolean(reusableStateSummary),
+          retainedSourceKey: cachedState?.sourceKey ?? '',
+          resolvedSourceKey: sourceKey,
+          operation: cachedState?.operation,
+        });
 
         if (libraryPreviewRequestIdRef.current[item.workspaceId] !== requestId) {
           return 'skipped';
@@ -745,7 +752,7 @@ export function useReaderLibraryPreview({
           return 'skipped';
         }
 
-        if (!force && historySummary) {
+        if (!force && historySummary && !preferRetainedSummary) {
           availableSummary = historySummary;
           if (!await persistIfCurrent(historySummary, sourceKey)) return 'skipped';
           setLibraryPreviewStates((current) => ({
@@ -774,7 +781,7 @@ export function useReaderLibraryPreview({
           return 'loaded';
         }
 
-        if (!force && cachedSummary) {
+        if (!force && cachedSummary && !preferRetainedSummary) {
           availableSummary = cachedSummary;
           if (!await persistIfCurrent(cachedSummary, sourceKey, true)) return 'skipped';
           setLibraryPreviewStates((current) => ({
