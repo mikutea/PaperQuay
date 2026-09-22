@@ -7,7 +7,15 @@ import {
   resolveVerifiedTranslationStatus,
   saveVerifiedLibraryOverview,
   shouldWriteOverviewCache,
+  sourceKeyAfterOverviewFailure,
 } from '../src/features/reader/readerBatchResults.ts';
+
+test('a generated but unsaved overview retains its source key for a save-only retry', () => {
+  assert.equal(sourceKeyAfterOverviewFailure(true, 'new-source', ''), 'new-source');
+  assert.equal(sourceKeyAfterOverviewFailure(true, 'new-source', 'old-source'), 'new-source');
+  assert.equal(sourceKeyAfterOverviewFailure(false, 'new-source', 'old-source'), 'old-source');
+  assert.equal(sourceKeyAfterOverviewFailure(true, '', 'old-source'), 'old-source');
+});
 
 test('native library remains a verified overview save target without a cache path', () => {
   assert.equal(shouldWriteOverviewCache('native-library', ''), false);

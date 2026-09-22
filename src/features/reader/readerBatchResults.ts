@@ -11,6 +11,16 @@ export function shouldWriteOverviewCache(
   throw new Error('The overview cache directory is not configured.');
 }
 
+export function sourceKeyAfterOverviewFailure(
+  hasAvailableSummary: boolean,
+  resolvedSourceKey: string,
+  previousSourceKey: string,
+): string {
+  return hasAvailableSummary && resolvedSourceKey
+    ? resolvedSourceKey
+    : previousSourceKey;
+}
+
 export function countVerifiedBatchResults(
   progress: Pick<BatchProgressState, 'succeeded' | 'reused'>,
 ): number {

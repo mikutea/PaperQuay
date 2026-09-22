@@ -44,7 +44,11 @@ import {
   writePreviewSummaryCache,
 } from './readerLibraryPreview';
 import { countTranslatedBlocks } from './readerTranslation';
-import { saveVerifiedLibraryOverview, shouldWriteOverviewCache } from './readerBatchResults';
+import {
+  saveVerifiedLibraryOverview,
+  shouldWriteOverviewCache,
+  sourceKeyAfterOverviewFailure,
+} from './readerBatchResults';
 import { readTranslationCache } from './readerTranslationCache';
 import { mapPreviewItemsWithConcurrency } from './readerPreviewWork';
 import type {
@@ -671,6 +675,7 @@ export function useReaderLibraryPreview({
       }));
 
       let availableSummary: PaperSummary | null = null;
+      let resolvedSourceKey = '';
       try {
         const previewContext = await loadLibraryPreviewBlocks(item);
         const summaryRequest = await resolveLibraryPreviewSummaryRequest(item, previewContext.blocks);
@@ -680,6 +685,7 @@ export function useReaderLibraryPreview({
           documentText,
           errorMessage,
         } = summaryRequest;
+        resolvedSourceKey = sourceKey;
         const historySummary =
           loadPaperHistory(item.workspaceId)?.paperSummarySourceKey === sourceKey
             ? loadPaperHistory(item.workspaceId)?.paperSummary ?? null
@@ -937,7 +943,11 @@ export function useReaderLibraryPreview({
               (item.localPdfPath ? getFileNameFromPath(item.localPdfPath) : noPdfLoadedText),
             currentJsonName: libraryPreviewStates[item.workspaceId]?.currentJsonName ?? notLoadedText,
             statusMessage: l('生成预览概览失败', 'Failed to generate the preview overview'),
-            sourceKey: libraryPreviewStates[item.workspaceId]?.sourceKey ?? '',
+            sourceKey: sourceKeyAfterOverviewFailure(
+              Boolean(availableSummary),
+              resolvedSourceKey,
+              current[item.workspaceId]?.sourceKey ?? '',
+            ),
           },
         }));
         return 'failed';
