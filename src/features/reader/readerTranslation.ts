@@ -20,6 +20,7 @@ export interface IncrementalTranslationResult {
   failedBlocks: TranslationBlockInput[];
   failureMessages: string[];
   rateLimited: boolean;
+  serviceUnavailable: boolean;
   totalBlocks: number;
   translatedCount: number;
   translations: TranslationMap;
@@ -42,6 +43,7 @@ export interface TranslateBlocksBestEffortOptions {
   signal?: AbortSignal;
   sourceLanguage: string;
   stopOnRateLimit?: boolean;
+  stopOnServiceUnavailable?: boolean;
   targetLanguage: string;
   temperature?: number;
   translateBatch: (
@@ -161,6 +163,19 @@ export function isTranslationRateLimitError(error: unknown): boolean {
     message.includes('rate-limit') ||
     message.includes('rate_limit')
   );
+}
+
+export function isTranslationServiceUnavailableError(error: unknown): boolean {
+  const status = error && typeof error === 'object' && 'status' in error
+    ? Number((error as { status?: unknown }).status)
+    : NaN;
+  if ([401, 403, 404, 500, 502, 503, 504].includes(status)) {
+    return true;
+  }
+
+  const message = toErrorMessage(error).toLowerCase();
+  return /(^|\D)(401|403|404|500|502|503|504)(\D|$)/.test(message) ||
+    /fetch failed|failed to fetch|econnrefused|econnreset|connection refused|network error|model_router_error|lm studio server did not start/i.test(message);
 }
 
 export function normalizeTranslationMap(translations: TranslationMap | null | undefined): TranslationMap {
@@ -299,6 +314,7 @@ export async function translateBlocksBestEffort({
   signal,
   sourceLanguage,
   stopOnRateLimit = false,
+  stopOnServiceUnavailable = false,
   targetLanguage,
   temperature,
   translateBatch,
@@ -324,6 +340,7 @@ export async function translateBlocksBestEffort({
       failedBlocks: [],
       failureMessages: [],
       rateLimited: false,
+      serviceUnavailable: false,
       totalBlocks: 0,
       translatedCount: 0,
       translations: {},
@@ -362,6 +379,7 @@ export async function translateBlocksBestEffort({
       failedBlocks: [],
       failureMessages: [],
       rateLimited: false,
+      serviceUnavailable: false,
       totalBlocks: requestedBlocks.length,
       translatedCount: Object.keys(translations).length,
       translations,
@@ -371,9 +389,10 @@ export async function translateBlocksBestEffort({
   let cursor = 0;
   let stoppedByControl = false;
   let rateLimited = false;
+  let serviceUnavailable = false;
   const runWorker = async () => {
     while (true) {
-      if (signal?.aborted || stoppedByControl || rateLimited) {
+      if (signal?.aborted || stoppedByControl || rateLimited || serviceUnavailable) {
         return;
       }
 
@@ -384,7 +403,8 @@ export async function translateBlocksBestEffort({
         currentIndex >= batches.length ||
         signal?.aborted ||
         stoppedByControl ||
-        rateLimited
+        rateLimited ||
+        serviceUnavailable
       ) {
         return;
       }
@@ -394,7 +414,7 @@ export async function translateBlocksBestEffort({
         return;
       }
 
-      if (signal?.aborted || stoppedByControl || rateLimited) {
+      if (signal?.aborted || stoppedByControl || rateLimited || serviceUnavailable) {
         return;
       }
 
@@ -405,7 +425,7 @@ export async function translateBlocksBestEffort({
         return;
       }
 
-      if (signal?.aborted || stoppedByControl || rateLimited) {
+      if (signal?.aborted || stoppedByControl || rateLimited || serviceUnavailable) {
         return;
       }
 
@@ -481,6 +501,9 @@ export async function translateBlocksBestEffort({
         if (stopOnRateLimit && isTranslationRateLimitError(error)) {
           rateLimited = true;
         }
+        if (stopOnServiceUnavailable && isTranslationServiceUnavailableError(error)) {
+          serviceUnavailable = true;
+        }
 
         for (const block of batch) {
           failedBlocksById.set(block.blockId, block);
@@ -503,6 +526,7 @@ export async function translateBlocksBestEffort({
     failedBlocks: requestedBlocks.filter((block) => !translations[block.blockId]?.trim()),
     failureMessages,
     rateLimited,
+    serviceUnavailable,
     totalBlocks: requestedBlocks.length,
     translatedCount: Object.keys(translations).length,
     translations,

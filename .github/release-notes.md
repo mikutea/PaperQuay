@@ -22,12 +22,17 @@ The binaries are not code-signed. Windows SmartScreen may show an unrecognized-a
 - Includes Pizzip's `pako` runtime dependency in packaged builds, preventing the main-process `Cannot find module 'pako/dist/pako.es5.min.js'` startup error.
 - Grants the Windows Chromium sandbox the minimum inherited read/execute access it requires, using the localized-independent `S-1-15-2-2` SID instead of disabling the sandbox.
 - Verifies the packaged `app.asar` can resolve the Pizzip/Pako runtime chain before release assets are published.
+- Keeps library-wide translation strictly serial, resumes saved translated blocks, and stops the run promptly when the translation service is unavailable instead of failing every paper.
+- Lets a manual “Generate All Overviews” request take priority over an automatic MinerU or translation batch after the current in-flight item finishes.
+- Preserves the validated Windows `--user-data-dir` profile path so the real library is not replaced by an empty nested profile.
+
+The local MiyuoAPI/LM Studio router and its Windows watchdog are personal device configuration, not bundled in the PaperQuay installers. Both TranslateGemma and Nemotron embedding are loaded on demand through the router, switched mutually exclusively, and given a 300-second idle unload TTL.
 
 Personal device-to-device library synchronization is intentionally not an application feature and is not included in these binaries.
 
 ## Verification
 
-- Full test suite: 213/213 passed on the integrated commit graph.
+- Full test suite: 216/216 passed on the integrated commit graph.
 - TypeScript check and production Vite build passed.
 - Windows x64 Electron packaging and packaged-runtime smoke verification are performed by the release workflow before publication.
 
@@ -61,12 +66,17 @@ Windows x64 构建：
 - 在发行包中纳入 Pizzip 的 `pako` 运行时依赖，避免主进程因 `Cannot find module 'pako/dist/pako.es5.min.js'` 而启动报错。
 - 使用不受系统显示语言影响的 `S-1-15-2-2` SID，为 Windows Chromium 沙箱补充最小继承式读取/执行权限，不关闭沙箱。
 - 发布前对实际 `app.asar` 执行 Pizzip/Pako 运行时解析烟雾测试。
+- 全库翻译严格串行、续用已保存段落，并在翻译服务不可用时及时停止本轮，避免逐篇失败。
+- 手动“全部生成概览”可以在当前进行中的自动 MinerU／翻译项目结束后优先运行。
+- 保留已验证的 Windows `--user-data-dir` 路径，避免误建空白嵌套文库。
+
+本机 MiyuoAPI／LM Studio 路由及 Windows 看护任务属于个人设备配置，不包含在 PaperQuay 安装包中。TranslateGemma 与 Nemotron embedding 均由路由按需装载、互斥切换，空闲 300 秒后卸载。
 
 两台个人设备之间的文献同步明确不是应用功能，也不包含在本软件二进制中。
 
 ## 验证
 
-- 集成提交图上的完整测试 213/213 通过。
+- 集成提交图上的完整测试 216/216 通过。
 - TypeScript 检查与生产 Vite 构建通过。
 - Windows x64 Electron 打包与发行物运行时烟雾测试由发行工作流完成，并在发布前作为门禁。
 

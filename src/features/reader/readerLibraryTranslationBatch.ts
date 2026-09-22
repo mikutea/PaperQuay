@@ -20,6 +20,7 @@ export type LibraryTranslationRunStatus =
   | 'skipped'
   | 'cancelled'
   | 'rate-limited'
+  | 'service-unavailable'
   | 'failed';
 
 export interface LibraryTranslationRunResult {
@@ -38,6 +39,7 @@ export interface LibraryTranslationRunOptions {
   signal?: AbortSignal;
   sourceLanguage?: string;
   stopOnRateLimit?: boolean;
+  stopOnServiceUnavailable?: boolean;
   targetLanguage?: string;
   waitForResumeOrCancel?: () => Promise<boolean>;
 }

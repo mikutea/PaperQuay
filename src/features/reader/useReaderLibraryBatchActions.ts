@@ -113,6 +113,10 @@ export function useReaderLibraryBatchActions({
   const batchTranslationRateLimitAbortControllerRef = useRef<AbortController | null>(null);
   const batchSummaryCancelRequestedRef = useRef(false);
   const batchCoordinatorRef = useRef<LibraryBatchKind | null>(null);
+  const activeBatchAutoRef = useRef(false);
+  const pendingManualSummaryRef = useRef(false);
+  const suppressAutoPipelineRef = useRef(false);
+  const manualSummaryActionRef = useRef<(() => Promise<void>) | null>(null);
   const autoTranslationBlockedSignatureRef = useRef<string | null>(null);
   const autoPipelineRunningRef = useRef(false);
   const autoPipelineRerunRequestedRef = useRef(false);
@@ -138,6 +142,24 @@ export function useReaderLibraryBatchActions({
     (kind: LibraryBatchKind, auto: boolean) => {
       if (batchCoordinatorRef.current !== null) {
         if (!auto) {
+          if (kind === 'summary' && activeBatchAutoRef.current) {
+            pendingManualSummaryRef.current = true;
+            suppressAutoPipelineRef.current = true;
+            if (batchCoordinatorRef.current === 'mineru') {
+              batchMineruCancelRequestedRef.current = true;
+              batchMineruPausedRef.current = false;
+            } else if (batchCoordinatorRef.current === 'translation') {
+              batchTranslationCancelRequestedRef.current = true;
+              batchTranslationPausedRef.current = false;
+            }
+            setStatusMessage(
+              l(
+                '正在结束自动全库任务，随后开始批量生成概览。',
+                'Finishing the automatic library task, then generating all overviews.',
+              ),
+            );
+            return false;
+          }
           setStatusMessage(
             l(
               '另一项全库任务正在运行，请等待其结束后再试。',
@@ -149,6 +171,7 @@ export function useReaderLibraryBatchActions({
       }
 
       batchCoordinatorRef.current = kind;
+      activeBatchAutoRef.current = auto;
       return true;
     },
     [l, setStatusMessage],
@@ -157,6 +180,15 @@ export function useReaderLibraryBatchActions({
   const releaseBatchCoordinator = useCallback((kind: LibraryBatchKind) => {
     if (batchCoordinatorRef.current === kind) {
       batchCoordinatorRef.current = null;
+      activeBatchAutoRef.current = false;
+      if (pendingManualSummaryRef.current) {
+        pendingManualSummaryRef.current = false;
+        setTimeout(() => {
+          void manualSummaryActionRef.current?.();
+        }, 0);
+      } else if (kind === 'summary') {
+        suppressAutoPipelineRef.current = false;
+      }
     }
   }, []);
 
@@ -242,7 +274,7 @@ export function useReaderLibraryBatchActions({
       batchMineruRunningRef.current = true;
       batchMineruStartingRef.current = false;
       batchMineruPausedRef.current = false;
-      batchMineruCancelRequestedRef.current = false;
+      batchMineruCancelRequestedRef.current = pendingManualSummaryRef.current;
       setBatchMineruRunning(true);
       setBatchMineruPaused(false);
       setBatchMineruProgress({
@@ -655,7 +687,7 @@ export function useReaderLibraryBatchActions({
 
       batchTranslationRunningRef.current = true;
       batchTranslationPausedRef.current = false;
-      batchTranslationCancelRequestedRef.current = false;
+      batchTranslationCancelRequestedRef.current = pendingManualSummaryRef.current;
       setBatchTranslationRunning(true);
       setBatchTranslationPaused(false);
       setBatchTranslationProgress({
@@ -677,6 +709,7 @@ export function useReaderLibraryBatchActions({
       let skippedCount = 0;
       let failedCount = 0;
       let rateLimited = false;
+      let serviceUnavailable = false;
       let lastSkippedReason = '';
 
       const waitForResumeOrCancel = async () => {
@@ -736,6 +769,7 @@ export function useReaderLibraryBatchActions({
               quiet: true,
               sourceLanguage: 'English',
               stopOnRateLimit: true,
+              stopOnServiceUnavailable: true,
               targetLanguage: 'Chinese',
               waitForResumeOrCancel,
             });
@@ -756,6 +790,9 @@ export function useReaderLibraryBatchActions({
             if (result.status === 'rate-limited') {
               rateLimited = true;
               batchTranslationCancelRequestedRef.current = true;
+            } else if (result.status === 'service-unavailable') {
+              serviceUnavailable = true;
+              batchTranslationCancelRequestedRef.current = true;
             }
           } catch {
             failedCount += 1;
@@ -765,14 +802,14 @@ export function useReaderLibraryBatchActions({
             updateProgress(currentLabel);
           }
 
-          if (rateLimited || batchTranslationCancelRequestedRef.current) {
+          if (rateLimited || serviceUnavailable || batchTranslationCancelRequestedRef.current) {
             break;
           }
         }
       } finally {
         const wasCancelled =
-          batchTranslationCancelRequestedRef.current && !rateLimited;
-        if (rateLimited || wasCancelled) {
+          batchTranslationCancelRequestedRef.current && !rateLimited && !serviceUnavailable;
+        if (rateLimited || serviceUnavailable || wasCancelled) {
           autoTranslationBlockedSignatureRef.current = runSignature;
         }
         batchTranslationRunningRef.current = false;
@@ -801,6 +838,11 @@ export function useReaderLibraryBatchActions({
                 `翻译服务触发 429 限流，已停止本轮；已完成 ${completedCount}/${candidates.length}`,
                 `Translation hit a 429 rate limit; stopped after ${completedCount}/${candidates.length}`,
               )
+            : serviceUnavailable
+              ? l(
+                  `翻译服务不可用，已停止本轮；已完成 ${completedCount}/${candidates.length}`,
+                  `Translation service unavailable; stopped after ${completedCount}/${candidates.length}`,
+                )
             : wasCancelled
               ? l(
                   `英文论文批量翻译已取消，已完成 ${completedCount}/${candidates.length}`,
@@ -814,13 +856,18 @@ export function useReaderLibraryBatchActions({
         releaseBatchCoordinator('translation');
       }
 
-      if (!auto || rateLimited) {
+      if (!auto || rateLimited || serviceUnavailable) {
         setStatusMessage(
           rateLimited
             ? l(
                 `翻译服务触发 429 限流，已停止本轮：成功 ${succeededCount}，复用 ${reusedCount}，跳过 ${skippedCount}，失败 ${failedCount}`,
                 `Translation hit a 429 rate limit and stopped: succeeded ${succeededCount}, reused ${reusedCount}, skipped ${skippedCount}, failed ${failedCount}`,
               )
+            : serviceUnavailable
+              ? l(
+                  `翻译服务不可用，已停止本轮：成功 ${succeededCount}，复用 ${reusedCount}，跳过 ${skippedCount}，失败 ${failedCount}`,
+                  `Translation service unavailable and stopped: succeeded ${succeededCount}, reused ${reusedCount}, skipped ${skippedCount}, failed ${failedCount}`,
+                )
             : batchTranslationCancelRequestedRef.current
               ? l(
                   `英文论文批量翻译已取消：成功 ${succeededCount}，复用 ${reusedCount}，跳过 ${skippedCount}，失败 ${failedCount}`,
@@ -1114,6 +1161,8 @@ export function useReaderLibraryBatchActions({
     ],
   );
 
+  manualSummaryActionRef.current = () => handleBatchGenerateSummaries({ auto: false });
+
   const handleToggleBatchMineruPause = useCallback(() => {
     if (!batchMineruRunningRef.current) {
       return;
@@ -1327,14 +1376,23 @@ export function useReaderLibraryBatchActions({
     }
 
     autoPipelineLatestRunRef.current = async () => {
+      if (suppressAutoPipelineRef.current) {
+        return;
+      }
       if (settings.autoMineruParse) {
         await handleBatchMineruParse({ auto: true });
       }
 
+      if (suppressAutoPipelineRef.current) {
+        return;
+      }
       if (settings.autoGenerateSummary && summaryConfigured) {
         await handleBatchGenerateSummaries({ auto: true });
       }
 
+      if (suppressAutoPipelineRef.current) {
+        return;
+      }
       if (settings.autoTranslateEnglishLibrary && translationConfigured) {
         await handleBatchTranslateEnglish({ auto: true });
       }
