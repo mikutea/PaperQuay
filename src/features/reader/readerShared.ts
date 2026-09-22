@@ -595,6 +595,7 @@ export interface BatchProgressState {
   total: number;
   completed: number;
   succeeded: number;
+  reused?: number;
   skipped: number;
   failed: number;
   currentLabel: string;
@@ -634,6 +635,7 @@ export const EMPTY_BATCH_PROGRESS: BatchProgressState = {
   total: 0,
   completed: 0,
   succeeded: 0,
+  reused: 0,
   skipped: 0,
   failed: 0,
   currentLabel: '',

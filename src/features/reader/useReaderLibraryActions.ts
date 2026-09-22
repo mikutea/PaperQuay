@@ -689,7 +689,7 @@ export function useReaderLibraryActions({
             setStatusMessage(message);
           }
           return {
-            status: 'skipped',
+            status: 'cached',
             translatedCount: blocksToTranslate.length,
             totalBlocks: blocksToTranslate.length,
             message,
@@ -775,6 +775,7 @@ export function useReaderLibraryActions({
           signal: options.signal,
           sourceLanguage,
           stopOnRateLimit: options.stopOnRateLimit,
+          stopOnServiceUnavailable: options.stopOnServiceUnavailable,
           targetLanguage,
           temperature: getModelRuntimeConfig(settings, 'translation').temperature,
           translateBatch: translateBlocksOpenAICompatible,
@@ -819,32 +820,39 @@ export function useReaderLibraryActions({
         const failedCount = result.failedBlocks.length;
         const runStatus: LibraryTranslationRunResult['status'] = result.rateLimited
           ? 'rate-limited'
-          : result.cancelled
-            ? 'cancelled'
-            : failedCount > 0
-              ? 'partial'
-              : 'success';
+          : result.serviceUnavailable
+            ? 'service-unavailable'
+            : result.cancelled
+              ? 'cancelled'
+              : failedCount > 0
+                ? 'partial'
+                : 'success';
         const translationFinishedMessage = result.rateLimited
           ? l(
               `翻译服务触发 429 限流，已保存 ${translatedCount} 段译文并停止本轮`,
               `Translation hit a 429 rate limit. Saved ${translatedCount} blocks and stopped this run`,
             )
-          : result.cancelled
+          : result.serviceUnavailable
             ? l(
-                `全文翻译已取消，已保存 ${translatedCount} 段译文${cacheStatusSuffix}`,
-                `Full translation cancelled. Saved ${translatedCount} translated blocks${cacheStatusSuffix}`,
+                `翻译服务不可用，已保存 ${translatedCount} 段译文并停止本轮`,
+                `Translation service unavailable. Saved ${translatedCount} blocks and stopped this run`,
               )
-            : failedCount > 0
+            : result.cancelled
               ? l(
-                  `全文翻译已部分完成，已保存 ${translatedCount} 段译文，剩余 ${failedCount} 段可稍后重试${cacheStatusSuffix}`,
-                  `Full translation partially completed. Saved ${translatedCount} translated blocks, with ${failedCount} remaining for retry${cacheStatusSuffix}`,
+                  `全文翻译已取消，已保存 ${translatedCount} 段译文${cacheStatusSuffix}`,
+                  `Full translation cancelled. Saved ${translatedCount} translated blocks${cacheStatusSuffix}`,
                 )
-              : l(
-                  `全文翻译完成，已生成 ${translatedCount} 段译文${cacheStatusSuffix}`,
-                  `Full translation complete. Generated ${translatedCount} translated blocks${cacheStatusSuffix}`,
-                );
+              : failedCount > 0
+                ? l(
+                    `全文翻译已部分完成，已保存 ${translatedCount} 段译文，剩余 ${failedCount} 段可稍后重试${cacheStatusSuffix}`,
+                    `Full translation partially completed. Saved ${translatedCount} translated blocks, with ${failedCount} remaining for retry${cacheStatusSuffix}`,
+                  )
+                : l(
+                    `全文翻译完成，已生成 ${translatedCount} 段译文${cacheStatusSuffix}`,
+                    `Full translation complete. Generated ${translatedCount} translated blocks${cacheStatusSuffix}`,
+                  );
         const operationError =
-          runStatus === 'partial' || runStatus === 'rate-limited'
+          runStatus === 'partial' || runStatus === 'rate-limited' || runStatus === 'service-unavailable'
             ? sanitizeTranslationErrorMessage(result.failureMessages[0], l, 'document')
             : '';
 

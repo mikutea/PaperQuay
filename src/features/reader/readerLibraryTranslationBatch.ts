@@ -15,10 +15,12 @@ export interface StructuredDocumentLanguageEvidence {
 
 export type LibraryTranslationRunStatus =
   | 'success'
+  | 'cached'
   | 'partial'
   | 'skipped'
   | 'cancelled'
   | 'rate-limited'
+  | 'service-unavailable'
   | 'failed';
 
 export interface LibraryTranslationRunResult {
@@ -37,6 +39,7 @@ export interface LibraryTranslationRunOptions {
   signal?: AbortSignal;
   sourceLanguage?: string;
   stopOnRateLimit?: boolean;
+  stopOnServiceUnavailable?: boolean;
   targetLanguage?: string;
   waitForResumeOrCancel?: () => Promise<boolean>;
 }
@@ -54,15 +57,17 @@ export function resolveLibraryTranslationExecutionOptions({
   concurrency: 1;
   requestsPerMinute: number;
 } {
-  const normalizedBatchSize = Number.isFinite(translationBatchSize)
-    ? Math.trunc(translationBatchSize)
-    : 10;
+  void translationBatchSize;
   const normalizedRequestsPerMinute = Number.isFinite(translationRequestsPerMinute)
     ? Math.trunc(translationRequestsPerMinute)
     : 0;
 
   return {
-    batchSize: Math.min(50, Math.max(1, normalizedBatchSize)),
+    // A single block per request gives crash-safe checkpointing and makes the
+    // shared rate limiter account for every actual model call. The desktop
+    // backend already sends one OpenAI-compatible request per block, so a
+    // larger outer batch never reduced request count or cost.
+    batchSize: 1,
     concurrency: 1,
     requestsPerMinute:
       normalizedRequestsPerMinute > 0
