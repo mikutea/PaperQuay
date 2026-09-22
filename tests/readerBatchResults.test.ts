@@ -8,9 +8,20 @@ import {
   persistOverviewIfCurrent,
   resolveVerifiedTranslationStatus,
   saveVerifiedLibraryOverview,
+  selectUsableOverview,
   shouldWriteOverviewCache,
   sourceKeyAfterOverviewFailure,
 } from '../src/features/reader/readerBatchResults.ts';
+
+test('invalid cached, history, and session summaries are never retained for retry', () => {
+  const format = (summary: { content?: string }) => summary.content?.trim() ?? '';
+  const valid = { content: 'A usable overview' };
+  assert.equal(selectUsableOverview(valid, format), valid);
+  assert.equal(selectUsableOverview({ content: '  ' }, format), null);
+  assert.equal(selectUsableOverview({}, format), null);
+  assert.equal(selectUsableOverview(null, format), null);
+  assert.equal(selectUsableOverview({ content: 'broken' }, () => { throw new Error('malformed'); }), null);
+});
 
 test('empty model and cached overviews fail before any persistence or success count', async () => {
   const summaryText = '';

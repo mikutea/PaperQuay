@@ -21,6 +21,18 @@ export function sourceKeyAfterOverviewFailure(
     : previousSourceKey;
 }
 
+export function selectUsableOverview<T>(
+  summary: T | null | undefined,
+  format: (summary: T) => string,
+): T | null {
+  if (!summary) return null;
+  try {
+    return format(summary).trim() ? summary : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function enqueueOverviewWrite<T>(
   pendingWrites: Map<string, Promise<unknown>>,
   key: string,

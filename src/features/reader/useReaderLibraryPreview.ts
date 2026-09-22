@@ -48,6 +48,7 @@ import {
   enqueueOverviewWrite,
   persistOverviewIfCurrent,
   saveVerifiedLibraryOverview,
+  selectUsableOverview,
   shouldWriteOverviewCache,
   sourceKeyAfterOverviewFailure,
 } from './readerBatchResults';
@@ -704,11 +705,20 @@ export function useReaderLibraryPreview({
           errorMessage,
         } = summaryRequest;
         resolvedSourceKey = sourceKey;
-        const historySummary =
+        const historySummary = selectUsableOverview(
           loadPaperHistory(item.workspaceId)?.paperSummarySourceKey === sourceKey
             ? loadPaperHistory(item.workspaceId)?.paperSummary ?? null
-            : null;
-        const cachedSummary = force ? null : await tryLoadSavedPreviewSummary(item, sourceKey);
+            : null,
+          formatPaperSummaryForLibrary,
+        );
+        const cachedSummary = selectUsableOverview(
+          force ? null : await tryLoadSavedPreviewSummary(item, sourceKey),
+          formatPaperSummaryForLibrary,
+        );
+        const reusableStateSummary = selectUsableOverview(
+          cachedState?.summary,
+          formatPaperSummaryForLibrary,
+        );
 
         if (libraryPreviewRequestIdRef.current[item.workspaceId] !== requestId) {
           return 'skipped';
@@ -793,9 +803,9 @@ export function useReaderLibraryPreview({
           return 'loaded';
         }
 
-        if (!force && cachedState?.summary && cachedState.sourceKey === sourceKey) {
-          availableSummary = cachedState.summary;
-          if (!await persistIfCurrent(cachedState.summary, sourceKey)) return 'skipped';
+        if (!force && reusableStateSummary && cachedState?.sourceKey === sourceKey) {
+          availableSummary = reusableStateSummary;
+          if (!await persistIfCurrent(reusableStateSummary, sourceKey)) return 'skipped';
           setLibraryPreviewStates((current) => ({
             ...current,
             [item.workspaceId]: {
@@ -904,6 +914,9 @@ export function useReaderLibraryPreview({
           return 'skipped';
         }
 
+        if (!selectUsableOverview(summary, formatPaperSummaryForLibrary)) {
+          throw new Error('The generated overview contains no usable content.');
+        }
         availableSummary = summary;
         if (!await persistIfCurrent(summary, sourceKey)) return 'skipped';
 
