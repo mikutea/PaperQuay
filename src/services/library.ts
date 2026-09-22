@@ -127,6 +127,16 @@ export async function listLibraryPapers(
   }
 }
 
+export async function listAllLibraryPapers(
+  request: Pick<ListPapersRequest, 'sortBy' | 'sortDirection'> = {},
+): Promise<LiteraturePaper[]> {
+  try {
+    return await invoke<LiteraturePaper[]>('library_list_all_papers', { request });
+  } catch (error) {
+    throw new Error(toErrorMessage(error, '读取完整文库失败'));
+  }
+}
+
 export async function reorderLibraryPapers(
   request: ReorderPapersRequest,
 ): Promise<void> {

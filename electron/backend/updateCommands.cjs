@@ -1,9 +1,15 @@
+const fs = require('node:fs');
+const path = require('node:path');
+
 const UPDATE_REPOSITORY = {
-  owner: 'WangQrkkk',
+  owner: 'mikutea',
   repo: 'PaperQuay',
 };
 const UPDATE_CHANNEL = 'stable';
-const LATEST_RELEASE_API_URL = `https://api.github.com/repos/${UPDATE_REPOSITORY.owner}/${UPDATE_REPOSITORY.repo}/releases/latest`;
+const RELEASES_API_URL = `https://api.github.com/repos/${UPDATE_REPOSITORY.owner}/${UPDATE_REPOSITORY.repo}/releases?per_page=100`;
+const FORK_TAG_PATTERN = /^app-v\d+\.\d+\.\d+-mikutea\.\d+$/;
+const NSIS_INSTALL_MARKER = '.paperquay-nsis-install';
+const MSI_INSTALL_MARKER = '.paperquay-msi-install';
 
 function cleanVersion(value) {
   const text = String(value ?? '').trim().replace(/^app-v/i, '').replace(/^v/i, '');
@@ -53,10 +59,10 @@ function compareVersions(leftValue, rightValue) {
     return -1;
   }
 
-  return leftPrerelease.localeCompare(rightPrerelease);
+  return leftPrerelease.localeCompare(rightPrerelease, undefined, { numeric: true });
 }
 
-function getAutoUpdateSupport(app) {
+function getAutoUpdateSupport(app, runtime = { platform: process.platform, executablePath: process.execPath }) {
   if (!app.isPackaged) {
     return {
       supported: false,
@@ -64,7 +70,14 @@ function getAutoUpdateSupport(app) {
     };
   }
 
-  if (process.platform === 'win32') {
+  if (runtime.platform === 'win32') {
+    const executableDirectory = path.dirname(runtime.executablePath);
+    if (fs.existsSync(path.join(executableDirectory, MSI_INSTALL_MARKER))) {
+      return { supported: false, reason: 'windows-msi' };
+    }
+    if (!fs.existsSync(path.join(executableDirectory, NSIS_INSTALL_MARKER))) {
+      return { supported: false, reason: 'windows-portable' };
+    }
     return {
       supported: true,
       channel: 'nsis',
@@ -72,7 +85,7 @@ function getAutoUpdateSupport(app) {
     };
   }
 
-  if (process.platform === 'linux') {
+  if (runtime.platform === 'linux') {
     if (process.env.APPIMAGE) {
       return {
         supported: true,
@@ -87,7 +100,7 @@ function getAutoUpdateSupport(app) {
     };
   }
 
-  if (process.platform === 'darwin') {
+  if (runtime.platform === 'darwin') {
     return {
       supported: false,
       reason: 'macos-manual',
@@ -128,7 +141,7 @@ function normalizeRelease(release) {
 }
 
 async function fetchLatestRelease() {
-  const response = await fetch(LATEST_RELEASE_API_URL, {
+  const response = await fetch(RELEASES_API_URL, {
     headers: {
       Accept: 'application/vnd.github+json',
       'User-Agent': 'PaperQuay-Updater',
@@ -140,18 +153,47 @@ async function fetchLatestRelease() {
     throw new Error(`GitHub release check failed: HTTP ${response.status}${text ? ` ${text}` : ''}`);
   }
 
-  const release = normalizeRelease(await response.json());
+  const release = selectLatestForkRelease(await response.json());
   if (!release) {
-    throw new Error('GitHub latest release did not include a valid PaperQuay version.');
+    throw new Error('No complete published PaperQuay fork prerelease was found.');
   }
 
   return release;
 }
 
+function selectLatestForkRelease(releases) {
+  if (!Array.isArray(releases)) {
+    return null;
+  }
+
+  return releases
+    .filter((release) =>
+      !release.draft &&
+      release.prerelease &&
+      FORK_TAG_PATTERN.test(String(release.tag_name ?? '')) &&
+      Array.isArray(release.assets) &&
+      release.assets.some((asset) => asset.name === 'stable.yml') &&
+      release.assets.some((asset) =>
+        asset.name === `PaperQuay-${String(release.tag_name).slice(5)}-win-x64.exe`),
+    )
+    .map(normalizeRelease)
+    .filter(Boolean)
+    .sort((left, right) => compareVersions(right.version, left.version))[0] ?? null;
+}
+
+function releaseDownloadBaseUrl(release) {
+  if (!release || !FORK_TAG_PATTERN.test(release.tagName)) {
+    throw new Error('Refusing an untrusted PaperQuay fork release tag.');
+  }
+  return `https://github.com/${UPDATE_REPOSITORY.owner}/${UPDATE_REPOSITORY.repo}/releases/download/${encodeURIComponent(release.tagName)}/`;
+}
+
 function createUpdateCommands(context) {
   const { app } = context;
-  const { shell } = require('electron');
-  const { autoUpdater } = require('electron-updater');
+  const shell = context.shell ?? require('electron').shell;
+  const autoUpdater = context.autoUpdater ?? require('electron-updater').autoUpdater;
+  const runtime = context.updateRuntime;
+  const releaseFetcher = context.fetchLatestRelease ?? fetchLatestRelease;
   const state = {
     checking: false,
     downloading: false,
@@ -165,7 +207,7 @@ function createUpdateCommands(context) {
   autoUpdater.channel = UPDATE_CHANNEL;
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
-  autoUpdater.allowPrerelease = false;
+  autoUpdater.allowPrerelease = true;
   autoUpdater.allowDowngrade = false;
   autoUpdater.logger = {
     info: (...args) => console.info('[autoUpdater]', ...args),
@@ -209,7 +251,7 @@ function createUpdateCommands(context) {
   });
 
   function buildStatus(extra = {}) {
-    const support = getAutoUpdateSupport(app);
+    const support = getAutoUpdateSupport(app, runtime);
     const currentVersion = cleanVersion(app.getVersion());
     const latestVersion = state.latestRelease?.version ?? '';
     const hasUpdate = latestVersion ? compareVersions(latestVersion, currentVersion) > 0 : false;
@@ -251,16 +293,20 @@ function createUpdateCommands(context) {
     state.error = '';
 
     try {
-      state.latestRelease = await fetchLatestRelease();
+      state.latestRelease = await releaseFetcher();
       state.downloaded = false;
       state.downloadProgress = null;
       state.updateAvailableFromUpdater = false;
 
-      const support = getAutoUpdateSupport(app);
+      const support = getAutoUpdateSupport(app, runtime);
       const currentVersion = cleanVersion(app.getVersion());
       const hasUpdate = compareVersions(state.latestRelease.version, currentVersion) > 0;
 
       if (support.supported && hasUpdate) {
+        // GitHubProvider cannot parse the fork's app-v... tag as SemVer. A
+        // generic feed scoped to the selected immutable release uses its
+        // published stable.yml and NSIS asset without consulting upstream.
+        autoUpdater.setFeedURL({ provider: 'generic', url: releaseDownloadBaseUrl(state.latestRelease) });
         const result = await autoUpdater.checkForUpdates();
         state.updateAvailableFromUpdater = Boolean(result?.updateInfo);
       }
@@ -294,6 +340,7 @@ function createUpdateCommands(context) {
       }
 
       if (!state.updateAvailableFromUpdater) {
+        autoUpdater.setFeedURL({ provider: 'generic', url: releaseDownloadBaseUrl(state.latestRelease) });
         await autoUpdater.checkForUpdates();
       }
 
@@ -335,4 +382,6 @@ module.exports = {
   compareVersions,
   createUpdateCommands,
   getAutoUpdateSupport,
+  releaseDownloadBaseUrl,
+  selectLatestForkRelease,
 };

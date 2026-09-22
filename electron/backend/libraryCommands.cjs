@@ -585,6 +585,11 @@ function createLibraryCommands(context) {
       return sortPapers(library.papers.filter((paper) => paperMatches(paper, request, library)), request).slice(0, limit);
     },
 
+    async library_list_all_papers({ request = {} } = {}) {
+      const library = store.load();
+      return sortPapers(library.papers, request);
+    },
+
     async library_reorder_papers({ request }) {
       const library = store.load();
       const order = new Map((request.paperIds ?? []).map((paperId, index) => [paperId, index]));

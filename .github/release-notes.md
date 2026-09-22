@@ -8,7 +8,7 @@ Windows x64 artifacts:
 
 - `.exe`: NSIS installer
 - `.msi`: MSI installer
-- `.zip`: portable directory whose root contains `PaperQuay.exe`
+- `.zip`: portable directory; start with `Start-PaperQuay.cmd` after extraction so the sandbox ACL is prepared
 - `SHA256SUMS.txt`: SHA-256 checksums for all three packages
 
 The binaries are not code-signed. Windows SmartScreen may show an unrecognized-app warning; verify the published SHA-256 before running them.
@@ -25,6 +25,8 @@ The binaries are not code-signed. Windows SmartScreen may show an unrecognized-a
 - Keeps library-wide translation strictly serial, resumes saved translated blocks, and stops the run promptly when the translation service is unavailable instead of failing every paper.
 - Lets a manual “Generate All Overviews” request take priority over an automatic MinerU or translation batch after the current in-flight item finishes.
 - Preserves the validated Windows `--user-data-dir` profile path so the real library is not replaced by an empty nested profile.
+- Resolves actionable review findings on fork PRs #1, #4, #5, and #6: batches cover more than 1,000 papers, automatic jobs stop on limits and outages, overview preemption resumes translation, and concurrent translation cannot overwrite a paper's cache.
+- Checks this fork's complete prereleases in-app; NSIS installers use the selected release's update manifest, while portable builds remain manual and start through the sandbox-ACL launcher.
 
 The local MiyuoAPI/LM Studio router and its Windows watchdog are personal device configuration, not bundled in the PaperQuay installers. Both TranslateGemma and Nemotron embedding are loaded on demand through the router, switched mutually exclusively, and given a 300-second idle unload TTL.
 
@@ -32,8 +34,7 @@ Personal device-to-device library synchronization is intentionally not an applic
 
 ## Verification
 
-- Full test suite: 216/216 passed on the integrated commit graph.
-- TypeScript check and production Vite build passed.
+- The tagged commit is checked by the complete test suite, TypeScript, and production Vite build before publication.
 - Windows x64 Electron packaging and packaged-runtime smoke verification are performed by the release workflow before publication.
 
 ## Source and licensing
@@ -52,7 +53,7 @@ Windows x64 构建：
 
 - `.exe`：NSIS 安装包
 - `.msi`：MSI 安装包
-- `.zip`：根目录直接包含 `PaperQuay.exe` 的免安装版
+- `.zip`：免安装版；解压后通过 `Start-PaperQuay.cmd` 启动，以便先设置沙箱所需权限
 - `SHA256SUMS.txt`：上述三个包的 SHA-256 校验值
 
 这些二进制文件未做代码签名，Windows SmartScreen 可能提示“无法识别的应用”；运行前请核对发布页中的 SHA-256。
@@ -69,6 +70,8 @@ Windows x64 构建：
 - 全库翻译严格串行、续用已保存段落，并在翻译服务不可用时及时停止本轮，避免逐篇失败。
 - 手动“全部生成概览”可以在当前进行中的自动 MinerU／翻译项目结束后优先运行。
 - 保留已验证的 Windows `--user-data-dir` 路径，避免误建空白嵌套文库。
+- 处理 fork 的 #1、#4、#5、#6 PR 中可执行的审查意见：全库任务覆盖超过 1000 篇论文，自动任务在限流或服务不可用时停止，手动概览抢占后恢复翻译，并避免同一论文并发翻译覆盖缓存。
+- 应用内检查本 fork 的完整预发布；NSIS 安装版使用对应发布的更新清单，免安装版通过沙箱权限启动脚本运行并采用手动更新。
 
 本机 MiyuoAPI／LM Studio 路由及 Windows 看护任务属于个人设备配置，不包含在 PaperQuay 安装包中。TranslateGemma 与 Nemotron embedding 均由路由按需装载、互斥切换，空闲 300 秒后卸载。
 
@@ -76,8 +79,7 @@ Windows x64 构建：
 
 ## 验证
 
-- 集成提交图上的完整测试 216/216 通过。
-- TypeScript 检查与生产 Vite 构建通过。
+- 发布前对标签提交运行完整测试集、TypeScript 检查和生产版 Vite 构建。
 - Windows x64 Electron 打包与发行物运行时烟雾测试由发行工作流完成，并在发布前作为门禁。
 
 ## 源码与许可

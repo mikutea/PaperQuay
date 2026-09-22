@@ -17,7 +17,7 @@ import {
   type OpenPreferencesEventDetail,
 } from '../../app/appEvents';
 import { selectDirectory } from '../../services/desktop';
-import { listLibraryPapers } from '../../services/library';
+import { listAllLibraryPapers, listLibraryPapers } from '../../services/library';
 import { AppLocaleProvider } from '../../i18n/uiLanguage';
 import { getHomeTabTitle, HOME_TAB_ID, type ReaderTab, useTabsStore } from '../../stores/useTabsStore';
 import {
@@ -46,6 +46,7 @@ import { emitLibraryMetadataEnrichRequest } from '../literature/libraryEvents';
 import ReaderPreferencesWindow from './ReaderPreferencesWindow';
 import { useReaderLibraryActions } from './useReaderLibraryActions';
 import { useReaderLibraryPreview } from './useReaderLibraryPreview';
+import { SupersededLibraryRefreshError, shouldReportLibraryRefreshError } from './readerLibraryRefresh';
 import { useReaderSettings } from './useReaderSettings';
 import { useReaderZoteroSync } from './useReaderZoteroSync';
 import {
@@ -63,6 +64,7 @@ import {
   getModelRuntimeConfig,
   mergeWorkspaceItemCollections,
   resolveLanguageLabel,
+  sameNativeLibraryWorkspaceItems,
   type PreferencesSectionKey,
 } from './readerShared';
 
@@ -167,6 +169,7 @@ function Reader({ workspaceActive = true }: ReaderProps) {
   const [standaloneItems, setStandaloneItems] = useState<WorkspaceItem[]>([]);
   const [nativeLibraryItems, setNativeLibraryItems] = useState<WorkspaceItem[]>([]);
   const [nativeLibraryHydrating, setNativeLibraryHydrating] = useState(false);
+  const nativeLibraryLoadGenerationRef = useRef(0);
   const [selectedLibraryItemId, setSelectedLibraryItemId] = useState<string | null>(null);
   const [libraryLoading, setLibraryLoading] = useState(false);
   const [readerBridges, setReaderBridges] = useState<Record<string, ReaderTabBridgeState>>({});
@@ -230,11 +233,14 @@ function Reader({ workspaceActive = true }: ReaderProps) {
   );
 
   const loadNativeLibraryBatchItems = useCallback(async () => {
-    const papers = await listLibraryPapers({
-      limit: 1000,
+    const generation = ++nativeLibraryLoadGenerationRef.current;
+    const papers = await listAllLibraryPapers({
       sortBy: 'updatedAt',
       sortDirection: 'desc',
     });
+    if (generation !== nativeLibraryLoadGenerationRef.current) {
+      throw new SupersededLibraryRefreshError();
+    }
     const hydratedItems = createNativeLibraryWorkspaceItems(
       papers,
       librarySettings?.storageDir,
@@ -243,7 +249,9 @@ function Reader({ workspaceActive = true }: ReaderProps) {
     // This is an authoritative snapshot of native-library items. Replacing the
     // previous collection prevents deleted papers or stale attachment paths
     // from leaking into a later batch run.
-    setNativeLibraryItems(hydratedItems);
+    setNativeLibraryItems((current) =>
+      sameNativeLibraryWorkspaceItems(current, hydratedItems) ? current : hydratedItems,
+    );
 
     return hydratedItems;
   }, [librarySettings?.storageDir]);
@@ -262,7 +270,7 @@ function Reader({ workspaceActive = true }: ReaderProps) {
 
     void loadNativeLibraryBatchItems()
       .catch((nextError) => {
-        if (cancelled) {
+        if (!shouldReportLibraryRefreshError(nextError, cancelled)) {
           return;
         }
 
@@ -283,6 +291,7 @@ function Reader({ workspaceActive = true }: ReaderProps) {
 
     return () => {
       cancelled = true;
+      nativeLibraryLoadGenerationRef.current += 1;
     };
   }, [configHydrated, loadNativeLibraryBatchItems, settings.uiLanguage]);
 

@@ -175,4 +175,5 @@ $RECYCLE.BIN/
 *.swo
 
 # Local AI assistant instructions
-AGENTS.md
+# The fork keeps its PR review gate in version control.
+!AGENTS.md

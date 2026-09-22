@@ -35,6 +35,7 @@ import {
 } from '../../services/library';
 import { readReaderConfigFile } from '../../services/readerConfig';
 import { useTabsStore } from '../../stores/useTabsStore';
+import { useThemeStore } from '../../stores/useThemeStore';
 import type {
   KnowledgeGraphAiRelationSuggestion,
   KnowledgeGraphEdge,
@@ -172,7 +173,7 @@ const graphPerspectives: Array<{
   },
 ];
 
-const graphStyles = [
+const graphStyles = (textColor: string) => [
   {
     selector: 'node',
     style: {
@@ -182,7 +183,7 @@ const graphStyles = [
       'font-family': 'Inter, ui-sans-serif, system-ui, sans-serif',
       'font-size': 9,
       'font-weight': 600,
-      color: 'var(--pq-text)',
+      color: textColor,
       'text-valign': 'bottom',
       'text-halign': 'center',
       'text-margin-y': 6,
@@ -260,6 +261,10 @@ const graphStyles = [
     },
   },
 ] as unknown as StylesheetJson;
+
+function graphNodeTextColor(container: HTMLElement): string {
+  return getComputedStyle(container).getPropertyValue('--pq-text').trim() || '#1c1917';
+}
 
 function compactNumber(value: number) {
   return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value);
@@ -535,6 +540,7 @@ function CollapsiblePanel({
 export default function KnowledgeGraphWorkspace() {
   const locale = useAppLocale();
   const l = useLocaleText();
+  const resolvedTheme = useThemeStore((state) => state.resolved);
   const isEnglish = locale === 'en-US';
   const containerRef = useRef<HTMLDivElement | null>(null);
   const cyRef = useRef<Core | null>(null);
@@ -1022,7 +1028,7 @@ export default function KnowledgeGraphWorkspace() {
     const cy = cytoscape({
       container: containerRef.current,
       elements: [],
-      style: graphStyles,
+      style: graphStyles(graphNodeTextColor(containerRef.current)),
       wheelSensitivity: 0.18,
       minZoom: 0.08,
       maxZoom: 2.8,
@@ -1082,6 +1088,11 @@ export default function KnowledgeGraphWorkspace() {
       cyRef.current = null;
     };
   }, [createRelation, selectGraphEdge, selectGraphNode]);
+
+  useEffect(() => {
+    if (!containerRef.current || !cyRef.current) return;
+    cyRef.current.style().selector('node').style('color', graphNodeTextColor(containerRef.current)).update();
+  }, [resolvedTheme]);
 
   const runAiRelationSuggestion = async () => {
     setAiWorking(true);

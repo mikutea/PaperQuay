@@ -40,6 +40,7 @@ import {
   buildTranslationSourceMetadata,
   selectReusableCachedTranslations,
 } from './readerTranslationSource';
+import { tryAcquirePaperTranslation } from './readerTranslationLock';
 
 type LocaleTextFn = (zh: string, en: string) => string;
 
@@ -389,6 +390,15 @@ export function useDocumentTranslation({
       return;
     }
 
+    const releasePaperTranslation = tryAcquirePaperTranslation(currentDocument.workspaceId);
+    if (!releasePaperTranslation) {
+      setStatusMessage(lRef.current(
+        "此论文正在另一处翻译，请稍后重试。",
+        "This paper is being translated elsewhere. Retry later.",
+      ));
+      return;
+    }
+
     const requestId = documentTranslationRequestIdRef.current + 1;
     const abortController = new AbortController();
 
@@ -613,6 +623,7 @@ export function useDocumentTranslation({
       setStatusMessage(message);
       updateLibraryOperation("translation", "error", message, 100, 100);
     } finally {
+      releasePaperTranslation();
       if (documentTranslationRequestIdRef.current === requestId) {
         setTranslating(false);
         setTranslationCancelling(false);
@@ -697,6 +708,15 @@ export function useDocumentTranslation({
         );
         setError(message);
         updateLibraryOperation("translation", "error", message, 100, 100);
+        return;
+      }
+
+      const releasePaperTranslation = tryAcquirePaperTranslation(currentDocument.workspaceId);
+      if (!releasePaperTranslation) {
+        setStatusMessage(lRef.current(
+          "此论文正在另一处翻译，请稍后重试。",
+          "This paper is being translated elsewhere. Retry later.",
+        ));
         return;
       }
 
@@ -894,6 +914,7 @@ export function useDocumentTranslation({
         setStatusMessage(message);
         updateLibraryOperation("translation", "error", message, 1, 1);
       } finally {
+        releasePaperTranslation();
         if (documentTranslationRequestIdRef.current === requestId) {
           setTranslating(false);
           setTranslationCancelling(false);

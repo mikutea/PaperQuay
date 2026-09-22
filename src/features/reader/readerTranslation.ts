@@ -174,8 +174,8 @@ export function isTranslationServiceUnavailableError(error: unknown): boolean {
   }
 
   const message = toErrorMessage(error).toLowerCase();
-  return /(^|\D)(401|403|404|500|502|503|504)(\D|$)/.test(message) ||
-    /fetch failed|failed to fetch|econnrefused|econnreset|connection refused|network error|model_router_error|lm studio server did not start/i.test(message);
+  return /\b(?:http(?:\s+status)?|status(?:\s+code)?)\s*[:=]?\s*(?:401|403|404|500|502|503|504)\b/i.test(message) ||
+    /fetch failed|failed to fetch|econnrefused|econnreset|etimedout|connection refused|network error|model_router_error|lm studio server did not start|timed? out|timeout/i.test(message);
 }
 
 export function normalizeTranslationMap(translations: TranslationMap | null | undefined): TranslationMap {

@@ -6,4 +6,12 @@
     DetailPrint "Failed to grant restricted app package read/execute access (icacls exit $0)."
     Abort
   ${EndIf}
+  ; The portable ZIP has no marker, so its built-in NSIS updater remains disabled.
+  FileOpen $1 "$INSTDIR\.paperquay-nsis-install" w
+  FileWrite $1 "PaperQuay NSIS installation"
+  FileClose $1
+!macroend
+
+!macro customUnInstall
+  Delete "$INSTDIR\.paperquay-nsis-install"
 !macroend

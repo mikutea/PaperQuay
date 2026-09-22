@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from 're
 import { createPortal } from 'react-dom';
 import {
   BookOpen,
+  Check,
   ChevronDown,
   ChevronUp,
   CircleStop,
@@ -118,8 +119,8 @@ function HeaderReadingModeTabs({
             className={cn(
               'inline-flex h-9 min-w-9 items-center justify-center gap-2 rounded-[14px] px-2 text-sm font-medium transition-all duration-200 2xl:px-3',
               readingViewMode === mode.key
-                ? 'bg-white text-slate-900 shadow-[0_6px_18px_rgba(15,23,42,0.08)]'
-                : 'text-slate-500 hover:text-slate-800',
+                ? 'bg-white text-slate-900 shadow-[0_6px_18px_rgba(15,23,42,0.08)] dark:bg-[var(--pq-surface-2)] dark:text-[var(--pq-text)] dark:shadow-[0_6px_18px_rgba(0,0,0,0.16)]'
+                : 'text-slate-500 hover:text-slate-800 dark:text-[var(--pq-text-faint)] dark:hover:text-[var(--pq-text)]',
             )}
           >
             {modeIcon}
@@ -146,32 +147,151 @@ function HeaderPdfVersionControl({
     availablePdfOptions.find((option) => option.path === currentPdfPath) ??
     availablePdfOptions[0] ??
     null;
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuStyle, setMenuStyle] = useState<CSSProperties>({});
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  const updateMenuPosition = useCallback(() => {
+    const rect = buttonRef.current?.getBoundingClientRect();
+    if (!rect) return;
+
+    const margin = 12;
+    const gap = 8;
+    const width = Math.min(Math.max(rect.width, 280), window.innerWidth - margin * 2);
+    const height = Math.min(280, availablePdfOptions.length * 44 + 16);
+    const spaceBelow = window.innerHeight - rect.bottom - margin - gap;
+    const spaceAbove = rect.top - margin - gap;
+    const openAbove = spaceBelow < height && spaceAbove > spaceBelow;
+    const maxHeight = Math.max(80, Math.min(height, openAbove ? spaceAbove : spaceBelow));
+
+    setMenuStyle({
+      left: Math.min(Math.max(margin, rect.left), window.innerWidth - width - margin),
+      top: openAbove ? Math.max(margin, rect.top - maxHeight - gap) : rect.bottom + gap,
+      width,
+      maxHeight,
+    });
+  }, [availablePdfOptions.length]);
+
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+
+    updateMenuPosition();
+    const focusFrame = window.requestAnimationFrame(() => {
+      const selected = menuRef.current?.querySelector<HTMLButtonElement>('[aria-selected="true"]');
+      (selected ?? menuRef.current?.querySelector<HTMLButtonElement>('[role="option"]'))?.focus();
+    });
+    const handlePointerDown = (event: PointerEvent) => {
+      if (
+        event.target instanceof Node &&
+        (buttonRef.current?.contains(event.target) || menuRef.current?.contains(event.target))
+      ) return;
+      setMenuOpen(false);
+    };
+    const handleFocusIn = (event: FocusEvent) => {
+      if (
+        event.target instanceof Node &&
+        (buttonRef.current?.contains(event.target) || menuRef.current?.contains(event.target))
+      ) return;
+      setMenuOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      setMenuOpen(false);
+      buttonRef.current?.focus();
+    };
+
+    window.addEventListener('resize', updateMenuPosition);
+    window.addEventListener('scroll', updateMenuPosition, true);
+    window.addEventListener('pointerdown', handlePointerDown);
+    window.addEventListener('focusin', handleFocusIn);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      window.removeEventListener('resize', updateMenuPosition);
+      window.removeEventListener('scroll', updateMenuPosition, true);
+      window.removeEventListener('pointerdown', handlePointerDown);
+      window.removeEventListener('focusin', handleFocusIn);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [menuOpen, updateMenuPosition]);
+
+  const menu = menuOpen ? (
+    <div
+      ref={menuRef}
+      role="listbox"
+      aria-label={l('PDF 版本', 'PDF Version')}
+      className="fixed z-[10000] overflow-y-auto rounded-2xl border border-slate-200 bg-white p-1.5 shadow-[0_18px_42px_rgba(15,23,42,0.18)] dark:border-white/10 dark:bg-[var(--pq-surface-1)] dark:shadow-[0_18px_42px_rgba(0,0,0,0.35)]"
+      style={menuStyle}
+      onKeyDown={(event) => {
+        if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+        const options = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="option"]') ?? []);
+        if (!options.length) return;
+        event.preventDefault();
+        const index = options.indexOf(document.activeElement as HTMLButtonElement);
+        const nextIndex = event.key === 'Home' ? 0
+          : event.key === 'End' ? options.length - 1
+            : event.key === 'ArrowDown' ? (index + 1) % options.length
+              : (index - 1 + options.length) % options.length;
+        options[nextIndex]?.focus();
+      }}
+    >
+      {availablePdfOptions.map((option) => {
+        const selected = option.path === selectedPdfOption?.path;
+        return (
+          <button
+            key={option.path}
+            type="button"
+            role="option"
+            aria-selected={selected}
+            title={option.label}
+            onClick={() => {
+              setMenuOpen(false);
+              onCurrentPdfPathChange(option.path);
+              buttonRef.current?.focus();
+            }}
+            className={cn(
+              'flex w-full min-w-0 items-center gap-2 rounded-xl px-3 py-2 text-left text-sm outline-none hover:bg-slate-100 focus:bg-slate-100 dark:hover:bg-[var(--pq-surface-2)] dark:focus:bg-[var(--pq-surface-2)]',
+              selected
+                ? 'bg-slate-100 text-slate-900 dark:bg-[var(--pq-surface-2)] dark:text-[var(--pq-text)]'
+                : 'text-slate-700 dark:text-[var(--pq-text-muted)]',
+            )}
+          >
+            <span className="min-w-0 flex-1 truncate">{option.label}</span>
+            {selected ? <Check className="h-4 w-4 shrink-0" aria-hidden="true" /> : null}
+          </button>
+        );
+      })}
+    </div>
+  ) : null;
 
   if (availablePdfOptions.length > 1) {
     return (
-      <label className="flex min-w-[180px] max-w-[260px] items-center gap-3 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 dark:border-white/10 dark:bg-[var(--pq-surface-1)] dark:text-[var(--pq-text-muted)] 2xl:min-w-[240px] 2xl:max-w-[420px]">
+      <div className="flex min-w-[180px] max-w-[260px] items-center gap-3 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 dark:border-white/10 dark:bg-[var(--pq-surface-1)] dark:text-[var(--pq-text-muted)] 2xl:min-w-[240px] 2xl:max-w-[420px]">
         <span className="hidden shrink-0 text-xs font-medium text-slate-500 dark:text-[var(--pq-text-faint)] 2xl:inline">
           {l('PDF 版本', 'PDF Version')}
         </span>
-        <div className="relative min-w-0 flex-1">
-          <select
-            value={currentPdfPath || availablePdfOptions[0]?.path || ''}
-            onChange={(event) => onCurrentPdfPathChange(event.target.value)}
+        <div className="min-w-0 flex-1">
+          <button
+            ref={buttonRef}
+            type="button"
+            aria-haspopup="listbox"
+            aria-expanded={menuOpen}
+            aria-label={l('PDF 版本', 'PDF Version')}
             title={selectedPdfOption?.label || ''}
-            className="block w-full min-w-0 appearance-none truncate bg-transparent pr-8 text-sm leading-6 text-slate-700 outline-none dark:text-[var(--pq-text-muted)]"
+            onClick={() => {
+              if (!menuOpen) updateMenuPosition();
+              setMenuOpen((open) => !open);
+            }}
+            className="flex w-full min-w-0 items-center gap-2 text-left text-sm leading-6 text-slate-700 outline-none focus-visible:ring-2 focus-visible:ring-[var(--pq-accent)] dark:text-[var(--pq-text-muted)]"
           >
-            {availablePdfOptions.map((option) => (
-              <option key={option.path} value={option.path}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-          <ChevronDown
-            className="pointer-events-none absolute right-0 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400 dark:text-[var(--pq-text-faint)]"
-            strokeWidth={1.8}
-          />
+            <span className="min-w-0 flex-1 truncate">{selectedPdfOption?.label}</span>
+            <ChevronDown className="h-4 w-4 shrink-0 text-slate-400 dark:text-[var(--pq-text-faint)]" strokeWidth={1.8} aria-hidden="true" />
+          </button>
         </div>
-      </label>
+        {typeof document === 'undefined' || !menu ? null : createPortal(menu, document.body)}
+      </div>
     );
   }
 

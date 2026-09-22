@@ -45,6 +45,7 @@ import {
 } from './readerLibraryPreview';
 import { countTranslatedBlocks } from './readerTranslation';
 import { readTranslationCache } from './readerTranslationCache';
+import { mapPreviewItemsWithConcurrency } from './readerPreviewWork';
 import type {
   LibraryPreviewSyncPayload,
   ReaderDocumentTranslationSnapshot,
@@ -278,14 +279,17 @@ export function useReaderLibraryPreview({
     let cancelled = false;
 
     void (async () => {
-      const nextEntries = await Promise.all(
-        allKnownItems.map(async (item) => [
+      const nextEntries = await mapPreviewItemsWithConcurrency(
+        allKnownItems,
+        8,
+        async (item) => [
           item.workspaceId,
           await hasExistingMineruOutput(item, {
             autoLoadSiblingJson: settings.autoLoadSiblingJson,
             mineruCacheDir: settings.mineruCacheDir,
           }),
-        ] as const),
+        ] as const,
+        () => !cancelled,
       );
 
       if (cancelled) {
@@ -312,8 +316,10 @@ export function useReaderLibraryPreview({
 
     void (async () => {
       const restoredEntries = (
-        await Promise.all(
-          allKnownItems.map(async (item) => {
+        await mapPreviewItemsWithConcurrency(
+          allKnownItems,
+          8,
+          async (item) => {
             const cachedTranslation = await readTranslationCache({
               item,
               mineruCacheDir: settings.mineruCacheDir,
@@ -337,7 +343,8 @@ export function useReaderLibraryPreview({
               sourceFingerprint: cachedTranslation.sourceFingerprint,
               translations: cachedTranslation.translations,
             };
-          }),
+          },
+          () => !cancelled,
         )
       ).filter((entry): entry is {
         item: WorkspaceItem;

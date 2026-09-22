@@ -171,6 +171,12 @@ select {
   font: inherit;
 }
 
+.dark select option,
+.dark select optgroup {
+  background-color: var(--pq-surface-1);
+  color: var(--pq-text);
+}
+
 button,
 a,
 summary,

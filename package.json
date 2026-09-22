@@ -1,7 +1,7 @@
 {
   "name": "paperquay",
   "private": true,
-  "version": "0.1.26-mikutea.6",
+  "version": "0.1.26-mikutea.7",
   "description": "AI-assisted desktop literature reader and library manager.",
   "author": {
     "name": "PaperQuay Developers",
@@ -81,13 +81,14 @@
     "zustand": "^5.0.12"
   },
   "build": {
+    "msiProjectCreated": "packaging/windows/msiProjectCreated.cjs",
     "appId": "dev.paperquay.app",
     "productName": "PaperQuay",
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "publish": [
       {
         "provider": "github",
-        "owner": "WangQrkkk",
+        "owner": "mikutea",
         "repo": "PaperQuay",
         "releaseType": "release",
         "channel": "stable"

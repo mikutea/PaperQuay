@@ -666,6 +666,15 @@ export function clampMineruBatchConcurrency(value: number): number {
   return Math.min(2, clampBatchConcurrency(value));
 }
 
+export function credentialRevision(value: string): string {
+  const credential = value.trim();
+  let hash = 2166136261;
+  for (let index = 0; index < credential.length; index += 1) {
+    hash = Math.imul(hash ^ credential.charCodeAt(index), 16777619);
+  }
+  return `${credential.length}:${(hash >>> 0).toString(16)}`;
+}
+
 function getPathSeparator(path: string): string {
   return path.includes('\\') ? '\\' : '/';
 }
@@ -769,7 +778,7 @@ export function normalizeReaderSettings(value?: Partial<ReaderSettings> | null):
     localRagEnabled: merged.localRagEnabled !== false,
     localRagTopK: clampLocalRagTopK(merged.localRagTopK),
     ragSourceMode: normalizeRagSourceMode(merged.ragSourceMode),
-    libraryBatchConcurrency: clampMineruBatchConcurrency(merged.libraryBatchConcurrency),
+    libraryBatchConcurrency: clampBatchConcurrency(merged.libraryBatchConcurrency),
     showLibraryReadingHeatmap: merged.showLibraryReadingHeatmap !== false,
     enablePdfReadingHeatmap: merged.enablePdfReadingHeatmap !== false,
     enableSelectionTranslation: merged.enableSelectionTranslation !== false,
@@ -994,6 +1003,23 @@ export function createNativeLibraryWorkspaceItems(
   }
 
   return items;
+}
+
+export function sameNativeLibraryWorkspaceItems(
+  current: WorkspaceItem[],
+  next: WorkspaceItem[],
+): boolean {
+  return current.length === next.length && current.every((item, index) => {
+    const other = next[index];
+    return Boolean(other) &&
+      item.workspaceId === other.workspaceId &&
+      item.itemKey === other.itemKey &&
+      item.title === other.title &&
+      item.creators === other.creators &&
+      item.year === other.year &&
+      item.attachmentFilename === other.attachmentFilename &&
+      item.localPdfPath === other.localPdfPath;
+  });
 }
 
 export function mergeWorkspaceItemCollections(
