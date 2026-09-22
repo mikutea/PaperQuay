@@ -1,0 +1,61 @@
+import type { LibraryTranslationRunStatus } from './readerLibraryTranslationBatch';
+import type { BatchProgressState, LibraryPreviewOutcome } from './readerShared';
+
+export function countVerifiedBatchResults(
+  progress: Pick<BatchProgressState, 'succeeded' | 'reused'>,
+): number {
+  return progress.succeeded + (progress.reused ?? 0);
+}
+
+export function classifyOverviewBatchOutcome(
+  outcome: LibraryPreviewOutcome,
+): 'succeeded' | 'reused' | 'skipped' | 'failed' {
+  switch (outcome) {
+    case 'generated':
+      return 'succeeded';
+    case 'loaded':
+      return 'reused';
+    case 'skipped':
+      return 'skipped';
+    case 'failed':
+      return 'failed';
+  }
+}
+
+export async function saveVerifiedLibraryOverview<T extends { aiSummary?: string | null }>(
+  summaryText: string,
+  save: () => Promise<T>,
+): Promise<T> {
+  if (!summaryText.trim()) {
+    throw new Error('The generated overview contains no usable content.');
+  }
+  const updatedPaper = await save();
+  if (updatedPaper.aiSummary?.trim() !== summaryText) {
+    throw new Error('The library did not confirm the saved overview.');
+  }
+  return updatedPaper;
+}
+
+export function resolveVerifiedTranslationStatus({
+  rateLimited,
+  serviceUnavailable,
+  cancelled,
+  cacheSaveFailed,
+  translatedCount,
+  totalBlocks,
+  failedBlocks,
+}: {
+  rateLimited: boolean;
+  serviceUnavailable: boolean;
+  cancelled: boolean;
+  cacheSaveFailed: boolean;
+  translatedCount: number;
+  totalBlocks: number;
+  failedBlocks: number;
+}): LibraryTranslationRunStatus {
+  if (rateLimited) return 'rate-limited';
+  if (serviceUnavailable) return 'service-unavailable';
+  if (cancelled) return 'cancelled';
+  if (cacheSaveFailed || translatedCount === 0) return 'failed';
+  return failedBlocks > 0 || translatedCount < totalBlocks ? 'partial' : 'success';
+}

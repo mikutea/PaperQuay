@@ -4,6 +4,7 @@ import {
   pickLocaleText,
   type BatchProgressState,
 } from './readerShared';
+import { countVerifiedBatchResults } from './readerBatchResults';
 import type {
   InputHTMLAttributes,
   ReactNode,
@@ -87,18 +88,21 @@ export function BatchProgressCard({
     return null;
   }
 
+  const confirmed = countVerifiedBatchResults(progress);
+
   return (
     <div className="rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-3">
       <div className="flex items-center justify-between gap-3 text-sm">
         <div className="font-medium text-slate-900">{title}</div>
         <div className="text-slate-500">
-          {progress.completed}/{progress.total}
+          {pickLocaleText(locale, `已确认结果 ${confirmed}/${progress.total}`, `Verified results ${confirmed}/${progress.total}`)}
         </div>
       </div>
       <div className="mt-3">
-        <ProgressBar value={progress.completed} total={progress.total} tone={tone} />
+        <ProgressBar value={confirmed} total={progress.total} tone={tone} />
       </div>
       <div className="mt-2 flex flex-wrap gap-3 text-xs text-slate-500">
+        <span>{pickLocaleText(locale, `已处理 ${progress.completed}/${progress.total}`, `Processed ${progress.completed}/${progress.total}`)}</span>
         <span>{pickLocaleText(locale, `成功 ${progress.succeeded}`, `Succeeded ${progress.succeeded}`)}</span>
         {progress.reused ? (
           <span>{pickLocaleText(locale, `复用 ${progress.reused}`, `Reused ${progress.reused}`)}</span>
