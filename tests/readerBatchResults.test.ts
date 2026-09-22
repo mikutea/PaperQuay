@@ -4,11 +4,74 @@ import test from 'node:test';
 import {
   classifyOverviewBatchOutcome,
   countVerifiedBatchResults,
+  enqueueOverviewWrite,
+  persistOverviewIfCurrent,
   resolveVerifiedTranslationStatus,
   saveVerifiedLibraryOverview,
   shouldWriteOverviewCache,
   sourceKeyAfterOverviewFailure,
 } from '../src/features/reader/readerBatchResults.ts';
+
+test('history overview must be saved before being counted as reusable', async () => {
+  const steps: string[] = [];
+  assert.equal(await persistOverviewIfCurrent({
+    isCurrent: () => true,
+    saveCache: async () => { steps.push('verified-cache'); },
+    saveNative: async () => { steps.push('native-noop'); },
+  }), true);
+  assert.deepEqual(steps, ['verified-cache', 'native-noop']);
+  await assert.rejects(persistOverviewIfCurrent({
+    isCurrent: () => true,
+    saveCache: async () => { throw new Error('cache unavailable'); },
+    saveNative: async () => { throw new Error('must not reach'); },
+  }), /cache unavailable/);
+});
+
+test('a superseded overview cannot commit success or start a stale native save', async () => {
+  let current = true;
+  let nativeSaves = 0;
+  assert.equal(await persistOverviewIfCurrent({
+    isCurrent: () => current,
+    saveCache: async () => { current = false; },
+    saveNative: async () => { nativeSaves += 1; },
+  }), false);
+  assert.equal(nativeSaves, 0);
+  current = true;
+  assert.equal(await persistOverviewIfCurrent({
+    isCurrent: () => current,
+    cacheAlreadyVerified: true,
+    saveCache: async () => { throw new Error('already verified'); },
+    saveNative: async () => { nativeSaves += 1; current = false; },
+  }), false);
+  assert.equal(nativeSaves, 1);
+});
+
+test('overlapping overview writes for one paper are serialized, even after failures', async () => {
+  const pendingWrites = new Map<string, Promise<unknown>>();
+  const steps: string[] = [];
+  let releaseFirst!: () => void;
+  let signalStarted!: () => void;
+  const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const firstStarted = new Promise<void>((resolve) => { signalStarted = resolve; });
+  const first = enqueueOverviewWrite(pendingWrites, 'paper-1', async () => {
+    steps.push('first-start');
+    signalStarted();
+    await firstGate;
+    steps.push('first-end');
+    throw new Error('first failed');
+  });
+  const second = enqueueOverviewWrite(pendingWrites, 'paper-1', async () => {
+    steps.push('second-start');
+    return 'saved';
+  });
+  await firstStarted;
+  assert.deepEqual(steps, ['first-start']);
+  releaseFirst();
+  await assert.rejects(first, /first failed/);
+  assert.equal(await second, 'saved');
+  assert.deepEqual(steps, ['first-start', 'first-end', 'second-start']);
+  assert.equal(pendingWrites.size, 0);
+});
 
 test('a generated but unsaved overview retains its source key for a save-only retry', () => {
   assert.equal(sourceKeyAfterOverviewFailure(true, 'new-source', ''), 'new-source');

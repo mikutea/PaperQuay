@@ -21,6 +21,41 @@ export function sourceKeyAfterOverviewFailure(
     : previousSourceKey;
 }
 
+export async function enqueueOverviewWrite<T>(
+  pendingWrites: Map<string, Promise<unknown>>,
+  key: string,
+  write: () => Promise<T>,
+): Promise<T> {
+  const previousWrite = pendingWrites.get(key) ?? Promise.resolve();
+  const nextWrite = previousWrite.catch(() => undefined).then(write);
+  pendingWrites.set(key, nextWrite);
+  try {
+    return await nextWrite;
+  } finally {
+    if (pendingWrites.get(key) === nextWrite) pendingWrites.delete(key);
+  }
+}
+
+export async function persistOverviewIfCurrent({
+  isCurrent,
+  cacheAlreadyVerified = false,
+  saveCache,
+  saveNative,
+}: {
+  isCurrent: () => boolean;
+  cacheAlreadyVerified?: boolean;
+  saveCache: () => Promise<void>;
+  saveNative: () => Promise<void>;
+}): Promise<boolean> {
+  if (!isCurrent()) return false;
+  if (!cacheAlreadyVerified) {
+    await saveCache();
+    if (!isCurrent()) return false;
+  }
+  await saveNative();
+  return isCurrent();
+}
+
 export function countVerifiedBatchResults(
   progress: Pick<BatchProgressState, 'succeeded' | 'reused'>,
 ): number {

@@ -45,6 +45,8 @@ import {
 } from './readerLibraryPreview';
 import { countTranslatedBlocks } from './readerTranslation';
 import {
+  enqueueOverviewWrite,
+  persistOverviewIfCurrent,
   saveVerifiedLibraryOverview,
   shouldWriteOverviewCache,
   sourceKeyAfterOverviewFailure,
@@ -148,6 +150,8 @@ export function useReaderLibraryPreview({
   const libraryPreviewRequestIdRef = useRef<Record<string, number>>({});
   const savedNativeSummaryKeysRef = useRef<Set<string>>(new Set());
   const pendingNativeSummarySavesRef = useRef<Map<string, Promise<void>>>(new Map());
+  const nativeOverviewWriteChainsRef = useRef<Map<string, Promise<unknown>>>(new Map());
+  const overviewCacheWriteChainsRef = useRef<Map<string, Promise<unknown>>>(new Map());
 
   const [libraryPreviewStates, setLibraryPreviewStates] = useState<
     Record<string, LibraryPreviewState>
@@ -197,7 +201,7 @@ export function useReaderLibraryPreview({
 
       let pendingSave = pendingNativeSummarySavesRef.current.get(saveKey);
       if (!pendingSave) {
-        pendingSave = (async () => {
+        pendingSave = enqueueOverviewWrite(nativeOverviewWriteChainsRef.current, item.itemKey, async () => {
           const updatedPaper = await saveVerifiedLibraryOverview(
             summaryText,
             () => updateLibraryPaper({
@@ -214,7 +218,7 @@ export function useReaderLibraryPreview({
               },
             }),
           );
-        })();
+        });
         pendingNativeSummarySavesRef.current.set(saveKey, pendingSave);
       }
 
@@ -588,20 +592,22 @@ export function useReaderLibraryPreview({
       if (!shouldWriteOverviewCache(item.source, settings.mineruCacheDir)) {
         return;
       }
-      await writePreviewSummaryCache({
-        item,
-        mineruCacheDir: settings.mineruCacheDir,
-        sourceKey,
-        summary,
+      await enqueueOverviewWrite(overviewCacheWriteChainsRef.current, item.itemKey, async () => {
+        await writePreviewSummaryCache({
+          item,
+          mineruCacheDir: settings.mineruCacheDir,
+          sourceKey,
+          summary,
+        });
+        const verified = await readSavedPreviewSummary({
+          item,
+          mineruCacheDir: settings.mineruCacheDir,
+          sourceKey,
+        });
+        if (JSON.stringify(verified) !== JSON.stringify(summary)) {
+          throw new Error('The saved overview cache could not be verified.');
+        }
       });
-      const verified = await readSavedPreviewSummary({
-        item,
-        mineruCacheDir: settings.mineruCacheDir,
-        sourceKey,
-      });
-      if (JSON.stringify(verified) !== JSON.stringify(summary)) {
-        throw new Error('The saved overview cache could not be verified.');
-      }
     },
     [settings.mineruCacheDir],
   );
@@ -643,6 +649,17 @@ export function useReaderLibraryPreview({
 
       const requestId = (libraryPreviewRequestIdRef.current[item.workspaceId] ?? 0) + 1;
       libraryPreviewRequestIdRef.current[item.workspaceId] = requestId;
+      const isCurrentRequest = () => libraryPreviewRequestIdRef.current[item.workspaceId] === requestId;
+      const persistIfCurrent = async (
+        summary: PaperSummary,
+        sourceKey: string,
+        cacheAlreadyVerified = false,
+      ): Promise<boolean> => persistOverviewIfCurrent({
+        isCurrent: isCurrentRequest,
+        cacheAlreadyVerified,
+        saveCache: () => savePreviewSummary(item, sourceKey, summary),
+        saveNative: () => persistNativeLibraryOverview(item, summary, sourceKey),
+      });
 
       setLibraryPreviewStates((current) => ({
         ...current,
@@ -719,7 +736,7 @@ export function useReaderLibraryPreview({
 
         if (!force && historySummary) {
           availableSummary = historySummary;
-          await persistNativeLibraryOverview(item, historySummary, sourceKey);
+          if (!await persistIfCurrent(historySummary, sourceKey)) return 'skipped';
           setLibraryPreviewStates((current) => ({
             ...current,
             [item.workspaceId]: {
@@ -748,7 +765,7 @@ export function useReaderLibraryPreview({
 
         if (!force && cachedSummary) {
           availableSummary = cachedSummary;
-          await persistNativeLibraryOverview(item, cachedSummary, sourceKey);
+          if (!await persistIfCurrent(cachedSummary, sourceKey, true)) return 'skipped';
           setLibraryPreviewStates((current) => ({
             ...current,
             [item.workspaceId]: {
@@ -777,8 +794,7 @@ export function useReaderLibraryPreview({
 
         if (!force && cachedState?.summary && cachedState.sourceKey === sourceKey) {
           availableSummary = cachedState.summary;
-          await savePreviewSummary(item, sourceKey, cachedState.summary);
-          await persistNativeLibraryOverview(item, cachedState.summary, sourceKey);
+          if (!await persistIfCurrent(cachedState.summary, sourceKey)) return 'skipped';
           setLibraryPreviewStates((current) => ({
             ...current,
             [item.workspaceId]: {
@@ -888,8 +904,7 @@ export function useReaderLibraryPreview({
         }
 
         availableSummary = summary;
-        await savePreviewSummary(item, sourceKey, summary);
-        await persistNativeLibraryOverview(item, summary, sourceKey);
+        if (!await persistIfCurrent(summary, sourceKey)) return 'skipped';
 
         setLibraryPreviewStates((current) => ({
           ...current,
