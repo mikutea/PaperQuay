@@ -1030,31 +1030,66 @@ export function extractTranslatableMarkdownFromMineruBlock(
   return toMarkdownFragment(block, plainText);
 }
 
+function displayMathTagsAsLatex(body: string): string | null {
+  let latex = body;
+
+  for (let depth = 0; depth < 32; depth += 1) {
+    const next = latex.replace(
+      /<\s*(sub|sup)\s*>([^<>]*)<\s*\/\s*\1\s*>/gi,
+      (_match, tag: string, content: string) => `${tag.toLowerCase() === 'sub' ? '_' : '^'}{${content}}`,
+    );
+
+    if (next === latex) break;
+    latex = next;
+  }
+
+  return /<\s*\/?\s*(?:sup|sub)\s*>/i.test(latex) ? null : latex;
+}
+
 export function displayMarkdownFallback(source: string | undefined, normalized: string): string {
-  if (!source || source.includes('~~~')) {
-    return normalized;
+  if (!source) return normalized;
+
+  // Tilde code fences are inert; normalize only the text around them. A `~~~`
+  // within a sentence is not a fence and must not hide adjacent inline tags.
+  if (/^ {0,3}~{3,}/m.test(source)) {
+    const renderOutsideFence = (text: string) => {
+      const leading = text.match(/^\s*/)?.[0] ?? '';
+      const trailing = text.match(/\s*$/)?.[0] ?? '';
+      const body = text.slice(leading.length, text.length - trailing.length);
+      return body
+        ? leading + displayMarkdownFallback(body, normalizeMarkdownMath(body)) + trailing
+        : text;
+    };
+    const lines = source.split(/(?<=\n)/);
+    let output = '';
+    let outside = '';
+    let fenceLength = 0;
+    for (const line of lines) {
+      const marker = /^ {0,3}(~{3,})(?:[^\n]*)/.exec(line);
+      if (marker && fenceLength === 0) {
+        output += renderOutsideFence(outside);
+        outside = '';
+        fenceLength = marker[1].length;
+        output += line;
+      } else if (fenceLength > 0) {
+        output += line;
+        if (marker && marker[1].length >= fenceLength && /^ {0,3}~{3,}\s*$/.test(line.trimEnd())) {
+          fenceLength = 0;
+        }
+      } else {
+        outside += line;
+      }
+    }
+    return output + renderOutsideFence(outside);
   }
 
   if (source.length > 65_536) {
-    return source;
+    // Image/table fallbacks contain a caption-only fragment, unlike their
+    // original Markdown source which can embed a remote image URL.
+    return /^\*\*(?:图片说明|表格说明)\*\*/.test(normalized) ? normalized : source;
   }
 
   const literalFences = new Set([...source.matchAll(/\$[^$\n]*\$/g)].map(([fenced]) => fenced));
-  const toLatex = (body: string): string | null => {
-    let latex = body;
-
-    for (let depth = 0; depth < 32; depth += 1) {
-      const next = latex.replace(
-        /<\s*(sub|sup)\s*>([^<>]*)<\s*\/\s*\1\s*>/gi,
-        (_match, tag: string, content: string) => `${tag.toLowerCase() === 'sub' ? '_' : '^'}{${content}}`,
-      );
-
-      if (next === latex) break;
-      latex = next;
-    }
-
-    return /<\s*\/?\s*(?:sup|sub)\s*>/i.test(latex) ? null : latex;
-  };
   const renderInlineMath = (segment: string) => segment.replace(
     /\$([^$\n]*<\s*\/?\s*(?:sup|sub)\s*>[^$\n]*)\$/gi,
     (fenced, body: string) => {
@@ -1065,10 +1100,10 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
         return isLiteralFence ? fenced : body;
       }
 
-      const duplicateScript = /^([^\s$]*[_^](?:\{[^{}]+\}|[A-Za-z0-9]+))(<\s*(?:sub|sup)\s*>[\s\S]*)$/i.exec(body);
+      const duplicateScript = /^([\s\S]*[_^](?:\{[^{}]+\}|[A-Za-z0-9]+))(<\s*(?:sub|sup)\s*>[\s\S]*)$/i.exec(body);
       if (duplicateScript) return `$${duplicateScript[1]}$${duplicateScript[2]}`;
 
-      const latex = toLatex(body);
+      const latex = displayMathTagsAsLatex(body);
       return latex === null ? fenced : `$${latex}$`;
     },
   );
@@ -1079,7 +1114,7 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
     for (const match of segment.matchAll(/\$\$([\s\S]*?)\$\$/g)) {
       const start = match.index ?? 0;
       output += renderInlineMath(segment.slice(cursor, start));
-      const latex = toLatex(match[1]);
+      const latex = displayMathTagsAsLatex(match[1]);
       output += latex === null ? match[0] : `$$${latex}$$`;
       cursor = start + match[0].length;
     }
@@ -1126,7 +1161,10 @@ export function buildRenderableBlocks(
 ): RenderableMineruBlock[] {
   return blocks.map((block) => {
     const plainText = extractTextFromMineruBlock(block);
-    const mathText = block.type === 'equation' ? extractMathText(block.content) : undefined;
+    const rawMathText = block.type === 'equation' ? extractMathText(block.content) : undefined;
+    const mathText = rawMathText
+      ? displayMathTagsAsLatex(rawMathText) ?? rawMathText
+      : undefined;
     const tableHtml = block.type === 'table' ? extractTableHtmlFromMineruBlock(block) : undefined;
     const captionText =
       block.type === 'table' || block.type === 'image'

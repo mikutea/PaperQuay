@@ -15,6 +15,7 @@ import {
 } from '../src/features/blocks/remarkMineruInlineFormatting.ts';
 import {
   buildRenderableBlocks,
+  displayMarkdownFallback,
   flattenMineruPages,
   parseMineruMarkdownPages,
 } from '../src/services/mineru.ts';
@@ -298,4 +299,71 @@ test('unrecognized HTML, malformed tags, and code stay literal', () => {
   assert.match(html, /&lt;img/);
   assert.match(html, /&lt;sup&gt;open/);
   assert.match(html, /<code>x&lt;sub&gt;2&lt;\/sub&gt;<\/code>/);
+});
+
+test('adjacent math outside a formula wrapper still renders', () => {
+  const markdown = '<span class="math">a</span> x_i H<sub>2</sub>O';
+
+  assert.match(normalizeMineruReaderMarkdown(markdown), /\$a\$ \$x_i H_\{2\}O\$/);
+  assert.doesNotMatch(render(markdown), /katex-error|&lt;sub/);
+});
+
+test('explicit math tags in JSON-backed text become LaTeX before remark-math', () => {
+  const markdown = '$H<sub>2</sub>O$';
+
+  assert.equal(normalizeMineruReaderMarkdown(markdown), '$H_{2}O$');
+  assert.doesNotMatch(render(markdown), /katex-error|&lt;sub/);
+});
+
+test('long mathematical text without inline tags takes the ordinary path', () => {
+  const markdown = 'x_1 '.repeat(40_000);
+
+  assert.equal(normalizeMineruReaderMarkdown(markdown), normalizeMarkdownMath(markdown));
+});
+
+test('existing scripts on later math terms do not create duplicate KaTeX scripts', () => {
+  for (const source of ['$x_i + y_j<sub>2</sub>$', '$x^i + y^j<sup>2</sup>$']) {
+    const blocks = flattenMineruPages(parseMineruMarkdownPages(source));
+    const markdown = buildRenderableBlocks(blocks)[0]?.markdown ?? '';
+
+    assert.doesNotMatch(render(markdown), /katex-error/);
+    assert.match(markdown, /\$<\s*(?:sub|sup)\s*>/);
+  }
+});
+
+test('equation fallback repairs the mathText actually sent to KaTeX', () => {
+  const blocks = flattenMineruPages(parseMineruMarkdownPages('\\sum_{i=1}^n x_i H<sub>2</sub>O'));
+  const rendered = buildRenderableBlocks(blocks)[0];
+
+  assert.equal(rendered?.block.type, 'equation');
+  assert.match(rendered?.mathText ?? '', /H_\{2\}O/);
+  assert.doesNotMatch(rendered?.mathText ?? '', /<sub>/);
+});
+
+test('oversized image fallback does not restore an embedded remote image', () => {
+  const source = `![${'a'.repeat(66_000)} H<sub>2</sub>O](https://example.invalid/pixel)`;
+  const blocks = flattenMineruPages(parseMineruMarkdownPages(source));
+  const markdown = buildRenderableBlocks(blocks)[0]?.markdown ?? '';
+
+  assert.equal(blocks[0]?.type, 'image');
+  assert.match(markdown, /^\*\*图片说明\*\*/);
+  assert.doesNotMatch(markdown, /https:\/\/example\.invalid\/pixel/);
+});
+
+test('mid-line tildes do not suppress tagged prose recovery', () => {
+  const source = 'Use ~~~ here and H<sub>2</sub>O';
+  const blocks = flattenMineruPages(parseMineruMarkdownPages(source));
+  const markdown = buildRenderableBlocks(blocks)[0]?.markdown ?? '';
+
+  assert.doesNotMatch(markdown, /\$[^$]*<sub>/);
+  assert.match(render(markdown), /H<sub>2<\/sub>O/);
+});
+
+test('real tilde code fences stay inert while surrounding tags render', () => {
+  const source = 'H<sub>2</sub>O\n~~~text\nH<sub>3</sub>O\n~~~\nCO<sub>2</sub>';
+  const markdown = displayMarkdownFallback(source, normalizeMarkdownMath(source));
+
+  assert.match(markdown, /~~~text\nH<sub>3<\/sub>O\n~~~/);
+  assert.match(render(markdown), /H<sub>2<\/sub>O/);
+  assert.match(render(markdown), /CO<sub>2<\/sub>/);
 });

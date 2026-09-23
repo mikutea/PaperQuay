@@ -207,10 +207,12 @@ export function normalizeMineruReaderMarkdown(markdown: string): string {
     (marker, index: string | undefined) => index === undefined ? MARKER_START : tags[Number(index)] ?? marker,
   );
 
-  if (
-    /(?:[_^](?:\{[^{}]+\}|[A-Za-z0-9]+)|\\[A-Za-z]+)[^$\n]*<\s*\/?\s*(?:sup|sub)\s*>/i.test(markdown) &&
-    !/<(?:span|div)\s+class=["'](?:math|formula)["']/i.test(markdown)
-  ) {
+  // Check for a tag first. A suffix-scanning pattern after every `_` becomes
+  // quadratic on long mathematical text with no inline tags.
+  if (/<\s*\/?\s*(?:sup|sub)\s*>/i.test(markdown) && /[_^\\$]/.test(markdown)) {
+    // A tag immediately after a complete math fence is already outside math;
+    // re-normalizing the unprotected source would absorb it into that fence.
+    if (/\$<\s*(?:sup|sub)\s*>/i.test(markdown)) return protectedResult;
     return displayMarkdownFallback(markdown, normalizeMarkdownMath(markdown));
   }
 
