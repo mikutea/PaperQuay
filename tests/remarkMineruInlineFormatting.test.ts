@@ -218,6 +218,14 @@ test('literal private-use characters are never consumed as internal markers', ()
   assert.match(render(`A${markerLikeText} B<sup>2</sup>`), /B<sup>2<\/sup>/);
 });
 
+test('literal reader tag markers are not mistaken for protected tags', () => {
+  const source = 'A{PQInlineTag0} and $x$<sup>2</sup>';
+
+  assert.match(normalizeMineruReaderMarkdown(source), /A\{PQInlineTag0\}/);
+  assert.match(render(source), /A\{PQInlineTag0\}/);
+  assert.match(render(source), /<sup>2<\/sup>/);
+});
+
 test('long private-use runs do not grow marker expressions or alter source text', () => {
   const source = `${'\uE200'.repeat(40_000)} x<sup>2</sup>`;
 
@@ -386,6 +394,23 @@ test('real tilde code fences stay inert while surrounding tags render', () => {
   assert.match(render(markdown), /CO<sub>2<\/sub>/);
 });
 
+test('a longer backtick fence closer preserves code while outside tags render', () => {
+  const source = 'H<sub>2</sub>O\n```text\n$H<sub>3</sub>O$\n````\nCO<sub>2</sub>';
+  const markdown = displayMarkdownFallback(source, normalizeMarkdownMath(source));
+
+  assert.match(markdown, /```text\n\$H<sub>3<\/sub>O\$\n````/);
+  assert.match(render(markdown), /H<sub>2<\/sub>O/);
+  assert.match(render(markdown), /CO<sub>2<\/sub>/);
+});
+
+test('mid-line backticks cannot close a fenced block', () => {
+  const source = '```text\n``` $H<sub>2</sub>O$\n$CO<sub>2</sub>$\n```\nH<sub>3</sub>O';
+  const markdown = displayMarkdownFallback(source, normalizeMarkdownMath(source));
+
+  assert.match(markdown, /``` \$H<sub>2<\/sub>O\$\n\$CO<sub>2<\/sub>\$\n```/);
+  assert.match(render(markdown), /H<sub>3<\/sub>O/);
+});
+
 test('an unmatched backtick does not hide a later matched code span', () => {
   const source = '` unmatched then ``x_i H<sub>2</sub>O``';
   const blocks = flattenMineruPages(parseMineruMarkdownPages(source));
@@ -401,6 +426,16 @@ test('a completed fence adjacent to a tag does not block a later explicit formul
   assert.match(html, /<sup>2<\/sup>/);
   assert.doesNotMatch(html, /katex-error|&lt;sub/);
   assert.match(html, /katex/);
+});
+
+test('fence-adjacent tags do not make a long math token stall normalization', () => {
+  const source = `${'x'.repeat(10_000)}_1 H<sub>2</sub>O and $x$<sup>2</sup>`;
+  const started = performance.now();
+  const markdown = normalizeMineruReaderMarkdown(source);
+
+  assert.ok(performance.now() - started < 2_000);
+  assert.match(markdown, /H<sub>2<\/sub>O/);
+  assert.match(markdown, /\$x\$<sup>2<\/sup>/);
 });
 
 test('equation mathText merges adjacent duplicate script tags for KaTeX', () => {

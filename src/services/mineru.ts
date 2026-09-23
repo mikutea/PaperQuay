@@ -1059,9 +1059,9 @@ function mergeRepeatedEquationScripts(body: string): string {
 export function displayMarkdownFallback(source: string | undefined, normalized: string): string {
   if (!source) return normalized;
 
-  // Tilde code fences are inert; normalize only the text around them. A `~~~`
-  // within a sentence is not a fence and must not hide adjacent inline tags.
-  if (/^ {0,3}~{3,}/m.test(source)) {
+  // Markdown code fences are inert, including a closer longer than its opener.
+  // Normalize only surrounding text; mid-line runs are not fences.
+  if (/^ {0,3}(?:`{3,}|~{3,})/m.test(source)) {
     const renderOutsideFence = (text: string) => {
       const leading = text.match(/^\s*/)?.[0] ?? '';
       const trailing = text.match(/\s*$/)?.[0] ?? '';
@@ -1074,16 +1074,18 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
     let output = '';
     let outside = '';
     let fenceLength = 0;
+    let fenceCharacter = '';
     for (const line of lines) {
-      const marker = /^ {0,3}(~{3,})(?:[^\n]*)/.exec(line);
+      const marker = /^ {0,3}(`{3,}|~{3,})(?:[^\n]*)/.exec(line);
       if (marker && fenceLength === 0) {
         output += renderOutsideFence(outside);
         outside = '';
         fenceLength = marker[1].length;
+        fenceCharacter = marker[1][0];
         output += line;
       } else if (fenceLength > 0) {
         output += line;
-        if (marker && marker[1].length >= fenceLength && /^ {0,3}~{3,}\s*$/.test(line.trimEnd())) {
+        if (marker && marker[1][0] === fenceCharacter && marker[1].length >= fenceLength && /^ {0,3}(?:`{3,}|~{3,})\s*$/.test(line.trimEnd())) {
           fenceLength = 0;
         }
       } else {

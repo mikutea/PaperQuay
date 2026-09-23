@@ -3,8 +3,10 @@ import { displayMarkdownFallback, displayMathTagsAsLatex } from '../../services/
 import { normalizeMarkdownMath } from '../../utils/markdown.ts';
 
 const INLINE_TAG_PATTERN = /<\s*\/?\s*(?:sup|sub)\s*>/gi;
-const MARKER_START = '\uE200';
-const MARKER_END = '\uE201';
+// Braces keep protected tags outside long math candidates in normalizeMarkdownMath.
+// A private-use marker here can cause repeated scans of a preceding math token.
+const MARKER_START = '{PQInlineTag';
+const MARKER_END = '}';
 const MAX_INLINE_NODES = 512;
 const MAX_INLINE_DEPTH = 32;
 const MAX_CAPTION_LENGTH = 16_384;
@@ -193,8 +195,8 @@ export function normalizeMineruReaderMarkdown(markdown: string): string {
     const [, slash, name] = /<\s*(\/?)\s*(sup|sub)\s*>/i.exec(tag) ?? [];
     return name ? `<${slash ? '/' : ''}${name.toLowerCase()}>` : tag;
   };
-  // Decide the fallback before normalizing marker text: a long math token
-  // followed by a marker makes the upstream boundary scan very expensive.
+  // Keep the direct path for ordinary math. A completed math fence followed
+  // immediately by a tag needs the protected path to preserve that fence.
   if (/[_^\\$]/.test(markdown) && !/\$<\s*(?:sup|sub)\s*>/i.test(markdown)) {
     return displayMarkdownFallback(
       markdown,
@@ -203,7 +205,7 @@ export function normalizeMineruReaderMarkdown(markdown: string): string {
   }
 
   const tags: string[] = [];
-  const readableMarkdown = markdown.replace(/\uE200/g, `${MARKER_START}${MARKER_START}`);
+  const readableMarkdown = markdown.replace(/\{PQInlineTag/g, `${MARKER_START}${MARKER_START}`);
 
   const protectInlineTags = (text: string) => text.replace(INLINE_TAG_PATTERN, (tag) => {
     const marker = `${MARKER_START}${tags.length}${MARKER_END}`;
@@ -253,7 +255,7 @@ export function normalizeMineruReaderMarkdown(markdown: string): string {
   protectedMarkdown += protectInlineTags(readableMarkdown.slice(cursor));
 
   const protectedResult = normalizeMarkdownMath(protectedMarkdown).replace(
-    /\uE200\uE200|\uE200(\d+)\uE201/g,
+    /\{PQInlineTag\{PQInlineTag|\{PQInlineTag(\d+)\}/g,
     (marker, index: string | undefined) => index === undefined ? MARKER_START : tags[Number(index)] ?? marker,
   );
 
