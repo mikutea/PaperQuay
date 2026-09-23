@@ -1,4 +1,5 @@
 import { createElement, isValidElement, type ReactNode } from 'react';
+import { displayMarkdownFallback } from '../../services/mineru.ts';
 import { normalizeMarkdownMath } from '../../utils/markdown.ts';
 
 const MATH_HTML_PATTERN =
@@ -201,10 +202,19 @@ export function normalizeMineruReaderMarkdown(markdown: string): string {
 
   protectedMarkdown += protectInlineTags(readableMarkdown.slice(cursor));
 
-  return normalizeMarkdownMath(protectedMarkdown).replace(
+  const protectedResult = normalizeMarkdownMath(protectedMarkdown).replace(
     /\uE200\uE200|\uE200(\d+)\uE201/g,
     (marker, index: string | undefined) => index === undefined ? MARKER_START : tags[Number(index)] ?? marker,
   );
+
+  if (
+    /(?:[_^](?:\{[^{}]+\}|[A-Za-z0-9]+)|\\[A-Za-z]+)[^$\n]*<\s*\/?\s*(?:sup|sub)\s*>/i.test(markdown) &&
+    !/<(?:span|div)\s+class=["'](?:math|formula)["']/i.test(markdown)
+  ) {
+    return displayMarkdownFallback(markdown, normalizeMarkdownMath(markdown));
+  }
+
+  return protectedResult;
 }
 
 // Only recognize MinerU's paired inline formatting tags. Other raw HTML stays literal.

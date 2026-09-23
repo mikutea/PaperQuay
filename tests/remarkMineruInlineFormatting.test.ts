@@ -114,6 +114,29 @@ test('Markdown fallback keeps real math adjacent to tagged prose', () => {
   assert.match(render(markdown), /katex/);
 });
 
+test('Markdown fallback avoids duplicate superscript math', () => {
+  const blocks = flattenMineruPages(parseMineruMarkdownPages('x^i<sup>2</sup>'));
+  const markdown = buildRenderableBlocks(blocks)[0]?.markdown ?? '';
+
+  assert.equal(markdown, '$x^i$<sup>2</sup>');
+  assert.doesNotMatch(render(markdown), /katex-error/);
+});
+
+test('explicit spaced inline math converts its paired tag', () => {
+  const blocks = flattenMineruPages(parseMineruMarkdownPages('$H <sub>2</sub>O$'));
+  const markdown = buildRenderableBlocks(blocks)[0]?.markdown ?? '';
+
+  assert.match(markdown, /H _\{2\}O/);
+  assert.doesNotMatch(render(markdown), /katex-error/);
+});
+
+test('JSON-backed and translated tagged prose retains adjacent math', () => {
+  const markdown = 'x_i H<sub>2</sub>O';
+
+  assert.equal(normalizeMineruReaderMarkdown(markdown), '$x_i H_{2}O$');
+  assert.doesNotMatch(render(markdown), /katex-error/);
+});
+
 test('Markdown fallback formats tags outside an inline code span in the same block', () => {
   const source = 'H<sub>2</sub>O and `code`';
   const blocks = flattenMineruPages(parseMineruMarkdownPages(source));

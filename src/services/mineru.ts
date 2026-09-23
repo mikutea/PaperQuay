@@ -1030,7 +1030,7 @@ export function extractTranslatableMarkdownFromMineruBlock(
   return toMarkdownFragment(block, plainText);
 }
 
-function displayMarkdownFallback(source: string | undefined, normalized: string): string {
+export function displayMarkdownFallback(source: string | undefined, normalized: string): string {
   if (!source || source.includes('~~~')) {
     return normalized;
   }
@@ -1059,13 +1059,14 @@ function displayMarkdownFallback(source: string | undefined, normalized: string)
     /\$([^$\n]*<\s*\/?\s*(?:sup|sub)\s*>[^$\n]*)\$/gi,
     (fenced, body: string) => {
       const isLiteralFence = literalFences.has(fenced);
+      const isCurrencyProse = isLiteralFence && /^\s*\d/.test(body) && [...body.matchAll(/\s+/g)].length >= 2;
 
-      if (!/(?:[_^=]|\\[A-Za-z])/.test(body) && (!isLiteralFence || /\s/.test(body))) {
+      if (!/(?:[_^=]|\\[A-Za-z])/.test(body) && (!isLiteralFence || isCurrencyProse)) {
         return isLiteralFence ? fenced : body;
       }
 
-      const duplicateSubscript = /^([^\s$]*_[A-Za-z0-9]+)(<\s*sub\s*>[\s\S]*)$/i.exec(body);
-      if (duplicateSubscript) return `$${duplicateSubscript[1]}$${duplicateSubscript[2]}`;
+      const duplicateScript = /^([^\s$]*[_^](?:\{[^{}]+\}|[A-Za-z0-9]+))(<\s*(?:sub|sup)\s*>[\s\S]*)$/i.exec(body);
+      if (duplicateScript) return `$${duplicateScript[1]}$${duplicateScript[2]}`;
 
       const latex = toLatex(body);
       return latex === null ? fenced : `$${latex}$`;
