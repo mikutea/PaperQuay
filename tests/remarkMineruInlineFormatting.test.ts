@@ -122,6 +122,22 @@ test('escaped dollar signs leave tagged prose for inline formatting', () => {
   assert.doesNotMatch(render(markdown), /katex-error/);
 });
 
+test('escaped display-math delimiters keep paired tags as readable text', () => {
+  const source = String.raw`\$$H<sub>2</sub>O\$$`;
+  const markdown = displayMarkdownFallback(source, normalizeMarkdownMath(source));
+
+  assert.doesNotMatch(markdown, /H_\{2\}/);
+  assert.match(render(markdown), /H<sub>2<\/sub>O/);
+});
+
+test('a dollar inside a paired tag is not an inline-math delimiter', () => {
+  const source = '$x<sup>US$</sup>$';
+  const markdown = displayMarkdownFallback(source, normalizeMarkdownMath(source));
+
+  assert.equal(markdown, String.raw`$x^{US{\char"24}}$`);
+  assert.doesNotMatch(render(markdown), /katex-error/);
+});
+
 test('parenthesized explicit math keeps its fence when it contains a tag', () => {
   const source = String.raw`\(x + H<sub>2</sub>O\)`;
   const blocks = flattenMineruPages(parseMineruMarkdownPages(source));
@@ -469,6 +485,18 @@ test('an over-indented candidate cannot close a top-level code fence', () => {
   assert.match(render(markdown), /CO<sub>2<\/sub>/);
 });
 
+test('a fence outside the opening quote or list starts its own code block', () => {
+  for (const source of [
+    '> ```text\n```\n$H<sub>2</sub>O$',
+    '10. ```text\n```\n$H<sub>2</sub>O$',
+  ]) {
+    const markdown = displayMarkdownFallback(source, normalizeMarkdownMath(source));
+
+    assert.match(markdown, /```\n\$H<sub>2<\/sub>O\$/);
+    assert.doesNotMatch(markdown, /H_\{2\}/);
+  }
+});
+
 test('mid-line backticks cannot close a fenced block', () => {
   const source = '```text\n``` $H<sub>2</sub>O$\n$CO<sub>2</sub>$\n```\nH<sub>3</sub>O';
   const markdown = displayMarkdownFallback(source, normalizeMarkdownMath(source));
@@ -580,6 +608,11 @@ test('math tags merge an existing TeX control-sequence script', () => {
 test('math tags merge an existing nested TeX script group', () => {
   assert.equal(displayMathTagsAsLatex(String.raw`x_{\mathrm{i}}<sub>2</sub>`), String.raw`x_{\mathrm{i}2}`);
   assert.doesNotMatch(render(String.raw`$$x_{\mathrm{i}}<sub>2</sub>$$`), /katex-error/);
+});
+
+test('math tags merge an existing Unicode script argument', () => {
+  assert.equal(displayMathTagsAsLatex('x_α<sub>2</sub>'), 'x_{α2}');
+  assert.doesNotMatch(render('$$x_α<sub>2</sub>$$'), /katex-error/);
 });
 
 test('math tag entities decode to KaTeX-safe characters', () => {

@@ -1056,6 +1056,10 @@ function mathTagContentToLatex(content: string): string {
         result += character;
         continue;
       }
+      if (character === '$' && !escaped) {
+        result += '{\\char"24}';
+        continue;
+      }
       if (!escaped && ('%#$&'.includes(character) || unmatchedBraces.has(offset + index))) {
         result += '\\';
       }
@@ -1071,7 +1075,7 @@ function mathTagContentToLatex(content: string): string {
       case '>': return '\\gt ';
       case '&': return '\\&';
       case '%': return '\\%';
-      case '$': return '\\$';
+      case '$': return '{\\char"24}';
       case '#': return '\\#';
       case '_': return '\\_';
       case '{': return '\\{';
@@ -1139,7 +1143,7 @@ function mergeRepeatedEquationScripts(body: string): string {
   grouped += body.slice(cursor);
 
   return grouped.replace(
-    /([_^])(?:\{([^{}]+)\}|(\\[A-Za-z]+|[A-Za-z0-9]+))\s*<\s*(sub|sup)\s*>([^<>]*)<\s*\/\s*\4\s*>/gi,
+    /([_^])(?:\{([^{}]+)\}|(\\[A-Za-z]+|[\p{L}\p{N}]+))\s*<\s*(sub|sup)\s*>([^<>]*)<\s*\/\s*\4\s*>/giu,
     (match, script: string, braced: string | undefined, bare: string | undefined, tag: string, content: string) => {
       if ((script === '_' ? 'sub' : 'sup') !== tag.toLowerCase()) return match;
       const existing = braced ?? bare ?? '';
@@ -1155,18 +1159,20 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
   // Normalize only surrounding text; mid-line runs are not fences.
   const unquote = (line: string) => {
     let cursor = 0;
+    let depth = 0;
     while (cursor < line.length) {
       let next = cursor;
       while (next - cursor < 3 && line[next] === ' ') next += 1;
       if (line[next] !== '>') break;
       cursor = next + 1;
+      depth += 1;
       if (line[cursor] === ' ' || line[cursor] === '\t') cursor += 1;
     }
-    return line.slice(cursor);
+    return { content: line.slice(cursor), depth };
   };
   const fenceMarker = (line: string) => /^( {0,3})((?:[-+*]|\d+[.)]) +)?(`{3,}|~{3,})(?:[^\n]*)/.exec(line);
   const lines = /(?:`{3,}|~{3,})/.test(source) ? source.split(/(?<=\n)/) : [];
-  if (lines.some((line) => fenceMarker(unquote(line)))) {
+  if (lines.some((line) => fenceMarker(unquote(line).content))) {
     const renderOutsideFence = (text: string) => {
       const leading = text.match(/^\s*/)?.[0] ?? '';
       const trailing = text.match(/\s*$/)?.[0] ?? '';
@@ -1180,13 +1186,20 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
     let fenceLength = 0;
     let fenceCharacter = '';
     let fenceIndent = 0;
+    let fenceQuoteDepth = 0;
     for (const line of lines) {
-      const quotedContent = unquote(line);
+      const { content: quotedContent, depth: quoteDepth } = unquote(line);
       const marker = fenceMarker(quotedContent);
+      const lineIndent = /^( *)/.exec(quotedContent)?.[1].length ?? 0;
+      if (fenceLength > 0 && (quoteDepth !== fenceQuoteDepth ||
+          (fenceIndent > 0 && quotedContent.trim() && lineIndent < fenceIndent))) {
+        fenceLength = 0;
+      }
       if (marker && fenceLength === 0) {
         output += renderOutsideFence(outside);
         outside = '';
-        fenceIndent = marker[2]?.length ?? 0;
+        fenceIndent = marker[2] ? marker[1].length + marker[2].length : 0;
+        fenceQuoteDepth = quoteDepth;
         fenceLength = marker[3].length;
         fenceCharacter = marker[3][0];
         output += line;
@@ -1251,7 +1264,23 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
     let output = '';
     let cursor = 0;
     let opening = -1;
+    const tagToken = /<\s*(\/?)\s*(sub|sup)\s*>/giy;
+    const tagStack: string[] = [];
     for (let index = 0; index < segment.length; index += 1) {
+      if (segment[index] === '<') {
+        tagToken.lastIndex = index;
+        const tag = tagToken.exec(segment);
+        if (tag) {
+          if (tag[1]) {
+            if (tagStack[tagStack.length - 1] === tag[2].toLowerCase()) tagStack.pop();
+          } else {
+            tagStack.push(tag[2].toLowerCase());
+          }
+          index = tagToken.lastIndex - 1;
+          continue;
+        }
+      }
+      if (tagStack.length > 0) continue;
       if (segment[index] !== '$') continue;
       let backslashes = 0;
       for (let previous = index - 1; segment[previous] === '\\'; previous -= 1) backslashes += 1;
@@ -1277,8 +1306,15 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
 
     for (const match of segment.matchAll(/\$\$([\s\S]*?)\$\$/g)) {
       const start = match.index ?? 0;
+      const escaped = (position: number) => {
+        let backslashes = 0;
+        for (let previous = position - 1; segment[previous] === '\\'; previous -= 1) backslashes += 1;
+        return backslashes % 2 !== 0;
+      };
       output += renderInlineMath(segment.slice(cursor, start));
-      const latex = displayMathTagsAsLatex(match[1]);
+      const latex = escaped(start) || escaped(start + match[0].length - 2)
+        ? null
+        : displayMathTagsAsLatex(match[1]);
       output += latex === null ? match[0] : `$$${latex}$$`;
       cursor = start + match[0].length;
     }
