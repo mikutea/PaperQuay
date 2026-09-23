@@ -34,6 +34,7 @@ import { normalizeRawLatexExpression } from '../../utils/markdown';
 import { sanitizeMineruTableHtml } from '../../utils/safeHtml';
 import {
   normalizeMineruReaderMarkdown,
+  plainMineruInlineCaption,
   renderMineruInlineCaption,
   remarkMineruInlineFormatting,
 } from './remarkMineruInlineFormatting';
@@ -273,7 +274,7 @@ function AssetFigure({
   );
   const [previewOpen, setPreviewOpen] = useState(false);
   const accessibleLabel = useMemo(
-    () => label.replace(/<\s*\/?\s*(?:sup|sub)\s*>/gi, ''),
+    () => plainMineruInlineCaption(label),
     [label],
   );
 

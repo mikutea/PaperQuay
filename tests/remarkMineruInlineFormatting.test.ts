@@ -9,6 +9,7 @@ import remarkMath from 'remark-math';
 
 import {
   normalizeMineruReaderMarkdown,
+  plainMineruInlineCaption,
   renderMineruInlineCaption,
   remarkMineruInlineFormatting,
 } from '../src/features/blocks/remarkMineruInlineFormatting.ts';
@@ -62,14 +63,32 @@ test('fragmented LaTeX inside formula HTML is repaired before formula conversion
   assert.equal(normalizeMineruReaderMarkdown(source), '$x \\in I$');
 });
 
-test('Markdown fallback blocks recover tags wrapped in spurious math fences', () => {
+test('Markdown fallback does not add spurious math fences around inline tags', () => {
   const pages = parseMineruMarkdownPages('H<sub>2</sub>O');
   const content = pages[0]?.[0]?.content as { markdown?: string } | undefined;
   const fallbackMarkdown = content?.markdown ?? '';
   const readerMarkdown = buildRenderableBlocks(flattenMineruPages(pages))[0]?.markdown ?? '';
 
-  assert.equal(fallbackMarkdown, '$H<sub>2</sub>O$');
+  assert.equal(fallbackMarkdown, 'H<sub>2</sub>O');
   assert.match(render(readerMarkdown), /H<sub>2<\/sub>O/);
+});
+
+test('ordinary currency signs around tagged text are preserved', () => {
+  const source = 'It costs $5 and H<sub>2</sub>O costs $10.';
+  const fallback = parseMineruMarkdownPages(source);
+  const content = fallback[0]?.[0]?.content as { markdown?: string } | undefined;
+
+  assert.equal(normalizeMineruReaderMarkdown(source), normalizeMarkdownMath(source));
+  assert.match(normalizeMineruReaderMarkdown(source), /\$5 and H<sub>2<\/sub>O costs \$10/);
+  assert.match(content?.markdown ?? '', /\$5 and H<sub>2<\/sub>O costs \$10/);
+});
+
+test('Markdown fallback preserves a dollar fence already present in source', () => {
+  const source = '$x<sup>2</sup>$';
+  const pages = parseMineruMarkdownPages(source);
+  const content = pages[0]?.[0]?.content as { markdown?: string } | undefined;
+
+  assert.equal(content?.markdown, source);
 });
 
 test('literal private-use characters are never consumed as internal markers', () => {
@@ -80,12 +99,29 @@ test('literal private-use characters are never consumed as internal markers', ()
   assert.match(render(`A${markerLikeText} B<sup>2</sup>`), /B<sup>2<\/sup>/);
 });
 
+test('long private-use runs do not grow marker expressions or alter source text', () => {
+  const source = `${'\uE200'.repeat(40_000)} x<sup>2</sup>`;
+
+  assert.equal(normalizeMineruReaderMarkdown(source), source);
+});
+
+test('excessively nested inline tags fall back to literal text without recursion failure', () => {
+  const source = `${'<sup>'.repeat(8_000)}x${'</sup>'.repeat(8_000)}`;
+  const html = render(source);
+  const caption = renderToStaticMarkup(createElement('span', null, ...renderMineruInlineCaption(source)));
+
+  assert.match(html, /&lt;sup&gt;/);
+  assert.match(caption, /&lt;sup&gt;/);
+});
+
 test('caption text uses the same safe inline formatting pipeline', () => {
   const html = renderToStaticMarkup(
     createElement('span', null, ...renderMineruInlineCaption('Levels of CO<sub>2</sub>')),
   );
 
   assert.match(html, /CO<sub>2<\/sub>/);
+  assert.equal(plainMineruInlineCaption('Levels of CO<sub>2</sub>'), 'Levels of CO2');
+  assert.equal(plainMineruInlineCaption('value <sup>approx.'), 'value <sup>approx.');
 });
 
 test('caption links, images, and other HTML remain inert literal text', () => {
@@ -98,12 +134,18 @@ test('caption links, images, and other HTML remain inert literal text', () => {
   assert.doesNotMatch(html, /<img\b|<a\b/);
 });
 
-test('fallback repair does not change inline or fenced code examples', () => {
+test('reader normalization does not change inline or fenced code examples', () => {
   const inline = '`$H<sub>2</sub>O$`';
   const fenced = '```text\n$H<sub>2</sub>O$\n```';
 
   assert.equal(normalizeMineruReaderMarkdown(inline), inline);
   assert.equal(normalizeMineruReaderMarkdown(fenced), fenced);
+});
+
+test('many paired backtick runs remain unchanged', () => {
+  const source = '`x`'.repeat(40_000);
+
+  assert.equal(normalizeMineruReaderMarkdown(source), source);
 });
 
 test('unrecognized HTML, malformed tags, and code stay literal', () => {

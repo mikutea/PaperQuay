@@ -765,7 +765,19 @@ function inferMarkdownBlockType(markdown: string): MineruBlockBase['type'] {
 }
 
 function createMarkdownMineruBlock(markdown: string): MineruBlockBase | null {
-  const normalizedMarkdown = normalizeMarkdownMath(markdown.trim());
+  const sourceMarkdown = markdown.trim();
+  const normalized = normalizeMarkdownMath(sourceMarkdown);
+  // Only this Markdown fallback knows whether a dollar fence existed in the source.
+  // Do not guess from already-normalized JSON or translated reader text.
+  const normalizedMarkdown = sourceMarkdown.length <= 16_384
+    ? normalized.replace(
+      /\$([^$\n]*<\/?(?:sup|sub)>[^$\n]*)\$/gi,
+      (fenced, body: string) =>
+        sourceMarkdown.includes(fenced) || !sourceMarkdown.includes(body)
+          ? fenced
+          : body,
+    )
+    : normalized;
 
   if (!normalizedMarkdown) {
     return null;

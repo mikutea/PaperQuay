@@ -1,72 +1,26 @@
-import { createElement, type ReactNode } from 'react';
+import { createElement, isValidElement, type ReactNode } from 'react';
 import { normalizeMarkdownMath } from '../../utils/markdown.ts';
 
 const MATH_HTML_PATTERN =
   /<div\s+class=["']formula["'][^>]*>.*?<\/div>|<span\s+class=["']math["'][^>]*>.*?<\/span>/gis;
 const INLINE_TAG_PATTERN = /<\s*\/?\s*(?:sup|sub)\s*>/gi;
-const PRENORMALIZED_TAG_MATH_PATTERN = /\$([^$\n]*<\/?(?:sup|sub)>[^$\n]*)\$/gi;
+const MARKER_START = '\uE200';
+const MARKER_END = '\uE201';
+const MAX_INLINE_NODES = 512;
+const MAX_INLINE_DEPTH = 32;
+const MAX_CAPTION_LENGTH = 16_384;
 
-function recoverTagMathOutsideCode(text: string): string {
-  return text.replace(PRENORMALIZED_TAG_MATH_PATTERN, (fenced, body: string) =>
-    /<\s*(sup|sub)\s*>.*?<\s*\/\s*\1\s*>/i.test(body) ? body : fenced,
-  );
-}
-
-function recoverTagMathOutsideInlineCode(line: string): string {
-  const delimiters = [...line.matchAll(/`+/g)];
-  let cursor = 0;
-  let output = '';
-
-  for (let index = 0; index < delimiters.length; index += 1) {
-    const opening = delimiters[index];
-    const closingIndex = delimiters.findIndex(
-      (candidate, nextIndex) => nextIndex > index && candidate[0].length === opening[0].length,
-    );
-
-    if (closingIndex < 0) {
-      break;
-    }
-
-    const closing = delimiters[closingIndex];
-    output += recoverTagMathOutsideCode(line.slice(cursor, opening.index));
-    output += line.slice(opening.index, (closing.index ?? 0) + closing[0].length);
-    cursor = (closing.index ?? 0) + closing[0].length;
-    index = closingIndex;
+export function renderMineruInlineCaption(text: string, depth = 0): ReactNode[] {
+  if (text.length > MAX_CAPTION_LENGTH || depth >= MAX_INLINE_DEPTH) {
+    return [text];
   }
 
-  return output + recoverTagMathOutsideCode(line.slice(cursor));
-}
-
-function recoverPreNormalizedTagMath(markdown: string): string {
-  let fence: { marker: string; length: number } | null = null;
-
-  return markdown.split('\n').map((line) => {
-    const opening = /^[ \t]{0,3}(`{3,}|~{3,})/.exec(line);
-
-    if (fence) {
-      if (
-        opening &&
-        opening[1][0] === fence.marker &&
-        opening[1].length >= fence.length &&
-        line.slice(opening[0].length).trim() === ''
-      ) {
-        fence = null;
-      }
-
-      return line;
-    }
-
-    if (opening) {
-      fence = { marker: opening[1][0], length: opening[1].length };
-      return line;
-    }
-
-    return recoverTagMathOutsideInlineCode(line);
-  }).join('\n');
-}
-
-export function renderMineruInlineCaption(text: string): ReactNode[] {
   const matches = [...text.matchAll(INLINE_TAG_PATTERN)];
+
+  if (matches.length > MAX_INLINE_NODES) {
+    return [text];
+  }
+
   const rendered: ReactNode[] = [];
   let cursor = 0;
 
@@ -78,7 +32,7 @@ export function renderMineruInlineCaption(text: string): ReactNode[] {
     }
 
     const name = opening[0].match(/(?:sup|sub)/i)?.[0].toLowerCase() as 'sup' | 'sub';
-    let depth = 1;
+    let nesting = 1;
     let closingIndex = index + 1;
 
     for (; closingIndex < matches.length; closingIndex += 1) {
@@ -88,14 +42,14 @@ export function renderMineruInlineCaption(text: string): ReactNode[] {
         continue;
       }
 
-      depth += /^<\s*\//.test(candidate[0]) ? -1 : 1;
+      nesting += /^<\s*\//.test(candidate[0]) ? -1 : 1;
 
-      if (depth === 0) {
+      if (nesting === 0) {
         break;
       }
     }
 
-    if (depth === 0) {
+    if (nesting === 0) {
       const closing = matches[closingIndex];
       rendered.push(text.slice(cursor, opening.index));
       rendered.push(createElement(
@@ -104,7 +58,7 @@ export function renderMineruInlineCaption(text: string): ReactNode[] {
         ...renderMineruInlineCaption(text.slice(
           (opening.index ?? 0) + opening[0].length,
           closing.index,
-        )),
+        ), depth + 1),
       ));
       cursor = (closing.index ?? 0) + closing[0].length;
       index = closingIndex;
@@ -113,6 +67,22 @@ export function renderMineruInlineCaption(text: string): ReactNode[] {
 
   rendered.push(text.slice(cursor));
   return rendered;
+}
+
+export function plainMineruInlineCaption(text: string): string {
+  const flatten = (node: ReactNode): string => {
+    if (typeof node === 'string' || typeof node === 'number') {
+      return String(node);
+    }
+
+    if (Array.isArray(node)) {
+      return node.map(flatten).join('');
+    }
+
+    return isValidElement<{ children?: ReactNode }>(node) ? flatten(node.props.children) : '';
+  };
+
+  return flatten(renderMineruInlineCaption(text));
 }
 
 interface MarkdownNode {
@@ -134,7 +104,11 @@ function readInlineTag(node: MarkdownNode): { name: 'sup' | 'sub'; closing: bool
     : null;
 }
 
-function renderInlineTags(children: MarkdownNode[]): MarkdownNode[] {
+function renderInlineTags(children: MarkdownNode[], depth = 0): MarkdownNode[] {
+  if (children.length > MAX_INLINE_NODES || depth >= MAX_INLINE_DEPTH) {
+    return children;
+  }
+
   const rendered: MarkdownNode[] = [];
 
   for (let index = 0; index < children.length; index += 1) {
@@ -142,7 +116,7 @@ function renderInlineTags(children: MarkdownNode[]): MarkdownNode[] {
     const opening = readInlineTag(node);
 
     if (opening && !opening.closing) {
-      let depth = 1;
+      let nesting = 1;
       let closingIndex = index + 1;
 
       for (; closingIndex < children.length; closingIndex += 1) {
@@ -152,18 +126,18 @@ function renderInlineTags(children: MarkdownNode[]): MarkdownNode[] {
           continue;
         }
 
-        depth += tag.closing ? -1 : 1;
+        nesting += tag.closing ? -1 : 1;
 
-        if (depth === 0) {
+        if (nesting === 0) {
           break;
         }
       }
 
-      if (depth === 0) {
+      if (nesting === 0) {
         rendered.push({
           type: 'mineruInlineFormatting',
           data: { hName: opening.name },
-          children: renderInlineTags(children.slice(index + 1, closingIndex)),
+          children: renderInlineTags(children.slice(index + 1, closingIndex), depth + 1),
         });
         index = closingIndex;
         continue;
@@ -171,7 +145,7 @@ function renderInlineTags(children: MarkdownNode[]): MarkdownNode[] {
     }
 
     if (node.children) {
-      node.children = renderInlineTags(node.children);
+      node.children = renderInlineTags(node.children, depth + 1);
     }
 
     rendered.push(node);
@@ -182,16 +156,10 @@ function renderInlineTags(children: MarkdownNode[]): MarkdownNode[] {
 
 export function normalizeMineruReaderMarkdown(markdown: string): string {
   const tags: string[] = [];
-  // Markdown fallback blocks can arrive with spurious math fences already added by MinerU.
-  const readableMarkdown = recoverPreNormalizedTagMath(markdown);
-  let markerStart = '\uE200';
-
-  while (readableMarkdown.includes(markerStart)) {
-    markerStart += '\uE200';
-  }
+  const readableMarkdown = markdown.replace(/\uE200/g, `${MARKER_START}${MARKER_START}`);
 
   const protectInlineTags = (text: string) => text.replace(INLINE_TAG_PATTERN, (tag) => {
-    const marker = `${markerStart}${tags.length}\uE201`;
+    const marker = `${MARKER_START}${tags.length}${MARKER_END}`;
     tags.push(tag);
     return marker;
   });
@@ -208,9 +176,9 @@ export function normalizeMineruReaderMarkdown(markdown: string): string {
 
   protectedMarkdown += protectInlineTags(readableMarkdown.slice(cursor));
 
-  const markerPattern = new RegExp(`${markerStart}(\\d+)\\uE201`, 'g');
-  return normalizeMarkdownMath(protectedMarkdown).replace(markerPattern, (_marker, index: string) =>
-    tags[Number(index)] ?? _marker,
+  return normalizeMarkdownMath(protectedMarkdown).replace(
+    /\uE200\uE200|\uE200(\d+)\uE201/g,
+    (marker, index: string | undefined) => index === undefined ? MARKER_START : tags[Number(index)] ?? marker,
   );
 }
 
