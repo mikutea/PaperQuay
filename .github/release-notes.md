@@ -24,6 +24,7 @@ The binaries are not code-signed. Windows SmartScreen may show an unrecognized-a
 - Verifies the packaged `app.asar` can resolve the Pizzip/Pako runtime chain before release assets are published.
 - Keeps library-wide translation strictly serial, resumes saved translated blocks, and stops the run promptly when the translation service is unavailable instead of failing every paper.
 - Lets a manual “Generate All Overviews” request take priority over an automatic MinerU or translation batch after the current in-flight item finishes.
+- Makes batch translation, library status, and Reader use the same visible MinerU blocks and source fingerprint. Older mismatched local translation caches are rejected and can be regenerated with the configured translation model.
 - Preserves the validated Windows `--user-data-dir` profile path so the real library is not replaced by an empty nested profile.
 - Resolves actionable review findings on fork PRs #1, #4, #5, and #6: batches cover more than 1,000 papers, automatic jobs stop on limits and outages, overview preemption resumes translation, and concurrent translation cannot overwrite a paper's cache.
 - Checks this fork's complete prereleases in-app; NSIS installers use the selected release's update manifest, while portable builds remain manual and start through the sandbox-ACL launcher.
@@ -69,6 +70,7 @@ Windows x64 构建：
 - 发布前对实际 `app.asar` 执行 Pizzip/Pako 运行时解析烟雾测试。
 - 全库翻译严格串行、续用已保存段落，并在翻译服务不可用时及时停止本轮，避免逐篇失败。
 - 手动“全部生成概览”可以在当前进行中的自动 MinerU／翻译项目结束后优先运行。
+- 让批量翻译、文库状态和阅读器使用同一组可见 MinerU 块及源指纹。旧批次中指纹不匹配的本地译文缓存不再复用，可通过已配置的翻译模型重新生成。
 - 保留已验证的 Windows `--user-data-dir` 路径，避免误建空白嵌套文库。
 - 处理 fork 的 #1、#4、#5、#6 PR 中可执行的审查意见：全库任务覆盖超过 1000 篇论文，自动任务在限流或服务不可用时停止，手动概览抢占后恢复翻译，并避免同一论文并发翻译覆盖缓存。
 - 应用内检查本 fork 的完整预发布；NSIS 安装版使用对应发布的更新清单，免安装版通过沙箱权限启动脚本运行并采用手动更新。

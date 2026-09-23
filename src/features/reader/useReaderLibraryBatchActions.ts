@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { resolveSummaryOutputLanguage } from '../../services/summarySource';
-import { extractTranslatableMarkdownFromMineruBlock } from '../../services/mineru';
 import type { WorkspaceItem } from '../../types/reader';
 import { buildMineruCachePaths } from '../../utils/mineruCache';
 import { runMineruCloudParseWithOcrFallback } from './mineruOcrFallback';
 import { createTranslationRequestRateLimiter } from './readerTranslation';
 import { classifyOverviewBatchOutcome } from './readerBatchResults';
-import { buildTranslationSourceMetadata } from './readerTranslationSource';
+import {
+  buildReaderTranslationBlockInputs,
+  buildTranslationSourceMetadata,
+} from './readerTranslationSource';
 import {
   getAutoEnglishTranslationAttemptKey,
   resolveLibraryTranslationExecutionOptions,
@@ -673,12 +675,7 @@ export function useReaderLibraryBatchActions({
               }
               try {
                 const preview = await loadLibraryPreviewBlocks(item);
-                const sourceBlocks = preview.blocks
-                  .map((block) => ({
-                    blockId: block.blockId,
-                    text: extractTranslatableMarkdownFromMineruBlock(block),
-                  }))
-                  .filter((block) => block.text.trim().length > 0);
+                const sourceBlocks = buildReaderTranslationBlockInputs(preview.blocks);
 
                 if (sourceBlocks.length === 0) {
                   return null;

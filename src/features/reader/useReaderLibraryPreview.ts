@@ -55,7 +55,12 @@ import {
   sourceKeyAfterOverviewFailure,
 } from './readerBatchResults';
 import { readTranslationCache } from './readerTranslationCache';
-import { mapPreviewItemsWithConcurrency } from './readerPreviewWork';
+import {
+  buildReaderTranslationBlockInputs,
+  buildTranslationSourceMetadata,
+  selectReusableCachedTranslations,
+} from './readerTranslationSource';
+import { mapPreviewItemsWithConcurrency, wasUpdatedDuringPreviewScan } from './readerPreviewWork';
 import type {
   LibraryPreviewSyncPayload,
   ReaderDocumentTranslationSnapshot,
@@ -339,6 +344,7 @@ export function useReaderLibraryPreview({
     }
 
     let cancelled = false;
+    const scanStartedAt = Date.now();
 
     void (async () => {
       const restoredEntries = (
@@ -356,18 +362,31 @@ export function useReaderLibraryPreview({
               return null;
             }
 
-            const count = countTranslatedBlocks(cachedTranslation.translations);
+            const preview = await loadReaderLibraryPreviewBlocks({
+              item,
+              settings,
+              l,
+              noJsonLoadedText,
+              noPdfLoadedText,
+              notLoadedText,
+            });
+            const sourceBlocks = buildReaderTranslationBlockInputs(preview.blocks);
+            const translations = selectReusableCachedTranslations(
+              cachedTranslation,
+              sourceBlocks,
+            );
+            const count = countTranslatedBlocks(translations);
 
             if (count === 0) {
               return null;
             }
 
+            const sourceMetadata = buildTranslationSourceMetadata(sourceBlocks);
             return {
               item,
               count,
-              blockSourceFingerprints: cachedTranslation.blockSourceFingerprints,
-              sourceFingerprint: cachedTranslation.sourceFingerprint,
-              translations: cachedTranslation.translations,
+              ...sourceMetadata,
+              translations,
             };
           },
           () => !cancelled,
@@ -397,7 +416,11 @@ export function useReaderLibraryPreview({
               ? countTranslatedBlocks(previousSnapshot.translations)
               : 0;
 
-          if (previousCount >= entry.count) {
+          if (
+            wasUpdatedDuringPreviewScan(previousSnapshot?.updatedAt, scanStartedAt) ||
+            (previousCount >= entry.count &&
+              previousSnapshot?.sourceFingerprint === entry.sourceFingerprint)
+          ) {
             continue;
           }
 
@@ -421,7 +444,10 @@ export function useReaderLibraryPreview({
         for (const entry of restoredEntries) {
           const previousState = current[entry.item.workspaceId] ?? EMPTY_LIBRARY_PREVIEW_STATE;
 
-          if (previousState.operation?.status === 'running') {
+          if (
+            previousState.operation?.status === 'running' ||
+            wasUpdatedDuringPreviewScan(previousState.operation?.updatedAt, scanStartedAt)
+          ) {
             continue;
           }
 
@@ -461,8 +487,10 @@ export function useReaderLibraryPreview({
     allKnownItems,
     createPaperTaskState,
     l,
+    noJsonLoadedText,
     noPdfLoadedText,
     notLoadedText,
+    settings.autoLoadSiblingJson,
     settings.mineruCacheDir,
     settings.translationTargetLanguage,
   ]);

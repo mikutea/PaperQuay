@@ -2,10 +2,15 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  buildReaderTranslationBlockInputs,
   buildTranslationSourceMetadata,
   selectReusableCachedTranslations,
   selectReusableSessionTranslations,
 } from '../src/features/reader/readerTranslationSource.ts';
+import {
+  extractTranslatableMarkdownFromMineruBlock,
+  flattenMineruPages,
+} from '../src/services/mineru.ts';
 
 const sourceBlocks = [
   { blockId: 'section-1', text: 'Visitors and residents share a rural square.' },
@@ -77,4 +82,46 @@ test('English batch retry reuses session translations after a failed cache save 
     sourceBlocks[0],
     { ...sourceBlocks[1], text: 'The model now evaluates a changed source.' },
   ], 'Chinese'), {});
+});
+
+test('batch and reader use the same source while old continuation-bound caches require retranslation', () => {
+  const blocks = flattenMineruPages([
+    [{ type: 'paragraph', content: { paragraph_content: 'The original paragraph.' } }],
+    [
+      { type: 'paragraph', content: { paragraph_content: [] }, bbox: [0, 0, 100, 100] },
+      { type: 'paragraph', content: { paragraph_content: 'A second visible paragraph.' } },
+    ],
+  ]);
+  const readerBlocks = buildReaderTranslationBlockInputs(blocks);
+  const oldBatchBlocks = blocks.map((block) => ({
+    blockId: block.blockId,
+    text: extractTranslatableMarkdownFromMineruBlock(block).trim(),
+  }));
+  const oldCache = {
+    ...buildTranslationSourceMetadata(oldBatchBlocks),
+    targetLanguage: 'Chinese',
+    translations: {
+      'page-1-block-1': '原文段落。',
+      'page-2-block-2': '第二个可见段落。',
+    },
+  };
+  const currentCache = {
+    ...buildTranslationSourceMetadata(readerBlocks),
+    targetLanguage: 'Chinese',
+    translations: oldCache.translations,
+  };
+
+  assert.equal(readerBlocks.length, 2);
+  assert.equal(oldBatchBlocks.length, 3);
+  assert.equal(blocks[1].contentSourceBlockId, 'page-1-block-1');
+  assert.deepEqual(selectReusableCachedTranslations(oldCache, readerBlocks), {});
+  assert.deepEqual(
+    selectReusableCachedTranslations(currentCache, readerBlocks),
+    {
+      'page-1-block-1': '原文段落。',
+      'page-2-block-2': '第二个可见段落。',
+    },
+  );
+  assert.deepEqual(selectReusableSessionTranslations(oldCache, readerBlocks, 'Chinese'), {});
+  assert.deepEqual(selectReusableSessionTranslations(currentCache, readerBlocks, 'English'), {});
 });

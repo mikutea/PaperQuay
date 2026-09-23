@@ -4,6 +4,10 @@ This fork's `main` is the integrated release branch. Keep unrelated user data,
 the live PaperQuay profile, and running app processes untouched. Use an isolated
 profile for Electron acceptance; never force-close a user's active PaperQuay.
 
+Keep fork-specific fixes small and close to upstream behavior. Do not broadly
+refactor upstream code or add compatibility layers solely to preserve locally
+generated fork data; prefer a scoped, backed-up local regeneration when needed.
+
 ## Code Review Rules
 
 - Open a PR for changes to `main`. A passing CI run is not approval.

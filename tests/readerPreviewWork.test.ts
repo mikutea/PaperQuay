@@ -1,7 +1,18 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { mapPreviewItemsWithConcurrency, waitForBatchResumeOrCancel } from '../src/features/reader/readerPreviewWork.ts';
+import {
+  mapPreviewItemsWithConcurrency,
+  waitForBatchResumeOrCancel,
+  wasUpdatedDuringPreviewScan,
+} from '../src/features/reader/readerPreviewWork.ts';
+
+test('cache scan does not replace newer translation snapshots or operation states', () => {
+  assert.equal(wasUpdatedDuringPreviewScan(120, 100), true);
+  assert.equal(wasUpdatedDuringPreviewScan(100, 100), true);
+  assert.equal(wasUpdatedDuringPreviewScan(99, 100), false);
+  assert.equal(wasUpdatedDuringPreviewScan(undefined, 100), false);
+});
 
 test('preview hydration keeps a bounded number of lookups in flight', async () => {
   let active = 0;

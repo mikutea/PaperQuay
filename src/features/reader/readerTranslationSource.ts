@@ -1,4 +1,15 @@
-import type { TranslationBlockInput, TranslationMap } from '../../types/reader';
+import { extractTranslatableMarkdownFromMineruBlock } from '../../services/mineru.ts';
+import type { PositionedMineruBlock, TranslationBlockInput, TranslationMap } from '../../types/reader';
+
+export function buildReaderTranslationBlockInputs(
+  blocks: PositionedMineruBlock[],
+): TranslationBlockInput[] {
+  return blocks.flatMap((block) => {
+    if (block.contentSourceBlockId) return [];
+    const text = extractTranslatableMarkdownFromMineruBlock(block).trim();
+    return text ? [{ blockId: block.blockId, text }] : [];
+  });
+}
 
 export interface TranslationSourceMetadata {
   blockSourceFingerprints: Record<string, string>;

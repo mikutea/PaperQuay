@@ -7,7 +7,6 @@ import {
   type MutableRefObject,
 } from "react";
 
-import { extractTranslatableMarkdownFromMineruBlock } from "../../services/mineru";
 import {
   translateBlocksOpenAICompatible,
   translateTextOpenAICompatible,
@@ -37,28 +36,13 @@ import {
   writeTranslationCache,
 } from "./readerTranslationCache";
 import {
+  buildReaderTranslationBlockInputs,
   buildTranslationSourceMetadata,
   selectReusableCachedTranslations,
 } from './readerTranslationSource';
 import { tryAcquirePaperTranslation } from './readerTranslationLock';
 
 type LocaleTextFn = (zh: string, en: string) => string;
-
-function buildTranslatableBlockInput(block: PositionedMineruBlock): TranslationBlockInput | null {
-  if (block.contentSourceBlockId) {
-    return null;
-  }
-
-  const text = extractTranslatableMarkdownFromMineruBlock(block).trim();
-
-  return text ? { blockId: block.blockId, text } : null;
-}
-
-function buildTranslatableBlockInputs(blocks: PositionedMineruBlock[]): TranslationBlockInput[] {
-  return blocks
-    .map((block) => buildTranslatableBlockInput(block))
-    .filter((block): block is TranslationBlockInput => Boolean(block));
-}
 
 function translationCacheFailureMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -148,7 +132,7 @@ export function useDocumentTranslation({
   const [selectedExcerptError, setSelectedExcerptError] = useState("");
 
   const translationSourceBlocks = useMemo(
-    () => buildTranslatableBlockInputs(flatBlocks),
+    () => buildReaderTranslationBlockInputs(flatBlocks),
     [flatBlocks],
   );
   const translationSourceMetadata = useMemo(
@@ -689,7 +673,7 @@ export function useDocumentTranslation({
         return;
       }
 
-      const blockToTranslate = buildTranslatableBlockInput(block);
+      const blockToTranslate = buildReaderTranslationBlockInputs([block])[0] ?? null;
 
       if (!blockToTranslate) {
         const message = lRef.current(
