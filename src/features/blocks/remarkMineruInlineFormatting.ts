@@ -1,5 +1,5 @@
 import { createElement, isValidElement, type ReactNode } from 'react';
-import { displayMarkdownFallback, displayMathTagsAsLatex } from '../../services/mineru.ts';
+import { displayMarkdownFallback, displayMathTagsAsLatex, mapOutsideLiteralPreBlocks } from '../../services/mineru.ts';
 import { normalizeMarkdownMath } from '../../utils/markdown.ts';
 
 const INLINE_TAG_PATTERN = /<\s*\/?\s*(?:sup|sub)\s*>/gi;
@@ -191,8 +191,38 @@ export function normalizeMineruReaderMarkdown(markdown: string): string {
     return normalizeMarkdownMath(markdown);
   }
 
-  // Four-space and tab-indented CommonMark code blocks are inert, like fences.
-  if (/(?:^|\n\n)(?: {4}|\t)/.test(markdown)) {
+  const literalPre = mapOutsideLiteralPreBlocks(markdown, normalizeMineruReaderMarkdown);
+  if (literalPre !== null) return literalPre;
+
+  // Four-space and tab-indented CommonMark code blocks are inert, including
+  // indentation after a blockquote container prefix.
+  const unquote = (line: string) => {
+    let cursor = 0;
+    while (cursor < line.length) {
+      let next = cursor;
+      while (next - cursor < 3 && line[next] === ' ') next += 1;
+      if (line[next] !== '>') break;
+      cursor = next + 1;
+      if (line[cursor] === ' ' || line[cursor] === '\t') cursor += 1;
+    }
+    return line.slice(cursor);
+  };
+  const lines = markdown.split(/(?<=\n)/);
+  let hasIndentedCode = false;
+  let candidateBlank = true;
+  let candidateInCode = false;
+  for (const line of lines) {
+    const content = unquote(line);
+    const blank = content.trim() === '';
+    const indented = /^(?: {4}|\t)/.test(content);
+    if (indented && (candidateBlank || candidateInCode)) {
+      hasIndentedCode = true;
+      break;
+    }
+    candidateInCode = false;
+    candidateBlank = blank;
+  }
+  if (hasIndentedCode) {
     const normalizeOutside = (text: string) => {
       const leading = text.match(/^\s*/)?.[0] ?? '';
       const trailing = text.match(/\s*$/)?.[0] ?? '';
@@ -203,9 +233,10 @@ export function normalizeMineruReaderMarkdown(markdown: string): string {
     let outside = '';
     let inCode = false;
     let previousBlank = true;
-    for (const line of markdown.split(/(?<=\n)/)) {
-      const blank = line.trim() === '';
-      const indented = /^(?: {4}|\t)/.test(line);
+    for (const line of lines) {
+      const content = unquote(line);
+      const blank = content.trim() === '';
+      const indented = /^(?: {4}|\t)/.test(content);
       if (indented && (previousBlank || inCode)) {
         if (outside) {
           output += normalizeOutside(outside);
@@ -287,7 +318,7 @@ export function normalizeMineruReaderMarkdown(markdown: string): string {
 
   // Formula wrappers have already received safe tag conversion. Keep ordinary
   // math on the direct path so long relation tokens never reach marker scans.
-  if (/[_^\\$=<>]/.test(markdown.replace(INLINE_TAG_PATTERN, '')) && !/\$<\s*(?:sup|sub)\s*>/i.test(markdown)) {
+  if (/[_^\\$=<>~]/.test(markdown.replace(INLINE_TAG_PATTERN, '')) && !/\$<\s*(?:sup|sub)\s*>/i.test(markdown)) {
     return displayMarkdownFallback(markdown, normalizeMarkdownMath(restoreInlineTags(protectedMarkdown)));
   }
 

@@ -375,6 +375,14 @@ test('reader normalization leaves four-space and tab-indented code blocks litera
   }
 });
 
+test('reader normalization recognizes indented code after blockquote prefixes', () => {
+  const source = '>     $H<sub>2</sub>O$';
+  const markdown = normalizeMineruReaderMarkdown(source);
+
+  assert.equal(markdown, source);
+  assert.match(render(markdown), /<code>\$H&lt;sub&gt;2&lt;\/sub&gt;O\$/);
+});
+
 test('many paired backtick runs remain unchanged', () => {
   const source = '`x`'.repeat(40_000);
 
@@ -429,7 +437,7 @@ test('long math tokens choose the direct fallback before tag-marker normalizatio
 });
 
 test('long relation tokens avoid expensive protected-tag normalization', () => {
-  for (const relation of ['=', '<', '>']) {
+  for (const relation of ['=', '<', '>', '~']) {
     const source = `${'x'.repeat(10_000)}${relation}foo H<sup>2</sup>`;
     const started = performance.now();
     const markdown = normalizeMineruReaderMarkdown(source);
@@ -555,6 +563,36 @@ test('an escaped backtick leaves the rest of its run available for inline code',
   assert.match(render(markdown), /<code>\$H&lt;sub&gt;2&lt;\/sub&gt;O\$<\/code>/);
 });
 
+test('a backslash before a code-span closer does not escape the closer', () => {
+  const source = '`$H<sub>2</sub>O$\\` and H<sub>3</sub>O';
+  const markdown = displayMarkdownFallback(source, normalizeMarkdownMath(source));
+
+  assert.match(markdown, /\$H<sub>2<\/sub>O\$\\`/);
+  assert.doesNotMatch(markdown, /H_\{2\}O/);
+  assert.match(render(markdown), /H<sub>3<\/sub>O/);
+});
+
+test('literal pre blocks keep tag examples inert while surrounding text formats', () => {
+  const source = '<pre>$H<sub>2</sub>O$</pre>\nH<sub>3</sub>O';
+  const fallback = displayMarkdownFallback(source, normalizeMarkdownMath(source));
+  const jsonBacked = normalizeMineruReaderMarkdown(source);
+
+  for (const markdown of [fallback, jsonBacked]) {
+    assert.match(markdown, /<pre>\$H<sub>2<\/sub>O\$<\/pre>/);
+    assert.doesNotMatch(markdown, /H_\{2\}O/);
+    assert.match(render(markdown), /H<sub>3<\/sub>O/);
+  }
+});
+
+test('an unclosed literal pre block keeps the remaining tag example inert', () => {
+  const source = 'H<sub>3</sub>O\n<pre>$H<sub>2</sub>O$';
+  const markdown = displayMarkdownFallback(source, normalizeMarkdownMath(source));
+
+  assert.match(markdown, /<pre>\$H<sub>2<\/sub>O\$$/);
+  assert.doesNotMatch(markdown, /H_\{2\}O/);
+  assert.match(render(markdown), /H<sub>3<\/sub>O/);
+});
+
 test('long blockquote prefixes do not backtrack while looking for a fence', () => {
   const source = `${'>   '.repeat(26)}X_1 H<sup>2</sup>`;
   const started = performance.now();
@@ -637,6 +675,11 @@ test('math tags merge an existing Unicode script argument', () => {
 test('math tags merge an existing TeX control-symbol script argument', () => {
   assert.equal(displayMathTagsAsLatex(String.raw`x_\%<sub>2</sub>`), String.raw`x_{\% 2}`);
   assert.doesNotMatch(render(String.raw`$$x_\%<sub>2</sub>$$`), /katex-error/);
+});
+
+test('unbraced script merging never consumes a second TeX atom', () => {
+  assert.equal(displayMathTagsAsLatex('x_ij<sub>2</sub>'), 'x_ij_{2}');
+  assert.doesNotMatch(render('$$x_ij<sub>2</sub>$$'), /katex-error/);
 });
 
 test('math tag entities decode to KaTeX-safe characters', () => {

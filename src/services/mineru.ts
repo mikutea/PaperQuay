@@ -1143,13 +1143,45 @@ function mergeRepeatedEquationScripts(body: string): string {
   grouped += body.slice(cursor);
 
   return grouped.replace(
-    /([_^])(?:\{([^{}]+)\}|(\\(?:[A-Za-z]+|[^A-Za-z\s])|[\p{L}\p{N}]+))\s*<\s*(sub|sup)\s*>([^<>]*)<\s*\/\s*\4\s*>/giu,
+    /([_^])(?:\{([^{}]+)\}|(\\(?:[A-Za-z]+|[^A-Za-z\s])|[\p{L}\p{N}]))\s*<\s*(sub|sup)\s*>([^<>]*)<\s*\/\s*\4\s*>/giu,
     (match, script: string, braced: string | undefined, bare: string | undefined, tag: string, content: string) => {
       if ((script === '_' ? 'sub' : 'sup') !== tag.toLowerCase()) return match;
       const existing = braced ?? bare ?? '';
       return `${script}{${existing}${existing.startsWith('\\') ? ' ' : ''}${mathTagContentToLatex(content)}}`;
     },
   );
+}
+
+export function mapOutsideLiteralPreBlocks(source: string, transform: (text: string) => string): string | null {
+  const lower = source.toLowerCase();
+  let output = '';
+  let cursor = 0;
+  let search = 0;
+  let found = false;
+  const renderOutside = (text: string) => {
+    const leading = text.match(/^\s*/)?.[0] ?? '';
+    const trailing = text.match(/\s*$/)?.[0] ?? '';
+    const body = text.slice(leading.length, text.length - trailing.length);
+    return body ? leading + transform(body) + trailing : text;
+  };
+  while (search < source.length) {
+    const opening = lower.indexOf('<pre', search);
+    if (opening < 0) break;
+    if (!/[\s>]/.test(lower[opening + 4] ?? '')) {
+      search = opening + 4;
+      continue;
+    }
+    const openingEnd = lower.indexOf('>', opening + 4);
+    if (openingEnd < 0) return output + renderOutside(source.slice(cursor, opening)) + source.slice(opening);
+    const closing = lower.indexOf('</pre>', openingEnd + 1);
+    output += renderOutside(source.slice(cursor, opening));
+    if (closing < 0) return output + source.slice(opening);
+    cursor = closing + 6;
+    output += source.slice(opening, cursor);
+    search = cursor;
+    found = true;
+  }
+  return found ? output + renderOutside(source.slice(cursor)) : null;
 }
 
 export function displayMarkdownFallback(source: string | undefined, normalized: string): string {
@@ -1221,6 +1253,9 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
     // original Markdown source which can embed a remote image URL.
     return /^\*\*(?:图片说明|表格说明)\*\*/.test(normalized) ? normalized : source;
   }
+
+  const literalPre = mapOutsideLiteralPreBlocks(source, (text) => displayMarkdownFallback(text, normalizeMarkdownMath(text)));
+  if (literalPre !== null) return literalPre;
 
   const literalFences = new Set([...source.matchAll(/\$[^$\n]*\$/g)].map(([fenced]) => fenced));
   for (let opening = source.indexOf('\\('); opening >= 0;) {
@@ -1332,24 +1367,23 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
       for (let index = (match.index ?? 0) - 1; text[index] === '\\'; index -= 1) {
         backslashes += 1;
       }
-      const escaped = backslashes % 2;
-      const length = match[0].length - escaped;
-      return length > 0 ? [{ index: (match.index ?? 0) + escaped, length }] : [];
+      return [{ index: match.index ?? 0, length: match[0].length, escaped: backslashes % 2 }];
     });
     const nextSame = new Int32Array(delimiters.length).fill(-1);
     const nextByLength = new Map<number, number>();
 
     for (let index = delimiters.length - 1; index >= 0; index -= 1) {
-      const length = delimiters[index].length;
-      nextSame[index] = nextByLength.get(length) ?? -1;
-      nextByLength.set(length, index);
+      const delimiter = delimiters[index];
+      nextSame[index] = nextByLength.get(delimiter.length - delimiter.escaped) ?? -1;
+      nextByLength.set(delimiter.length, index);
     }
 
     const spans: Array<[number, number]> = [];
     for (let index = 0; index < delimiters.length; index += 1) {
+      if (delimiters[index].length <= delimiters[index].escaped) continue;
       const closingIndex = nextSame[index];
       if (closingIndex < 0) continue;
-      spans.push([delimiters[index].index, delimiters[closingIndex].index + delimiters[closingIndex].length]);
+      spans.push([delimiters[index].index + delimiters[index].escaped, delimiters[closingIndex].index + delimiters[closingIndex].length]);
       index = closingIndex;
     }
     return spans;
