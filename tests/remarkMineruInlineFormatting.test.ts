@@ -9,6 +9,7 @@ import remarkMath from 'remark-math';
 
 import {
   normalizeMineruReaderMarkdown,
+  renderMineruInlineCaption,
   remarkMineruInlineFormatting,
 } from '../src/features/blocks/remarkMineruInlineFormatting.ts';
 import {
@@ -80,7 +81,29 @@ test('literal private-use characters are never consumed as internal markers', ()
 });
 
 test('caption text uses the same safe inline formatting pipeline', () => {
-  assert.match(render('Levels of CO<sub>2</sub>'), /CO<sub>2<\/sub>/);
+  const html = renderToStaticMarkup(
+    createElement('span', null, ...renderMineruInlineCaption('Levels of CO<sub>2</sub>')),
+  );
+
+  assert.match(html, /CO<sub>2<\/sub>/);
+});
+
+test('caption links, images, and other HTML remain inert literal text', () => {
+  const source = '![caption](https://example.invalid/pixel) <a href="https://example.invalid">link</a> <sup>1</sup>';
+  const html = renderToStaticMarkup(createElement('span', null, ...renderMineruInlineCaption(source)));
+
+  assert.match(html, /!\[caption\]\(https:\/\/example\.invalid\/pixel\)/);
+  assert.match(html, /&lt;a href=/);
+  assert.match(html, /<sup>1<\/sup>/);
+  assert.doesNotMatch(html, /<img\b|<a\b/);
+});
+
+test('fallback repair does not change inline or fenced code examples', () => {
+  const inline = '`$H<sub>2</sub>O$`';
+  const fenced = '```text\n$H<sub>2</sub>O$\n```';
+
+  assert.equal(normalizeMineruReaderMarkdown(inline), inline);
+  assert.equal(normalizeMineruReaderMarkdown(fenced), fenced);
 });
 
 test('unrecognized HTML, malformed tags, and code stay literal', () => {

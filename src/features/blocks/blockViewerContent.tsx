@@ -34,6 +34,7 @@ import { normalizeRawLatexExpression } from '../../utils/markdown';
 import { sanitizeMineruTableHtml } from '../../utils/safeHtml';
 import {
   normalizeMineruReaderMarkdown,
+  renderMineruInlineCaption,
   remarkMineruInlineFormatting,
 } from './remarkMineruInlineFormatting';
 
@@ -247,18 +248,8 @@ function MarkdownContentComponent({
 
 const MarkdownContent = memo(MarkdownContentComponent);
 
-function InlineMarkdownContent({ markdown }: { markdown: string }) {
-  const normalizedMarkdown = useMemo(() => normalizeMineruReaderMarkdown(markdown), [markdown]);
-
-  return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm, remarkMath, remarkMineruInlineFormatting]}
-      rehypePlugins={[[rehypeKatex, { strict: 'ignore', throwOnError: false }]]}
-      components={{ p: ({ children }) => <span>{children}</span> }}
-    >
-      {normalizedMarkdown}
-    </ReactMarkdown>
-  );
+function InlineCaptionContent({ text }: { text: string }) {
+  return <>{renderMineruInlineCaption(text)}</>;
 }
 
 function AssetFigure({
@@ -372,7 +363,7 @@ function AssetFigure({
           >
             <div className="flex items-center justify-between border-b border-slate-200/80 px-5 py-3">
               <div className="truncate text-sm font-medium text-slate-700">
-                <InlineMarkdownContent markdown={label} />
+                <InlineCaptionContent text={label} />
               </div>
               <button
                 type="button"
@@ -439,7 +430,7 @@ function TableContentComponent({
                 lineHeight: `${24 * scale}px`,
               }}
             >
-              <InlineMarkdownContent markdown={captionText} />
+              <InlineCaptionContent text={captionText} />
             </div>
           ) : null}
 
