@@ -1031,7 +1031,7 @@ export function extractTranslatableMarkdownFromMineruBlock(
 }
 
 export function displayMathTagsAsLatex(body: string): string | null {
-  let latex = body;
+  let latex = mergeRepeatedEquationScripts(body);
 
   for (let depth = 0; depth < 32; depth += 1) {
     const next = latex.replace(
@@ -1185,7 +1185,7 @@ export function buildRenderableBlocks(
     const plainText = extractTextFromMineruBlock(block);
     const rawMathText = block.type === 'equation' ? extractMathText(block.content) : undefined;
     const mathText = rawMathText
-      ? displayMathTagsAsLatex(mergeRepeatedEquationScripts(rawMathText)) ?? rawMathText
+      ? displayMathTagsAsLatex(rawMathText) ?? rawMathText
       : undefined;
     const tableHtml = block.type === 'table' ? extractTableHtmlFromMineruBlock(block) : undefined;
     const captionText =

@@ -327,6 +327,18 @@ test('tag-free unterminated formula wrappers skip inline-tag wrapper scanning', 
   assert.equal(normalizeMineruReaderMarkdown(markdown), normalizeMarkdownMath(markdown));
 });
 
+test('malformed formula wrappers with a paired tag remain bounded and readable', () => {
+  const markdown = `${'<div class="formula">'.repeat(2_000)}H<sup>2</sup>`;
+
+  assert.match(normalizeMineruReaderMarkdown(markdown), /H<sup>2<\/sup>/);
+});
+
+test('long math tokens choose the direct fallback before tag-marker normalization', () => {
+  const markdown = `${'x'.repeat(20_000)}_1 H<sup>2</sup>O`;
+
+  assert.match(normalizeMineruReaderMarkdown(markdown), /H\^\{2\}O|H<sup>2<\/sup>O/);
+});
+
 test('existing scripts on later math terms do not create duplicate KaTeX scripts', () => {
   for (const source of ['$x_i + y_j<sub>2</sub>$', '$x^i + y^j<sup>2</sup>$']) {
     const blocks = flattenMineruPages(parseMineruMarkdownPages(source));
@@ -398,4 +410,11 @@ test('equation mathText merges adjacent duplicate script tags for KaTeX', () => 
   assert.equal(rendered?.block.type, 'equation');
   assert.match(rendered?.mathText ?? '', /y_\{j2\}/);
   assert.doesNotMatch(rendered?.mathText ?? '', /<sub>/);
+});
+
+test('display-math fences merge adjacent duplicate script tags for KaTeX', () => {
+  const markdown = '$$x_i<sub>2</sub>$$';
+
+  assert.doesNotMatch(render(markdown), /katex-error|&lt;sub/);
+  assert.match(render(markdown), /katex/);
 });

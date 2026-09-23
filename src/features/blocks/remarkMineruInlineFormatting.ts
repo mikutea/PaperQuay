@@ -2,8 +2,6 @@ import { createElement, isValidElement, type ReactNode } from 'react';
 import { displayMarkdownFallback, displayMathTagsAsLatex } from '../../services/mineru.ts';
 import { normalizeMarkdownMath } from '../../utils/markdown.ts';
 
-const MATH_HTML_PATTERN =
-  /<div\s+class=["']formula["'][^>]*>.*?<\/div>|<span\s+class=["']math["'][^>]*>.*?<\/span>/gis;
 const INLINE_TAG_PATTERN = /<\s*\/?\s*(?:sup|sub)\s*>/gi;
 const MARKER_START = '\uE200';
 const MARKER_END = '\uE201';
@@ -187,10 +185,21 @@ function renderInlineTags(
 }
 
 export function normalizeMineruReaderMarkdown(markdown: string): string {
-  // The wrapper matcher can repeatedly scan unterminated formula openers.
-  // Without supported inline tags, the upstream math normalizer is sufficient.
   if (!/<\s*\/?\s*(?:sup|sub)\s*>/i.test(markdown)) {
     return normalizeMarkdownMath(markdown);
+  }
+
+  const canonicalizeInlineTag = (tag: string) => {
+    const [, slash, name] = /<\s*(\/?)\s*(sup|sub)\s*>/i.exec(tag) ?? [];
+    return name ? `<${slash ? '/' : ''}${name.toLowerCase()}>` : tag;
+  };
+  // Decide the fallback before normalizing marker text: a long math token
+  // followed by a marker makes the upstream boundary scan very expensive.
+  if (/[_^\\$]/.test(markdown) && !/\$<\s*(?:sup|sub)\s*>/i.test(markdown)) {
+    return displayMarkdownFallback(
+      markdown,
+      normalizeMarkdownMath(markdown.replace(INLINE_TAG_PATTERN, canonicalizeInlineTag)),
+    );
   }
 
   const tags: string[] = [];
@@ -204,15 +213,41 @@ export function normalizeMineruReaderMarkdown(markdown: string): string {
   let protectedMarkdown = '';
   let cursor = 0;
 
-  // Formula wrappers must retain their tags until the existing LaTeX repair runs.
-  for (const match of readableMarkdown.matchAll(MATH_HTML_PATTERN)) {
-    const start = match.index ?? 0;
-    protectedMarkdown += protectInlineTags(readableMarkdown.slice(cursor, start));
-    protectedMarkdown += match[0].replace(INLINE_TAG_PATTERN, (tag) => {
-      const [, slash, name] = /<\s*(\/?)\s*(sup|sub)\s*>/i.exec(tag) ?? [];
-      return name ? `<${slash ? '/' : ''}${name.toLowerCase()}>` : tag;
-    });
-    cursor = start + match[0].length;
+  // Locate wrapper open/close tokens once, rather than retrying an unbounded
+  // wildcard from every malformed opener in imported MinerU text.
+  const closes = {
+    div: [...readableMarkdown.matchAll(/<\/div>/gi)].map((match) => match.index ?? 0),
+    span: [...readableMarkdown.matchAll(/<\/span>/gi)].map((match) => match.index ?? 0),
+  };
+  const closeCursor = { div: 0, span: 0 };
+  let search = 0;
+  while (search < readableMarkdown.length) {
+    const start = readableMarkdown.indexOf('<', search);
+    if (start < 0) break;
+    const end = readableMarkdown.indexOf('>', start + 1);
+    if (end < 0) break;
+    const opening = readableMarkdown.slice(start, end + 1);
+    const kind = /^<div\s+class=["']formula["'][^>]*>$/i.test(opening)
+      ? 'div'
+      : /^<span\s+class=["']math["'][^>]*>$/i.test(opening) ? 'span' : null;
+
+    if (kind) {
+      const positions = closes[kind];
+      while (positions[closeCursor[kind]] < end + 1) closeCursor[kind] += 1;
+      const closing = positions[closeCursor[kind]];
+      if (closing !== undefined) {
+        const closingEnd = closing + kind.length + 3;
+        protectedMarkdown += protectInlineTags(readableMarkdown.slice(cursor, start));
+        protectedMarkdown += readableMarkdown.slice(start, closingEnd).replace(
+          INLINE_TAG_PATTERN,
+          canonicalizeInlineTag,
+        );
+        cursor = closingEnd;
+        search = cursor;
+        continue;
+      }
+    }
+    search = end + 1;
   }
 
   protectedMarkdown += protectInlineTags(readableMarkdown.slice(cursor));
@@ -221,17 +256,6 @@ export function normalizeMineruReaderMarkdown(markdown: string): string {
     /\uE200\uE200|\uE200(\d+)\uE201/g,
     (marker, index: string | undefined) => index === undefined ? MARKER_START : tags[Number(index)] ?? marker,
   );
-
-  // Check for a tag first. A suffix-scanning pattern after every `_` becomes
-  // quadratic on long mathematical text with no inline tags.
-  if (/<\s*\/?\s*(?:sup|sub)\s*>/i.test(markdown) && /[_^\\$]/.test(markdown)) {
-    // A tag immediately after a complete math fence is already outside math;
-    // re-normalizing the unprotected source would absorb it into that fence.
-    if (/\$<\s*(?:sup|sub)\s*>/i.test(markdown)) {
-      return protectedResult;
-    }
-    return displayMarkdownFallback(markdown, normalizeMarkdownMath(markdown));
-  }
 
   return protectedResult;
 }
