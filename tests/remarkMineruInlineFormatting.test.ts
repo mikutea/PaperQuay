@@ -157,6 +157,14 @@ test('parenthesized math with an ordinary inner parenthesis retains its authored
   assert.match(render(markdown), /katex/);
 });
 
+test('parenthesized math keeps its fence with delimiter-adjacent whitespace', () => {
+  const source = String.raw`\( f(x) + H<sub>2</sub>O \)`;
+  const markdown = displayMarkdownFallback(source, normalizeMarkdownMath(source));
+
+  assert.equal(markdown, '$f(x) + H_{2}O$');
+  assert.doesNotMatch(render(markdown), /katex-error/);
+});
+
 test('identical authored math and prose tags keep their occurrence-specific formatting', () => {
   for (const source of ['$H<sub>2</sub>O$ and H<sub>2</sub>O', 'H<sub>2</sub>O and $H<sub>2</sub>O$']) {
     const markdown = displayMarkdownFallback(source, normalizeMarkdownMath(source));
@@ -354,6 +362,17 @@ test('reader normalization does not change inline or fenced code examples', () =
 
   assert.equal(normalizeMineruReaderMarkdown(inline), inline);
   assert.equal(normalizeMineruReaderMarkdown(fenced), fenced);
+});
+
+test('reader normalization leaves four-space and tab-indented code blocks literal', () => {
+  for (const indent of ['    ', '\t']) {
+    const source = `text\n\n${indent}$H<sub>2</sub>O$\n\nH<sub>3</sub>O`;
+    const markdown = normalizeMineruReaderMarkdown(source);
+
+    assert.match(markdown, new RegExp(`${indent === '\t' ? '\\t' : ' {4}'}\\$H<sub>2<\\/sub>O\\$`));
+    assert.match(render(markdown), /<pre><code>\$H&lt;sub&gt;2&lt;\/sub&gt;O\$\n<\/code><\/pre>/);
+    assert.match(render(markdown), /H<sub>3<\/sub>O/);
+  }
 });
 
 test('many paired backtick runs remain unchanged', () => {
@@ -613,6 +632,11 @@ test('math tags merge an existing nested TeX script group', () => {
 test('math tags merge an existing Unicode script argument', () => {
   assert.equal(displayMathTagsAsLatex('x_α<sub>2</sub>'), 'x_{α2}');
   assert.doesNotMatch(render('$$x_α<sub>2</sub>$$'), /katex-error/);
+});
+
+test('math tags merge an existing TeX control-symbol script argument', () => {
+  assert.equal(displayMathTagsAsLatex(String.raw`x_\%<sub>2</sub>`), String.raw`x_{\% 2}`);
+  assert.doesNotMatch(render(String.raw`$$x_\%<sub>2</sub>$$`), /katex-error/);
 });
 
 test('math tag entities decode to KaTeX-safe characters', () => {

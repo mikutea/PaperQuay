@@ -1143,7 +1143,7 @@ function mergeRepeatedEquationScripts(body: string): string {
   grouped += body.slice(cursor);
 
   return grouped.replace(
-    /([_^])(?:\{([^{}]+)\}|(\\[A-Za-z]+|[\p{L}\p{N}]+))\s*<\s*(sub|sup)\s*>([^<>]*)<\s*\/\s*\4\s*>/giu,
+    /([_^])(?:\{([^{}]+)\}|(\\(?:[A-Za-z]+|[^A-Za-z\s])|[\p{L}\p{N}]+))\s*<\s*(sub|sup)\s*>([^<>]*)<\s*\/\s*\4\s*>/giu,
     (match, script: string, braced: string | undefined, bare: string | undefined, tag: string, content: string) => {
       if ((script === '_' ? 'sub' : 'sup') !== tag.toLowerCase()) return match;
       const existing = braced ?? bare ?? '';
@@ -1240,8 +1240,12 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
     }
     if (position < 0) return literalFences.has(fenced);
     sourceBodyCursors.set(body, position + body.length);
-    const before = source.slice(Math.max(0, position - 2), position);
-    const after = source.slice(position + body.length, position + body.length + 2);
+    let left = position;
+    while (left > 0 && /\s/.test(source[left - 1])) left -= 1;
+    let right = position + body.length;
+    while (right < source.length && /\s/.test(source[right])) right += 1;
+    const before = source.slice(Math.max(0, left - 2), left);
+    const after = source.slice(right, right + 2);
     return (before.endsWith('$') && after.startsWith('$')) || (before.endsWith('\\(') && after.startsWith('\\)'));
   };
   const renderInlineMath = (segment: string) => {

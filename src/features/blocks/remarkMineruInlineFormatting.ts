@@ -191,6 +191,39 @@ export function normalizeMineruReaderMarkdown(markdown: string): string {
     return normalizeMarkdownMath(markdown);
   }
 
+  // Four-space and tab-indented CommonMark code blocks are inert, like fences.
+  if (/(?:^|\n\n)(?: {4}|\t)/.test(markdown)) {
+    const normalizeOutside = (text: string) => {
+      const leading = text.match(/^\s*/)?.[0] ?? '';
+      const trailing = text.match(/\s*$/)?.[0] ?? '';
+      const body = text.slice(leading.length, text.length - trailing.length);
+      return body ? leading + normalizeMineruReaderMarkdown(body) + trailing : text;
+    };
+    let output = '';
+    let outside = '';
+    let inCode = false;
+    let previousBlank = true;
+    for (const line of markdown.split(/(?<=\n)/)) {
+      const blank = line.trim() === '';
+      const indented = /^(?: {4}|\t)/.test(line);
+      if (indented && (previousBlank || inCode)) {
+        if (outside) {
+          output += normalizeOutside(outside);
+          outside = '';
+        }
+        output += line;
+        inCode = true;
+      } else if (inCode && blank) {
+        output += line;
+      } else {
+        outside += line;
+        inCode = false;
+      }
+      previousBlank = blank;
+    }
+    return output + normalizeOutside(outside);
+  }
+
   const canonicalizeInlineTag = (tag: string) => {
     const [, slash, name] = /<\s*(\/?)\s*(sup|sub)\s*>/i.exec(tag) ?? [];
     return name ? `<${slash ? '/' : ''}${name.toLowerCase()}>` : tag;
