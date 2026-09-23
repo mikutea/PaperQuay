@@ -18,6 +18,7 @@ import {
   flattenMineruPages,
   parseMineruMarkdownPages,
 } from '../src/services/mineru.ts';
+import { buildReaderTranslationBlockInputs } from '../src/features/reader/readerTranslationSource.ts';
 import { normalizeMarkdownMath } from '../src/utils/markdown.ts';
 
 function render(markdown: string): string {
@@ -63,13 +64,16 @@ test('fragmented LaTeX inside formula HTML is repaired before formula conversion
   assert.equal(normalizeMineruReaderMarkdown(source), '$x \\in I$');
 });
 
-test('Markdown fallback does not add spurious math fences around inline tags', () => {
+test('Markdown fallback display removes a synthetic tag fence without changing translation source', () => {
   const pages = parseMineruMarkdownPages('H<sub>2</sub>O');
   const content = pages[0]?.[0]?.content as { markdown?: string } | undefined;
   const fallbackMarkdown = content?.markdown ?? '';
-  const readerMarkdown = buildRenderableBlocks(flattenMineruPages(pages))[0]?.markdown ?? '';
+  const blocks = flattenMineruPages(pages);
+  const readerMarkdown = buildRenderableBlocks(blocks)[0]?.markdown ?? '';
 
-  assert.equal(fallbackMarkdown, 'H<sub>2</sub>O');
+  assert.equal(fallbackMarkdown, '$H<sub>2</sub>O$');
+  assert.equal(buildReaderTranslationBlockInputs(blocks)[0]?.text, '$H<sub>2</sub>O$');
+  assert.equal(readerMarkdown, 'H<sub>2</sub>O');
   assert.match(render(readerMarkdown), /H<sub>2<\/sub>O/);
 });
 
@@ -81,6 +85,7 @@ test('ordinary currency signs around tagged text are preserved', () => {
   assert.equal(normalizeMineruReaderMarkdown(source), normalizeMarkdownMath(source));
   assert.match(normalizeMineruReaderMarkdown(source), /\$5 and H<sub>2<\/sub>O costs \$10/);
   assert.match(content?.markdown ?? '', /\$5 and H<sub>2<\/sub>O costs \$10/);
+  assert.match(buildRenderableBlocks(flattenMineruPages(fallback))[0]?.markdown ?? '', /\$5 and H<sub>2<\/sub>O costs \$10/);
 });
 
 test('Markdown fallback preserves a dollar fence already present in source', () => {
@@ -89,6 +94,17 @@ test('Markdown fallback preserves a dollar fence already present in source', () 
   const content = pages[0]?.[0]?.content as { markdown?: string } | undefined;
 
   assert.equal(content?.markdown, source);
+  assert.equal(buildRenderableBlocks(flattenMineruPages(pages))[0]?.markdown, '$x^{2}$');
+});
+
+test('Markdown fallback keeps real math adjacent to tagged prose', () => {
+  const pages = parseMineruMarkdownPages('x_i H<sub>2</sub>O');
+  const blocks = flattenMineruPages(pages);
+  const markdown = buildRenderableBlocks(blocks)[0]?.markdown ?? '';
+
+  assert.equal(buildReaderTranslationBlockInputs(blocks)[0]?.text, '$x_i H<sub>2</sub>O$');
+  assert.equal(markdown, '$x_i H_{2}O$');
+  assert.match(render(markdown), /katex/);
 });
 
 test('literal private-use characters are never consumed as internal markers', () => {

@@ -765,19 +765,7 @@ function inferMarkdownBlockType(markdown: string): MineruBlockBase['type'] {
 }
 
 function createMarkdownMineruBlock(markdown: string): MineruBlockBase | null {
-  const sourceMarkdown = markdown.trim();
-  const normalized = normalizeMarkdownMath(sourceMarkdown);
-  // Only this Markdown fallback knows whether a dollar fence existed in the source.
-  // Do not guess from already-normalized JSON or translated reader text.
-  const normalizedMarkdown = sourceMarkdown.length <= 16_384
-    ? normalized.replace(
-      /\$([^$\n]*<\/?(?:sup|sub)>[^$\n]*)\$/gi,
-      (fenced, body: string) =>
-        sourceMarkdown.includes(fenced) || !sourceMarkdown.includes(body)
-          ? fenced
-          : body,
-    )
-    : normalized;
+  const normalizedMarkdown = normalizeMarkdownMath(markdown.trim());
 
   if (!normalizedMarkdown) {
     return null;
@@ -837,9 +825,15 @@ function createMarkdownMineruBlock(markdown: string): MineruBlockBase | null {
 }
 
 function flushMarkdownBlock(buffer: string[], blocks: MineruBlockBase[]): void {
-  const block = createMarkdownMineruBlock(buffer.join('\n'));
+  const sourceMarkdown = buffer.join('\n');
+  const block = createMarkdownMineruBlock(sourceMarkdown);
 
   if (block) {
+    // Display the original tagged Markdown; keep normalized content for translation fingerprints.
+    if (/<\/?(?:sup|sub)>/i.test(sourceMarkdown)) {
+      block.readerMarkdownSource = sourceMarkdown.trim();
+    }
+
     blocks.push(block);
   }
 
@@ -1036,6 +1030,28 @@ export function extractTranslatableMarkdownFromMineruBlock(
   return toMarkdownFragment(block, plainText);
 }
 
+function displayMarkdownFallback(source: string | undefined, normalized: string): string {
+  if (!source || source.length > 16_384 || /`|~~~/.test(source)) {
+    return normalized;
+  }
+
+  return normalized.replace(/\$([^$\n]*<\/?(?:sup|sub)>[^$\n]*)\$/gi, (fenced, body: string) => {
+    if (!source.includes(body)) {
+      return fenced;
+    }
+
+    // Keep real formulas as math; a plain tagged token only needs inline formatting.
+    if (/[_^\\=]/.test(body) || (source.includes(fenced) && !/\s/.test(body))) {
+      const latex = body
+        .replace(/<sub>([^<>]*)<\/sub>/gi, '_{$1}')
+        .replace(/<sup>([^<>]*)<\/sup>/gi, '^{$1}');
+      return `$${latex}$`;
+    }
+
+    return source.includes(fenced) ? fenced : body;
+  });
+}
+
 export function buildRenderableBlocks(
   blocks: PositionedMineruBlock[],
   mineruPath?: string,
@@ -1053,7 +1069,7 @@ export function buildRenderableBlocks(
     return {
       block,
       plainText,
-      markdown: toMarkdownFragment(block, plainText),
+      markdown: displayMarkdownFallback(block.readerMarkdownSource, toMarkdownFragment(block, plainText)),
       mathText,
       tableHtml,
       captionText,

@@ -49,6 +49,7 @@ export type MineruKnownBlockType =
 export interface MineruBlockBase {
   type: MineruKnownBlockType;
   content: unknown;
+  readerMarkdownSource?: string;
   bbox?: BBox;
   bboxCoordinateSystem?: BBoxCoordinateSystem;
   bboxPageSize?: BBoxPageSize;
