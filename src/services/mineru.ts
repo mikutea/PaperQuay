@@ -1143,7 +1143,7 @@ function mergeRepeatedEquationScripts(body: string): string {
   grouped += body.slice(cursor);
 
   return grouped.replace(
-    /([_^])(?:\{([^{}]+)\}|(\\(?:[A-Za-z]+|[^A-Za-z\s])|[\p{L}\p{N}]))\s*<\s*(sub|sup)\s*>([^<>]*)<\s*\/\s*\4\s*>/giu,
+    /([_^])(?:\{([^{}]+)\}|(\\(?:[A-Za-z]+|[^A-Za-z\s])|[^\s\\{}_^$]))\s*<\s*(sub|sup)\s*>([^<>]*)<\s*\/\s*\4\s*>/giu,
     (match, script: string, braced: string | undefined, bare: string | undefined, tag: string, content: string) => {
       if ((script === '_' ? 'sub' : 'sup') !== tag.toLowerCase()) return match;
       const existing = braced ?? bare ?? '';
@@ -1152,11 +1152,12 @@ function mergeRepeatedEquationScripts(body: string): string {
   );
 }
 
-export function mapOutsideLiteralPreBlocks(source: string, transform: (text: string) => string): string | null {
+export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: string) => string): string | null {
   const lower = source.toLowerCase();
+  const blockTags = /<(pre|textarea|script|style|address|article|aside|blockquote|body|caption|center|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|header|html|legend|li|main|nav|ol|p|section|summary|table|tbody|td|tfoot|th|thead|tr|ul)\b/gi;
+  const blankLinePattern = /\n[ \t]*\n/g;
   let output = '';
   let cursor = 0;
-  let search = 0;
   let found = false;
   const renderOutside = (text: string) => {
     const leading = text.match(/^\s*/)?.[0] ?? '';
@@ -1164,21 +1165,23 @@ export function mapOutsideLiteralPreBlocks(source: string, transform: (text: str
     const body = text.slice(leading.length, text.length - trailing.length);
     return body ? leading + transform(body) + trailing : text;
   };
-  while (search < source.length) {
-    const opening = lower.indexOf('<pre', search);
-    if (opening < 0) break;
-    if (!/[\s>]/.test(lower[opening + 4] ?? '')) {
-      search = opening + 4;
-      continue;
-    }
-    const openingEnd = lower.indexOf('>', opening + 4);
+  for (const match of source.matchAll(blockTags)) {
+    const opening = match.index ?? 0;
+    if (opening < cursor) continue;
+    const tag = match[1].toLowerCase();
+    const openingEnd = lower.indexOf('>', opening + match[0].length);
     if (openingEnd < 0) return output + renderOutside(source.slice(cursor, opening)) + source.slice(opening);
-    const closing = lower.indexOf('</pre>', openingEnd + 1);
+    if (tag === 'div' && /^<div\s+class=["']formula["']/i.test(source.slice(opening, openingEnd + 1))) continue;
+    const typeOne = /^(?:pre|textarea|script|style)$/.test(tag);
+    const closing = typeOne ? lower.indexOf(`</${tag}>`, openingEnd + 1) : -1;
+    blankLinePattern.lastIndex = openingEnd + 1;
+    const blankLine = typeOne ? null : blankLinePattern.exec(source);
+    const blockEnd = typeOne
+      ? (closing < 0 ? source.length : closing + tag.length + 3)
+      : (blankLine === null ? source.length : blankLine.index + 1);
     output += renderOutside(source.slice(cursor, opening));
-    if (closing < 0) return output + source.slice(opening);
-    cursor = closing + 6;
+    cursor = blockEnd;
     output += source.slice(opening, cursor);
-    search = cursor;
     found = true;
   }
   return found ? output + renderOutside(source.slice(cursor)) : null;
@@ -1254,8 +1257,8 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
     return /^\*\*(?:图片说明|表格说明)\*\*/.test(normalized) ? normalized : source;
   }
 
-  const literalPre = mapOutsideLiteralPreBlocks(source, (text) => displayMarkdownFallback(text, normalizeMarkdownMath(text)));
-  if (literalPre !== null) return literalPre;
+  const literalHtml = mapOutsideLiteralHtmlBlocks(source, (text) => displayMarkdownFallback(text, normalizeMarkdownMath(text)));
+  if (literalHtml !== null) return literalHtml;
 
   const literalFences = new Set([...source.matchAll(/\$[^$\n]*\$/g)].map(([fenced]) => fenced));
   for (let opening = source.indexOf('\\('); opening >= 0;) {

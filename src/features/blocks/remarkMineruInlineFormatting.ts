@@ -1,5 +1,6 @@
 import { createElement, isValidElement, type ReactNode } from 'react';
-import { displayMarkdownFallback, displayMathTagsAsLatex, mapOutsideLiteralPreBlocks } from '../../services/mineru.ts';
+import { parseEntities } from 'parse-entities';
+import { displayMarkdownFallback, displayMathTagsAsLatex, mapOutsideLiteralHtmlBlocks } from '../../services/mineru.ts';
 import { normalizeMarkdownMath } from '../../utils/markdown.ts';
 
 const INLINE_TAG_PATTERN = /<\s*\/?\s*(?:sup|sub)\s*>/gi;
@@ -19,20 +20,20 @@ export function renderMineruInlineCaption(
   budget: { remaining: number } = { remaining: MAX_CAPTION_WORK },
 ): ReactNode[] {
   if (text.length > MAX_CAPTION_LENGTH || depth >= MAX_INLINE_DEPTH) {
-    return [text];
+    return [parseEntities(text)];
   }
 
   const matches = [...text.matchAll(INLINE_TAG_PATTERN)];
 
   if (matches.length > MAX_INLINE_NODES) {
-    return [text];
+    return [parseEntities(text)];
   }
 
   const rendered: ReactNode[] = [];
   let cursor = 0;
 
   for (let index = 0; index < matches.length; index += 1) {
-    if (--budget.remaining < 0) return [text];
+    if (--budget.remaining < 0) return [parseEntities(text)];
     const opening = matches[index];
 
     if (/^<\s*\//.test(opening[0])) {
@@ -44,7 +45,7 @@ export function renderMineruInlineCaption(
     let closingIndex = index + 1;
 
     for (; closingIndex < matches.length; closingIndex += 1) {
-      if (--budget.remaining < 0) return [text];
+      if (--budget.remaining < 0) return [parseEntities(text)];
       const candidate = matches[closingIndex];
 
       if (!new RegExp(name, 'i').test(candidate[0])) {
@@ -60,7 +61,7 @@ export function renderMineruInlineCaption(
 
     if (nesting === 0) {
       const closing = matches[closingIndex];
-      rendered.push(text.slice(cursor, opening.index));
+      rendered.push(parseEntities(text.slice(cursor, opening.index)));
       rendered.push(createElement(
         name,
         { key: opening.index },
@@ -74,7 +75,7 @@ export function renderMineruInlineCaption(
     }
   }
 
-  rendered.push(text.slice(cursor));
+  rendered.push(parseEntities(text.slice(cursor)));
   return rendered;
 }
 
@@ -186,24 +187,31 @@ function renderInlineTags(
   return rendered;
 }
 
-export function normalizeMineruReaderMarkdown(markdown: string): string {
+export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFences = true): string {
   if (!/<\s*\/?\s*(?:sup|sub)\s*>/i.test(markdown)) {
     return normalizeMarkdownMath(markdown);
   }
 
-  const literalPre = mapOutsideLiteralPreBlocks(markdown, normalizeMineruReaderMarkdown);
-  if (literalPre !== null) return literalPre;
+  const literalHtml = mapOutsideLiteralHtmlBlocks(markdown, normalizeMineruReaderMarkdown);
+  if (literalHtml !== null) return literalHtml;
 
   // Four-space and tab-indented CommonMark code blocks are inert, including
   // indentation after a blockquote container prefix.
+  const listMarker = /(?:[-+*]|\d{1,9}[.)])(?=[ \t])/y;
   const unquote = (line: string) => {
     let cursor = 0;
     while (cursor < line.length) {
       let next = cursor;
       while (next - cursor < 3 && line[next] === ' ') next += 1;
-      if (line[next] !== '>') break;
-      cursor = next + 1;
-      if (line[cursor] === ' ' || line[cursor] === '\t') cursor += 1;
+      if (line[next] === '>') {
+        cursor = next + 1;
+        if (line[cursor] === ' ' || line[cursor] === '\t') cursor += 1;
+        continue;
+      }
+      listMarker.lastIndex = next;
+      const list = listMarker.exec(line);
+      if (!list) break;
+      cursor = next + list[0].length + 1;
     }
     return line.slice(cursor);
   };
@@ -253,6 +261,36 @@ export function normalizeMineruReaderMarkdown(markdown: string): string {
       previousBlank = blank;
     }
     return output + normalizeOutside(outside);
+  }
+
+  // A completed math fence followed by a tag must stay outside that formula.
+  // Split at each paired tag so this exception cannot force later, unrelated
+  // long math tokens through the protected-marker normalizer.
+  if (splitAdjacentFences) {
+    const adjacency = /\$<\s*(sup|sub)\s*>/gi;
+    const chunks: string[] = [];
+    let cursor = 0;
+    for (const opening of markdown.matchAll(adjacency)) {
+      const start = opening.index ?? 0;
+      if (start < cursor) continue;
+      const tags = /<\s*(\/?)\s*(sup|sub)\s*>/gi;
+      tags.lastIndex = start + opening[0].length;
+      let depth = 1;
+      for (let tag = tags.exec(markdown); tag; tag = tags.exec(markdown)) {
+        if (tag[2].toLowerCase() !== opening[1].toLowerCase()) continue;
+        depth += tag[1] ? -1 : 1;
+        if (depth === 0) {
+          const end = (tag.index ?? 0) + tag[0].length;
+          chunks.push(markdown.slice(cursor, end));
+          cursor = end;
+          break;
+        }
+      }
+    }
+    if (chunks.length > 0 && cursor < markdown.length) {
+      chunks.push(markdown.slice(cursor));
+      return chunks.map((chunk) => normalizeMineruReaderMarkdown(chunk, false)).join('');
+    }
   }
 
   const canonicalizeInlineTag = (tag: string) => {

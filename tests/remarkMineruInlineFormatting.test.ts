@@ -338,6 +338,14 @@ test('caption text uses the same safe inline formatting pipeline', () => {
   assert.equal(plainMineruInlineCaption('value <sup>approx.'), 'value <sup>approx.');
 });
 
+test('caption entities decode in visible text and flattened alt text', () => {
+  const source = 'CO<sub>&#8322;</sub> &amp; H<sub>2</sub>O';
+  const html = renderToStaticMarkup(createElement('span', null, ...renderMineruInlineCaption(source)));
+
+  assert.match(html, /CO<sub>₂<\/sub> &amp; H<sub>2<\/sub>O/);
+  assert.equal(plainMineruInlineCaption(source), 'CO₂ & H2O');
+});
+
 test('caption links, images, and other HTML remain inert literal text', () => {
   const source = '![caption](https://example.invalid/pixel) <a href="https://example.invalid">link</a> <sup>1</sup>';
   const html = renderToStaticMarkup(createElement('span', null, ...renderMineruInlineCaption(source)));
@@ -377,6 +385,14 @@ test('reader normalization leaves four-space and tab-indented code blocks litera
 
 test('reader normalization recognizes indented code after blockquote prefixes', () => {
   const source = '>     $H<sub>2</sub>O$';
+  const markdown = normalizeMineruReaderMarkdown(source);
+
+  assert.equal(markdown, source);
+  assert.match(render(markdown), /<code>\$H&lt;sub&gt;2&lt;\/sub&gt;O\$/);
+});
+
+test('reader normalization recognizes indented code after list markers', () => {
+  const source = '-     $H<sub>2</sub>O$';
   const markdown = normalizeMineruReaderMarkdown(source);
 
   assert.equal(markdown, source);
@@ -584,6 +600,20 @@ test('literal pre blocks keep tag examples inert while surrounding text formats'
   }
 });
 
+test('literal raw HTML blocks keep tag examples inert', () => {
+  for (const tag of ['textarea', 'script', 'style', 'div']) {
+    const source = `<${tag}>$H<sub>2</sub>O$</${tag}>\n\nH<sub>3</sub>O`;
+    for (const markdown of [
+      displayMarkdownFallback(source, normalizeMarkdownMath(source)),
+      normalizeMineruReaderMarkdown(source),
+    ]) {
+      assert.match(markdown, new RegExp(`<${tag}>\\$H<sub>2<\\/sub>O\\$<\\/${tag}>`));
+      assert.doesNotMatch(markdown, /H_\{2\}O/);
+      assert.match(render(markdown), /H<sub>3<\/sub>O/);
+    }
+  }
+});
+
 test('an unclosed literal pre block keeps the remaining tag example inert', () => {
   const source = 'H<sub>3</sub>O\n<pre>$H<sub>2</sub>O$';
   const markdown = displayMarkdownFallback(source, normalizeMarkdownMath(source));
@@ -618,6 +648,16 @@ test('fence-adjacent tags do not make a long math token stall normalization', ()
   assert.ok(performance.now() - started < 2_000);
   assert.match(markdown, /H<sub>2<\/sub>O/);
   assert.match(markdown, /\$x\$<sup>2<\/sup>/);
+});
+
+test('a completed fence does not force a later long relation through marker normalization', () => {
+  const source = `$x$<sup>2</sup> ${'x'.repeat(10_000)}=foo A<sup>2</sup>`;
+  const started = performance.now();
+  const markdown = normalizeMineruReaderMarkdown(source);
+
+  assert.ok(performance.now() - started < 2_000);
+  assert.match(markdown, /^\$x\$<sup>2<\/sup>/);
+  assert.match(markdown, /A(?:\^\{2\}|<sup>2<\/sup>)/);
 });
 
 test('equation mathText merges adjacent duplicate script tags for KaTeX', () => {
@@ -680,6 +720,11 @@ test('math tags merge an existing TeX control-symbol script argument', () => {
 test('unbraced script merging never consumes a second TeX atom', () => {
   assert.equal(displayMathTagsAsLatex('x_ij<sub>2</sub>'), 'x_ij_{2}');
   assert.doesNotMatch(render('$$x_ij<sub>2</sub>$$'), /katex-error/);
+});
+
+test('unbraced punctuation scripts merge before paired tags', () => {
+  assert.equal(displayMathTagsAsLatex('x_+<sub>2</sub>'), 'x_{+2}');
+  assert.doesNotMatch(render('$$x_+<sub>2</sub>$$'), /katex-error/);
 });
 
 test('math tag entities decode to KaTeX-safe characters', () => {
