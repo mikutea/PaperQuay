@@ -1,3 +1,4 @@
+import { parseEntities } from 'parse-entities';
 import type {
   BBox,
   BBoxCoordinateSystem,
@@ -1030,13 +1031,39 @@ export function extractTranslatableMarkdownFromMineruBlock(
   return toMarkdownFragment(block, plainText);
 }
 
+function decodeMathTagEntities(content: string): string {
+  const decoded = content.replace(/&(?:#(?:[xX][0-9a-fA-F]{1,6}|\d{1,8})|[A-Za-z][A-Za-z0-9]{0,31});/g, (reference) => {
+    const value = parseEntities(reference);
+    if (value === reference) return reference;
+
+    return [...value].map((character) => {
+      switch (character) {
+        case '<': return '\\lt ';
+        case '>': return '\\gt ';
+        case '&': return '\\&';
+        case '%': return '\\%';
+        case '$': return '\\$';
+        case '#': return '\\#';
+        case '_': return '\\_';
+        case '{': return '\\{';
+        case '}': return '\\}';
+        case '\\': return '\\backslash ';
+        case '^': return '\\hat{}';
+        default: return character;
+      }
+    }).join('');
+  });
+
+  return decoded.replace(/(?<!\\)&/g, '\\&');
+}
+
 export function displayMathTagsAsLatex(body: string): string | null {
   let latex = mergeRepeatedEquationScripts(body);
 
   for (let depth = 0; depth < 32; depth += 1) {
     const next = latex.replace(
       /<\s*(sub|sup)\s*>([^<>]*)<\s*\/\s*\1\s*>/gi,
-      (_match, tag: string, content: string) => `${tag.toLowerCase() === 'sub' ? '_' : '^'}{${content}}`,
+      (_match, tag: string, content: string) => `${tag.toLowerCase() === 'sub' ? '_' : '^'}{${decodeMathTagEntities(content)}}`,
     );
 
     if (next === latex) break;
@@ -1048,10 +1075,10 @@ export function displayMathTagsAsLatex(body: string): string | null {
 
 function mergeRepeatedEquationScripts(body: string): string {
   return body.replace(
-    /([_^])(?:\{([^{}]+)\}|([A-Za-z0-9]+))<\s*(sub|sup)\s*>([^<>]*)<\s*\/\s*\4\s*>/gi,
+    /([_^])(?:\{([^{}]+)\}|([A-Za-z0-9]+))\s*<\s*(sub|sup)\s*>([^<>]*)<\s*\/\s*\4\s*>/gi,
     (match, script: string, braced: string | undefined, bare: string | undefined, tag: string, content: string) => {
       if ((script === '_' ? 'sub' : 'sup') !== tag.toLowerCase()) return match;
-      return `${script}{${braced ?? bare ?? ''}${content}}`;
+      return `${script}{${braced ?? bare ?? ''}${decodeMathTagEntities(content)}}`;
     },
   );
 }

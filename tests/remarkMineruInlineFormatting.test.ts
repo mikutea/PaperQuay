@@ -16,6 +16,7 @@ import {
 import {
   buildRenderableBlocks,
   displayMarkdownFallback,
+  displayMathTagsAsLatex,
   flattenMineruPages,
   parseMineruMarkdownPages,
 } from '../src/services/mineru.ts';
@@ -452,4 +453,22 @@ test('display-math fences merge adjacent duplicate script tags for KaTeX', () =>
 
   assert.doesNotMatch(render(markdown), /katex-error|&lt;sub/);
   assert.match(render(markdown), /katex/);
+});
+
+test('math tags merge duplicate scripts even when TeX whitespace separates them', () => {
+  assert.equal(displayMathTagsAsLatex('x_i <sub>2</sub>'), 'x_{i2}');
+  assert.equal(displayMathTagsAsLatex('x^{i}\n<sup>2</sup>'), 'x^{i2}');
+  assert.doesNotMatch(render('$$x_i <sub>2</sub>$$'), /katex-error/);
+
+  const equation = buildRenderableBlocks(flattenMineruPages(parseMineruMarkdownPages('\\sum_i x_i <sub>2</sub>')))[0];
+  assert.match(equation?.mathText ?? '', /x_\{i2\}/);
+});
+
+test('math tag entities decode to KaTeX-safe characters', () => {
+  assert.equal(displayMathTagsAsLatex('x<sup>a&lt;b</sup>'), 'x^{a\\lt b}');
+  assert.equal(displayMathTagsAsLatex('x<sub>a&amp;b</sub>'), 'x_{a\\&b}');
+  assert.equal(displayMathTagsAsLatex('x<sup>&#x3B1;</sup>'), 'x^{α}');
+  assert.equal(displayMathTagsAsLatex('x<sup>&lt;sub&gt;2&lt;/sub&gt;</sup>'), 'x^{\\lt sub\\gt 2\\lt /sub\\gt }');
+  assert.doesNotMatch(render('$$x<sup>a&lt;b</sup>$$'), /katex-error/);
+  assert.doesNotMatch(render('$$x<sub>a&amp;b</sub>$$'), /katex-error/);
 });
