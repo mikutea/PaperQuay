@@ -41,7 +41,7 @@ function htmlFormulaToLatex(value: string) {
     .trim();
 }
 
-export function normalizeExplicitMathSyntax(markdown: string) {
+function normalizeExplicitMathSyntax(markdown: string) {
   return markdown
     .replace(/\\\[(.*?)\\\]/gs, (_, expression: string) => `\n$$\n${normalizeLatexExpression(expression)}\n$$\n`)
     .replace(/\\\((.*?)\\\)/gs, (_, expression: string) => `$${normalizeLatexExpression(expression)}$`)

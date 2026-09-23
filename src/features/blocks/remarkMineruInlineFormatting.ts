@@ -1,4 +1,8 @@
-import { normalizeExplicitMathSyntax, normalizeMarkdownMath } from '../../utils/markdown.ts';
+import { normalizeMarkdownMath } from '../../utils/markdown.ts';
+
+const MATH_HTML_PATTERN =
+  /<div\s+class=["']formula["'][^>]*>.*?<\/div>|<span\s+class=["']math["'][^>]*>.*?<\/span>/gis;
+const INLINE_TAG_PATTERN = /<\s*\/?\s*(?:sup|sub)\s*>/gi;
 
 interface MarkdownNode {
   type: string;
@@ -67,16 +71,37 @@ function renderInlineTags(children: MarkdownNode[]): MarkdownNode[] {
 
 export function normalizeMineruReaderMarkdown(markdown: string): string {
   const tags: string[] = [];
-  const explicitMathMarkdown = normalizeExplicitMathSyntax(markdown);
-  const protectedMarkdown = explicitMathMarkdown.replace(/<\s*\/?\s*(?:sup|sub)\s*>/gi, (tag) => {
-    const marker = `\uE200${tags.length}\uE201`;
+  // Markdown fallback blocks can arrive with spurious math fences already added by MinerU.
+  const readableMarkdown = markdown.replace(/\$([^$\n]*<\/?(?:sup|sub)>[^$\n]*)\$/gi, (fenced, body: string) =>
+    /<\s*(sup|sub)\s*>.*?<\s*\/\s*\1\s*>/i.test(body) ? body : fenced,
+  );
+  let markerStart = '\uE200';
+
+  while (readableMarkdown.includes(markerStart)) {
+    markerStart += '\uE200';
+  }
+
+  const protectInlineTags = (text: string) => text.replace(INLINE_TAG_PATTERN, (tag) => {
+    const marker = `${markerStart}${tags.length}\uE201`;
     tags.push(tag);
     return marker;
   });
+  let protectedMarkdown = '';
+  let cursor = 0;
 
-  return normalizeMarkdownMath(protectedMarkdown).replace(
-    /\uE200(\d+)\uE201/g,
-    (_marker, index: string) => tags[Number(index)] ?? '',
+  // Formula wrappers must retain their tags until the existing LaTeX repair runs.
+  for (const match of readableMarkdown.matchAll(MATH_HTML_PATTERN)) {
+    const start = match.index ?? 0;
+    protectedMarkdown += protectInlineTags(readableMarkdown.slice(cursor, start));
+    protectedMarkdown += match[0];
+    cursor = start + match[0].length;
+  }
+
+  protectedMarkdown += protectInlineTags(readableMarkdown.slice(cursor));
+
+  const markerPattern = new RegExp(`${markerStart}(\\d+)\\uE201`, 'g');
+  return normalizeMarkdownMath(protectedMarkdown).replace(markerPattern, (_marker, index: string) =>
+    tags[Number(index)] ?? _marker,
   );
 }
 

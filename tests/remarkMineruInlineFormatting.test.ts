@@ -11,6 +11,12 @@ import {
   normalizeMineruReaderMarkdown,
   remarkMineruInlineFormatting,
 } from '../src/features/blocks/remarkMineruInlineFormatting.ts';
+import {
+  buildRenderableBlocks,
+  flattenMineruPages,
+  parseMineruMarkdownPages,
+} from '../src/services/mineru.ts';
+import { normalizeMarkdownMath } from '../src/utils/markdown.ts';
 
 function render(markdown: string): string {
   return renderToStaticMarkup(
@@ -46,6 +52,35 @@ test('formula HTML keeps its existing LaTeX conversion', () => {
 
   assert.doesNotMatch(html, /&lt;sup|<sup>/);
   assert.match(html, /katex/);
+});
+
+test('fragmented LaTeX inside formula HTML is repaired before formula conversion', () => {
+  const source = '<span class="math">x \\ in I</span>';
+
+  assert.equal(normalizeMineruReaderMarkdown(source), normalizeMarkdownMath(source));
+  assert.equal(normalizeMineruReaderMarkdown(source), '$x \\in I$');
+});
+
+test('Markdown fallback blocks recover tags wrapped in spurious math fences', () => {
+  const pages = parseMineruMarkdownPages('H<sub>2</sub>O');
+  const content = pages[0]?.[0]?.content as { markdown?: string } | undefined;
+  const fallbackMarkdown = content?.markdown ?? '';
+  const readerMarkdown = buildRenderableBlocks(flattenMineruPages(pages))[0]?.markdown ?? '';
+
+  assert.equal(fallbackMarkdown, '$H<sub>2</sub>O$');
+  assert.match(render(readerMarkdown), /H<sub>2<\/sub>O/);
+});
+
+test('literal private-use characters are never consumed as internal markers', () => {
+  const markerLikeText = '\uE2000\uE201';
+
+  assert.match(render(`A${markerLikeText} B`), new RegExp(markerLikeText));
+  assert.match(render(`A${markerLikeText} B<sup>2</sup>`), new RegExp(markerLikeText));
+  assert.match(render(`A${markerLikeText} B<sup>2</sup>`), /B<sup>2<\/sup>/);
+});
+
+test('caption text uses the same safe inline formatting pipeline', () => {
+  assert.match(render('Levels of CO<sub>2</sub>'), /CO<sub>2<\/sub>/);
 });
 
 test('unrecognized HTML, malformed tags, and code stay literal', () => {

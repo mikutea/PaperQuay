@@ -247,6 +247,20 @@ function MarkdownContentComponent({
 
 const MarkdownContent = memo(MarkdownContentComponent);
 
+function InlineMarkdownContent({ markdown }: { markdown: string }) {
+  const normalizedMarkdown = useMemo(() => normalizeMineruReaderMarkdown(markdown), [markdown]);
+
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm, remarkMath, remarkMineruInlineFormatting]}
+      rehypePlugins={[[rehypeKatex, { strict: 'ignore', throwOnError: false }]]}
+      components={{ p: ({ children }) => <span>{children}</span> }}
+    >
+      {normalizedMarkdown}
+    </ReactMarkdown>
+  );
+}
+
 function AssetFigure({
   assetPath,
   label,
@@ -267,6 +281,10 @@ function AssetFigure({
     shouldLoadAsset ? assetPath : undefined,
   );
   const [previewOpen, setPreviewOpen] = useState(false);
+  const accessibleLabel = useMemo(
+    () => label.replace(/<\s*\/?\s*(?:sup|sub)\s*>/gi, ''),
+    [label],
+  );
 
   useEffect(() => {
     setShouldLoadAsset(false);
@@ -316,7 +334,7 @@ function AssetFigure({
             }}
             className="group relative block w-full overflow-hidden bg-slate-50"
           >
-            <img src={dataUrl} alt={label} className="max-h-[420px] w-full object-contain" />
+            <img src={dataUrl} alt={accessibleLabel} className="max-h-[420px] w-full object-contain" />
             <span className="pointer-events-none absolute right-3 top-3 inline-flex items-center rounded-full bg-slate-950/70 px-2.5 py-1 text-xs text-white opacity-0 transition-opacity duration-200 group-hover:opacity-100">
               <Expand className="mr-1.5 h-3.5 w-3.5" strokeWidth={1.9} />
               {l('放大', 'Zoom')}
@@ -353,7 +371,9 @@ function AssetFigure({
             onClick={(event) => event.stopPropagation()}
           >
             <div className="flex items-center justify-between border-b border-slate-200/80 px-5 py-3">
-              <div className="truncate text-sm font-medium text-slate-700">{label}</div>
+              <div className="truncate text-sm font-medium text-slate-700">
+                <InlineMarkdownContent markdown={label} />
+              </div>
               <button
                 type="button"
                 onClick={() => setPreviewOpen(false)}
@@ -363,7 +383,7 @@ function AssetFigure({
               </button>
             </div>
             <div className="max-h-[calc(100vh-140px)] overflow-auto bg-slate-50 p-4">
-              <img src={dataUrl} alt={label} className="mx-auto h-auto max-w-full object-contain" />
+              <img src={dataUrl} alt={accessibleLabel} className="mx-auto h-auto max-w-full object-contain" />
             </div>
           </div>
         </div>
@@ -419,7 +439,7 @@ function TableContentComponent({
                 lineHeight: `${24 * scale}px`,
               }}
             >
-              {captionText}
+              <InlineMarkdownContent markdown={captionText} />
             </div>
           ) : null}
 
