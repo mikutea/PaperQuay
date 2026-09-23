@@ -192,7 +192,10 @@ export function normalizeMineruReaderMarkdown(markdown: string): string {
   for (const match of readableMarkdown.matchAll(MATH_HTML_PATTERN)) {
     const start = match.index ?? 0;
     protectedMarkdown += protectInlineTags(readableMarkdown.slice(cursor, start));
-    protectedMarkdown += match[0];
+    protectedMarkdown += match[0].replace(INLINE_TAG_PATTERN, (tag) => {
+      const [, slash, name] = /<\s*(\/?)\s*(sup|sub)\s*>/i.exec(tag) ?? [];
+      return name ? `<${slash ? '/' : ''}${name.toLowerCase()}>` : tag;
+    });
     cursor = start + match[0].length;
   }
 

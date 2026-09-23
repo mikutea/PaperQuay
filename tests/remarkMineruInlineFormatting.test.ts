@@ -64,6 +64,13 @@ test('fragmented LaTeX inside formula HTML is repaired before formula conversion
   assert.equal(normalizeMineruReaderMarkdown(source), '$x \\in I$');
 });
 
+test('formula HTML preserves supported tag whitespace as LaTeX scripts', () => {
+  const source = '<span class="math">H<sub >2</sub >O</span>';
+
+  assert.equal(normalizeMineruReaderMarkdown(source), '$H_{2}O$');
+  assert.doesNotMatch(render(source), /katex-error/);
+});
+
 test('Markdown fallback display removes a synthetic tag fence without changing translation source', () => {
   const pages = parseMineruMarkdownPages('H<sub>2</sub>O');
   const content = pages[0]?.[0]?.content as { markdown?: string } | undefined;
@@ -131,6 +138,52 @@ test('Markdown fallback recognizes supported tags with harmless whitespace', () 
 
   assert.equal(markdown, 'H<sup >2</sup >O');
   assert.match(render(markdown), /H<sup>2<\/sup>O/);
+});
+
+test('long Markdown fallback blocks still show paired tags outside math', () => {
+  const source = `${'word '.repeat(3_300)}H<sub>2</sub>O`;
+  const blocks = flattenMineruPages(parseMineruMarkdownPages(source));
+  const markdown = buildRenderableBlocks(blocks)[0]?.markdown ?? '';
+
+  assert.match(markdown, /H<sub>2<\/sub>O/);
+  assert.doesNotMatch(markdown, /\$H<sub>2<\/sub>O\$/);
+});
+
+test('oversized Markdown fallback uses its tagged display source without touching translation input', () => {
+  const source = `${'word '.repeat(13_200)}H<sub>2</sub>O`;
+  const blocks = flattenMineruPages(parseMineruMarkdownPages(source));
+
+  assert.equal(buildRenderableBlocks(blocks)[0]?.markdown, source);
+  assert.notEqual(buildReaderTranslationBlockInputs(blocks)[0]?.text, '');
+});
+
+test('escaped backticks do not hide paired tags from fallback display recovery', () => {
+  const source = '\\` H<sub>2</sub>O \\`';
+  const blocks = flattenMineruPages(parseMineruMarkdownPages(source));
+  const markdown = buildRenderableBlocks(blocks)[0]?.markdown ?? '';
+
+  assert.match(markdown, /H<sub>2<\/sub>O/);
+  assert.doesNotMatch(markdown, /\$[^$]*<sub>2<\/sub>[^$]*\$/);
+});
+
+test('display math in Markdown fallback converts paired tags to LaTeX', () => {
+  const source = '\\sum_{i=1}^n x_i H<sub>2</sub>O';
+  const blocks = flattenMineruPages(parseMineruMarkdownPages(source));
+  const markdown = buildRenderableBlocks(blocks)[0]?.markdown ?? '';
+
+  assert.match(markdown, /H_\{2\}O/);
+  assert.doesNotMatch(markdown, /<sub>/);
+  assert.doesNotMatch(render(markdown), /katex-error/);
+});
+
+test('fragmented LaTeX repair does not leave tags inside fallback math', () => {
+  const source = '\\ pmb{x} H<sup>2</sup>';
+  const blocks = flattenMineruPages(parseMineruMarkdownPages(source));
+  const markdown = buildRenderableBlocks(blocks)[0]?.markdown ?? '';
+
+  assert.match(markdown, /\\pmb\{x\}/);
+  assert.match(markdown, /H\^\{2\}/);
+  assert.doesNotMatch(render(markdown), /katex-error/);
 });
 
 test('literal private-use characters are never consumed as internal markers', () => {

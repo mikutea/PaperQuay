@@ -1031,46 +1031,68 @@ export function extractTranslatableMarkdownFromMineruBlock(
 }
 
 function displayMarkdownFallback(source: string | undefined, normalized: string): string {
-  if (!source || source.length > 16_384 || source.includes('~~~')) {
+  if (!source || source.includes('~~~')) {
     return normalized;
   }
 
-  const renderOutsideCode = (segment: string) => segment.replace(
+  if (source.length > 65_536) {
+    return source;
+  }
+
+  const literalFences = new Set([...source.matchAll(/\$[^$\n]*\$/g)].map(([fenced]) => fenced));
+  const toLatex = (body: string): string | null => {
+    let latex = body;
+
+    for (let depth = 0; depth < 32; depth += 1) {
+      const next = latex.replace(
+        /<\s*(sub|sup)\s*>([^<>]*)<\s*\/\s*\1\s*>/gi,
+        (_match, tag: string, content: string) => `${tag.toLowerCase() === 'sub' ? '_' : '^'}{${content}}`,
+      );
+
+      if (next === latex) break;
+      latex = next;
+    }
+
+    return /<\s*\/?\s*(?:sup|sub)\s*>/i.test(latex) ? null : latex;
+  };
+  const renderInlineMath = (segment: string) => segment.replace(
     /\$([^$\n]*<\s*\/?\s*(?:sup|sub)\s*>[^$\n]*)\$/gi,
     (fenced, body: string) => {
-      if (!source.includes(body)) {
-        return fenced;
+      const isLiteralFence = literalFences.has(fenced);
+
+      if (!/(?:[_^=]|\\[A-Za-z])/.test(body) && (!isLiteralFence || /\s/.test(body))) {
+        return isLiteralFence ? fenced : body;
       }
 
-      // Keep real formulas as math; a plain tagged token only needs inline formatting.
-      if (/[_^\\=]/.test(body) || (source.includes(fenced) && !/\s/.test(body))) {
-        const duplicateSubscript = /^([^\s$]*_[A-Za-z0-9]+)(<\s*sub\s*>[\s\S]*)$/i.exec(body);
+      const duplicateSubscript = /^([^\s$]*_[A-Za-z0-9]+)(<\s*sub\s*>[\s\S]*)$/i.exec(body);
+      if (duplicateSubscript) return `$${duplicateSubscript[1]}$${duplicateSubscript[2]}`;
 
-        if (duplicateSubscript) {
-          return `$${duplicateSubscript[1]}$${duplicateSubscript[2]}`;
-        }
-
-        let latex = body;
-
-        for (let depth = 0; depth < 32; depth += 1) {
-          const next = latex.replace(
-            /<\s*(sub|sup)\s*>([^<>]*)<\s*\/\s*\1\s*>/gi,
-            (_match, tag: string, content: string) => `${tag.toLowerCase() === 'sub' ? '_' : '^'}{${content}}`,
-          );
-
-          if (next === latex) break;
-          latex = next;
-        }
-
-        if (/<\s*\/?\s*(?:sup|sub)\s*>/i.test(latex)) return fenced;
-        return `$${latex}$`;
-      }
-
-      return source.includes(fenced) ? fenced : body;
+      const latex = toLatex(body);
+      return latex === null ? fenced : `$${latex}$`;
     },
   );
+  const renderOutsideCode = (segment: string) => {
+    let output = '';
+    let cursor = 0;
 
-  const delimiters = [...normalized.matchAll(/`+/g)];
+    for (const match of segment.matchAll(/\$\$([\s\S]*?)\$\$/g)) {
+      const start = match.index ?? 0;
+      output += renderInlineMath(segment.slice(cursor, start));
+      const latex = toLatex(match[1]);
+      output += latex === null ? match[0] : `$$${latex}$$`;
+      cursor = start + match[0].length;
+    }
+
+    return output + renderInlineMath(segment.slice(cursor));
+  };
+
+  const delimiters = [...normalized.matchAll(/`+/g)].filter((match) => {
+    let backslashes = 0;
+    for (let index = (match.index ?? 0) - 1; normalized[index] === '\\'; index -= 1) {
+      backslashes += 1;
+    }
+    return backslashes % 2 === 0;
+  });
   const nextSame = new Int32Array(delimiters.length).fill(-1);
   const nextByLength = new Map<number, number>();
 
