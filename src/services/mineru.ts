@@ -1088,7 +1088,7 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
 
   // Markdown code fences are inert, including a closer longer than its opener.
   // Normalize only surrounding text; mid-line runs are not fences.
-  if (/^ {0,3}(?:`{3,}|~{3,})/m.test(source)) {
+  if (/^(?: {0,3}>[ \t]?)*(?: {0,3}(?:(?:[-+*]|\d+[.)]) +)?)(?:`{3,}|~{3,})/m.test(source)) {
     const renderOutsideFence = (text: string) => {
       const leading = text.match(/^\s*/)?.[0] ?? '';
       const trailing = text.match(/\s*$/)?.[0] ?? '';
@@ -1102,17 +1102,21 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
     let outside = '';
     let fenceLength = 0;
     let fenceCharacter = '';
+    let fenceIndent = 0;
     for (const line of lines) {
-      const marker = /^ {0,3}(`{3,}|~{3,})(?:[^\n]*)/.exec(line);
+      const quotedContent = line.replace(/^(?: {0,3}>[ \t]?)+/, '');
+      const marker = /^( {0,3}(?:(?:[-+*]|\d+[.)]) +)?)(`{3,}|~{3,})(?:[^\n]*)/.exec(quotedContent);
       if (marker && fenceLength === 0) {
         output += renderOutsideFence(outside);
         outside = '';
-        fenceLength = marker[1].length;
-        fenceCharacter = marker[1][0];
+        fenceIndent = marker[1].length;
+        fenceLength = marker[2].length;
+        fenceCharacter = marker[2][0];
         output += line;
       } else if (fenceLength > 0) {
         output += line;
-        if (marker && marker[1][0] === fenceCharacter && marker[1].length >= fenceLength && /^ {0,3}(?:`{3,}|~{3,})\s*$/.test(line.trimEnd())) {
+        const closing = /^( *)(`{3,}|~{3,})\s*$/.exec(quotedContent.trimEnd());
+        if (closing && closing[1].length <= fenceIndent + 3 && closing[2][0] === fenceCharacter && closing[2].length >= fenceLength) {
           fenceLength = 0;
         }
       } else {
@@ -1140,7 +1144,9 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
       }
 
       const duplicateScript = /^([\s\S]*[_^](?:\{[^{}]+\}|[A-Za-z0-9]+))(<\s*(?:sub|sup)\s*>[\s\S]*)$/i.exec(body);
-      if (duplicateScript) return `$${duplicateScript[1]}$${duplicateScript[2]}`;
+      if (duplicateScript && /<\s*\/\s*(?:sub|sup)\s*>\s*$/i.test(duplicateScript[2])) {
+        return `$${duplicateScript[1]}$${duplicateScript[2]}`;
+      }
 
       const latex = displayMathTagsAsLatex(body);
       return latex === null ? fenced : `$${latex}$`;

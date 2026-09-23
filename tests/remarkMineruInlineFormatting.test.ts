@@ -412,6 +412,19 @@ test('mid-line backticks cannot close a fenced block', () => {
   assert.match(render(markdown), /H<sub>3<\/sub>O/);
 });
 
+test('blockquote and list code fences keep tag examples literal', () => {
+  for (const source of [
+    '> ```text\n> $H<sub>2</sub>O$\n> ```\nH<sub>3</sub>O',
+    '10. ```text\n    $H<sub>2</sub>O$\n    ````\nH<sub>3</sub>O',
+  ]) {
+    const markdown = displayMarkdownFallback(source, normalizeMarkdownMath(source));
+
+    assert.match(markdown, /\$H<sub>2<\/sub>O\$/);
+    assert.doesNotMatch(markdown, /\$H_\{2\}O\$/);
+    assert.match(render(markdown), /H<sub>3<\/sub>O/);
+  }
+});
+
 test('an unmatched backtick does not hide a later matched code span', () => {
   const source = '` unmatched then ``x_i H<sub>2</sub>O``';
   const blocks = flattenMineruPages(parseMineruMarkdownPages(source));
@@ -453,6 +466,15 @@ test('display-math fences merge adjacent duplicate script tags for KaTeX', () =>
 
   assert.doesNotMatch(render(markdown), /katex-error|&lt;sub/);
   assert.match(render(markdown), /katex/);
+});
+
+test('formula terms after a duplicate script tag stay in the same math fence', () => {
+  const source = '$x_i<sub>2</sub>+y_j$';
+  const blocks = flattenMineruPages(parseMineruMarkdownPages(source));
+  const markdown = buildRenderableBlocks(blocks)[0]?.markdown ?? '';
+
+  assert.match(markdown, /^\$x_\{i2\}\+y_j\$$/);
+  assert.doesNotMatch(render(markdown), /katex-error/);
 });
 
 test('math tags merge duplicate scripts even when TeX whitespace separates them', () => {
