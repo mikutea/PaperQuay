@@ -107,6 +107,32 @@ test('Markdown fallback keeps real math adjacent to tagged prose', () => {
   assert.match(render(markdown), /katex/);
 });
 
+test('Markdown fallback formats tags outside an inline code span in the same block', () => {
+  const source = 'H<sub>2</sub>O and `code`';
+  const blocks = flattenMineruPages(parseMineruMarkdownPages(source));
+  const markdown = buildRenderableBlocks(blocks)[0]?.markdown ?? '';
+
+  assert.equal(markdown, source);
+  assert.match(render(markdown), /H<sub>2<\/sub>O and <code>code<\/code>/);
+});
+
+test('Markdown fallback converts nested tags within a real formula', () => {
+  const blocks = flattenMineruPages(parseMineruMarkdownPages('x_i<sub>n<sup>2</sup></sub>'));
+  const markdown = buildRenderableBlocks(blocks)[0]?.markdown ?? '';
+
+  assert.equal(markdown, '$x_i$<sub>n<sup>2</sup></sub>');
+  assert.match(render(markdown), /katex/);
+  assert.doesNotMatch(render(markdown), /katex-error|&lt;sub/);
+});
+
+test('Markdown fallback recognizes supported tags with harmless whitespace', () => {
+  const blocks = flattenMineruPages(parseMineruMarkdownPages('H<sup >2</sup >O'));
+  const markdown = buildRenderableBlocks(blocks)[0]?.markdown ?? '';
+
+  assert.equal(markdown, 'H<sup >2</sup >O');
+  assert.match(render(markdown), /H<sup>2<\/sup>O/);
+});
+
 test('literal private-use characters are never consumed as internal markers', () => {
   const markerLikeText = '\uE2000\uE201';
 
@@ -128,6 +154,23 @@ test('excessively nested inline tags fall back to literal text without recursion
 
   assert.match(html, /&lt;sup&gt;/);
   assert.match(caption, /&lt;sup&gt;/);
+});
+
+test('inline formatting enforces one work budget across paragraph siblings', () => {
+  const tree = {
+    type: 'root',
+    children: Array.from({ length: 64 }, (_, index) => ({
+      type: 'paragraph',
+      children: index === 63
+        ? [{ type: 'html', value: '<sup>' }, { type: 'text', value: '2' }, { type: 'html', value: '</sup>' }]
+        : Array.from({ length: 256 }, () => ({ type: 'html', value: '<sup>' })),
+    })),
+  };
+
+  remarkMineruInlineFormatting()(tree);
+
+  assert.equal(tree.children.length, 64);
+  assert.equal(tree.children[63].children[0]?.type, 'html');
 });
 
 test('caption text uses the same safe inline formatting pipeline', () => {

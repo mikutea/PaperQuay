@@ -830,7 +830,7 @@ function flushMarkdownBlock(buffer: string[], blocks: MineruBlockBase[]): void {
 
   if (block) {
     // Display the original tagged Markdown; keep normalized content for translation fingerprints.
-    if (/<\/?(?:sup|sub)>/i.test(sourceMarkdown)) {
+    if (/<\s*\/?\s*(?:sup|sub)\s*>/i.test(sourceMarkdown)) {
       block.readerMarkdownSource = sourceMarkdown.trim();
     }
 
@@ -1031,25 +1031,70 @@ export function extractTranslatableMarkdownFromMineruBlock(
 }
 
 function displayMarkdownFallback(source: string | undefined, normalized: string): string {
-  if (!source || source.length > 16_384 || /`|~~~/.test(source)) {
+  if (!source || source.length > 16_384 || source.includes('~~~')) {
     return normalized;
   }
 
-  return normalized.replace(/\$([^$\n]*<\/?(?:sup|sub)>[^$\n]*)\$/gi, (fenced, body: string) => {
-    if (!source.includes(body)) {
-      return fenced;
-    }
+  const renderOutsideCode = (segment: string) => segment.replace(
+    /\$([^$\n]*<\s*\/?\s*(?:sup|sub)\s*>[^$\n]*)\$/gi,
+    (fenced, body: string) => {
+      if (!source.includes(body)) {
+        return fenced;
+      }
 
-    // Keep real formulas as math; a plain tagged token only needs inline formatting.
-    if (/[_^\\=]/.test(body) || (source.includes(fenced) && !/\s/.test(body))) {
-      const latex = body
-        .replace(/<sub>([^<>]*)<\/sub>/gi, '_{$1}')
-        .replace(/<sup>([^<>]*)<\/sup>/gi, '^{$1}');
-      return `$${latex}$`;
-    }
+      // Keep real formulas as math; a plain tagged token only needs inline formatting.
+      if (/[_^\\=]/.test(body) || (source.includes(fenced) && !/\s/.test(body))) {
+        const duplicateSubscript = /^([^\s$]*_[A-Za-z0-9]+)(<\s*sub\s*>[\s\S]*)$/i.exec(body);
 
-    return source.includes(fenced) ? fenced : body;
-  });
+        if (duplicateSubscript) {
+          return `$${duplicateSubscript[1]}$${duplicateSubscript[2]}`;
+        }
+
+        let latex = body;
+
+        for (let depth = 0; depth < 32; depth += 1) {
+          const next = latex.replace(
+            /<\s*(sub|sup)\s*>([^<>]*)<\s*\/\s*\1\s*>/gi,
+            (_match, tag: string, content: string) => `${tag.toLowerCase() === 'sub' ? '_' : '^'}{${content}}`,
+          );
+
+          if (next === latex) break;
+          latex = next;
+        }
+
+        if (/<\s*\/?\s*(?:sup|sub)\s*>/i.test(latex)) return fenced;
+        return `$${latex}$`;
+      }
+
+      return source.includes(fenced) ? fenced : body;
+    },
+  );
+
+  const delimiters = [...normalized.matchAll(/`+/g)];
+  const nextSame = new Int32Array(delimiters.length).fill(-1);
+  const nextByLength = new Map<number, number>();
+
+  for (let index = delimiters.length - 1; index >= 0; index -= 1) {
+    const length = delimiters[index][0].length;
+    nextSame[index] = nextByLength.get(length) ?? -1;
+    nextByLength.set(length, index);
+  }
+
+  let output = '';
+  let cursor = 0;
+
+  for (let index = 0; index < delimiters.length; index += 1) {
+    const closingIndex = nextSame[index];
+    if (closingIndex < 0) break;
+    const opening = delimiters[index];
+    const closing = delimiters[closingIndex];
+    output += renderOutsideCode(normalized.slice(cursor, opening.index));
+    output += normalized.slice(opening.index, (closing.index ?? 0) + closing[0].length);
+    cursor = (closing.index ?? 0) + closing[0].length;
+    index = closingIndex;
+  }
+
+  return output + renderOutsideCode(normalized.slice(cursor));
 }
 
 export function buildRenderableBlocks(

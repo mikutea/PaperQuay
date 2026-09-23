@@ -9,6 +9,7 @@ const MARKER_END = '\uE201';
 const MAX_INLINE_NODES = 512;
 const MAX_INLINE_DEPTH = 32;
 const MAX_CAPTION_LENGTH = 16_384;
+const MAX_INLINE_WORK = 20_000;
 
 export function renderMineruInlineCaption(text: string, depth = 0): ReactNode[] {
   if (text.length > MAX_CAPTION_LENGTH || depth >= MAX_INLINE_DEPTH) {
@@ -104,14 +105,23 @@ function readInlineTag(node: MarkdownNode): { name: 'sup' | 'sub'; closing: bool
     : null;
 }
 
-function renderInlineTags(children: MarkdownNode[], depth = 0): MarkdownNode[] {
-  if (children.length > MAX_INLINE_NODES || depth >= MAX_INLINE_DEPTH) {
+function renderInlineTags(
+  children: MarkdownNode[],
+  budget: { remaining: number },
+  depth = 0,
+): MarkdownNode[] {
+  if (children.length > MAX_INLINE_NODES || depth >= MAX_INLINE_DEPTH || budget.remaining <= 0) {
     return children;
   }
 
   const rendered: MarkdownNode[] = [];
 
   for (let index = 0; index < children.length; index += 1) {
+    if (--budget.remaining < 0) {
+      rendered.push(...children.slice(index));
+      return rendered;
+    }
+
     const node = children[index];
     const opening = readInlineTag(node);
 
@@ -120,6 +130,11 @@ function renderInlineTags(children: MarkdownNode[], depth = 0): MarkdownNode[] {
       let closingIndex = index + 1;
 
       for (; closingIndex < children.length; closingIndex += 1) {
+        if (--budget.remaining < 0) {
+          rendered.push(...children.slice(index));
+          return rendered;
+        }
+
         const tag = readInlineTag(children[closingIndex]);
 
         if (tag?.name !== opening.name) {
@@ -137,7 +152,7 @@ function renderInlineTags(children: MarkdownNode[], depth = 0): MarkdownNode[] {
         rendered.push({
           type: 'mineruInlineFormatting',
           data: { hName: opening.name },
-          children: renderInlineTags(children.slice(index + 1, closingIndex), depth + 1),
+          children: renderInlineTags(children.slice(index + 1, closingIndex), budget, depth + 1),
         });
         index = closingIndex;
         continue;
@@ -145,7 +160,7 @@ function renderInlineTags(children: MarkdownNode[], depth = 0): MarkdownNode[] {
     }
 
     if (node.children) {
-      node.children = renderInlineTags(node.children, depth + 1);
+      node.children = renderInlineTags(node.children, budget, depth + 1);
     }
 
     rendered.push(node);
@@ -188,7 +203,7 @@ export function remarkMineruInlineFormatting() {
     const root = tree as MarkdownNode;
 
     if (root.children) {
-      root.children = renderInlineTags(root.children);
+      root.children = renderInlineTags(root.children, { remaining: MAX_INLINE_WORK });
     }
   };
 }
