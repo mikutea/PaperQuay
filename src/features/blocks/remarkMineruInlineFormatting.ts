@@ -195,15 +195,6 @@ export function normalizeMineruReaderMarkdown(markdown: string): string {
     const [, slash, name] = /<\s*(\/?)\s*(sup|sub)\s*>/i.exec(tag) ?? [];
     return name ? `<${slash ? '/' : ''}${name.toLowerCase()}>` : tag;
   };
-  // Keep the direct path for ordinary math. A completed math fence followed
-  // immediately by a tag needs the protected path to preserve that fence.
-  if (/[_^\\$]/.test(markdown) && !/\$<\s*(?:sup|sub)\s*>/i.test(markdown)) {
-    return displayMarkdownFallback(
-      markdown,
-      normalizeMarkdownMath(markdown.replace(INLINE_TAG_PATTERN, canonicalizeInlineTag)),
-    );
-  }
-
   const tags: string[] = [];
   const readableMarkdown = markdown.replace(/\{PQInlineTag/g, `${MARKER_START}${MARKER_START}`);
 
@@ -240,10 +231,12 @@ export function normalizeMineruReaderMarkdown(markdown: string): string {
       if (closing !== undefined) {
         const closingEnd = closing + kind.length + 3;
         protectedMarkdown += protectInlineTags(readableMarkdown.slice(cursor, start));
-        protectedMarkdown += readableMarkdown.slice(start, closingEnd).replace(
-          INLINE_TAG_PATTERN,
-          canonicalizeInlineTag,
-        );
+        const wrapper = readableMarkdown.slice(start, closingEnd);
+        const inner = readableMarkdown.slice(end + 1, closing);
+        const safeMath = displayMathTagsAsLatex(inner);
+        protectedMarkdown += safeMath === null
+          ? wrapper.replace(INLINE_TAG_PATTERN, canonicalizeInlineTag)
+          : `${readableMarkdown.slice(start, end + 1)}${safeMath}${readableMarkdown.slice(closing, closingEnd)}`;
         cursor = closingEnd;
         search = cursor;
         continue;
@@ -254,10 +247,18 @@ export function normalizeMineruReaderMarkdown(markdown: string): string {
 
   protectedMarkdown += protectInlineTags(readableMarkdown.slice(cursor));
 
-  const protectedResult = normalizeMarkdownMath(protectedMarkdown).replace(
+  const restoreInlineTags = (value: string) => value.replace(
     /\{PQInlineTag\{PQInlineTag|\{PQInlineTag(\d+)\}/g,
     (marker, index: string | undefined) => index === undefined ? MARKER_START : tags[Number(index)] ?? marker,
   );
+
+  // Formula wrappers have already received safe tag conversion. Keep ordinary
+  // math on the direct path so long relation tokens never reach marker scans.
+  if (/[_^\\$=<>]/.test(markdown.replace(INLINE_TAG_PATTERN, '')) && !/\$<\s*(?:sup|sub)\s*>/i.test(markdown)) {
+    return displayMarkdownFallback(markdown, normalizeMarkdownMath(restoreInlineTags(protectedMarkdown)));
+  }
+
+  const protectedResult = restoreInlineTags(normalizeMarkdownMath(protectedMarkdown));
 
   return protectedResult;
 }

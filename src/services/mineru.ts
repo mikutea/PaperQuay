@@ -1112,7 +1112,33 @@ export function displayMathTagsAsLatex(body: string): string | null {
 }
 
 function mergeRepeatedEquationScripts(body: string): string {
-  return body.replace(
+  const groupStarts = new Map<number, number>();
+  const stack: number[] = [];
+  for (let index = 0; index < body.length; index += 1) {
+    if (body[index] === '\\') {
+      index += 1;
+    } else if (body[index] === '{') {
+      stack.push(index);
+    } else if (body[index] === '}' && stack.length) {
+      groupStarts.set(index, stack.pop()!);
+    }
+  }
+
+  let grouped = '';
+  let cursor = 0;
+  for (const match of body.matchAll(/<\s*(sub|sup)\s*>([^<>]*)<\s*\/\s*\1\s*>/gi)) {
+    const start = match.index ?? 0;
+    let closing = start - 1;
+    while (closing >= cursor && /\s/.test(body[closing])) closing -= 1;
+    const opening = groupStarts.get(closing);
+    const script = match[1].toLowerCase() === 'sub' ? '_' : '^';
+    if (opening === undefined || opening <= cursor || body[opening - 1] !== script) continue;
+    grouped += body.slice(cursor, opening - 1) + `${script}{${body.slice(opening + 1, closing)}${mathTagContentToLatex(match[2])}}`;
+    cursor = start + match[0].length;
+  }
+  grouped += body.slice(cursor);
+
+  return grouped.replace(
     /([_^])(?:\{([^{}]+)\}|(\\[A-Za-z]+|[A-Za-z0-9]+))\s*<\s*(sub|sup)\s*>([^<>]*)<\s*\/\s*\4\s*>/gi,
     (match, script: string, braced: string | undefined, bare: string | undefined, tag: string, content: string) => {
       if ((script === '_' ? 'sub' : 'sup') !== tag.toLowerCase()) return match;
@@ -1138,7 +1164,7 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
     }
     return line.slice(cursor);
   };
-  const fenceMarker = (line: string) => /^( {0,3}(?:(?:[-+*]|\d+[.)]) +)?)(`{3,}|~{3,})(?:[^\n]*)/.exec(line);
+  const fenceMarker = (line: string) => /^( {0,3})((?:[-+*]|\d+[.)]) +)?(`{3,}|~{3,})(?:[^\n]*)/.exec(line);
   const lines = /(?:`{3,}|~{3,})/.test(source) ? source.split(/(?<=\n)/) : [];
   if (lines.some((line) => fenceMarker(unquote(line)))) {
     const renderOutsideFence = (text: string) => {
@@ -1160,9 +1186,9 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
       if (marker && fenceLength === 0) {
         output += renderOutsideFence(outside);
         outside = '';
-        fenceIndent = marker[1].length;
-        fenceLength = marker[2].length;
-        fenceCharacter = marker[2][0];
+        fenceIndent = marker[2]?.length ?? 0;
+        fenceLength = marker[3].length;
+        fenceCharacter = marker[3][0];
         output += line;
       } else if (fenceLength > 0) {
         output += line;
@@ -1184,14 +1210,30 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
   }
 
   const literalFences = new Set([...source.matchAll(/\$[^$\n]*\$/g)].map(([fenced]) => fenced));
-  for (const [parenthesized] of source.matchAll(/\\\([^)]*\\\)/g)) {
+  for (let opening = source.indexOf('\\('); opening >= 0;) {
+    const closing = source.indexOf('\\)', opening + 2);
+    if (closing < 0) break;
+    const parenthesized = source.slice(opening, closing + 2);
     const fenced = normalizeMarkdownMath(parenthesized);
     if (/^\$[^$\n]*\$$/.test(fenced)) literalFences.add(fenced);
+    opening = source.indexOf('\\(', closing + 2);
   }
   const sourceHasDollar = source.includes('$');
+  const sourceBodyCursors = new Map<string, number>();
+  const isAuthoredFence = (fenced: string, body: string) => {
+    let position = source.indexOf(body, sourceBodyCursors.get(body) ?? 0);
+    while (position >= 0 && sourceSpans.some(([start, end]) => position >= start && position < end)) {
+      position = source.indexOf(body, position + body.length);
+    }
+    if (position < 0) return literalFences.has(fenced);
+    sourceBodyCursors.set(body, position + body.length);
+    const before = source.slice(Math.max(0, position - 2), position);
+    const after = source.slice(position + body.length, position + body.length + 2);
+    return (before.endsWith('$') && after.startsWith('$')) || (before.endsWith('\\(') && after.startsWith('\\)'));
+  };
   const renderInlineMath = (segment: string) => {
     const renderFence = (fenced: string, body: string) => {
-      const isLiteralFence = literalFences.has(fenced);
+      const isLiteralFence = isAuthoredFence(fenced, body);
       const isCurrencyProse = isLiteralFence && /^\s*\d/.test(body) && [...body.matchAll(/\s+/g)].length >= 2;
 
       if (!/(?:[_^=]|\\[A-Za-z])/.test(body) && (!isLiteralFence || isCurrencyProse)) {

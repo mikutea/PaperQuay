@@ -73,6 +73,13 @@ test('formula HTML preserves supported tag whitespace as LaTeX scripts', () => {
   assert.doesNotMatch(render(source), /katex-error/);
 });
 
+test('formula wrappers escape tag metacharacters before legacy math conversion', () => {
+  const source = '<span class="math">x<sup>50%</sup></span>';
+
+  assert.equal(normalizeMineruReaderMarkdown(source), '$x^{50\\%}$');
+  assert.doesNotMatch(render(source), /katex-error/);
+});
+
 test('Markdown fallback display removes a synthetic tag fence without changing translation source', () => {
   const pages = parseMineruMarkdownPages('H<sub>2</sub>O');
   const content = pages[0]?.[0]?.content as { markdown?: string } | undefined;
@@ -124,6 +131,24 @@ test('parenthesized explicit math keeps its fence when it contains a tag', () =>
   assert.match(markdown, /^\$x \+ H_\{2\}O\$$/);
   assert.match(render(markdown), /katex/);
   assert.doesNotMatch(render(markdown), /katex-error/);
+});
+
+test('parenthesized math with an ordinary inner parenthesis retains its authored fence', () => {
+  const source = String.raw`\(f(x) + H<sub>2</sub>O\)`;
+  const markdown = displayMarkdownFallback(source, normalizeMarkdownMath(source));
+
+  assert.equal(markdown, '$f(x) + H_{2}O$');
+  assert.match(render(markdown), /katex/);
+});
+
+test('identical authored math and prose tags keep their occurrence-specific formatting', () => {
+  for (const source of ['$H<sub>2</sub>O$ and H<sub>2</sub>O', 'H<sub>2</sub>O and $H<sub>2</sub>O$']) {
+    const markdown = displayMarkdownFallback(source, normalizeMarkdownMath(source));
+
+    assert.equal((markdown.match(/H_\{2\}O/g) ?? []).length, 1);
+    assert.equal((markdown.match(/H<sub>2<\/sub>O/g) ?? []).length, 1);
+    assert.doesNotMatch(render(markdown), /katex-error/);
+  }
 });
 
 test('Markdown fallback keeps real math adjacent to tagged prose', () => {
@@ -368,6 +393,17 @@ test('long math tokens choose the direct fallback before tag-marker normalizatio
   assert.match(normalizeMineruReaderMarkdown(markdown), /H\^\{2\}O|H<sup>2<\/sup>O/);
 });
 
+test('long relation tokens avoid expensive protected-tag normalization', () => {
+  for (const relation of ['=', '<', '>']) {
+    const source = `${'x'.repeat(10_000)}${relation}foo H<sup>2</sup>`;
+    const started = performance.now();
+    const markdown = normalizeMineruReaderMarkdown(source);
+
+    assert.ok(performance.now() - started < 2_000);
+    assert.match(markdown, /H(?:\^\{2\}|<sup>2<\/sup>)/);
+  }
+});
+
 test('existing scripts on later math terms do not create duplicate KaTeX scripts', () => {
   for (const source of ['$x_i + y_j<sub>2</sub>$', '$x^i + y^j<sup>2</sup>$']) {
     const blocks = flattenMineruPages(parseMineruMarkdownPages(source));
@@ -421,6 +457,15 @@ test('a longer backtick fence closer preserves code while outside tags render', 
 
   assert.match(markdown, /```text\n\$H<sub>3<\/sub>O\$\n````/);
   assert.match(render(markdown), /H<sub>2<\/sub>O/);
+  assert.match(render(markdown), /CO<sub>2<\/sub>/);
+});
+
+test('an over-indented candidate cannot close a top-level code fence', () => {
+  const source = '   ```text\n      ```\n$x_i H<sub>2</sub>O$\n   ```\nCO<sub>2</sub>';
+  const markdown = displayMarkdownFallback(source, normalizeMarkdownMath(source));
+
+  assert.match(markdown, /      ```\n\$x_i H<sub>2<\/sub>O\$\n   ```/);
+  assert.doesNotMatch(markdown, /\$x_i H_\{2\}O\$/);
   assert.match(render(markdown), /CO<sub>2<\/sub>/);
 });
 
@@ -530,6 +575,11 @@ test('math tags merge an existing TeX control-sequence script', () => {
 
   const equation = buildRenderableBlocks(flattenMineruPages(parseMineruMarkdownPages(String.raw`\sum_i x_\alpha<sub>2</sub>`)))[0];
   assert.match(equation?.mathText ?? '', /x_\{\\alpha 2\}/);
+});
+
+test('math tags merge an existing nested TeX script group', () => {
+  assert.equal(displayMathTagsAsLatex(String.raw`x_{\mathrm{i}}<sub>2</sub>`), String.raw`x_{\mathrm{i}2}`);
+  assert.doesNotMatch(render(String.raw`$$x_{\mathrm{i}}<sub>2</sub>$$`), /katex-error/);
 });
 
 test('math tag entities decode to KaTeX-safe characters', () => {
