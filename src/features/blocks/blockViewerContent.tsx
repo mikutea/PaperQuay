@@ -30,11 +30,12 @@ import type {
   TranslationDisplayMode,
 } from '../../types/reader';
 import { cn } from '../../utils/cn';
-import {
-  normalizeMarkdownMath,
-  normalizeRawLatexExpression,
-} from '../../utils/markdown';
+import { normalizeRawLatexExpression } from '../../utils/markdown';
 import { sanitizeMineruTableHtml } from '../../utils/safeHtml';
+import {
+  normalizeMineruReaderMarkdown,
+  remarkMineruInlineFormatting,
+} from './remarkMineruInlineFormatting';
 
 function hasActiveTextSelection() {
   const selection = window.getSelection();
@@ -166,7 +167,7 @@ function MarkdownContentComponent({
   markdown: string;
   scale: number;
 }) {
-  const normalizedMarkdown = useMemo(() => normalizeMarkdownMath(markdown), [markdown]);
+  const normalizedMarkdown = useMemo(() => normalizeMineruReaderMarkdown(markdown), [markdown]);
   const bodyStyle = {
     fontSize: `${15 * scale}px`,
     lineHeight: `${31 * scale}px`,
@@ -175,7 +176,7 @@ function MarkdownContentComponent({
   return (
     <ReactMarkdown
       className="prose prose-slate max-w-none prose-headings:tracking-tight prose-a:text-indigo-600 prose-strong:text-slate-900 dark:prose-invert dark:prose-strong:text-[var(--pq-text)] [&_.katex]:text-slate-900 dark:[&_.katex]:text-[var(--pq-text)] [&_.katex-display]:my-4 [&_.katex-display]:overflow-x-auto [&_.katex-display]:overflow-y-hidden [&_.katex-display]:py-2"
-      remarkPlugins={[remarkGfm, remarkMath]}
+      remarkPlugins={[remarkGfm, remarkMath, remarkMineruInlineFormatting]}
       rehypePlugins={[[rehypeKatex, { strict: 'ignore', throwOnError: false }]]}
       components={{
         p: ({ children }) => (
