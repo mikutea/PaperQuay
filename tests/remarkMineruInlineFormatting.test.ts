@@ -106,6 +106,26 @@ test('Markdown fallback preserves a dollar fence already present in source', () 
   assert.equal(buildRenderableBlocks(flattenMineruPages(pages))[0]?.markdown, '$x^{2}$');
 });
 
+test('escaped dollar signs leave tagged prose for inline formatting', () => {
+  const source = String.raw`\$H<sub>2</sub>O\$`;
+  const markdown = displayMarkdownFallback(source, normalizeMarkdownMath(source));
+
+  assert.doesNotMatch(markdown, /H_\{2\}/);
+  assert.match(render(markdown), /H<sub>2<\/sub>O/);
+  assert.doesNotMatch(render(markdown), /katex-error/);
+});
+
+test('parenthesized explicit math keeps its fence when it contains a tag', () => {
+  const source = String.raw`\(x + H<sub>2</sub>O\)`;
+  const blocks = flattenMineruPages(parseMineruMarkdownPages(source));
+  const markdown = buildRenderableBlocks(blocks)[0]?.markdown ?? '';
+
+  assert.equal(buildReaderTranslationBlockInputs(blocks)[0]?.text, normalizeMarkdownMath(source));
+  assert.match(markdown, /^\$x \+ H_\{2\}O\$$/);
+  assert.match(render(markdown), /katex/);
+  assert.doesNotMatch(render(markdown), /katex-error/);
+});
+
 test('Markdown fallback keeps real math adjacent to tagged prose', () => {
   const pages = parseMineruMarkdownPages('x_i H<sub>2</sub>O');
   const blocks = flattenMineruPages(pages);
@@ -502,6 +522,14 @@ test('math tags merge duplicate scripts even when TeX whitespace separates them'
 
   const equation = buildRenderableBlocks(flattenMineruPages(parseMineruMarkdownPages('\\sum_i x_i <sub>2</sub>')))[0];
   assert.match(equation?.mathText ?? '', /x_\{i2\}/);
+});
+
+test('math tags merge an existing TeX control-sequence script', () => {
+  assert.equal(displayMathTagsAsLatex(String.raw`x_\alpha<sub>2</sub>`), String.raw`x_{\alpha 2}`);
+  assert.doesNotMatch(render(String.raw`$$x_\alpha<sub>2</sub>$$`), /katex-error/);
+
+  const equation = buildRenderableBlocks(flattenMineruPages(parseMineruMarkdownPages(String.raw`\sum_i x_\alpha<sub>2</sub>`)))[0];
+  assert.match(equation?.mathText ?? '', /x_\{\\alpha 2\}/);
 });
 
 test('math tag entities decode to KaTeX-safe characters', () => {

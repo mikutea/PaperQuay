@@ -1113,10 +1113,11 @@ export function displayMathTagsAsLatex(body: string): string | null {
 
 function mergeRepeatedEquationScripts(body: string): string {
   return body.replace(
-    /([_^])(?:\{([^{}]+)\}|([A-Za-z0-9]+))\s*<\s*(sub|sup)\s*>([^<>]*)<\s*\/\s*\4\s*>/gi,
+    /([_^])(?:\{([^{}]+)\}|(\\[A-Za-z]+|[A-Za-z0-9]+))\s*<\s*(sub|sup)\s*>([^<>]*)<\s*\/\s*\4\s*>/gi,
     (match, script: string, braced: string | undefined, bare: string | undefined, tag: string, content: string) => {
       if ((script === '_' ? 'sub' : 'sup') !== tag.toLowerCase()) return match;
-      return `${script}{${braced ?? bare ?? ''}${mathTagContentToLatex(content)}}`;
+      const existing = braced ?? bare ?? '';
+      return `${script}{${existing}${existing.startsWith('\\') ? ' ' : ''}${mathTagContentToLatex(content)}}`;
     },
   );
 }
@@ -1183,9 +1184,13 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
   }
 
   const literalFences = new Set([...source.matchAll(/\$[^$\n]*\$/g)].map(([fenced]) => fenced));
-  const renderInlineMath = (segment: string) => segment.replace(
-    /\$([^$\n]*<\s*\/?\s*(?:sup|sub)\s*>[^$\n]*)\$/gi,
-    (fenced, body: string) => {
+  for (const [parenthesized] of source.matchAll(/\\\([^)]*\\\)/g)) {
+    const fenced = normalizeMarkdownMath(parenthesized);
+    if (/^\$[^$\n]*\$$/.test(fenced)) literalFences.add(fenced);
+  }
+  const sourceHasDollar = source.includes('$');
+  const renderInlineMath = (segment: string) => {
+    const renderFence = (fenced: string, body: string) => {
       const isLiteralFence = literalFences.has(fenced);
       const isCurrencyProse = isLiteralFence && /^\s*\d/.test(body) && [...body.matchAll(/\s+/g)].length >= 2;
 
@@ -1200,8 +1205,30 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
 
       const latex = displayMathTagsAsLatex(body);
       return latex === null ? fenced : `$${latex}$`;
-    },
-  );
+    };
+    let output = '';
+    let cursor = 0;
+    let opening = -1;
+    for (let index = 0; index < segment.length; index += 1) {
+      if (segment[index] !== '$') continue;
+      let backslashes = 0;
+      for (let previous = index - 1; segment[previous] === '\\'; previous -= 1) backslashes += 1;
+      // A normalizer-created fence can end next to an escaped backtick;
+      // never reinterpret an escaped dollar that was present in the source.
+      if (backslashes % 2 !== 0 && (opening < 0 || sourceHasDollar)) continue;
+      if (opening < 0) {
+        opening = index;
+        continue;
+      }
+      const body = segment.slice(opening + 1, index);
+      if (!body.includes('\n') && /<\s*\/?\s*(?:sup|sub)\s*>/i.test(body)) {
+        output += segment.slice(cursor, opening) + renderFence(segment.slice(opening, index + 1), body);
+        cursor = index + 1;
+      }
+      opening = -1;
+    }
+    return output + segment.slice(cursor);
+  };
   const renderOutsideCode = (segment: string) => {
     let output = '';
     let cursor = 0;
