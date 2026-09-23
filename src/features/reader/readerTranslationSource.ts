@@ -1,29 +1,14 @@
 import { extractTranslatableMarkdownFromMineruBlock } from '../../services/mineru.ts';
 import type { PositionedMineruBlock, TranslationBlockInput, TranslationMap } from '../../types/reader';
 
-function buildTranslationBlockInputs(
-  blocks: PositionedMineruBlock[],
-  includeContentContinuations: boolean,
-): TranslationBlockInput[] {
-  return blocks.flatMap((block) => {
-    if (!includeContentContinuations && block.contentSourceBlockId) return [];
-    const text = extractTranslatableMarkdownFromMineruBlock(block).trim();
-    return text ? [{ blockId: block.blockId, text }] : [];
-  });
-}
-
 export function buildReaderTranslationBlockInputs(
   blocks: PositionedMineruBlock[],
 ): TranslationBlockInput[] {
-  return buildTranslationBlockInputs(blocks, false);
-}
-
-// Batches before this fix included continuation blocks in their source fingerprint.
-// Recreate that exact source only to verify and reuse already saved translations.
-export function buildLegacyBatchTranslationBlockInputs(
-  blocks: PositionedMineruBlock[],
-): TranslationBlockInput[] {
-  return buildTranslationBlockInputs(blocks, true);
+  return blocks.flatMap((block) => {
+    if (block.contentSourceBlockId) return [];
+    const text = extractTranslatableMarkdownFromMineruBlock(block).trim();
+    return text ? [{ blockId: block.blockId, text }] : [];
+  });
 }
 
 export interface TranslationSourceMetadata {
@@ -87,7 +72,6 @@ export function buildTranslationSourceMetadata(
 export function selectReusableCachedTranslations(
   cached: SourceBoundTranslationCache | null | undefined,
   sourceBlocks: TranslationBlockInput[],
-  legacyBatchSourceBlocks?: TranslationBlockInput[],
 ): TranslationMap {
   if (
     !cached ||
@@ -101,19 +85,7 @@ export function selectReusableCachedTranslations(
   const currentSource = buildTranslationSourceMetadata(sourceBlocks);
 
   if (cached.sourceFingerprint !== currentSource.sourceFingerprint) {
-    if (!legacyBatchSourceBlocks || legacyBatchSourceBlocks.length <= sourceBlocks.length) {
-      return {};
-    }
-    const legacySource = buildTranslationSourceMetadata(legacyBatchSourceBlocks);
-    if (
-      cached.sourceFingerprint !== legacySource.sourceFingerprint ||
-      !sourceBlocks.every((block) =>
-        legacySource.blockSourceFingerprints[block.blockId.trim()] ===
-        currentSource.blockSourceFingerprints[block.blockId.trim()],
-      )
-    ) {
-      return {};
-    }
+    return {};
   }
 
   const reusable: TranslationMap = {};
@@ -141,9 +113,8 @@ export function selectReusableSessionTranslations(
   snapshot: (SourceBoundTranslationCache & { targetLanguage: string }) | null | undefined,
   sourceBlocks: TranslationBlockInput[],
   targetLanguage: string,
-  legacyBatchSourceBlocks?: TranslationBlockInput[],
 ): TranslationMap {
   return snapshot?.targetLanguage === targetLanguage
-    ? selectReusableCachedTranslations(snapshot, sourceBlocks, legacyBatchSourceBlocks)
+    ? selectReusableCachedTranslations(snapshot, sourceBlocks)
     : {};
 }

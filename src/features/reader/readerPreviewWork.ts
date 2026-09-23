@@ -18,6 +18,13 @@ export async function mapPreviewItemsWithConcurrency<T, R>(
   return results.filter((_, index) => index in results);
 }
 
+export function wasUpdatedDuringPreviewScan(
+  updatedAt: number | undefined,
+  scanStartedAt: number,
+): boolean {
+  return updatedAt !== undefined && updatedAt >= scanStartedAt;
+}
+
 export async function waitForBatchResumeOrCancel(
   isPaused: () => boolean,
   isCancelled: () => boolean,

@@ -52,7 +52,6 @@ import {
 } from './readerTranslation';
 import { readTranslationCache } from './readerTranslationCache';
 import {
-  buildLegacyBatchTranslationBlockInputs,
   buildReaderTranslationBlockInputs,
   buildTranslationSourceMetadata,
   selectReusableCachedTranslations,
@@ -571,7 +570,6 @@ export function useReaderLibraryActions({
       try {
         const previewContext = await loadLibraryPreviewBlocks(item);
         const blocksToTranslate = buildReaderTranslationBlockInputs(previewContext.blocks);
-        const legacyBatchSourceBlocks = buildLegacyBatchTranslationBlockInputs(previewContext.blocks);
 
         if (blocksToTranslate.length === 0) {
           const message = l(
@@ -676,13 +674,11 @@ export function useReaderLibraryActions({
         const reusableCachedTranslations = selectReusableCachedTranslations(
           cachedTranslationResult,
           blocksToTranslate,
-          legacyBatchSourceBlocks,
         );
         const reusableSnapshotTranslations = selectReusableSessionTranslations(
           currentSnapshot,
           blocksToTranslate,
           targetLanguage,
-          legacyBatchSourceBlocks,
         );
         const resumedTranslations = mergeReaderTranslations(
           reusableCachedTranslations,

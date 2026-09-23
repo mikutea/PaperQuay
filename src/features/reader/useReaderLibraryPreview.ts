@@ -56,12 +56,11 @@ import {
 } from './readerBatchResults';
 import { readTranslationCache } from './readerTranslationCache';
 import {
-  buildLegacyBatchTranslationBlockInputs,
   buildReaderTranslationBlockInputs,
   buildTranslationSourceMetadata,
   selectReusableCachedTranslations,
 } from './readerTranslationSource';
-import { mapPreviewItemsWithConcurrency } from './readerPreviewWork';
+import { mapPreviewItemsWithConcurrency, wasUpdatedDuringPreviewScan } from './readerPreviewWork';
 import type {
   LibraryPreviewSyncPayload,
   ReaderDocumentTranslationSnapshot,
@@ -345,6 +344,7 @@ export function useReaderLibraryPreview({
     }
 
     let cancelled = false;
+    const scanStartedAt = Date.now();
 
     void (async () => {
       const restoredEntries = (
@@ -374,7 +374,6 @@ export function useReaderLibraryPreview({
             const translations = selectReusableCachedTranslations(
               cachedTranslation,
               sourceBlocks,
-              buildLegacyBatchTranslationBlockInputs(preview.blocks),
             );
             const count = countTranslatedBlocks(translations);
 
@@ -418,8 +417,9 @@ export function useReaderLibraryPreview({
               : 0;
 
           if (
-            previousCount >= entry.count &&
-            previousSnapshot?.sourceFingerprint === entry.sourceFingerprint
+            wasUpdatedDuringPreviewScan(previousSnapshot?.updatedAt, scanStartedAt) ||
+            (previousCount >= entry.count &&
+              previousSnapshot?.sourceFingerprint === entry.sourceFingerprint)
           ) {
             continue;
           }
@@ -444,7 +444,10 @@ export function useReaderLibraryPreview({
         for (const entry of restoredEntries) {
           const previousState = current[entry.item.workspaceId] ?? EMPTY_LIBRARY_PREVIEW_STATE;
 
-          if (previousState.operation?.status === 'running') {
+          if (
+            previousState.operation?.status === 'running' ||
+            wasUpdatedDuringPreviewScan(previousState.operation?.updatedAt, scanStartedAt)
+          ) {
             continue;
           }
 
