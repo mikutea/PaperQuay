@@ -55,6 +55,12 @@ import {
   sourceKeyAfterOverviewFailure,
 } from './readerBatchResults';
 import { readTranslationCache } from './readerTranslationCache';
+import {
+  buildLegacyBatchTranslationBlockInputs,
+  buildReaderTranslationBlockInputs,
+  buildTranslationSourceMetadata,
+  selectReusableCachedTranslations,
+} from './readerTranslationSource';
 import { mapPreviewItemsWithConcurrency } from './readerPreviewWork';
 import type {
   LibraryPreviewSyncPayload,
@@ -356,18 +362,32 @@ export function useReaderLibraryPreview({
               return null;
             }
 
-            const count = countTranslatedBlocks(cachedTranslation.translations);
+            const preview = await loadReaderLibraryPreviewBlocks({
+              item,
+              settings,
+              l,
+              noJsonLoadedText,
+              noPdfLoadedText,
+              notLoadedText,
+            });
+            const sourceBlocks = buildReaderTranslationBlockInputs(preview.blocks);
+            const translations = selectReusableCachedTranslations(
+              cachedTranslation,
+              sourceBlocks,
+              buildLegacyBatchTranslationBlockInputs(preview.blocks),
+            );
+            const count = countTranslatedBlocks(translations);
 
             if (count === 0) {
               return null;
             }
 
+            const sourceMetadata = buildTranslationSourceMetadata(sourceBlocks);
             return {
               item,
               count,
-              blockSourceFingerprints: cachedTranslation.blockSourceFingerprints,
-              sourceFingerprint: cachedTranslation.sourceFingerprint,
-              translations: cachedTranslation.translations,
+              ...sourceMetadata,
+              translations,
             };
           },
           () => !cancelled,
@@ -397,7 +417,10 @@ export function useReaderLibraryPreview({
               ? countTranslatedBlocks(previousSnapshot.translations)
               : 0;
 
-          if (previousCount >= entry.count) {
+          if (
+            previousCount >= entry.count &&
+            previousSnapshot?.sourceFingerprint === entry.sourceFingerprint
+          ) {
             continue;
           }
 
@@ -461,8 +484,10 @@ export function useReaderLibraryPreview({
     allKnownItems,
     createPaperTaskState,
     l,
+    noJsonLoadedText,
     noPdfLoadedText,
     notLoadedText,
+    settings.autoLoadSiblingJson,
     settings.mineruCacheDir,
     settings.translationTargetLanguage,
   ]);

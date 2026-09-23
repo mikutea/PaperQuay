@@ -7,7 +7,6 @@ import {
   type MutableRefObject,
 } from "react";
 
-import { extractTranslatableMarkdownFromMineruBlock } from "../../services/mineru";
 import {
   translateBlocksOpenAICompatible,
   translateTextOpenAICompatible,
@@ -37,28 +36,14 @@ import {
   writeTranslationCache,
 } from "./readerTranslationCache";
 import {
+  buildLegacyBatchTranslationBlockInputs,
+  buildReaderTranslationBlockInputs,
   buildTranslationSourceMetadata,
   selectReusableCachedTranslations,
 } from './readerTranslationSource';
 import { tryAcquirePaperTranslation } from './readerTranslationLock';
 
 type LocaleTextFn = (zh: string, en: string) => string;
-
-function buildTranslatableBlockInput(block: PositionedMineruBlock): TranslationBlockInput | null {
-  if (block.contentSourceBlockId) {
-    return null;
-  }
-
-  const text = extractTranslatableMarkdownFromMineruBlock(block).trim();
-
-  return text ? { blockId: block.blockId, text } : null;
-}
-
-function buildTranslatableBlockInputs(blocks: PositionedMineruBlock[]): TranslationBlockInput[] {
-  return blocks
-    .map((block) => buildTranslatableBlockInput(block))
-    .filter((block): block is TranslationBlockInput => Boolean(block));
-}
 
 function translationCacheFailureMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -148,7 +133,11 @@ export function useDocumentTranslation({
   const [selectedExcerptError, setSelectedExcerptError] = useState("");
 
   const translationSourceBlocks = useMemo(
-    () => buildTranslatableBlockInputs(flatBlocks),
+    () => buildReaderTranslationBlockInputs(flatBlocks),
+    [flatBlocks],
+  );
+  const legacyBatchSourceBlocks = useMemo(
+    () => buildLegacyBatchTranslationBlockInputs(flatBlocks),
     [flatBlocks],
   );
   const translationSourceMetadata = useMemo(
@@ -238,6 +227,7 @@ export function useDocumentTranslation({
     const reusableSnapshotTranslations = selectReusableCachedTranslations(
       translationSnapshot,
       translationSourceBlocks,
+      legacyBatchSourceBlocks,
     );
     const incomingCount = countTranslatedBlocks(reusableSnapshotTranslations);
 
@@ -271,6 +261,7 @@ export function useDocumentTranslation({
     translatedCount,
     translationSnapshot,
     translationSourceBlocks,
+    legacyBatchSourceBlocks,
     translationSourceMetadata.sourceFingerprint,
     lRef,
   ]);
@@ -300,6 +291,7 @@ export function useDocumentTranslation({
       const reusableCachedTranslations = selectReusableCachedTranslations(
         cachedTranslationResult,
         translationSourceBlocks,
+        legacyBatchSourceBlocks,
       );
       const restoredCount = countTranslatedBlocks(reusableCachedTranslations);
 
@@ -357,6 +349,7 @@ export function useDocumentTranslation({
     translatedCount,
     tryLoadSavedTranslations,
     translationSourceBlocks,
+    legacyBatchSourceBlocks,
     translationSourceMetadata.sourceFingerprint,
     updateLibraryOperation,
     lRef,
@@ -433,10 +426,15 @@ export function useDocumentTranslation({
       const reusableCachedTranslations = selectReusableCachedTranslations(
         cachedTranslationResult,
         blocksToTranslate,
+        legacyBatchSourceBlocks,
       );
       const reusableSnapshotTranslations =
         translationSnapshot?.targetLanguage === settings.translationTargetLanguage
-          ? selectReusableCachedTranslations(translationSnapshot, blocksToTranslate)
+          ? selectReusableCachedTranslations(
+              translationSnapshot,
+              blocksToTranslate,
+              legacyBatchSourceBlocks,
+            )
           : {};
       const reusableInMemoryTranslations =
         blockTranslationTargetLanguage === settings.translationTargetLanguage &&
@@ -636,6 +634,7 @@ export function useDocumentTranslation({
   }, [
     currentDocument,
     blockTranslationTargetLanguage,
+    legacyBatchSourceBlocks,
     libraryOperationRunning,
     onOpenPreferences,
     saveTranslationCache,
@@ -689,7 +688,7 @@ export function useDocumentTranslation({
         return;
       }
 
-      const blockToTranslate = buildTranslatableBlockInput(block);
+      const blockToTranslate = buildReaderTranslationBlockInputs([block])[0] ?? null;
 
       if (!blockToTranslate) {
         const message = lRef.current(
@@ -743,6 +742,28 @@ export function useDocumentTranslation({
       const sourceMetadata = translationSourceMetadata;
 
       try {
+        // Restore the disk cache before writing one block. Otherwise a quick click while
+        // the reader is still loading can replace every other saved translation.
+        const cachedTranslationResult = await tryLoadSavedTranslations(currentDocument);
+        if (documentTranslationRequestIdRef.current !== requestId) return;
+        const reusableCachedTranslations = selectReusableCachedTranslations(
+          cachedTranslationResult,
+          sourceBlocks,
+          legacyBatchSourceBlocks,
+        );
+        const initialInMemoryTranslations =
+          blockTranslationTargetLanguage === settings.translationTargetLanguage &&
+          blockTranslationSourceFingerprintRef.current === sourceMetadata.sourceFingerprint
+            ? selectReusableCachedTranslations(
+                { ...sourceMetadata, translations: blockTranslationsRef.current },
+                sourceBlocks,
+              )
+            : {};
+        const preservedTranslations = mergeReaderTranslations(
+          reusableCachedTranslations,
+          initialInMemoryTranslations,
+        );
+
         const result = await translateBlocksBestEffort({
           apiKey: translationModelPreset.apiKey.trim(),
           apiMode: translationModelPreset.apiMode,
@@ -773,7 +794,7 @@ export function useDocumentTranslation({
                   )
                 : {};
             const mergedTranslations = mergeReaderTranslations(
-              reusableInMemoryTranslations,
+              mergeReaderTranslations(preservedTranslations, reusableInMemoryTranslations),
               progress.translations,
             );
 
@@ -820,7 +841,7 @@ export function useDocumentTranslation({
               )
             : {};
         const nextTranslations = mergeReaderTranslations(
-          reusableInMemoryTranslations,
+          mergeReaderTranslations(preservedTranslations, reusableInMemoryTranslations),
           result.translations,
         );
         const translatedText = result.translations[block.blockId]?.trim() ?? "";
@@ -928,6 +949,7 @@ export function useDocumentTranslation({
     [
       currentDocument,
       blockTranslationTargetLanguage,
+      legacyBatchSourceBlocks,
       libraryOperationRunning,
       onOpenPreferences,
       saveTranslationCache,
@@ -940,6 +962,7 @@ export function useDocumentTranslation({
       translationModelPreset,
       translationSourceBlocks,
       translationSourceMetadata,
+      tryLoadSavedTranslations,
       updateLibraryOperation,
       lRef,
     ],
