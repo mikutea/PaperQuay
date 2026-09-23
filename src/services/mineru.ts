@@ -1031,30 +1031,68 @@ export function extractTranslatableMarkdownFromMineruBlock(
   return toMarkdownFragment(block, plainText);
 }
 
-function decodeMathTagEntities(content: string): string {
-  const decoded = content.replace(/&(?:#(?:[xX][0-9a-fA-F]{1,6}|\d{1,8})|[A-Za-z][A-Za-z0-9]{0,31});/g, (reference) => {
-    const value = parseEntities(reference);
-    if (value === reference) return reference;
+function mathTagContentToLatex(content: string): string {
+  const openings: number[] = [];
+  const unmatchedBraces = new Set<number>();
+  for (let index = 0; index < content.length; index += 1) {
+    if (content[index] === '\\') {
+      index += 1;
+    } else if (content[index] === '{') {
+      openings.push(index);
+    } else if (content[index] === '}') {
+      if (openings.length) openings.pop();
+      else unmatchedBraces.add(index);
+    }
+  }
+  for (const index of openings) unmatchedBraces.add(index);
 
-    return [...value].map((character) => {
-      switch (character) {
-        case '<': return '\\lt ';
-        case '>': return '\\gt ';
-        case '&': return '\\&';
-        case '%': return '\\%';
-        case '$': return '\\$';
-        case '#': return '\\#';
-        case '_': return '\\_';
-        case '{': return '\\{';
-        case '}': return '\\}';
-        case '\\': return '\\backslash ';
-        case '^': return '\\hat{}';
-        default: return character;
+  const escapeRaw = (raw: string, offset: number) => {
+    let result = '';
+    let escaped = false;
+    for (let index = 0; index < raw.length; index += 1) {
+      const character = raw[index];
+      if (character === '\\' && !escaped) {
+        escaped = true;
+        result += character;
+        continue;
       }
-    }).join('');
-  });
+      if (!escaped && ('%#$&'.includes(character) || unmatchedBraces.has(offset + index))) {
+        result += '\\';
+      }
+      result += character;
+      escaped = false;
+    }
+    return result;
+  };
 
-  return decoded.replace(/(?<!\\)&/g, '\\&');
+  const escapeDecoded = (value: string) => [...value].map((character) => {
+    switch (character) {
+      case '<': return '\\lt ';
+      case '>': return '\\gt ';
+      case '&': return '\\&';
+      case '%': return '\\%';
+      case '$': return '\\$';
+      case '#': return '\\#';
+      case '_': return '\\_';
+      case '{': return '\\{';
+      case '}': return '\\}';
+      case '\\': return '\\backslash ';
+      case '^': return '\\hat{}';
+      default: return character;
+    }
+  }).join('');
+
+  let output = '';
+  let cursor = 0;
+  for (const match of content.matchAll(/&(?:#(?:[xX][0-9a-fA-F]{1,6}|\d{1,8})|[A-Za-z][A-Za-z0-9]{0,31});/g)) {
+    const start = match.index ?? 0;
+    output += escapeRaw(content.slice(cursor, start), cursor);
+    const decoded = parseEntities(match[0]);
+    output += decoded === match[0] ? escapeRaw(match[0], start) : escapeDecoded(decoded);
+    cursor = start + match[0].length;
+  }
+
+  return output + escapeRaw(content.slice(cursor), cursor);
 }
 
 export function displayMathTagsAsLatex(body: string): string | null {
@@ -1063,7 +1101,7 @@ export function displayMathTagsAsLatex(body: string): string | null {
   for (let depth = 0; depth < 32; depth += 1) {
     const next = latex.replace(
       /<\s*(sub|sup)\s*>([^<>]*)<\s*\/\s*\1\s*>/gi,
-      (_match, tag: string, content: string) => `${tag.toLowerCase() === 'sub' ? '_' : '^'}{${decodeMathTagEntities(content)}}`,
+      (_match, tag: string, content: string) => `${tag.toLowerCase() === 'sub' ? '_' : '^'}{${mathTagContentToLatex(content)}}`,
     );
 
     if (next === latex) break;
@@ -1078,7 +1116,7 @@ function mergeRepeatedEquationScripts(body: string): string {
     /([_^])(?:\{([^{}]+)\}|([A-Za-z0-9]+))\s*<\s*(sub|sup)\s*>([^<>]*)<\s*\/\s*\4\s*>/gi,
     (match, script: string, braced: string | undefined, bare: string | undefined, tag: string, content: string) => {
       if ((script === '_' ? 'sub' : 'sup') !== tag.toLowerCase()) return match;
-      return `${script}{${braced ?? bare ?? ''}${decodeMathTagEntities(content)}}`;
+      return `${script}{${braced ?? bare ?? ''}${mathTagContentToLatex(content)}}`;
     },
   );
 }
@@ -1088,7 +1126,20 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
 
   // Markdown code fences are inert, including a closer longer than its opener.
   // Normalize only surrounding text; mid-line runs are not fences.
-  if (/^(?: {0,3}>[ \t]?)*(?: {0,3}(?:(?:[-+*]|\d+[.)]) +)?)(?:`{3,}|~{3,})/m.test(source)) {
+  const unquote = (line: string) => {
+    let cursor = 0;
+    while (cursor < line.length) {
+      let next = cursor;
+      while (next - cursor < 3 && line[next] === ' ') next += 1;
+      if (line[next] !== '>') break;
+      cursor = next + 1;
+      if (line[cursor] === ' ' || line[cursor] === '\t') cursor += 1;
+    }
+    return line.slice(cursor);
+  };
+  const fenceMarker = (line: string) => /^( {0,3}(?:(?:[-+*]|\d+[.)]) +)?)(`{3,}|~{3,})(?:[^\n]*)/.exec(line);
+  const lines = /(?:`{3,}|~{3,})/.test(source) ? source.split(/(?<=\n)/) : [];
+  if (lines.some((line) => fenceMarker(unquote(line)))) {
     const renderOutsideFence = (text: string) => {
       const leading = text.match(/^\s*/)?.[0] ?? '';
       const trailing = text.match(/\s*$/)?.[0] ?? '';
@@ -1097,15 +1148,14 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
         ? leading + displayMarkdownFallback(body, normalizeMarkdownMath(body)) + trailing
         : text;
     };
-    const lines = source.split(/(?<=\n)/);
     let output = '';
     let outside = '';
     let fenceLength = 0;
     let fenceCharacter = '';
     let fenceIndent = 0;
     for (const line of lines) {
-      const quotedContent = line.replace(/^(?: {0,3}>[ \t]?)+/, '');
-      const marker = /^( {0,3}(?:(?:[-+*]|\d+[.)]) +)?)(`{3,}|~{3,})(?:[^\n]*)/.exec(quotedContent);
+      const quotedContent = unquote(line);
+      const marker = fenceMarker(quotedContent);
       if (marker && fenceLength === 0) {
         output += renderOutsideFence(outside);
         outside = '';
@@ -1168,18 +1218,20 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
   };
 
   const codeSpans = (text: string) => {
-    const delimiters = [...text.matchAll(/`+/g)].filter((match) => {
+    const delimiters = [...text.matchAll(/`+/g)].flatMap((match) => {
       let backslashes = 0;
       for (let index = (match.index ?? 0) - 1; text[index] === '\\'; index -= 1) {
         backslashes += 1;
       }
-      return backslashes % 2 === 0;
+      const escaped = backslashes % 2;
+      const length = match[0].length - escaped;
+      return length > 0 ? [{ index: (match.index ?? 0) + escaped, length }] : [];
     });
     const nextSame = new Int32Array(delimiters.length).fill(-1);
     const nextByLength = new Map<number, number>();
 
     for (let index = delimiters.length - 1; index >= 0; index -= 1) {
-      const length = delimiters[index][0].length;
+      const length = delimiters[index].length;
       nextSame[index] = nextByLength.get(length) ?? -1;
       nextByLength.set(length, index);
     }
@@ -1188,7 +1240,7 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
     for (let index = 0; index < delimiters.length; index += 1) {
       const closingIndex = nextSame[index];
       if (closingIndex < 0) continue;
-      spans.push([delimiters[index].index ?? 0, (delimiters[closingIndex].index ?? 0) + delimiters[closingIndex][0].length]);
+      spans.push([delimiters[index].index, delimiters[closingIndex].index + delimiters[closingIndex].length]);
       index = closingIndex;
     }
     return spans;

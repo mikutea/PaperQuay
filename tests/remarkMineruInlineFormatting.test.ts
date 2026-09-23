@@ -433,6 +433,24 @@ test('an unmatched backtick does not hide a later matched code span', () => {
   assert.match(render(markdown), /<code>x_i H&lt;sub&gt;2&lt;\/sub&gt;O<\/code>/);
 });
 
+test('an escaped backtick leaves the rest of its run available for inline code', () => {
+  const source = 'H<sub>3</sub>O and \\``$H<sub>2</sub>O$`';
+  const markdown = displayMarkdownFallback(source, normalizeMarkdownMath(source));
+
+  assert.match(markdown, /\$H<sub>2<\/sub>O\$/);
+  assert.doesNotMatch(markdown, /\$H_\{2\}O\$/);
+  assert.match(render(markdown), /H<sub>3<\/sub>O/);
+  assert.match(render(markdown), /<code>\$H&lt;sub&gt;2&lt;\/sub&gt;O\$<\/code>/);
+});
+
+test('long blockquote prefixes do not backtrack while looking for a fence', () => {
+  const source = `${'>   '.repeat(26)}X_1 H<sup>2</sup>`;
+  const started = performance.now();
+  displayMarkdownFallback(source, normalizeMarkdownMath(source));
+
+  assert.ok(performance.now() - started < 2_000);
+});
+
 test('a completed fence adjacent to a tag does not block a later explicit formula', () => {
   const source = '$x$<sup>2</sup> and $H<sub>2</sub>O$';
   const html = render(source);
@@ -493,4 +511,12 @@ test('math tag entities decode to KaTeX-safe characters', () => {
   assert.equal(displayMathTagsAsLatex('x<sup>&lt;sub&gt;2&lt;/sub&gt;</sup>'), 'x^{\\lt sub\\gt 2\\lt /sub\\gt }');
   assert.doesNotMatch(render('$$x<sup>a&lt;b</sup>$$'), /katex-error/);
   assert.doesNotMatch(render('$$x<sub>a&amp;b</sub>$$'), /katex-error/);
+});
+
+test('raw math-tag metacharacters are escaped without breaking balanced TeX groups', () => {
+  assert.equal(displayMathTagsAsLatex('x<sup>50%</sup>'), 'x^{50\\%}');
+  assert.equal(displayMathTagsAsLatex('x<sub>a{b</sub>'), 'x_{a\\{b}');
+  assert.equal(displayMathTagsAsLatex('x<sup>\\frac{1}{2}</sup>'), 'x^{\\frac{1}{2}}');
+  assert.doesNotMatch(render('$$x<sup>50%</sup>$$'), /katex-error/);
+  assert.doesNotMatch(render('$$x<sub>a{b</sub>$$'), /katex-error/);
 });
