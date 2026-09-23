@@ -321,6 +321,12 @@ test('long mathematical text without inline tags takes the ordinary path', () =>
   assert.equal(normalizeMineruReaderMarkdown(markdown), normalizeMarkdownMath(markdown));
 });
 
+test('tag-free unterminated formula wrappers skip inline-tag wrapper scanning', () => {
+  const markdown = '<div class="formula">'.repeat(400);
+
+  assert.equal(normalizeMineruReaderMarkdown(markdown), normalizeMarkdownMath(markdown));
+});
+
 test('existing scripts on later math terms do not create duplicate KaTeX scripts', () => {
   for (const source of ['$x_i + y_j<sub>2</sub>$', '$x^i + y^j<sup>2</sup>$']) {
     const blocks = flattenMineruPages(parseMineruMarkdownPages(source));
@@ -366,4 +372,30 @@ test('real tilde code fences stay inert while surrounding tags render', () => {
   assert.match(markdown, /~~~text\nH<sub>3<\/sub>O\n~~~/);
   assert.match(render(markdown), /H<sub>2<\/sub>O/);
   assert.match(render(markdown), /CO<sub>2<\/sub>/);
+});
+
+test('an unmatched backtick does not hide a later matched code span', () => {
+  const source = '` unmatched then ``x_i H<sub>2</sub>O``';
+  const blocks = flattenMineruPages(parseMineruMarkdownPages(source));
+  const markdown = buildRenderableBlocks(blocks)[0]?.markdown ?? '';
+
+  assert.match(render(markdown), /<code>x_i H&lt;sub&gt;2&lt;\/sub&gt;O<\/code>/);
+});
+
+test('a completed fence adjacent to a tag does not block a later explicit formula', () => {
+  const source = '$x$<sup>2</sup> and $H<sub>2</sub>O$';
+  const html = render(source);
+
+  assert.match(html, /<sup>2<\/sup>/);
+  assert.doesNotMatch(html, /katex-error|&lt;sub/);
+  assert.match(html, /katex/);
+});
+
+test('equation mathText merges adjacent duplicate script tags for KaTeX', () => {
+  const blocks = flattenMineruPages(parseMineruMarkdownPages('\\sum_i y_j<sub>2</sub>'));
+  const rendered = buildRenderableBlocks(blocks)[0];
+
+  assert.equal(rendered?.block.type, 'equation');
+  assert.match(rendered?.mathText ?? '', /y_\{j2\}/);
+  assert.doesNotMatch(rendered?.mathText ?? '', /<sub>/);
 });

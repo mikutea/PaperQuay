@@ -1030,7 +1030,7 @@ export function extractTranslatableMarkdownFromMineruBlock(
   return toMarkdownFragment(block, plainText);
 }
 
-function displayMathTagsAsLatex(body: string): string | null {
+export function displayMathTagsAsLatex(body: string): string | null {
   let latex = body;
 
   for (let depth = 0; depth < 32; depth += 1) {
@@ -1044,6 +1044,16 @@ function displayMathTagsAsLatex(body: string): string | null {
   }
 
   return /<\s*\/?\s*(?:sup|sub)\s*>/i.test(latex) ? null : latex;
+}
+
+function mergeRepeatedEquationScripts(body: string): string {
+  return body.replace(
+    /([_^])(?:\{([^{}]+)\}|([A-Za-z0-9]+))<\s*(sub|sup)\s*>([^<>]*)<\s*\/\s*\4\s*>/gi,
+    (match, script: string, braced: string | undefined, bare: string | undefined, tag: string, content: string) => {
+      if ((script === '_' ? 'sub' : 'sup') !== tag.toLowerCase()) return match;
+      return `${script}{${braced ?? bare ?? ''}${content}}`;
+    },
+  );
 }
 
 export function displayMarkdownFallback(source: string | undefined, normalized: string): string {
@@ -1122,34 +1132,46 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
     return output + renderInlineMath(segment.slice(cursor));
   };
 
-  const delimiters = [...normalized.matchAll(/`+/g)].filter((match) => {
-    let backslashes = 0;
-    for (let index = (match.index ?? 0) - 1; normalized[index] === '\\'; index -= 1) {
-      backslashes += 1;
-    }
-    return backslashes % 2 === 0;
-  });
-  const nextSame = new Int32Array(delimiters.length).fill(-1);
-  const nextByLength = new Map<number, number>();
+  const codeSpans = (text: string) => {
+    const delimiters = [...text.matchAll(/`+/g)].filter((match) => {
+      let backslashes = 0;
+      for (let index = (match.index ?? 0) - 1; text[index] === '\\'; index -= 1) {
+        backslashes += 1;
+      }
+      return backslashes % 2 === 0;
+    });
+    const nextSame = new Int32Array(delimiters.length).fill(-1);
+    const nextByLength = new Map<number, number>();
 
-  for (let index = delimiters.length - 1; index >= 0; index -= 1) {
-    const length = delimiters[index][0].length;
-    nextSame[index] = nextByLength.get(length) ?? -1;
-    nextByLength.set(length, index);
-  }
+    for (let index = delimiters.length - 1; index >= 0; index -= 1) {
+      const length = delimiters[index][0].length;
+      nextSame[index] = nextByLength.get(length) ?? -1;
+      nextByLength.set(length, index);
+    }
+
+    const spans: Array<[number, number]> = [];
+    for (let index = 0; index < delimiters.length; index += 1) {
+      const closingIndex = nextSame[index];
+      if (closingIndex < 0) continue;
+      spans.push([delimiters[index].index ?? 0, (delimiters[closingIndex].index ?? 0) + delimiters[closingIndex][0].length]);
+      index = closingIndex;
+    }
+    return spans;
+  };
 
   let output = '';
   let cursor = 0;
+  const normalizedSpans = codeSpans(normalized);
+  const sourceSpans = codeSpans(source);
 
-  for (let index = 0; index < delimiters.length; index += 1) {
-    const closingIndex = nextSame[index];
-    if (closingIndex < 0) break;
-    const opening = delimiters[index];
-    const closing = delimiters[closingIndex];
-    output += renderOutsideCode(normalized.slice(cursor, opening.index));
-    output += normalized.slice(opening.index, (closing.index ?? 0) + closing[0].length);
-    cursor = (closing.index ?? 0) + closing[0].length;
-    index = closingIndex;
+  for (let index = 0; index < normalizedSpans.length; index += 1) {
+    const [start, end] = normalizedSpans[index];
+    const sourceSpan = sourceSpans[index];
+    output += renderOutsideCode(normalized.slice(cursor, start));
+    output += sourceSpan
+      ? source.slice(sourceSpan[0], sourceSpan[1])
+      : normalized.slice(start, end);
+    cursor = end;
   }
 
   return output + renderOutsideCode(normalized.slice(cursor));
@@ -1163,7 +1185,7 @@ export function buildRenderableBlocks(
     const plainText = extractTextFromMineruBlock(block);
     const rawMathText = block.type === 'equation' ? extractMathText(block.content) : undefined;
     const mathText = rawMathText
-      ? displayMathTagsAsLatex(rawMathText) ?? rawMathText
+      ? displayMathTagsAsLatex(mergeRepeatedEquationScripts(rawMathText)) ?? rawMathText
       : undefined;
     const tableHtml = block.type === 'table' ? extractTableHtmlFromMineruBlock(block) : undefined;
     const captionText =

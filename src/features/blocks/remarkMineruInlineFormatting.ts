@@ -1,5 +1,5 @@
 import { createElement, isValidElement, type ReactNode } from 'react';
-import { displayMarkdownFallback } from '../../services/mineru.ts';
+import { displayMarkdownFallback, displayMathTagsAsLatex } from '../../services/mineru.ts';
 import { normalizeMarkdownMath } from '../../utils/markdown.ts';
 
 const MATH_HTML_PATTERN =
@@ -98,7 +98,7 @@ interface MarkdownNode {
   type: string;
   value?: string;
   children?: MarkdownNode[];
-  data?: { hName?: string };
+  data?: { hName?: string; hChildren?: MarkdownNode[] };
 }
 
 function readInlineTag(node: MarkdownNode): { name: 'sup' | 'sub'; closing: boolean } | null {
@@ -131,6 +131,15 @@ function renderInlineTags(
     }
 
     const node = children[index];
+    if ((node.type === 'math' || node.type === 'inlineMath') && typeof node.value === 'string') {
+      const latex = displayMathTagsAsLatex(node.value);
+      if (latex !== null) {
+        node.value = latex;
+        if (node.data?.hChildren?.[0]?.type === 'text') {
+          node.data.hChildren[0].value = latex;
+        }
+      }
+    }
     const opening = readInlineTag(node);
 
     if (opening && !opening.closing) {
@@ -178,6 +187,12 @@ function renderInlineTags(
 }
 
 export function normalizeMineruReaderMarkdown(markdown: string): string {
+  // The wrapper matcher can repeatedly scan unterminated formula openers.
+  // Without supported inline tags, the upstream math normalizer is sufficient.
+  if (!/<\s*\/?\s*(?:sup|sub)\s*>/i.test(markdown)) {
+    return normalizeMarkdownMath(markdown);
+  }
+
   const tags: string[] = [];
   const readableMarkdown = markdown.replace(/\uE200/g, `${MARKER_START}${MARKER_START}`);
 
@@ -212,7 +227,9 @@ export function normalizeMineruReaderMarkdown(markdown: string): string {
   if (/<\s*\/?\s*(?:sup|sub)\s*>/i.test(markdown) && /[_^\\$]/.test(markdown)) {
     // A tag immediately after a complete math fence is already outside math;
     // re-normalizing the unprotected source would absorb it into that fence.
-    if (/\$<\s*(?:sup|sub)\s*>/i.test(markdown)) return protectedResult;
+    if (/\$<\s*(?:sup|sub)\s*>/i.test(markdown)) {
+      return protectedResult;
+    }
     return displayMarkdownFallback(markdown, normalizeMarkdownMath(markdown));
   }
 
