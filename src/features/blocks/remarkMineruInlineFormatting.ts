@@ -10,8 +10,13 @@ const MAX_INLINE_NODES = 512;
 const MAX_INLINE_DEPTH = 32;
 const MAX_CAPTION_LENGTH = 16_384;
 const MAX_INLINE_WORK = 20_000;
+const MAX_CAPTION_WORK = 4_096;
 
-export function renderMineruInlineCaption(text: string, depth = 0): ReactNode[] {
+export function renderMineruInlineCaption(
+  text: string,
+  depth = 0,
+  budget: { remaining: number } = { remaining: MAX_CAPTION_WORK },
+): ReactNode[] {
   if (text.length > MAX_CAPTION_LENGTH || depth >= MAX_INLINE_DEPTH) {
     return [text];
   }
@@ -26,6 +31,7 @@ export function renderMineruInlineCaption(text: string, depth = 0): ReactNode[] 
   let cursor = 0;
 
   for (let index = 0; index < matches.length; index += 1) {
+    if (--budget.remaining < 0) return [text];
     const opening = matches[index];
 
     if (/^<\s*\//.test(opening[0])) {
@@ -37,6 +43,7 @@ export function renderMineruInlineCaption(text: string, depth = 0): ReactNode[] 
     let closingIndex = index + 1;
 
     for (; closingIndex < matches.length; closingIndex += 1) {
+      if (--budget.remaining < 0) return [text];
       const candidate = matches[closingIndex];
 
       if (!new RegExp(name, 'i').test(candidate[0])) {
@@ -59,7 +66,7 @@ export function renderMineruInlineCaption(text: string, depth = 0): ReactNode[] 
         ...renderMineruInlineCaption(text.slice(
           (opening.index ?? 0) + opening[0].length,
           closing.index,
-        ), depth + 1),
+        ), depth + 1, budget),
       ));
       cursor = (closing.index ?? 0) + closing[0].length;
       index = closingIndex;

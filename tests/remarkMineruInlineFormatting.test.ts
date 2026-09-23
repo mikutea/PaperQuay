@@ -193,6 +193,14 @@ test('caption links, images, and other HTML remain inert literal text', () => {
   assert.doesNotMatch(html, /<img\b|<a\b/);
 });
 
+test('caption matching has a work limit even at the accepted tag-count boundary', () => {
+  const source = `${'<sup>'.repeat(510)}<sub>2</sub>`;
+  const html = renderToStaticMarkup(createElement('span', null, ...renderMineruInlineCaption(source)));
+
+  assert.match(html, /&lt;sub&gt;2&lt;\/sub&gt;/);
+  assert.doesNotMatch(html, /<sub>2<\/sub>/);
+});
+
 test('reader normalization does not change inline or fenced code examples', () => {
   const inline = '`$H<sub>2</sub>O$`';
   const fenced = '```text\n$H<sub>2</sub>O$\n```';
