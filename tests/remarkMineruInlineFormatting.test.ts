@@ -562,6 +562,15 @@ test('image removal does not substitute its alt code span for later source code'
   assert.doesNotMatch(markdown, /`alt`/);
 });
 
+test('image removal matches the later code span even when alt normalizes identically', () => {
+  const source = 'prefix ![`1 2%`](images/foo.png) `12%` and H<sub>3</sub>O';
+  const blocks = flattenMineruPages(parseMineruMarkdownPages(source));
+  const markdown = buildRenderableBlocks(blocks)[0]?.markdown ?? '';
+
+  assert.match(markdown, /`12%`/);
+  assert.doesNotMatch(markdown, /`1 2%`/);
+});
+
 test('source code is still restored when normalization changes text inside it', () => {
   const source = '`$H<sub>2</sub>O$` and H<sub>3</sub>O';
   const blocks = flattenMineruPages(parseMineruMarkdownPages(source));
@@ -778,6 +787,23 @@ test('an ATX heading cannot supply setext text before a type-seven tag', () => {
   const source = '# Heading\n===\n<x>\n\\(x + H<sub>2</sub>O\\)';
 
   assert.match(normalizeMineruReaderMarkdown(source), /<x>\n\$x \+ H_\{2\}O\$$/);
+});
+
+test('an ordered list starting above one cannot interrupt a paragraph', () => {
+  const source = 'paragraph\n2. continued\n<x>\n\\(x + H<sub>2</sub>O\\)';
+  assert.match(normalizeMineruReaderMarkdown(source), /<x>\n\$x \+ H_\{2\}O\$$/);
+  for (const list of ['2. item\n<x>', 'paragraph\n\n2. item\n<x>']) {
+    const separateBlock = `${list}\n\\(x + H<sub>2</sub>O\\)`;
+    assert.equal(normalizeMineruReaderMarkdown(separateBlock), separateBlock);
+  }
+});
+
+test('Unicode case folding does not shift raw HTML closer offsets', () => {
+  for (const closing of ['</pre>', '</PRE>']) {
+    const source = `<pre>\nİ\n${closing}\n\\(x + H<sub>2</sub>O\\)`;
+    const markdown = normalizeMineruReaderMarkdown(source);
+    assert.match(markdown, /\$x \+ H_\{2\}O\$$/);
+  }
 });
 
 test('a quoted ATX heading cannot supply setext text either', () => {

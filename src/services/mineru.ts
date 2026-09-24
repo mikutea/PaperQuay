@@ -1348,7 +1348,6 @@ function markdownQuoteDepth(line: string): number {
 }
 
 export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: string) => string): string | null {
-  const lower = source.toLowerCase();
   const fencedLines = fencedMarkdownLineStarts(source);
   const blockStarts = /<!--|<\?|<!\[CDATA\[|<![A-Z]|<\/([A-Za-z][A-Za-z0-9-]*)\s*>|<([A-Za-z][A-Za-z0-9-]*)(?=[\s/>]|$)/g;
   const namedBlockTags = new Set('address article aside base basefont blockquote body caption center col colgroup dd details dialog dir div dl dt fieldset figcaption figure footer form frame frameset h1 h2 h3 h4 h5 h6 head header hr html iframe legend li link main menu menuitem nav noframes ol optgroup option output p param search section summary table tbody td tfoot th thead title tr track ul'.split(' '));
@@ -1394,8 +1393,8 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
     ['-->', []], ['?>', []], [']]>', []],
     ['</pre>', []], ['</textarea>', []], ['</script>', []], ['</style>', []],
   ]);
-  for (const match of lower.matchAll(/-->|\?>|\]\]>|<\/(?:pre|textarea|script|style)>/g)) {
-    markerPositions.get(match[0])!.push(match.index ?? 0);
+  for (const match of source.matchAll(/-->|\?>|\]\]>|<\/(?:pre|textarea|script|style)>/gi)) {
+    markerPositions.get(match[0].toLowerCase())!.push(match.index ?? 0);
   }
   const markerCursors = new Map<string, number>();
   const nextMarker = (marker: string, after: number) => {
@@ -1410,8 +1409,8 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
   let found = false;
   let mathWrapperUntil = 0;
   const wrapperClosers = {
-    div: [...lower.matchAll(/<\/div>/g)].map((match) => match.index ?? 0),
-    span: [...lower.matchAll(/<\/span>/g)].map((match) => match.index ?? 0),
+    div: [...source.matchAll(/<\/div>/gi)].map((match) => match.index ?? 0),
+    span: [...source.matchAll(/<\/span>/gi)].map((match) => match.index ?? 0),
   };
   const wrapperCloseCursor = { div: 0, span: 0 };
   const atBlockStart = (lineStart: number, opening: number) => {
@@ -1581,9 +1580,17 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
           && lineCursor > 1
           && markdownQuoteDepth(priorLine) === markdownQuoteDepth(source.slice(lineStarts[lineCursor - 2], lineStarts[lineCursor - 1]).trimEnd())
           && canSupplySetextHeadingText(source.slice(lineStarts[lineCursor - 2], lineStarts[lineCursor - 1]).trimEnd());
+        const beforePrior = lineCursor > 1
+          ? source.slice(lineStarts[lineCursor - 2], lineStarts[lineCursor - 1]).trimEnd() : '';
+        const orderedMarker = /^ {0,3}(\d{1,9})[.)][ \t]+/.exec(priorContent);
+        const listBoundary = /^ {0,3}[-+*][ \t]+/.test(priorContent)
+          || !!orderedMarker && (Number(orderedMarker[1]) === 1 || lineCursor === 1
+            || /^(?: {0,3}>[ \t]?)*[ \t]*$/.test(beforePrior)
+            || markdownQuoteDepth(beforePrior) !== markdownQuoteDepth(priorLine));
         if (priorContent.trim() && cursor !== lineStart &&
             !setextHeading &&
-            !/^ {0,3}(?:#{1,6}(?:[ \t]+|$)|(?:\*(?:[ \t]*\*){2,}|_(?:[ \t]*_){2,}|-(?:[ \t]*-){2,})[ \t]*$|(?:[-+*]|\d{1,9}[.)])[ \t]+|`{3,}|~{3,})/.test(priorContent)) {
+            !listBoundary &&
+            !/^ {0,3}(?:#{1,6}(?:[ \t]+|$)|(?:\*(?:[ \t]*\*){2,}|_(?:[ \t]*_){2,}|-(?:[ \t]*-){2,})[ \t]*$|`{3,}|~{3,})/.test(priorContent)) {
           output += renderOutside(source.slice(cursor, opening)) + source.slice(opening, openingEnd + 1);
           cursor = openingEnd + 1;
           found = true;
@@ -1947,6 +1954,24 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
   // inline delimiters and must still stop at paragraph/block boundaries.
   const normalizedSpans = markdownCodeSpans(normalized, true);
   const sourceSpans = markdownCodeSpans(source, true);
+  // normalizeMarkdownMath removes MinerU image paths and their alt text. Do
+  // not restore a code span from a removed alt into later surviving code.
+  const removedImageAlts: Array<[number, number]> = [];
+  const imagePath = /images\/[A-Za-z0-9._/-]+\.(?:png|jpe?g|webp)\)/iy;
+  let imageCursor = 0;
+  while (imageCursor < source.length) {
+    const opening = source.indexOf('![', imageCursor);
+    if (opening < 0) break;
+    imageCursor = opening + 2;
+    if (opening > 0 && !/\s/.test(source[opening - 1])) continue;
+    const closing = source.indexOf(']', imageCursor);
+    if (closing < 0) break;
+    imageCursor = closing + 1;
+    if (source[imageCursor] !== '(') continue;
+    imagePath.lastIndex = imageCursor + 1;
+    if (imagePath.exec(source)) removedImageAlts.push([opening + 2, closing]);
+  }
+  let imageAltCursor = 0;
   let sourceSpanCursor = 0;
 
   for (const [start, end] of normalizedSpans) {
@@ -1954,6 +1979,9 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
     let restoredSpan = normalizedSpan;
     while (sourceSpanCursor < sourceSpans.length) {
       const [sourceStart, sourceEnd] = sourceSpans[sourceSpanCursor++];
+      while (removedImageAlts[imageAltCursor]?.[1] <= sourceStart) imageAltCursor += 1;
+      if (removedImageAlts[imageAltCursor]?.[0] <= sourceStart
+        && sourceEnd <= removedImageAlts[imageAltCursor][1]) continue;
       const candidate = source.slice(sourceStart, sourceEnd);
       if (candidate === normalizedSpan || normalizeMarkdownMath(candidate) === normalizedSpan) {
         restoredSpan = candidate;
