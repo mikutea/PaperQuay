@@ -60,6 +60,11 @@ test('formula HTML keeps its existing LaTeX conversion', () => {
   assert.match(html, /katex/);
 });
 
+test('a spaced less-than relation inside a math script is not an HTML tag', () => {
+  const latex = displayMathTagsAsLatex('x<sup>a < b > c</sup>');
+  assert.equal(latex, 'x^{a \\lt  b > c}');
+});
+
 test('fragmented LaTeX inside formula HTML is repaired before formula conversion', () => {
   const source = '<span class="math">x \\ in I</span>';
 
@@ -785,6 +790,20 @@ test('only uppercase HTML declarations protect following raw HTML math text', ()
   assert.equal(normalizeMineruReaderMarkdown(uppercase), uppercase);
 });
 
+test('multiline HTML declarations keep formula examples literal', () => {
+  const source = '<!DOCTYPE\n\\(x + H<sub>2</sub>O\\)\n>\n\n\\(y + H<sub>3</sub>O\\)';
+  const markdown = normalizeMineruReaderMarkdown(source);
+  assert.match(markdown, /^<!DOCTYPE\n\\\(x \+ H<sub>2<\/sub>O\\\)\n>/);
+  assert.match(markdown, /\$y \+ H_\{3\}O\$$/);
+});
+
+test('indented code ends the paragraph before a type-seven HTML block', () => {
+  const source = '    code\n<x>\nliteral \\(x + H<sub>2</sub>O\\)\n\noutside \\(y + H<sub>3</sub>O\\)';
+  const markdown = normalizeMineruReaderMarkdown(source);
+  assert.match(markdown, /literal \\\(x \+ H<sub>2<\/sub>O\\\)/);
+  assert.match(markdown, /outside \$y \+ H_\{3\}O\$$/);
+});
+
 test('custom HTML blocks do not interrupt a paragraph', () => {
   for (const source of [
     'paragraph\n<x>\n\\(x + H<sub>2</sub>O\\)',
@@ -896,6 +915,12 @@ test('a fence opened on a list continuation ends at list dedent', () => {
   const markdown = normalizeMineruReaderMarkdown(source);
   assert.match(markdown, /  \$H<sub>3<\/sub>O\$/);
   assert.match(markdown, /outside \$x \+ H_\{2\}O\$$/);
+});
+
+test('a tabbed list marker measures its fence continuation in columns', () => {
+  const source = '-\t```text\n  \\(x + H<sub>2</sub>O\\)';
+  const markdown = normalizeMineruReaderMarkdown(source);
+  assert.match(markdown, /\$x \+ H_\{2\}O\$$/);
 });
 
 test('bare CR line endings keep fenced examples inert and later math active', () => {

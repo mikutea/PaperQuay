@@ -1112,9 +1112,7 @@ function containsOtherHtmlTag(content: string): boolean {
     }
     if (content[index] !== '>' || opening < 0) continue;
     let cursor = opening + 1;
-    while (cursor < index && /\s/.test(content[cursor])) cursor += 1;
     if (content[cursor] === '/') cursor += 1;
-    while (cursor < index && /\s/.test(content[cursor])) cursor += 1;
     if (/[A-Za-z]/.test(content[cursor] ?? '')) {
       cursor += 1;
       while (cursor < index && /[A-Za-z0-9:-]/.test(content[cursor])) cursor += 1;
@@ -1258,6 +1256,14 @@ export function splitMarkdownLinesPreservingEndings(source: string): string[] {
   return lines;
 }
 
+function markdownColumnAt(line: string, end: number, start = 0): number {
+  let column = 0;
+  for (let index = start; index < end; index += 1) {
+    column += line[index] === '\t' ? 4 - column % 4 : 1;
+  }
+  return column;
+}
+
 export function fencedMarkdownLineStarts(source: string): Set<number> {
   const starts = new Set<number>();
   if (!/(?:`{3,}|~{3,})/.test(source)) return starts;
@@ -1283,7 +1289,7 @@ export function fencedMarkdownLineStarts(source: string): Set<number> {
       const ordered = /^(\d{1,9})[.)]/.exec(list[0]);
       if (paragraphContinues && ordered && Number(ordered[1]) !== 1) break;
       cursor = next + list[0].length;
-      containers.push({ kind: 'list', width: cursor - start });
+      containers.push({ kind: 'list', width: markdownColumnAt(line, cursor) - markdownColumnAt(line, start) });
     }
     return { cursor, containers };
   };
@@ -1297,12 +1303,13 @@ export function fencedMarkdownLineStarts(source: string): Set<number> {
         cursor += 1;
         if (line[cursor] === ' ' || line[cursor] === '\t') cursor += 1;
       } else {
-        let width = 0;
-        while (width < container.width && (line[cursor] === ' ' || line[cursor] === '\t')) {
-          width += line[cursor] === '\t' ? 4 : 1;
+        const startColumn = markdownColumnAt(line, cursor);
+        let column = startColumn;
+        while (column - startColumn < container.width && (line[cursor] === ' ' || line[cursor] === '\t')) {
+          column += line[cursor] === '\t' ? 4 - column % 4 : 1;
           cursor += 1;
         }
-        if (width < container.width) return null;
+        if (column - startColumn < container.width) return null;
       }
     }
     return cursor;
@@ -1419,7 +1426,7 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
     const content = line.slice(position);
     const list = /^ {0,3}(?:[-+*]|\d{1,9}[.)])[ \t]+/.exec(content);
     if (list) {
-      const width = list[0].length;
+      const width = markdownColumnAt(content, list[0].length);
       while (activeListWidths.length && activeListWidths[activeListWidths.length - 1] >= width) activeListWidths.pop();
       activeListWidths.push(width);
     } else if (content.trim()) {
@@ -1444,6 +1451,8 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
     markerPositions.get(match[0].toLowerCase())!.push(match.index ?? 0);
   }
   const markerCursors = new Map<string, number>();
+  const declarationEnds = [...source.matchAll(/>/g)].map((match) => match.index ?? 0);
+  let declarationEndCursor = 0;
   const nextMarker = (marker: string, after: number) => {
     const positions = markerPositions.get(marker)!;
     let index = markerCursors.get(marker) ?? 0;
@@ -1487,7 +1496,7 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
       const list = marker.exec(source);
       if (list && position + list[0].length <= opening) {
         position += list[0].length;
-        containers.push({ kind: 'list', width: position - start });
+        containers.push({ kind: 'list', width: markdownColumnAt(source, position, lineStart) - markdownColumnAt(source, start, lineStart) });
         continue;
       }
       if (position !== opening) return null;
@@ -1519,13 +1528,14 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
           position += 1;
           if (source[position] === ' ' || source[position] === '\t') position += 1;
         } else {
-          let width = 0;
-          while (width < container.width && (source[position] === ' ' || source[position] === '\t')) {
-            width += source[position] === '\t' ? 4 : 1;
+          const startColumn = markdownColumnAt(source, position, lineStart);
+          let column = startColumn;
+          while (column - startColumn < container.width && (source[position] === ' ' || source[position] === '\t')) {
+            column += source[position] === '\t' ? 4 - column % 4 : 1;
             position += 1;
           }
           // Blank lines may continue a list's raw HTML block without padding.
-          if (width < container.width && source.slice(position, lineEnd).trim()) {
+          if (column - startColumn < container.width && source.slice(position, lineEnd).trim()) {
             return lineStart;
           }
         }
@@ -1599,7 +1609,12 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
     const openingLineEnd = lineEnds[lineCursor] ?? source.length;
     let openingEnd = specialEnding
       ? opening + match[0].length - 1
-      : findHtmlTagEnd(source, opening, openingLineEnd);
+      : special && match[0].startsWith('<!')
+        ? (() => {
+            while (declarationEnds[declarationEndCursor] < opening) declarationEndCursor += 1;
+            return declarationEnds[declarationEndCursor] ?? -1;
+          })()
+        : findHtmlTagEnd(source, opening, openingLineEnd);
     // Type-one and type-six raw HTML start at the tag name even if `>` is absent.
     if (openingEnd < 0 && (typeOne || namedBlockTags.has(tag))) {
       openingEnd = openingLineEnd - 1;
@@ -1649,10 +1664,13 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
           || !!orderedMarker && (Number(orderedMarker[1]) === 1 || lineCursor === 1
             || /^(?: {0,3}>[ \t]?)*[ \t]*$/.test(beforePrior)
             || markdownQuoteDepth(beforePrior) !== markdownQuoteDepth(priorLine)));
+        const indentedCodeBoundary = /^(?: {4}|\t)/.test(priorContent)
+          && (!beforePrior.trim() || /^(?: {4}|\t)/.test(beforePrior));
         if (priorContent.trim() && cursor !== lineStart &&
             !leftContainer &&
             !setextHeading &&
             !listBoundary &&
+            !indentedCodeBoundary &&
             !/^ {0,3}(?:#{1,6}(?:[ \t]+|$)|(?:\*(?:[ \t]*\*){2,}|_(?:[ \t]*_){2,}|-(?:[ \t]*-){2,})[ \t]*$|`{3,}|~{3,})/.test(priorContent)) {
           output += renderOutside(source.slice(cursor, opening)) + source.slice(opening, openingEnd + 1);
           cursor = openingEnd + 1;
