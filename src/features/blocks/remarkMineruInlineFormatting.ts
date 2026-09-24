@@ -1,6 +1,6 @@
 import { createElement, isValidElement, type ReactNode } from 'react';
 import { parseEntities } from 'parse-entities';
-import { displayMarkdownFallback, displayMathTagsAsLatex, fencedMarkdownLineStarts, mapOutsideLiteralHtmlBlocks } from '../../services/mineru.ts';
+import { displayMarkdownFallback, displayMathTagsAsLatex, fencedMarkdownLineStarts, findHtmlTagEnd, mapOutsideLiteralHtmlBlocks } from '../../services/mineru.ts';
 import { normalizeMarkdownMath } from '../../utils/markdown.ts';
 
 const INLINE_TAG_PATTERN = /<\s*\/?\s*(?:sup|sub)\s*>/gi;
@@ -228,6 +228,11 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
   let hasIndentedCode = false;
   let candidateBlank = true;
   let candidateInCode = false;
+  const endsStandaloneBlock = (content: string) => {
+    const line = content.replace(/\r?\n$/, '').trimEnd();
+    return /^ {0,3}#{1,6}(?:[ \t]+|$)/.test(line)
+      || /^ {0,3}(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*){3,}|=+[ \t]*)$/.test(line);
+  };
   for (const [index, line] of lines.entries()) {
     if (fencedLines[index]) {
       // The line after a fence is a new block boundary, even without a blank line.
@@ -243,7 +248,7 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
       break;
     }
     candidateInCode = false;
-    candidateBlank = blank;
+    candidateBlank = blank || endsStandaloneBlock(content);
   }
   if (hasIndentedCode) {
     const normalizeOutside = (text: string) => {
@@ -279,7 +284,7 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
         outside += line;
         inCode = false;
       }
-      previousBlank = blank;
+      previousBlank = blank || endsStandaloneBlock(content);
     }
     return output + normalizeOutside(outside);
   }
@@ -367,12 +372,12 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
   while (search < readableMarkdown.length) {
     const start = readableMarkdown.indexOf('<', search);
     if (start < 0) break;
-    const end = readableMarkdown.indexOf('>', start + 1);
+    const end = findHtmlTagEnd(readableMarkdown, start);
     if (end < 0) break;
     const opening = readableMarkdown.slice(start, end + 1);
-    const kind = /^<div\s+class=["']formula["'][^>]*>$/i.test(opening)
+    const kind = /^<div\s+class=["']formula["'](?=[\s/>])/i.test(opening)
       ? 'div'
-      : /^<span\s+class=["']math["'][^>]*>$/i.test(opening) ? 'span' : null;
+      : /^<span\s+class=["']math["'](?=[\s/>])/i.test(opening) ? 'span' : null;
 
     if (kind) {
       const positions = closes[kind];
@@ -386,7 +391,7 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
         const safeMath = displayMathTagsAsLatex(inner);
         protectedMarkdown += safeMath === null
           ? wrapper.replace(INLINE_TAG_PATTERN, canonicalizeInlineTag)
-          : `${readableMarkdown.slice(start, end + 1)}${safeMath}${readableMarkdown.slice(closing, closingEnd)}`;
+          : `${kind === 'div' ? '<div class="formula">' : '<span class="math">'}${safeMath}</${kind}>`;
         cursor = closingEnd;
         search = cursor;
         continue;

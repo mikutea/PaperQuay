@@ -1156,6 +1156,21 @@ export function displayMathTagsAsLatex(body: string): string | null {
   return /<\s*\/?\s*(?:sup|sub)\s*>/i.test(latex) ? null : latex;
 }
 
+export function findHtmlTagEnd(source: string, opening: number, limit = source.length): number {
+  let quote = '';
+  for (let index = opening + 1; index < limit; index += 1) {
+    const char = source[index];
+    if (quote) {
+      if (char === quote) quote = '';
+    } else if (char === '"' || char === "'") {
+      quote = char;
+    } else if (char === '>') {
+      return index;
+    }
+  }
+  return -1;
+}
+
 function mergeRepeatedEquationScripts(body: string): string {
   const groupStarts = new Map<number, number>();
   const stack: number[] = [];
@@ -1390,10 +1405,13 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
       : match[0].startsWith('<?') ? '?>'
       : match[0].toLowerCase().startsWith('<![cdata[') ? ']]>' : '';
     const special = !tag;
-    const openingEnd = lower.indexOf('>', opening + match[0].length);
-    if (openingEnd < 0) return output + renderOutside(source.slice(cursor, opening)) + source.slice(opening);
-    const mathWrapper = tag === 'div' && /^<div\s+class=["']formula["']/i.test(source.slice(opening, openingEnd + 1)) ? 'div'
-      : tag === 'span' && /^<span\s+class=["']math["']/i.test(source.slice(opening, openingEnd + 1)) ? 'span' : null;
+    const openingLineEnd = source.indexOf('\n', opening);
+    const openingEnd = specialEnding
+      ? opening + match[0].length - 1
+      : findHtmlTagEnd(source, opening, openingLineEnd < 0 ? source.length : openingLineEnd);
+    if (openingEnd < 0) continue;
+    const mathWrapper = tag === 'div' && /^<div\s+class=["']formula["'](?=[\s/>])/i.test(source.slice(opening, openingEnd + 1)) ? 'div'
+      : tag === 'span' && /^<span\s+class=["']math["'](?=[\s/>])/i.test(source.slice(opening, openingEnd + 1)) ? 'span' : null;
     if (mathWrapper) {
       const positions = wrapperClosers[mathWrapper];
       while (positions[wrapperCloseCursor[mathWrapper]] < openingEnd + 1) wrapperCloseCursor[mathWrapper] += 1;
@@ -1546,9 +1564,11 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
         return isLiteralFence ? fenced : body;
       }
 
-      const duplicateScript = /^([\s\S]*[_^](?:\{[^{}]+\}|[A-Za-z0-9]+))(<\s*(?:sub|sup)\s*>[\s\S]*)$/i.exec(body);
-      if (!isLiteralFence && duplicateScript && /<\s*\/\s*(?:sub|sup)\s*>\s*$/i.test(duplicateScript[2])) {
-        return `$${duplicateScript[1]}$${duplicateScript[2]}`;
+      const duplicateScript = /^([\s\S]*([_^])(?:\{[^{}]+\}|[A-Za-z0-9]+))(<\s*(sub|sup)\s*>[\s\S]*)$/i.exec(body);
+      if (!isLiteralFence && duplicateScript
+        && (duplicateScript[2] === '_' ? 'sub' : 'sup') === duplicateScript[4].toLowerCase()
+        && /<\s*\/\s*(?:sub|sup)\s*>\s*$/i.test(duplicateScript[3])) {
+        return `$${duplicateScript[1]}$${duplicateScript[3]}`;
       }
 
       const latex = displayMathTagsAsLatex(body);

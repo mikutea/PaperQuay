@@ -73,6 +73,13 @@ test('formula HTML preserves supported tag whitespace as LaTeX scripts', () => {
   assert.doesNotMatch(render(source), /katex-error/);
 });
 
+test('formula HTML ignores greater-than characters inside quoted attributes', () => {
+  const source = '<span class="math" title=">">x<sup>2</sup></span>';
+
+  assert.equal(normalizeMineruReaderMarkdown(source), '$x^{2}$');
+  assert.doesNotMatch(render(source), /katex-error|&lt;sup/);
+});
+
 test('formula wrappers escape tag metacharacters before legacy math conversion', () => {
   const source = '<span class="math">x<sup>50%</sup></span>';
 
@@ -911,6 +918,20 @@ test('authored inline math keeps a repeated script tag inside the math fence', (
   assert.doesNotMatch(render(markdown), /katex-error|&lt;sub/);
 });
 
+test('opposite HTML scripts remain inside synthetic math fences', () => {
+  assert.equal(normalizeMineruReaderMarkdown('x_i<sup>2</sup>'), '$x_i^{2}$');
+  assert.equal(normalizeMineruReaderMarkdown('x^i<sub>2</sub>'), '$x^i_{2}$');
+  assert.doesNotMatch(render('x_i<sup>2</sup>'), /katex-error|&lt;sup/);
+});
+
+test('thematic breaks and headings end a block before indented code', () => {
+  for (const prefix of ['---', '# Heading']) {
+    const source = `${prefix}\n    $H<sub>2</sub>O$`;
+    assert.equal(normalizeMineruReaderMarkdown(source), source);
+    assert.match(render(source), /<pre><code>\$H&lt;sub&gt;2&lt;\/sub&gt;O\$\n<\/code><\/pre>/);
+  }
+});
+
 test('multiline math spans reach their existing formula converter', () => {
   const source = '<span class="math">\nx<sup>2</sup>\n</span>';
   const markdown = normalizeMineruReaderMarkdown(source);
@@ -1018,6 +1039,15 @@ test('many inline comments on one line do not rescan the prefix', () => {
 
 test('blank lines in a deeply nested list fence do not rescan every container', () => {
   const source = `${'- '.repeat(4_000)}\x60\x60\x60\n${'\n'.repeat(4_000)}H<sub>2</sub>O`;
+  const started = performance.now();
+  const markdown = normalizeMineruReaderMarkdown(source);
+
+  assert.ok(performance.now() - started < 2_000);
+  assert.match(markdown, /H<sub>2<\/sub>O$/);
+});
+
+test('malformed custom tags do not search every later line for a delimiter', () => {
+  const source = `${'<x\n'.repeat(20_000)}<junk>\n\nH<sub>2</sub>O`;
   const started = performance.now();
   const markdown = normalizeMineruReaderMarkdown(source);
 
