@@ -1100,10 +1100,12 @@ function mathTagContentToLatex(content: string): string {
 }
 
 export function displayMathTagsAsLatex(body: string): string | null {
-  let latex = mergeRepeatedEquationScripts(body);
+  let latex = body;
 
   for (let depth = 0; depth < 32; depth += 1) {
-    const next = latex.replace(
+    // Resolve inner tags first, then merge the now-visible script with any
+    // script already attached to the same TeX atom on the next pass.
+    const next = mergeRepeatedEquationScripts(latex).replace(
       /<\s*(sub|sup)\s*>([^<>]*)<\s*\/\s*\1\s*>/gi,
       (_match, tag: string, content: string) => `${tag.toLowerCase() === 'sub' ? '_' : '^'}{${mathTagContentToLatex(content)}}`,
     );
@@ -1157,12 +1159,35 @@ function mergeRepeatedEquationScripts(body: string): string {
 
 export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: string) => string): string | null {
   const lower = source.toLowerCase();
-  const blockStarts = /<!--|<\?|<!\[CDATA\[|<![A-Z]|<\/([A-Za-z][A-Za-z0-9-]*)\s*>|<([A-Za-z][A-Za-z0-9-]*)\b/gi;
+  const blockStarts = /<!--|<\?|<!\[CDATA\[|<![A-Z]|<\/([A-Za-z][A-Za-z0-9-]*)\s*>|<([A-Za-z][A-Za-z0-9-]*)(?=[\s/>])/gi;
   const namedBlockTags = new Set('address article aside base basefont blockquote body caption center col colgroup dd details dialog dir div dl dt fieldset figcaption figure footer form frame frameset h1 h2 h3 h4 h5 h6 head header hr html iframe legend li link main menu menuitem nav noframes ol optgroup option output p param search section summary table tbody td tfoot th thead title tr track ul'.split(' '));
   const blankLinePattern = /\n[ \t]*\n/g;
   let output = '';
   let cursor = 0;
   let found = false;
+  let formulaUntil = 0;
+  const atBlockStart = (lineStart: number, opening: number) => {
+    if (opening - lineStart > 256) return false;
+    let position = lineStart;
+    while (position < opening) {
+      const start = position;
+      while (position - start < 3 && source[position] === ' ') position += 1;
+      if (source[position] === '>') {
+        position += 1;
+        if (source[position] === ' ' || source[position] === '\t') position += 1;
+        continue;
+      }
+      const marker = /(?:[-+*]|\d{1,9}[.)])[ \t]+/y;
+      marker.lastIndex = position;
+      const list = marker.exec(source);
+      if (list && position + list[0].length <= opening) {
+        position += list[0].length;
+        continue;
+      }
+      return position === opening;
+    }
+    return true;
+  };
   const renderOutside = (text: string) => {
     const leading = text.match(/^\s*/)?.[0] ?? '';
     const trailing = text.match(/\s*$/)?.[0] ?? '';
@@ -1171,9 +1196,9 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
   };
   for (const match of source.matchAll(blockStarts)) {
     const opening = match.index ?? 0;
-    if (opening < cursor) continue;
+    if (opening < cursor || opening < formulaUntil) continue;
     const lineStart = source.lastIndexOf('\n', opening - 1) + 1;
-    if (opening - lineStart > 3 || !/^ *$/.test(source.slice(lineStart, opening))) continue;
+    if (!atBlockStart(lineStart, opening)) continue;
     const tag = (match[2] ?? match[1] ?? '').toLowerCase();
     const specialEnding = match[0].startsWith('<!--') ? '-->'
       : match[0].startsWith('<?') ? '?>'
@@ -1181,7 +1206,11 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
     const special = !tag;
     const openingEnd = lower.indexOf('>', opening + match[0].length);
     if (openingEnd < 0) return output + renderOutside(source.slice(cursor, opening)) + source.slice(opening);
-    if (tag === 'div' && /^<div\s+class=["']formula["']/i.test(source.slice(opening, openingEnd + 1))) continue;
+    if (tag === 'div' && /^<div\s+class=["']formula["']/i.test(source.slice(opening, openingEnd + 1))) {
+      const closing = lower.indexOf('</div>', openingEnd + 1);
+      formulaUntil = closing < 0 ? source.length : closing + '</div>'.length;
+      continue;
+    }
     const typeOne = /^(?:pre|textarea|script|style)$/.test(tag);
     if (tag && !typeOne && !namedBlockTags.has(tag)) {
       const lineEnd = source.indexOf('\n', openingEnd + 1);

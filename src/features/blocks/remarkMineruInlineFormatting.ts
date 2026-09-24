@@ -266,31 +266,33 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
   // A completed math fence followed by a tag must stay outside that formula.
   // Split at each paired tag so this exception cannot force later, unrelated
   // long math tokens through the protected-marker normalizer.
-  if (splitAdjacentFences) {
-    const chunks: string[] = [];
-    const stack: Array<{ name: string; adjacent: boolean }> = [];
-    let cursor = 0;
-    let tagCount = 0;
-    for (const tag of markdown.matchAll(INLINE_TAG_PATTERN)) {
-      if (++tagCount > MAX_INLINE_NODES) return markdown;
-      const name = /(?:sup|sub)/i.exec(tag[0])?.[0].toLowerCase() ?? '';
-      if (/^<\s*\//.test(tag[0])) {
-        const opening = stack[stack.length - 1];
-        if (opening?.name !== name) continue;
-        stack.pop();
-        if (opening.adjacent && stack.length === 0) {
+  const chunks: string[] = [];
+  const stack: Array<{ name: string; adjacent: boolean }> = [];
+  let chunkCursor = 0;
+  let tagCount = 0;
+  let pairedAdjacentFence = false;
+  for (const tag of markdown.matchAll(INLINE_TAG_PATTERN)) {
+    if (++tagCount > MAX_INLINE_NODES) return markdown;
+    const name = /(?:sup|sub)/i.exec(tag[0])?.[0].toLowerCase() ?? '';
+    if (/^<\s*\//.test(tag[0])) {
+      const opening = stack[stack.length - 1];
+      if (opening?.name !== name) continue;
+      stack.pop();
+      if (opening.adjacent && stack.length === 0) {
+        pairedAdjacentFence = true;
+        if (splitAdjacentFences) {
           const end = (tag.index ?? 0) + tag[0].length;
-          chunks.push(markdown.slice(cursor, end));
-          cursor = end;
+          chunks.push(markdown.slice(chunkCursor, end));
+          chunkCursor = end;
         }
-      } else {
-        stack.push({ name, adjacent: stack.length === 0 && markdown[(tag.index ?? 0) - 1] === '$' });
       }
+    } else {
+      stack.push({ name, adjacent: stack.length === 0 && markdown[(tag.index ?? 0) - 1] === '$' });
     }
-    if (chunks.length > 0 && cursor < markdown.length) {
-      chunks.push(markdown.slice(cursor));
-      return chunks.map((chunk) => normalizeMineruReaderMarkdown(chunk, false)).join('');
-    }
+  }
+  if (splitAdjacentFences && chunks.length > 0 && chunkCursor < markdown.length) {
+    chunks.push(markdown.slice(chunkCursor));
+    return chunks.map((chunk) => normalizeMineruReaderMarkdown(chunk, false)).join('');
   }
 
   const canonicalizeInlineTag = (tag: string) => {
@@ -356,7 +358,7 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
 
   // Formula wrappers have already received safe tag conversion. Keep ordinary
   // math on the direct path so long relation tokens never reach marker scans.
-  if (/[_^\\$=<>~]/.test(markdown.replace(INLINE_TAG_PATTERN, '')) && !/\$<\s*(?:sup|sub)\s*>/i.test(markdown)) {
+  if (/[_^\\$=<>~]/.test(markdown.replace(INLINE_TAG_PATTERN, '')) && !pairedAdjacentFence) {
     return displayMarkdownFallback(markdown, normalizeMarkdownMath(restoreInlineTags(protectedMarkdown)));
   }
 

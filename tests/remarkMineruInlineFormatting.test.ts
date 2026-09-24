@@ -788,3 +788,49 @@ test('raw math-tag metacharacters are escaped without breaking balanced TeX grou
   assert.doesNotMatch(render('$$x<sup>50%</sup>$$'), /katex-error/);
   assert.doesNotMatch(render('$$x<sub>a{b</sub>$$'), /katex-error/);
 });
+
+test('multiline formula wrappers keep their closing div available to the math converter', () => {
+  const source = '<div class="formula">\nx<sup>2</sup>\n</div>\n\nH<sub>2</sub>O';
+  const markdown = normalizeMineruReaderMarkdown(source);
+
+  assert.doesNotMatch(markdown, /<sup>/);
+  assert.match(markdown, /x\^\{2\}/);
+  assert.match(markdown, /H<sub>2<\/sub>O/);
+  assert.doesNotMatch(render(source), /katex-error/);
+});
+
+test('nested math tags merge with an existing script before KaTeX rendering', () => {
+  const source = '$$x_i<sub>2<sub>3</sub></sub>$$';
+  const latex = displayMathTagsAsLatex('x_i<sub>2<sub>3</sub></sub>');
+
+  assert.equal(latex, 'x_{i2_{3}}');
+  assert.doesNotMatch(render(source), /katex-error|&lt;sub/);
+});
+
+test('Markdown autolinks do not become literal HTML blocks', () => {
+  for (const link of ['<https://example.com>', '<user@example.com>']) {
+    const source = `${link}\n\n\\(x + H<sub>2</sub>O\\)`;
+    const markdown = normalizeMineruReaderMarkdown(source);
+    assert.match(markdown, /x \+ H_\{2\}O/);
+    assert.doesNotMatch(render(source), /katex-error|&lt;sub/);
+  }
+});
+
+test('raw pre blocks inside blockquotes and lists leave tag examples untouched', () => {
+  for (const prefix of ['> ', '- ']) {
+    const source = `${prefix}<pre>\n${prefix}$H<sub>2</sub>O$\n${prefix}</pre>\n\nH<sub>3</sub>O`;
+    const markdown = normalizeMineruReaderMarkdown(source);
+    assert.match(markdown, /\$H<sub>2<\/sub>O\$/);
+    assert.doesNotMatch(markdown, /H_\{2\}O/);
+    assert.match(render(source), /H<sub>3<\/sub>O/);
+  }
+});
+
+test('an unmatched dollar-adjacent tag cannot slow a later long relation', () => {
+  const source = `$<sup>${'x'.repeat(10_000)}=foo A<sup>2</sup>`;
+  const started = performance.now();
+  const markdown = normalizeMineruReaderMarkdown(source);
+
+  assert.ok(performance.now() - started < 2_000);
+  assert.match(markdown, /A(?:\^\{2\}|<sup>2<\/sup>)/);
+});
