@@ -230,7 +230,8 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
   let candidateInCode = false;
   for (const [index, line] of lines.entries()) {
     if (fencedLines[index]) {
-      candidateBlank = false;
+      // The line after a fence is a new block boundary, even without a blank line.
+      candidateBlank = true;
       candidateInCode = false;
       continue;
     }
@@ -259,7 +260,7 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
       if (fencedLines[index]) {
         outside += line;
         inCode = false;
-        previousBlank = false;
+        previousBlank = true;
         continue;
       }
       const content = unquote(line);

@@ -1060,6 +1060,10 @@ function mathTagContentToLatex(content: string): string {
         result += '{\\char"24}';
         continue;
       }
+      if (character === '<' && !escaped) {
+        result += '\\lt ';
+        continue;
+      }
       if (!escaped && ('%#$&'.includes(character) || unmatchedBraces.has(offset + index))) {
         result += '\\';
       }
@@ -1099,16 +1103,51 @@ function mathTagContentToLatex(content: string): string {
   return output + escapeRaw(content.slice(cursor), cursor);
 }
 
+function replaceInnermostMathTags(body: string): string {
+  const stack: Array<{ name: string; start: number; end: number; nested: boolean }> = [];
+  const replacements: Array<{ start: number; end: number; value: string }> = [];
+
+  for (const tag of body.matchAll(/<\s*(\/?)\s*(sub|sup)\s*>/gi)) {
+    const name = tag[2].toLowerCase();
+    const start = tag.index ?? 0;
+    if (!tag[1]) {
+      if (stack.length) stack[stack.length - 1].nested = true;
+      stack.push({ name, start, end: start + tag[0].length, nested: false });
+      continue;
+    }
+
+    const opening = stack[stack.length - 1];
+    if (!opening || opening.name !== name) continue;
+    stack.pop();
+    if (opening.nested) continue;
+
+    const content = body.slice(opening.end, start);
+    // A less-than relation is text; a different HTML tag is not math markup.
+    if (/<\s*\/?\s*[A-Za-z][A-Za-z0-9:-]*(?:\s+[^<>]*)?\s*\/?>/.test(content)) continue;
+    replacements.push({
+      start: opening.start,
+      end: start + tag[0].length,
+      value: `${name === 'sub' ? '_' : '^'}{${mathTagContentToLatex(content)}}`,
+    });
+  }
+
+  if (!replacements.length) return body;
+  let output = '';
+  let cursor = 0;
+  for (const replacement of replacements) {
+    output += body.slice(cursor, replacement.start) + replacement.value;
+    cursor = replacement.end;
+  }
+  return output + body.slice(cursor);
+}
+
 export function displayMathTagsAsLatex(body: string): string | null {
   let latex = body;
 
   for (let depth = 0; depth < 32; depth += 1) {
     // Resolve inner tags first, then merge the now-visible script with any
     // script already attached to the same TeX atom on the next pass.
-    const next = mergeRepeatedEquationScripts(latex).replace(
-      /<\s*(sub|sup)\s*>([^<]*)<\s*\/\s*\1\s*>/gi,
-      (_match, tag: string, content: string) => `${tag.toLowerCase() === 'sub' ? '_' : '^'}{${mathTagContentToLatex(content)}}`,
-    );
+    const next = replaceInnermostMathTags(mergeRepeatedEquationScripts(latex));
 
     if (next === latex) break;
     latex = next;
@@ -1240,7 +1279,26 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
   const fencedLines = fencedMarkdownLineStarts(source);
   const blockStarts = /<!--|<\?|<!\[CDATA\[|<![A-Z]|<\/([A-Za-z][A-Za-z0-9-]*)\s*>|<([A-Za-z][A-Za-z0-9-]*)(?=[\s/>])/gi;
   const namedBlockTags = new Set('address article aside base basefont blockquote body caption center col colgroup dd details dialog dir div dl dt fieldset figcaption figure footer form frame frameset h1 h2 h3 h4 h5 h6 head header hr html iframe legend li link main menu menuitem nav noframes ol optgroup option output p param search section summary table tbody td tfoot th thead title tr track ul'.split(' '));
-  const blankLinePattern = /\n[ \t]*\n/g;
+  const lineStarts = [0];
+  for (const newline of source.matchAll(/\n/g)) lineStarts.push((newline.index ?? 0) + 1);
+  let lineCursor = 0;
+  const blankLines = [...source.matchAll(/\n(?=[ \t]*\n)/g)].map((match) => match.index ?? 0);
+  let blankCursor = 0;
+  const markerPositions = new Map<string, number[]>([
+    ['-->', []], ['?>', []], [']]>', []],
+    ['</pre>', []], ['</textarea>', []], ['</script>', []], ['</style>', []],
+  ]);
+  for (const match of lower.matchAll(/-->|\?>|\]\]>|<\/(?:pre|textarea|script|style)>/g)) {
+    markerPositions.get(match[0])!.push(match.index ?? 0);
+  }
+  const markerCursors = new Map<string, number>();
+  const nextMarker = (marker: string, after: number) => {
+    const positions = markerPositions.get(marker)!;
+    let index = markerCursors.get(marker) ?? 0;
+    while (positions[index] < after) index += 1;
+    markerCursors.set(marker, index);
+    return positions[index] ?? -1;
+  };
   let output = '';
   let cursor = 0;
   let found = false;
@@ -1275,11 +1333,12 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
     }
     return containers;
   };
-  const containerEnd = (afterOpening: number, containers: Array<{ kind: 'quote' | 'list'; width: number }>) => {
-    if (containers.length === 0) return source.length;
+  const containerEnd = (afterOpening: number, naturalEnd: number, containers: Array<{ kind: 'quote' | 'list'; width: number }>) => {
+    if (containers.length === 0) return naturalEnd;
     let lineStart = source.indexOf('\n', afterOpening);
-    while (lineStart >= 0 && lineStart + 1 < source.length) {
+    while (lineStart >= 0 && lineStart + 1 < naturalEnd) {
       lineStart += 1;
+      const nextLine = source.indexOf('\n', lineStart);
       let position = lineStart;
       for (const container of containers) {
         if (container.kind === 'quote') {
@@ -1294,12 +1353,15 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
             width += source[position] === '\t' ? 4 : 1;
             position += 1;
           }
-          if (width < container.width) return lineStart;
+          // Blank lines may continue a list's raw HTML block without padding.
+          if (width < container.width && source.slice(position, nextLine < 0 ? naturalEnd : nextLine).trim()) {
+            return lineStart;
+          }
         }
       }
-      lineStart = source.indexOf('\n', lineStart);
+      lineStart = nextLine;
     }
-    return source.length;
+    return naturalEnd;
   };
   const renderOutside = (text: string) => {
     const leading = text.match(/^\s*/)?.[0] ?? '';
@@ -1310,7 +1372,8 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
   for (const match of source.matchAll(blockStarts)) {
     const opening = match.index ?? 0;
     if (opening < cursor || opening < mathWrapperUntil) continue;
-    const lineStart = source.lastIndexOf('\n', opening - 1) + 1;
+    while (lineStarts[lineCursor + 1] <= opening) lineCursor += 1;
+    const lineStart = lineStarts[lineCursor];
     if (fencedLines.has(lineStart)) continue;
     const containers = atBlockStart(lineStart, opening);
     if (containers === null) continue;
@@ -1337,15 +1400,15 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
       const lineEnd = source.indexOf('\n', openingEnd + 1);
       if (source.slice(openingEnd + 1, lineEnd < 0 ? source.length : lineEnd).trim()) continue;
     }
-    const closing = typeOne ? lower.indexOf(`</${tag}>`, openingEnd + 1)
-      : specialEnding ? lower.indexOf(specialEnding, opening + match[0].length) : -1;
-    blankLinePattern.lastIndex = openingEnd + 1;
-    const blankLine = typeOne || special ? null : blankLinePattern.exec(source);
-    const enclosingEnd = containerEnd(openingEnd, containers);
-    const blockEnd = typeOne ? (closing < 0 || closing >= enclosingEnd ? enclosingEnd : closing + tag.length + 3)
-      : specialEnding ? (closing < 0 || closing >= enclosingEnd ? enclosingEnd : closing + specialEnding.length)
-      : special ? Math.min(openingEnd + 1, enclosingEnd)
-      : Math.min(blankLine === null ? source.length : blankLine.index + 1, enclosingEnd);
+    const closing = typeOne ? nextMarker(`</${tag}>`, openingEnd + 1)
+      : specialEnding ? nextMarker(specialEnding, opening + match[0].length) : -1;
+    while (blankLines[blankCursor] < openingEnd + 1) blankCursor += 1;
+    const blankLine = typeOne || special ? undefined : blankLines[blankCursor];
+    const naturalEnd = typeOne ? (closing < 0 ? source.length : closing + tag.length + 3)
+      : specialEnding ? (closing < 0 ? source.length : closing + specialEnding.length)
+      : special ? openingEnd + 1
+      : blankLine === undefined ? source.length : blankLine + 1;
+    const blockEnd = containerEnd(openingEnd, naturalEnd, containers);
     output += renderOutside(source.slice(cursor, opening));
     cursor = blockEnd;
     output += source.slice(opening, cursor);

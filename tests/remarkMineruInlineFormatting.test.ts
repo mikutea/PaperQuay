@@ -857,6 +857,14 @@ test('an unclosed pre inside a quote or list ends when its container ends', () =
   }
 });
 
+test('a blank line does not end a list-contained raw pre block', () => {
+  const source = '- <pre>\n\n  $H<sub>2</sub>O$\n  </pre>\n\nH<sub>3</sub>O';
+
+  assert.equal(normalizeMineruReaderMarkdown(source), source);
+  assert.doesNotMatch(normalizeMineruReaderMarkdown(source), /H_\{2\}O/);
+  assert.match(render(source), /H<sub>3<\/sub>O/);
+});
+
 test('an indented line inside a fenced block cannot hide later math', () => {
   const source = '```text\n\n    example\n```\n\\(x + H<sub>2</sub>O\\)';
   const markdown = normalizeMineruReaderMarkdown(source);
@@ -864,6 +872,20 @@ test('an indented line inside a fenced block cannot hide later math', () => {
   assert.match(markdown, /^```text\n\n    example\n```\n/);
   assert.match(markdown, /\$x \+ H_\{2\}O\$/);
   assert.doesNotMatch(render(source), /katex-error|&lt;sub/);
+});
+
+test('indented code immediately after a closing fence stays literal', () => {
+  const source = '```text\nx\n```\n    $H<sub>2</sub>O$';
+
+  assert.equal(normalizeMineruReaderMarkdown(source), source);
+  assert.match(render(source), /<pre><code>\$H&lt;sub&gt;2&lt;\/sub&gt;O\$\n<\/code><\/pre>/);
+});
+
+test('a list item with extra marker padding remains literal indented code', () => {
+  const source = '-     ```\n      $H<sub>2</sub>O$\n      ```';
+
+  assert.equal(normalizeMineruReaderMarkdown(source), source);
+  assert.match(render(source), /<pre><code>```\n\$H&lt;sub&gt;2&lt;\/sub&gt;O\$\n```\n<\/code><\/pre>/);
 });
 
 test('authored inline math keeps a repeated script tag inside the math fence', () => {
@@ -918,6 +940,14 @@ test('math tag bodies may contain a literal greater-than sign', () => {
   assert.doesNotMatch(render('$$x<sup>a>b</sup>$$'), /katex-error|&lt;sup/);
 });
 
+test('math tag bodies distinguish less-than relations from nested HTML', () => {
+  assert.equal(displayMathTagsAsLatex('x<sup>a<2</sup>'), 'x^{a\\lt 2}');
+  assert.equal(displayMathTagsAsLatex('x<sup>a<b</sup>'), 'x^{a\\lt b}');
+  assert.equal(displayMathTagsAsLatex('x<sup>a<sub>i</sub></sup>'), 'x^{a_{i}}');
+  assert.equal(displayMathTagsAsLatex('x<sup>a<i>b</i></sup>'), null);
+  assert.doesNotMatch(render('$$x<sup>a<2</sup>$$'), /katex-error|&lt;sup/);
+});
+
 test('an opening display fence is not mistaken for a completed inline fence', () => {
   const markdown = normalizeMineruReaderMarkdown('$$<sup>2</sup>x$$');
 
@@ -933,4 +963,34 @@ test('many unclosed formula wrappers do not rescan every remaining block', () =>
   normalizeMineruReaderMarkdown(source);
 
   assert.ok(performance.now() - started < 2_000);
+});
+
+test('closed comments in one long blockquote do not rescan the remaining suffix', () => {
+  const source = `${'> <!--keep-->\n'.repeat(14_000)}> H<sub>2</sub>O`;
+  const started = performance.now();
+  const markdown = normalizeMineruReaderMarkdown(source);
+
+  assert.ok(performance.now() - started < 2_000);
+  assert.equal((markdown.match(/<!--keep-->/g) ?? []).length, 14_000);
+  assert.match(markdown, /H<sub>2<\/sub>O/);
+});
+
+test('unclosed HTML in separate quote blocks does not repeatedly search the suffix', () => {
+  for (const opening of ['<!--', '<div>']) {
+    const source = `${`> ${opening}\noutside\n`.repeat(8_000)}H<sub>2</sub>O`;
+    const started = performance.now();
+    const markdown = normalizeMineruReaderMarkdown(source);
+
+    assert.ok(performance.now() - started < 2_000);
+    assert.match(markdown, /H<sub>2<\/sub>O/);
+  }
+});
+
+test('many inline comments on one line do not rescan the prefix', () => {
+  const source = `${'x<!-- -->'.repeat(50_000)}H<sub>2</sub>O`;
+  const started = performance.now();
+  const markdown = normalizeMineruReaderMarkdown(source);
+
+  assert.ok(performance.now() - started < 2_000);
+  assert.match(markdown, /H<sub>2<\/sub>O$/);
 });
