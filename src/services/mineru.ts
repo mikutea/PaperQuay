@@ -1191,6 +1191,35 @@ export function findHtmlTagEnd(source: string, opening: number, limit = source.l
   return -1;
 }
 
+function validHtmlOpening(source: string, start: number, end: number): boolean {
+  let position = start + 1;
+  while (/[A-Za-z0-9-]/.test(source[position] ?? '') && position < end) position += 1;
+  while (position < end) {
+    const spacing = position;
+    while ((source[position] === ' ' || source[position] === '\t') && position < end) position += 1;
+    if (source[position] === '/' && position + 1 === end) return true;
+    if (position === end) return true;
+    if (position === spacing || !/[A-Za-z_:]/.test(source[position] ?? '')) return false;
+    position += 1;
+    while (/[A-Za-z0-9:._-]/.test(source[position] ?? '') && position < end) position += 1;
+    while ((source[position] === ' ' || source[position] === '\t') && position < end) position += 1;
+    if (source[position] !== '=') continue;
+    position += 1;
+    while ((source[position] === ' ' || source[position] === '\t') && position < end) position += 1;
+    const quote = source[position] === '"' || source[position] === "'" ? source[position++] : '';
+    const valueStart = position;
+    if (quote) {
+      while (position < end && source[position] !== quote) position += 1;
+      if (position === end) return false;
+      position += 1;
+    } else {
+      while (position < end && !/[\s"'=<>`]/.test(source[position])) position += 1;
+      if (position === valueStart) return false;
+    }
+  }
+  return position === end;
+}
+
 function mergeRepeatedEquationScripts(body: string): string {
   const unescapedScript = (source: string, position: number) => {
     let backslashes = 0;
@@ -1489,6 +1518,12 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
   const wrapperCloseCursor = { div: 0, span: 0 };
   const atBlockStart = (lineStart: number, opening: number) => {
     if (opening - lineStart > 256) return null;
+    const ordered = /^ {0,3}(\d{1,9})[.)][ \t]+/.exec(source.slice(lineStart, opening));
+    if (ordered && Number(ordered[1]) !== 1 && lineCursor > 0) {
+      const priorStart = lineStarts[lineCursor - 1];
+      const prior = source.slice(priorStart, lineEnds[lineCursor - 1]);
+      if (!fencedLines.has(priorStart) && canSupplySetextHeadingText(prior)) return null;
+    }
     const inheritedWidth = inheritedListWidths[lineCursor];
     if (inheritedWidth && source.slice(lineStart, opening).trim() === '') {
       let indent = 0;
@@ -1571,34 +1606,6 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
     if (/(?:^|\n)(?: {4,}|\t[ \t]*)$/.test(leading)) return transform(text);
     return leading + transform(body) + trailing;
   };
-  const validCustomOpening = (start: number, end: number) => {
-    let position = start + 1;
-    while (/[A-Za-z0-9-]/.test(source[position] ?? '') && position < end) position += 1;
-    while (position < end) {
-      const spacing = position;
-      while ((source[position] === ' ' || source[position] === '\t') && position < end) position += 1;
-      if (source[position] === '/' && position + 1 === end) return true;
-      if (position === end) return true;
-      if (position === spacing || !/[A-Za-z_:]/.test(source[position] ?? '')) return false;
-      position += 1;
-      while (/[A-Za-z0-9:._-]/.test(source[position] ?? '') && position < end) position += 1;
-      while ((source[position] === ' ' || source[position] === '\t') && position < end) position += 1;
-      if (source[position] !== '=') continue;
-      position += 1;
-      while ((source[position] === ' ' || source[position] === '\t') && position < end) position += 1;
-      const quote = source[position] === '"' || source[position] === "'" ? source[position++] : '';
-      const valueStart = position;
-      if (quote) {
-        while (position < end && source[position] !== quote) position += 1;
-        if (position === end) return false;
-        position += 1;
-      } else {
-        while (position < end && !/[\s"'=<>`]/.test(source[position])) position += 1;
-        if (position === valueStart) return false;
-      }
-    }
-    return position === end;
-  };
   const throughLineEnd = (end: number) => {
     let low = 0;
     let high = lineStarts.length;
@@ -1650,7 +1657,7 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
       }
     }
     if (tag && !typeOne && !namedBlockTags.has(tag)) {
-      if (match[2] && !validCustomOpening(opening, openingEnd)) continue;
+      if (match[2] && !validHtmlOpening(source, opening, openingEnd)) continue;
       if (source.slice(openingEnd + 1, openingLineEnd).trim()) continue;
       // CommonMark type-7 tags cannot interrupt an ordinary paragraph.
       if (lineCursor > 0 && !fencedLines.has(lineStarts[lineCursor - 1])) {
@@ -1767,7 +1774,8 @@ export function markdownCodeSpans(text: string, inlineOnly = false): Array<[numb
           // A valid URI autolink or inline HTML tag keeps its backticks inert.
           // An invalid email autolink such as <a@b.c`foo> does not.
           if (/^[A-Za-z][A-Za-z0-9+.-]+:[^\s<>]*$/.test(body)
-            || /^\/?[A-Za-z][A-Za-z0-9-]*(?:[ \t]+[^<>]*)?\/?$/.test(body)) {
+            || /^\/[A-Za-z][A-Za-z0-9-]*[ \t]*$/.test(body)
+            || /^[A-Za-z][A-Za-z0-9-]*/.test(body) && validHtmlOpening(text, index, end)) {
             linkDestinations.push([index + 1, end]);
             index = end;
             continue;
@@ -1861,6 +1869,7 @@ export function markdownCodeSpans(text: string, inlineOnly = false): Array<[numb
     const fencedLines = fencedMarkdownLineStarts(text);
     let previousQuoteDepth = 0;
     let listWidth = 0;
+    let listItemParagraph = false;
     let previousContent = '';
     let previousParagraph: boolean = false;
     let start = 0;
@@ -1878,9 +1887,13 @@ export function markdownCodeSpans(text: string, inlineOnly = false): Array<[numb
           if (line[prefix] === ' ' || line[prefix] === '\t') prefix += 1;
           quoteDepth += 1;
         }
-        if (quoteDepth !== previousQuoteDepth) {
+        const lazyQuoteContinuation = quoteDepth === 0 && previousQuoteDepth > 0
+          && previousParagraph && !!line.trim()
+          && !/^ {0,3}(?:#{1,6}(?:[ \t]+|$)|(?:[-+*]|1[.)])[ \t]+|(?:`{3,}|~{3,}))/.test(line);
+        if (quoteDepth !== previousQuoteDepth && !lazyQuoteContinuation) {
           paragraphBreaks.push(start);
           listWidth = 0;
+          listItemParagraph = false;
           previousParagraph = false;
         }
         previousQuoteDepth = quoteDepth;
@@ -1891,12 +1904,15 @@ export function markdownCodeSpans(text: string, inlineOnly = false): Array<[numb
         if (startsList) {
           paragraphBreaks.push(start);
           listWidth = listMarker![0].length;
+          listItemParagraph = !!content.slice(listWidth).trim();
         } else if (listWidth && content.trim()) {
           let indent = 0;
           while (content[indent] === ' ' || content[indent] === '\t') indent += content[indent] === '\t' ? 4 : 1;
-          if (indent < listWidth) {
+          const newBlock = /^ {0,3}(?:#{1,6}(?:[ \t]+|$)|(?:[-+*]|1[.)])[ \t]+|`{3,}|~{3,})/.test(content);
+          if (indent < listWidth && (!listItemParagraph || newBlock)) {
             paragraphBreaks.push(start);
             listWidth = 0;
+            listItemParagraph = false;
           }
         }
         const standalone = /^ {0,3}#{1,6}(?:[ \t]+|$)/.test(content) ||
@@ -1914,6 +1930,7 @@ export function markdownCodeSpans(text: string, inlineOnly = false): Array<[numb
       } else {
         previousContent = '';
         previousParagraph = false;
+        listItemParagraph = false;
         if (!fencedLines.has(end)) paragraphBreaks.push(end);
       }
       start = end;

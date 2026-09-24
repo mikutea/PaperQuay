@@ -199,6 +199,18 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
   // Four-space and tab-indented CommonMark code blocks are inert, including
   // indentation after a blockquote container prefix.
   const listMarker = /(?:[-+*]|\d{1,9}[.)])(?=[ \t])/y;
+  const thematicBreakAt = (line: string, start: number) => {
+    let index = start;
+    while (index - start < 3 && line[index] === ' ') index += 1;
+    const marker = line[index];
+    if (marker !== '*' && marker !== '-' && marker !== '_') return false;
+    let count = 0;
+    for (; index < line.length && line[index] !== '\r' && line[index] !== '\n'; index += 1) {
+      if (line[index] === marker) count += 1;
+      else if (line[index] !== ' ' && line[index] !== '\t') return false;
+    }
+    return count >= 3;
+  };
   const unquote = (line: string) => {
     let cursor = 0;
     while (cursor < line.length) {
@@ -209,6 +221,7 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
         if (line[cursor] === ' ' || line[cursor] === '\t') cursor += 1;
         continue;
       }
+      if (thematicBreakAt(line, cursor)) break;
       listMarker.lastIndex = next;
       const list = listMarker.exec(line);
       if (!list) break;

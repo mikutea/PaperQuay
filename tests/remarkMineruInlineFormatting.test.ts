@@ -90,6 +90,12 @@ test('a backtick in an inline HTML attribute cannot open a code span', () => {
   assert.match(render(source), /katex/);
 });
 
+test('a malformed inline HTML attribute cannot hide a code delimiter', () => {
+  const source = '<span `foo> \\(x + H<sub>2</sub>O\\) `end`';
+  assert.equal(normalizeMineruReaderMarkdown(source), source);
+  assert.doesNotMatch(render(source), /katex/);
+});
+
 test('an authored math token cannot open a later code span', () => {
   const source = '$a`b$ \\(x + H<sub>2</sub>O\\) `end`';
   assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$/);
@@ -894,6 +900,24 @@ test('a completed GFM table can precede a raw type-seven HTML block', () => {
   assert.doesNotMatch(render(source), /katex/);
 });
 
+test('a noninterrupting ordered marker cannot open a raw HTML pre block', () => {
+  const source = 'paragraph\n2. <pre>\n   \\(x + H<sub>2</sub>O\\)';
+  assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$/);
+  assert.match(render(source), /katex/);
+});
+
+test('a lazy blockquote continuation can close an inline code span', () => {
+  const source = '> `start\n\\(x + H<sub>2</sub>O\\)\nend`';
+  assert.equal(normalizeMineruReaderMarkdown(source), source);
+  assert.doesNotMatch(render(source), /katex/);
+});
+
+test('a spaced thematic break ends before indented literal code', () => {
+  const source = '* * *\n    \\(x + H<sub>2</sub>O\\)';
+  assert.equal(normalizeMineruReaderMarkdown(source), source);
+  assert.doesNotMatch(render(source), /katex/);
+});
+
 test('custom HTML blocks do not interrupt a paragraph', () => {
   for (const source of [
     'paragraph\n<x>\n\\(x + H<sub>2</sub>O\\)',
@@ -1120,7 +1144,8 @@ test('nonblank block starts terminate an inline code span from the prior block',
     '> \x60start\n\\(x + H<sub>2</sub>O\\)\n\x60end',
     '- \x60start\n\\(x + H<sub>2</sub>O\\)\n\x60end',
   ]) {
-    assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$/m);
+    assert.equal(normalizeMineruReaderMarkdown(source), source);
+    assert.doesNotMatch(render(source), /katex/);
   }
   assert.equal(markdownCodeSpans('> \x60start\n> end\x60', true).length, 1);
   assert.equal(markdownCodeSpans('- \x60start\n  end\x60', true).length, 1);
@@ -1239,6 +1264,13 @@ test('many unmatched adjacent tags do not rescan the remaining suffix', () => {
 
 test('malformed HTML prefixes sharing one closer do not rescan the suffix', () => {
   const source = `${'<a'.repeat(16_000)}> H<sub>2</sub>O`;
+  const started = performance.now();
+  normalizeMineruReaderMarkdown(source);
+  assert.ok(performance.now() - started < 2_000);
+});
+
+test('raw-block detection does not rescan malformed tag prefixes', () => {
+  const source = `${'<x '.repeat(32_000)}>\nH<sub>2</sub>O`;
   const started = performance.now();
   normalizeMineruReaderMarkdown(source);
   assert.ok(performance.now() - started < 2_000);
