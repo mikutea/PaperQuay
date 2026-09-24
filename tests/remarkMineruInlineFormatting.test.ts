@@ -78,6 +78,12 @@ test('a URI autolink backtick cannot open an inline code span', () => {
   assert.match(render(source), /katex/);
 });
 
+test('an invalid email autolink does not hide its code delimiter', () => {
+  const source = '<a@b.c`foo> \\(x + H<sub>2</sub>O\\) `end`';
+  assert.equal(normalizeMineruReaderMarkdown(source), source);
+  assert.doesNotMatch(render(source), /katex/);
+});
+
 test('an inline code formula wrapper remains literal', () => {
   const source = '`<span class="math">H<sub>2</sub>O</span>`';
   assert.equal(normalizeMineruReaderMarkdown(source), source);
@@ -356,6 +362,11 @@ test('excessively nested inline tags fall back to literal text without recursion
   assert.match(caption, /&lt;sup&gt;/);
 });
 
+test('the inline-tag work cap still lets an unrelated authored formula render', () => {
+  const source = `${'H<sub>2</sub>O '.repeat(257)}\\(x_i\\)`;
+  assert.match(normalizeMineruReaderMarkdown(source), /\$x_i\$$/);
+});
+
 test('fenced code tags do not exhaust the formatting cap or block later math', () => {
   const literal = 'H<sub>2</sub>O'.repeat(257);
   const source = ['```text', literal, '```', '\\(x_i\\)'].join('\n');
@@ -484,6 +495,12 @@ test('reader normalization leaves four-space and tab-indented code blocks litera
 test('mixed space-tab indentation is a literal code block', () => {
   const source = ' \t\\(x + H<sub>2</sub>O\\)';
   assert.equal(normalizeMineruReaderMarkdown(source), source);
+});
+
+test('a list marker tab is measured from its source column', () => {
+  const source = '- \t\\(x + H<sub>2</sub>O\\)';
+  assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$/);
+  assert.match(render(source), /katex/);
 });
 
 test('bare CR indented code remains literal while later math formats', () => {
@@ -838,6 +855,12 @@ test('indented code ends the paragraph before a type-seven HTML block', () => {
 test('the installed Markdown renderer treats a reference-following indent as a paragraph', () => {
   const source = '[foo]: /url\n    \\(x + H<sub>2</sub>O\\)';
   assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$$/);
+  assert.match(render(source), /katex/);
+});
+
+test('a link reference destination backtick cannot span into later paragraph text', () => {
+  const source = '[foo]: /url`tick\n\\(x + H<sub>2</sub>O\\)\n`end`';
+  assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$/);
   assert.match(render(source), /katex/);
 });
 

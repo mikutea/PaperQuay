@@ -1732,8 +1732,9 @@ export function markdownCodeSpans(text: string, inlineOnly = false): Array<[numb
         while (nextAngleClose >= 0 && nextAngleClose <= index) nextAngleClose = text.indexOf('>', nextAngleClose + 1);
         if (nextAngleClose > index) {
           const body = text.slice(index + 1, nextAngleClose);
-          if (/^[A-Za-z][A-Za-z0-9+.-]+:[^\s<>]*$/.test(body)
-            || /^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(body)) {
+          // An email autolink containing a backtick is invalid CommonMark, so
+          // only URI autolinks can hide a code delimiter here.
+          if (/^[A-Za-z][A-Za-z0-9+.-]+:[^\s<>]*$/.test(body)) {
             linkDestinations.push([index + 1, nextAngleClose]);
             index = nextAngleClose;
             continue;
@@ -1839,14 +1840,15 @@ export function markdownCodeSpans(text: string, inlineOnly = false): Array<[numb
         }
         const standalone = /^ {0,3}#{1,6}(?:[ \t]+|$)/.test(content) ||
             /^ {0,3}(?:\*(?:[ \t]*\*){2,}|_(?:[ \t]*_){2,}|-(?:[ \t]*-){2,})[ \t]*$/.test(content);
+        const referenceDefinition = /^ {0,3}\[[^\]\r\n]+\]:[ \t]*(?:<[^>\r\n]*>|[^ \t\r\n]+)[ \t]*$/.test(content);
         const setext: boolean = /^ {0,3}(?:=+|-{1,2})[ \t]*$/.test(content)
           && canSupplySetextHeadingText(previousContent, previousParagraph);
-        if (standalone) {
+        if (standalone || referenceDefinition) {
           paragraphBreaks.push(start, end);
         } else if (setext) {
           paragraphBreaks.push(end);
         }
-        previousParagraph = !!content.trim() && !startsList && !standalone && !setext;
+        previousParagraph = !!content.trim() && !startsList && !standalone && !referenceDefinition && !setext;
         previousContent = content;
       } else {
         previousContent = '';

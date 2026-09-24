@@ -212,7 +212,19 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
       listMarker.lastIndex = next;
       const list = listMarker.exec(line);
       if (!list) break;
-      cursor = next + list[0].length + 1;
+      const markerEnd = next + list[0].length;
+      let column = 0;
+      for (let index = 0; index < markerEnd; index += 1) {
+        column += line[index] === '\t' ? 4 - column % 4 : 1;
+      }
+      const markerColumn = column;
+      let paddingEnd = markerEnd;
+      while (line[paddingEnd] === ' ' || line[paddingEnd] === '\t') {
+        column += line[paddingEnd] === '\t' ? 4 - column % 4 : 1;
+        paddingEnd += 1;
+        if (column - markerColumn > 4) break;
+      }
+      cursor = column - markerColumn > 4 ? markerEnd + 1 : paddingEnd;
     }
     return line.slice(cursor);
   };
@@ -390,7 +402,11 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
     if (fenceStarts.has(tagLineStart)) continue;
     if (codeSpans[codeSpanCursor]?.[0] <= tagStart && tagStart < codeSpans[codeSpanCursor][1]) continue;
     if (tagInsideHtml(tagStart)) continue;
-    if (++tagCount > MAX_INLINE_NODES) return markdown;
+    if (++tagCount > MAX_INLINE_NODES) {
+      // The cap is also a complexity guard: avoid reprocessing a tag-heavy
+      // string unless it contains an authored parenthesized/display formula.
+      return /\\[([]/.test(markdown) ? normalizeMarkdownMathOutsideCodeSpans(markdown) : markdown;
+    }
     const name = /(?:sup|sub)/i.exec(tag[0])?.[0].toLowerCase() ?? '';
     if (/^<\s*\//.test(tag[0])) {
       const opening = stack[stack.length - 1];
