@@ -798,6 +798,15 @@ test('an ordered list starting above one cannot interrupt a paragraph', () => {
   }
 });
 
+test('a dedented blockquote paragraph cannot block a new raw HTML block', () => {
+  for (const source of [
+    '> paragraph\n<x>\nliteral \\(x + H<sub>2</sub>O\\)',
+    '- paragraph\n  continued\n<x>\nliteral \\(x + H<sub>2</sub>O\\)',
+  ]) {
+    assert.equal(normalizeMineruReaderMarkdown(source), source);
+  }
+});
+
 test('Unicode case folding does not shift raw HTML closer offsets', () => {
   for (const closing of ['</pre>', '</PRE>']) {
     const source = `<pre>\nİ\n${closing}\n\\(x + H<sub>2</sub>O\\)`;
@@ -831,6 +840,16 @@ test('a fence opened on a list continuation ends at list dedent', () => {
   const markdown = normalizeMineruReaderMarkdown(source);
   assert.match(markdown, /  \$H<sub>3<\/sub>O\$/);
   assert.match(markdown, /outside \$x \+ H_\{2\}O\$$/);
+});
+
+test('bare CR line endings keep fenced examples inert and later math active', () => {
+  const source = '```text\rimages/foo.png H<sub>2</sub>O\r```\r\\(x + H<sub>3</sub>O\\)';
+  const markdown = normalizeMineruReaderMarkdown(source);
+  assert.match(markdown, /^```text\rimages\/foo\.png H<sub>2<\/sub>O\r```\r/);
+  assert.match(markdown, /\$x \+ H_\{3\}O\$$/);
+  const html = render(source);
+  assert.match(html, /images\/foo\.png H&lt;sub&gt;2&lt;\/sub&gt;O/);
+  assert.match(html, /class="katex"/);
 });
 
 test('a nested blockquote underline cannot complete an outer setext heading', () => {

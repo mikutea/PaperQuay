@@ -1237,6 +1237,20 @@ function mergeRepeatedEquationScripts(body: string): string {
 
 // Line starts occupied by fenced code. Keep the opening quote/list container
 // with the fence so an unclosed fence stops when that container ends.
+function splitMarkdownLinesPreservingEndings(source: string): string[] {
+  const lines: string[] = [];
+  let start = 0;
+  for (let index = 0; index < source.length; index += 1) {
+    if (source[index] !== '\r' && source[index] !== '\n') continue;
+    const end = source[index] === '\r' && source[index + 1] === '\n' ? index + 2 : index + 1;
+    lines.push(source.slice(start, end));
+    start = end;
+    index = end - 1;
+  }
+  if (start < source.length) lines.push(source.slice(start));
+  return lines;
+}
+
 export function fencedMarkdownLineStarts(source: string): Set<number> {
   const starts = new Set<number>();
   if (!/(?:`{3,}|~{3,})/.test(source)) return starts;
@@ -1290,9 +1304,8 @@ export function fencedMarkdownLineStarts(source: string): Set<number> {
   let activeListContainers: Container[] = [];
   let fenceAllowsBlank = false;
   let lineStart = 0;
-  while (lineStart < source.length) {
-    const newline = source.indexOf('\n', lineStart);
-    const line = source.slice(lineStart, newline < 0 ? source.length : newline).replace(/\r$/, '');
+  for (const rawLine of splitMarkdownLinesPreservingEndings(source)) {
+    const line = rawLine.replace(/\r\n$|[\r\n]$/, '');
     const continued = fenceRun ? continuation(line, fenceContainers) : null;
     if (fenceRun && (continued !== null || (line.trim() === '' && fenceAllowsBlank))) {
       starts.add(lineStart);
@@ -1315,7 +1328,7 @@ export function fencedMarkdownLineStarts(source: string): Set<number> {
         starts.add(lineStart);
       }
     }
-    lineStart = newline < 0 ? source.length : newline + 1;
+    lineStart += rawLine.length;
   }
   return starts;
 }
@@ -1582,12 +1595,15 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
           && canSupplySetextHeadingText(source.slice(lineStarts[lineCursor - 2], lineStarts[lineCursor - 1]).trimEnd());
         const beforePrior = lineCursor > 1
           ? source.slice(lineStarts[lineCursor - 2], lineStarts[lineCursor - 1]).trimEnd() : '';
+        const leftContainer = markdownQuoteDepth(priorLine) > markdownQuoteDepth(source.slice(lineStart, opening))
+          || (inheritedListWidths[lineCursor - 1] ?? 0) > (inheritedListWidths[lineCursor] ?? 0);
         const orderedMarker = /^ {0,3}(\d{1,9})[.)][ \t]+/.exec(priorContent);
         const listBoundary = /^ {0,3}[-+*][ \t]+/.test(priorContent)
           || !!orderedMarker && (Number(orderedMarker[1]) === 1 || lineCursor === 1
             || /^(?: {0,3}>[ \t]?)*[ \t]*$/.test(beforePrior)
             || markdownQuoteDepth(beforePrior) !== markdownQuoteDepth(priorLine));
         if (priorContent.trim() && cursor !== lineStart &&
+            !leftContainer &&
             !setextHeading &&
             !listBoundary &&
             !/^ {0,3}(?:#{1,6}(?:[ \t]+|$)|(?:\*(?:[ \t]*\*){2,}|_(?:[ \t]*_){2,}|-(?:[ \t]*-){2,})[ \t]*$|`{3,}|~{3,})/.test(priorContent)) {
@@ -1820,7 +1836,7 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
     let output = '';
     let outside = '';
     let lineStart = 0;
-    for (const line of source.split(/(?<=\n)/)) {
+    for (const line of splitMarkdownLinesPreservingEndings(source)) {
       if (fencedLines.has(lineStart)) {
         output += renderOutsideFence(outside);
         outside = '';
