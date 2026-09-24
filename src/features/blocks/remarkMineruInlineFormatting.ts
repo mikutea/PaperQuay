@@ -267,24 +267,24 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
   // Split at each paired tag so this exception cannot force later, unrelated
   // long math tokens through the protected-marker normalizer.
   if (splitAdjacentFences) {
-    const adjacency = /\$<\s*(sup|sub)\s*>/gi;
     const chunks: string[] = [];
+    const stack: Array<{ name: string; adjacent: boolean }> = [];
     let cursor = 0;
-    for (const opening of markdown.matchAll(adjacency)) {
-      const start = opening.index ?? 0;
-      if (start < cursor) continue;
-      const tags = /<\s*(\/?)\s*(sup|sub)\s*>/gi;
-      tags.lastIndex = start + opening[0].length;
-      let depth = 1;
-      for (let tag = tags.exec(markdown); tag; tag = tags.exec(markdown)) {
-        if (tag[2].toLowerCase() !== opening[1].toLowerCase()) continue;
-        depth += tag[1] ? -1 : 1;
-        if (depth === 0) {
+    let tagCount = 0;
+    for (const tag of markdown.matchAll(INLINE_TAG_PATTERN)) {
+      if (++tagCount > MAX_INLINE_NODES) return markdown;
+      const name = /(?:sup|sub)/i.exec(tag[0])?.[0].toLowerCase() ?? '';
+      if (/^<\s*\//.test(tag[0])) {
+        const opening = stack[stack.length - 1];
+        if (opening?.name !== name) continue;
+        stack.pop();
+        if (opening.adjacent && stack.length === 0) {
           const end = (tag.index ?? 0) + tag[0].length;
           chunks.push(markdown.slice(cursor, end));
           cursor = end;
-          break;
         }
+      } else {
+        stack.push({ name, adjacent: stack.length === 0 && markdown[(tag.index ?? 0) - 1] === '$' });
       }
     }
     if (chunks.length > 0 && cursor < markdown.length) {

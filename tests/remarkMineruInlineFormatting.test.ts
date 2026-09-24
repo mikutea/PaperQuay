@@ -561,6 +561,15 @@ test('blockquote and list code fences keep tag examples literal', () => {
   }
 });
 
+test('nested list code fences keep tagged math examples literal', () => {
+  const source = '- - ~~~text\n    $H<sub>2</sub>O$\n    ~~~\n\nH<sub>3</sub>O';
+  const markdown = displayMarkdownFallback(source, normalizeMarkdownMath(source));
+
+  assert.match(markdown, /~~~text\n    \$H<sub>2<\/sub>O\$\n    ~~~/);
+  assert.doesNotMatch(markdown, /H_\{2\}O/);
+  assert.match(render(markdown), /H<sub>3<\/sub>O/);
+});
+
 test('an unmatched backtick does not hide a later matched code span', () => {
   const source = '` unmatched then ``x_i H<sub>2</sub>O``';
   const blocks = flattenMineruPages(parseMineruMarkdownPages(source));
@@ -601,13 +610,32 @@ test('literal pre blocks keep tag examples inert while surrounding text formats'
 });
 
 test('literal raw HTML blocks keep tag examples inert', () => {
-  for (const tag of ['textarea', 'script', 'style', 'div']) {
-    const source = `<${tag}>$H<sub>2</sub>O$</${tag}>\n\nH<sub>3</sub>O`;
+  for (const tag of ['textarea', 'script', 'style', 'div', 'iframe', 'custom']) {
+    const inner = tag === 'custom' ? '\n$H<sub>2</sub>O$\n' : '$H<sub>2</sub>O$';
+    const source = `<${tag}>${inner}</${tag}>\n\nH<sub>3</sub>O`;
     for (const markdown of [
       displayMarkdownFallback(source, normalizeMarkdownMath(source)),
       normalizeMineruReaderMarkdown(source),
     ]) {
-      assert.match(markdown, new RegExp(`<${tag}>\\$H<sub>2<\\/sub>O\\$<\\/${tag}>`));
+      assert.match(markdown, new RegExp(`<${tag}>\\s*\\$H<sub>2<\\/sub>O\\$\\s*<\\/${tag}>`));
+      assert.doesNotMatch(markdown, /H_\{2\}O/);
+      assert.match(render(markdown), /H<sub>3<\/sub>O/);
+    }
+  }
+});
+
+test('raw comment, instruction, and CDATA blocks keep tag examples inert', () => {
+  for (const [opening, closing] of [
+    ['<!--', '-->'],
+    ['<?instruction', '?>'],
+    ['<![CDATA[', ']]>'],
+  ]) {
+    const source = `${opening}\n$H<sub>2</sub>O$\n${closing}\n\nH<sub>3</sub>O`;
+    for (const markdown of [
+      displayMarkdownFallback(source, normalizeMarkdownMath(source)),
+      normalizeMineruReaderMarkdown(source),
+    ]) {
+      assert.match(markdown, /\$H<sub>2<\/sub>O\$/);
       assert.doesNotMatch(markdown, /H_\{2\}O/);
       assert.match(render(markdown), /H<sub>3<\/sub>O/);
     }
@@ -658,6 +686,15 @@ test('a completed fence does not force a later long relation through marker norm
   assert.ok(performance.now() - started < 2_000);
   assert.match(markdown, /^\$x\$<sup>2<\/sup>/);
   assert.match(markdown, /A(?:\^\{2\}|<sup>2<\/sup>)/);
+});
+
+test('many unmatched adjacent tags do not rescan the remaining suffix', () => {
+  const source = `${'$<sup>'.repeat(1_000)}${'x'.repeat(40_000)}=foo`;
+  const started = performance.now();
+  const markdown = normalizeMineruReaderMarkdown(source);
+
+  assert.ok(performance.now() - started < 2_000);
+  assert.equal(markdown, source);
 });
 
 test('equation mathText merges adjacent duplicate script tags for KaTeX', () => {
@@ -725,6 +762,14 @@ test('unbraced script merging never consumes a second TeX atom', () => {
 test('unbraced punctuation scripts merge before paired tags', () => {
   assert.equal(displayMathTagsAsLatex('x_+<sub>2</sub>'), 'x_{+2}');
   assert.doesNotMatch(render('$$x_+<sub>2</sub>$$'), /katex-error/);
+});
+
+test('braced control-word scripts keep a boundary before appended letters', () => {
+  const source = String.raw`x_{\alpha}<sub>b</sub>`;
+  const latex = displayMathTagsAsLatex(source);
+
+  assert.equal(latex, String.raw`x_{\alpha b}`);
+  assert.doesNotMatch(render(`$$${source}$$`), /katex-error/);
 });
 
 test('math tag entities decode to KaTeX-safe characters', () => {

@@ -1137,7 +1137,10 @@ function mergeRepeatedEquationScripts(body: string): string {
     const opening = groupStarts.get(closing);
     const script = match[1].toLowerCase() === 'sub' ? '_' : '^';
     if (opening === undefined || opening <= cursor || body[opening - 1] !== script) continue;
-    grouped += body.slice(cursor, opening - 1) + `${script}{${body.slice(opening + 1, closing)}${mathTagContentToLatex(match[2])}}`;
+    const existing = body.slice(opening + 1, closing);
+    const appended = mathTagContentToLatex(match[2]);
+    const delimiter = /\\[A-Za-z]+$/.test(existing) && /^[A-Za-z]/.test(appended) ? ' ' : '';
+    grouped += body.slice(cursor, opening - 1) + `${script}{${existing}${delimiter}${appended}}`;
     cursor = start + match[0].length;
   }
   grouped += body.slice(cursor);
@@ -1154,7 +1157,8 @@ function mergeRepeatedEquationScripts(body: string): string {
 
 export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: string) => string): string | null {
   const lower = source.toLowerCase();
-  const blockTags = /<(pre|textarea|script|style|address|article|aside|blockquote|body|caption|center|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|header|html|legend|li|main|nav|ol|p|section|summary|table|tbody|td|tfoot|th|thead|tr|ul)\b/gi;
+  const blockStarts = /<!--|<\?|<!\[CDATA\[|<![A-Z]|<\/([A-Za-z][A-Za-z0-9-]*)\s*>|<([A-Za-z][A-Za-z0-9-]*)\b/gi;
+  const namedBlockTags = new Set('address article aside base basefont blockquote body caption center col colgroup dd details dialog dir div dl dt fieldset figcaption figure footer form frame frameset h1 h2 h3 h4 h5 h6 head header hr html iframe legend li link main menu menuitem nav noframes ol optgroup option output p param search section summary table tbody td tfoot th thead title tr track ul'.split(' '));
   const blankLinePattern = /\n[ \t]*\n/g;
   let output = '';
   let cursor = 0;
@@ -1165,19 +1169,31 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
     const body = text.slice(leading.length, text.length - trailing.length);
     return body ? leading + transform(body) + trailing : text;
   };
-  for (const match of source.matchAll(blockTags)) {
+  for (const match of source.matchAll(blockStarts)) {
     const opening = match.index ?? 0;
     if (opening < cursor) continue;
-    const tag = match[1].toLowerCase();
+    const lineStart = source.lastIndexOf('\n', opening - 1) + 1;
+    if (opening - lineStart > 3 || !/^ *$/.test(source.slice(lineStart, opening))) continue;
+    const tag = (match[2] ?? match[1] ?? '').toLowerCase();
+    const specialEnding = match[0].startsWith('<!--') ? '-->'
+      : match[0].startsWith('<?') ? '?>'
+      : match[0].toLowerCase().startsWith('<![cdata[') ? ']]>' : '';
+    const special = !tag;
     const openingEnd = lower.indexOf('>', opening + match[0].length);
     if (openingEnd < 0) return output + renderOutside(source.slice(cursor, opening)) + source.slice(opening);
     if (tag === 'div' && /^<div\s+class=["']formula["']/i.test(source.slice(opening, openingEnd + 1))) continue;
     const typeOne = /^(?:pre|textarea|script|style)$/.test(tag);
-    const closing = typeOne ? lower.indexOf(`</${tag}>`, openingEnd + 1) : -1;
+    if (tag && !typeOne && !namedBlockTags.has(tag)) {
+      const lineEnd = source.indexOf('\n', openingEnd + 1);
+      if (source.slice(openingEnd + 1, lineEnd < 0 ? source.length : lineEnd).trim()) continue;
+    }
+    const closing = typeOne ? lower.indexOf(`</${tag}>`, openingEnd + 1)
+      : specialEnding ? lower.indexOf(specialEnding, opening + match[0].length) : -1;
     blankLinePattern.lastIndex = openingEnd + 1;
-    const blankLine = typeOne ? null : blankLinePattern.exec(source);
-    const blockEnd = typeOne
-      ? (closing < 0 ? source.length : closing + tag.length + 3)
+    const blankLine = typeOne || special ? null : blankLinePattern.exec(source);
+    const blockEnd = typeOne ? (closing < 0 ? source.length : closing + tag.length + 3)
+      : specialEnding ? (closing < 0 ? source.length : closing + specialEnding.length)
+      : special ? openingEnd + 1
       : (blankLine === null ? source.length : blankLine.index + 1);
     output += renderOutside(source.slice(cursor, opening));
     cursor = blockEnd;
@@ -1205,7 +1221,20 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
     }
     return { content: line.slice(cursor), depth };
   };
-  const fenceMarker = (line: string) => /^( {0,3})((?:[-+*]|\d+[.)]) +)?(`{3,}|~{3,})(?:[^\n]*)/.exec(line);
+  const fenceMarker = (line: string) => {
+    let cursor = 0;
+    const listPattern = /( {0,3})(?:[-+*]|\d{1,9}[.)])([ \t]+)/y;
+    while (cursor < line.length) {
+      listPattern.lastIndex = cursor;
+      const list = listPattern.exec(line);
+      if (!list) break;
+      cursor += list[0].length - list[2].length + (list[2].length <= 4 ? list[2].length : 1);
+    }
+    const fencePattern = /( {0,3})(`{3,}|~{3,})(?:[^\n]*)/y;
+    fencePattern.lastIndex = cursor;
+    const fence = fencePattern.exec(line);
+    return fence ? { indent: cursor, run: fence[2] } : null;
+  };
   const lines = /(?:`{3,}|~{3,})/.test(source) ? source.split(/(?<=\n)/) : [];
   if (lines.some((line) => fenceMarker(unquote(line).content))) {
     const renderOutsideFence = (text: string) => {
@@ -1233,10 +1262,10 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
       if (marker && fenceLength === 0) {
         output += renderOutsideFence(outside);
         outside = '';
-        fenceIndent = marker[2] ? marker[1].length + marker[2].length : 0;
+        fenceIndent = marker.indent;
         fenceQuoteDepth = quoteDepth;
-        fenceLength = marker[3].length;
-        fenceCharacter = marker[3][0];
+        fenceLength = marker.run.length;
+        fenceCharacter = marker.run[0];
         output += line;
       } else if (fenceLength > 0) {
         output += line;
