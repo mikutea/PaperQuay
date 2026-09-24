@@ -217,6 +217,15 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
     return line.slice(cursor);
   };
   const lines = splitMarkdownLinesPreservingEndings(markdown);
+  const isIndentedCode = (content: string) => {
+    let column = 0;
+    for (const character of content) {
+      if (character !== ' ' && character !== '\t') break;
+      column += character === '\t' ? 4 - column % 4 : 1;
+      if (column >= 4) return true;
+    }
+    return false;
+  };
   // Indentation inside a fenced block is fenced content, not a new indented
   // code block. Keep the fence together before splitting out indented blocks.
   const fenceStarts = fencedMarkdownLineStarts(markdown);
@@ -246,7 +255,7 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
     }
     const content = unquote(line);
     const blank = content.trim() === '';
-    const indented = /^(?: {4}|\t)/.test(content);
+    const indented = isIndentedCode(content);
     if (indented && (candidateBlank || candidateInCode)) {
       hasIndentedCode = true;
       break;
@@ -278,7 +287,7 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
       }
       const content = unquote(line);
       const blank = content.trim() === '';
-      const indented = /^(?: {4}|\t)/.test(content);
+      const indented = isIndentedCode(content);
       if (indented && (previousBlank || inCode)) {
         if (outside) {
           output += normalizeOutside(outside);
@@ -329,6 +338,19 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
   const chunks: string[] = [];
   const stack: Array<{ name: string; adjacent: boolean; start: number }> = [];
   const codeSpans = markdownCodeSpans(markdown, true);
+  const hasUnquotedLessThan = (tag: string) => {
+    let quote = '';
+    for (let index = 1; index < tag.length; index += 1) {
+      if (quote) {
+        if (tag[index] === quote) quote = '';
+      } else if (tag[index] === '"' || tag[index] === "'") {
+        quote = tag[index];
+      } else if (tag[index] === '<') {
+        return true;
+      }
+    }
+    return false;
+  };
   const insideHtmlTag = (text: string) => {
     const ranges: Array<[number, number]> = [];
     for (let start = text.indexOf('<'); start >= 0;) {
@@ -338,6 +360,10 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
       }
       const end = findHtmlTagEnd(text, start);
       if (end < 0) break;
+      if (hasUnquotedLessThan(text.slice(start, end + 1))) {
+        start = text.indexOf('<', start + 1);
+        continue;
+      }
       ranges.push([start, end + 1]);
       start = text.indexOf('<', end + 1);
     }
@@ -394,6 +420,7 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
   };
   const tags: string[] = [];
   const readableMarkdown = markdown.replace(/\{PQInlineTag/g, `${MARKER_START}${MARKER_START}`);
+  const readableCodeSpans = markdownCodeSpans(readableMarkdown, true);
 
   const protectAttributeTags = (text: string) => {
     let protectedAttributes = '';
@@ -407,6 +434,10 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
       const end = findHtmlTagEnd(text, start);
       if (end < 0) break;
       const opening = text.slice(start, end + 1);
+      if (hasUnquotedLessThan(opening)) {
+        start = text.indexOf('<', start + 1);
+        continue;
+      }
       const named = /^<(\/?)([A-Za-z][A-Za-z0-9-]*)\b/.exec(opening);
       const name = named?.[2].toLowerCase();
       const depth = name ? openAttributeTags.get(name) ?? 0 : 0;
@@ -452,11 +483,17 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
   };
   const closeCursor = { div: 0, span: 0 };
   let search = 0;
+  let wrapperCodeCursor = 0;
   while (search < readableMarkdown.length) {
     const start = readableMarkdown.indexOf('<', search);
     if (start < 0) break;
     const end = findHtmlTagEnd(readableMarkdown, start);
     if (end < 0) break;
+    while (readableCodeSpans[wrapperCodeCursor]?.[1] <= start) wrapperCodeCursor += 1;
+    if (readableCodeSpans[wrapperCodeCursor]?.[0] <= start && start < readableCodeSpans[wrapperCodeCursor][1]) {
+      search = end + 1;
+      continue;
+    }
     const opening = readableMarkdown.slice(start, end + 1);
     const kind = /^<div\s+class=["']formula["'](?=[\s/>])/i.test(opening)
       ? 'div'

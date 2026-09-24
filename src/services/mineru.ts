@@ -1723,10 +1723,23 @@ function isLineLevelCodePrefix(prefix: string): boolean {
 
 export function markdownCodeSpans(text: string, inlineOnly = false): Array<[number, number]> {
   const linkDestinations: Array<[number, number]> = [];
-  if (inlineOnly) {
+  if (inlineOnly && text.includes('`')) {
     let labelStart = -1;
+    let nextAngleClose = text.indexOf('>');
     for (let index = 0; index < text.length; index += 1) {
       if (text[index] === '\\') { index += 1; continue; }
+      if (text[index] === '<') {
+        while (nextAngleClose >= 0 && nextAngleClose <= index) nextAngleClose = text.indexOf('>', nextAngleClose + 1);
+        if (nextAngleClose > index) {
+          const body = text.slice(index + 1, nextAngleClose);
+          if (/^[A-Za-z][A-Za-z0-9+.-]+:[^\s<>]*$/.test(body)
+            || /^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(body)) {
+            linkDestinations.push([index + 1, nextAngleClose]);
+            index = nextAngleClose;
+            continue;
+          }
+        }
+      }
       if (text[index] === '[') { labelStart = index; continue; }
       if (text[index] === ']' && text[index + 1] === '(' && labelStart >= 0) {
         let depth = 1;

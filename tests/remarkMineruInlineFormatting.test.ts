@@ -72,6 +72,18 @@ test('a link destination backtick cannot open an inline code span', () => {
   assert.match(render('[`x`](https://e/foo) H<sub>2</sub>O'), /<code>x<\/code>/);
 });
 
+test('a URI autolink backtick cannot open an inline code span', () => {
+  const source = '<https://e/`foo> \\(x + H<sub>2</sub>O\\) `end`';
+  assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$/);
+  assert.match(render(source), /katex/);
+});
+
+test('an inline code formula wrapper remains literal', () => {
+  const source = '`<span class="math">H<sub>2</sub>O</span>`';
+  assert.equal(normalizeMineruReaderMarkdown(source), source);
+  assert.match(render(source), /<code>&lt;span class=&quot;math&quot;&gt;H&lt;sub&gt;2&lt;\/sub&gt;O&lt;\/span&gt;<\/code>/);
+});
+
 test('superscript text inside a quoted HTML attribute stays inert', () => {
   const source = '<span title="H<sub>2</sub>O">x</span>';
   assert.equal(normalizeMineruReaderMarkdown(source), source);
@@ -467,6 +479,11 @@ test('reader normalization leaves four-space and tab-indented code blocks litera
     assert.match(render(markdown), /<pre><code>\$H&lt;sub&gt;2&lt;\/sub&gt;O\$\n<\/code><\/pre>/);
     assert.match(render(markdown), /H<sub>3<\/sub>O/);
   }
+});
+
+test('mixed space-tab indentation is a literal code block', () => {
+  const source = ' \t\\(x + H<sub>2</sub>O\\)';
+  assert.equal(normalizeMineruReaderMarkdown(source), source);
 });
 
 test('bare CR indented code remains literal while later math formats', () => {
