@@ -463,6 +463,11 @@ test('bare CR paragraph breaks stop code spans before later formulae', () => {
   assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$/);
 });
 
+test('bare CR headings separate unmatched inline code spans', () => {
+  const source = '`start\r# \\(x + H<sub>2</sub>O\\)\r`end';
+  assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$/);
+});
+
 test('reader normalization recognizes indented code after blockquote prefixes', () => {
   const source = '>     $H<sub>2</sub>O$';
   const markdown = normalizeMineruReaderMarkdown(source);
@@ -831,6 +836,16 @@ test('entering a blockquote ends the outside paragraph before raw HTML', () => {
   assert.equal(normalizeMineruReaderMarkdown(source), source);
 });
 
+test('a type-seven tag cannot interrupt an active list paragraph', () => {
+  const source = '- item\n  <x>\n  literal \\(x + H<sub>2</sub>O\\)';
+  assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$$/);
+});
+
+test('a non-one ordered continuation may become setext heading text', () => {
+  const source = 'paragraph\n2. continued\n===\n<x>\n\\(x + H<sub>2</sub>O\\)';
+  assert.equal(normalizeMineruReaderMarkdown(source), source);
+});
+
 test('a slash-delimited pseudo-tag cannot open a type-six raw HTML block', () => {
   const source = '<div/foo>\n\\(x + H<sub>2</sub>O\\)';
   assert.match(renderToStaticMarkup(createElement(ReactMarkdown, null, source)), /^<p>&lt;div\/foo&gt;/);
@@ -960,6 +975,11 @@ test('an unclosed raw HTML block inside a list ends when the list dedents', () =
   const source = '- item\n  <pre>\n  literal\noutside \\(x + H<sub>2</sub>O\\)';
 
   assert.match(normalizeMineruReaderMarkdown(source), /outside \$x \+ H_\{2\}O\$$/);
+});
+
+test('indented code within a list cannot start a raw HTML block', () => {
+  const source = '- item\n\n      <pre>\n  \\(x + H<sub>2</sub>O\\)';
+  assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$$/);
 });
 
 test('an unclosed raw HTML block in a quoted list ends at list dedent', () => {
@@ -1171,6 +1191,11 @@ test('escaped TeX script markers do not merge with tagged scripts', () => {
 test('GFM table cells cannot share one inline code span', () => {
   const source = '| value |\n| --- |\n| `start |\n| \\(x + H<sub>2</sub>O\\) |\n| `end |';
   assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$/);
+});
+
+test('noninterrupting ordered marker does not split a multiline code span', () => {
+  const source = '`start\n2. \\(x + H<sub>2</sub>O\\)\n`end';
+  assert.equal(normalizeMineruReaderMarkdown(source), source);
 });
 
 test('unbraced punctuation scripts merge before paired tags', () => {

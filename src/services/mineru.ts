@@ -1360,7 +1360,7 @@ export function fencedMarkdownLineStarts(source: string): Set<number> {
   return starts;
 }
 
-function canSupplySetextHeadingText(line: string): boolean {
+function canSupplySetextHeadingText(line: string, continuedParagraph = false): boolean {
   let position = 0;
   while (position < line.length) {
     let marker = position;
@@ -1370,7 +1370,9 @@ function canSupplySetextHeadingText(line: string): boolean {
     if (line[position] === ' ' || line[position] === '\t') position += 1;
   }
   const content = line.slice(position).trimEnd();
-  return !!content.trim() && !/^ {0,3}(?:#{1,6}(?:[ \t]+|$)|(?:[-*_][ \t]*){3,}[ \t]*$|(?:[-+*]|\d{1,9}[.)])[ \t]+|`{3,}|~{3,})/.test(content);
+  const ordered = /^ {0,3}(\d{1,9})[.)][ \t]+/.exec(content);
+  return !!content.trim() && !/^ {0,3}(?:#{1,6}(?:[ \t]+|$)|(?:[-*_][ \t]*){3,}[ \t]*$|[-+*][ \t]+|`{3,}|~{3,})/.test(content)
+    && (!ordered || continuedParagraph && Number(ordered[1]) !== 1);
 }
 
 function markdownQuoteDepth(line: string): number {
@@ -1462,6 +1464,11 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
     if (opening - lineStart > 256) return null;
     const inheritedWidth = inheritedListWidths[lineCursor];
     if (inheritedWidth && source.slice(lineStart, opening).trim() === '') {
+      let indent = 0;
+      for (let position = lineStart; position < opening; position += 1) {
+        indent += source[position] === '\t' ? 4 - indent % 4 : 1;
+      }
+      if (indent >= inheritedWidth + 4) return null;
       return [{ kind: 'list' as const, width: inheritedWidth }];
     }
     const containers: Array<{ kind: 'quote' | 'list'; width: number }> = [];
@@ -1624,19 +1631,24 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
           if (priorLine[position] === ' ' || priorLine[position] === '\t') position += 1;
         }
         const priorContent = priorLine.slice(position);
-        const setextHeading = /^ {0,3}(?:=+|-{1,2})[ \t]*$/.test(priorContent)
-          && lineCursor > 1
-          && markdownQuoteDepth(priorLine) === markdownQuoteDepth(source.slice(lineStarts[lineCursor - 2], lineStarts[lineCursor - 1]).trimEnd())
-          && canSupplySetextHeadingText(source.slice(lineStarts[lineCursor - 2], lineStarts[lineCursor - 1]).trimEnd());
         const beforePrior = lineCursor > 1
           ? source.slice(lineStarts[lineCursor - 2], lineStarts[lineCursor - 1]).trimEnd() : '';
+        const beforeBeforePrior = lineCursor > 2
+          ? source.slice(lineStarts[lineCursor - 3], lineStarts[lineCursor - 2]).trimEnd() : '';
+        const continuedParagraph = !!beforeBeforePrior.trim()
+          && markdownQuoteDepth(beforeBeforePrior) === markdownQuoteDepth(beforePrior)
+          && canSupplySetextHeadingText(beforeBeforePrior);
+        const setextHeading = /^ {0,3}(?:=+|-{1,2})[ \t]*$/.test(priorContent)
+          && lineCursor > 1
+          && markdownQuoteDepth(priorLine) === markdownQuoteDepth(beforePrior)
+          && canSupplySetextHeadingText(beforePrior, continuedParagraph);
         const leftContainer = markdownQuoteDepth(priorLine) !== markdownQuoteDepth(source.slice(lineStart, opening))
           || (inheritedListWidths[lineCursor - 1] ?? 0) > (inheritedListWidths[lineCursor] ?? 0);
         const orderedMarker = /^ {0,3}(\d{1,9})[.)][ \t]+/.exec(priorContent);
-        const listBoundary = /^ {0,3}[-+*][ \t]+/.test(priorContent)
+        const listBoundary = !(inheritedListWidths[lineCursor] ?? 0) && (/^ {0,3}[-+*][ \t]+/.test(priorContent)
           || !!orderedMarker && (Number(orderedMarker[1]) === 1 || lineCursor === 1
             || /^(?: {0,3}>[ \t]?)*[ \t]*$/.test(beforePrior)
-            || markdownQuoteDepth(beforePrior) !== markdownQuoteDepth(priorLine));
+            || markdownQuoteDepth(beforePrior) !== markdownQuoteDepth(priorLine)));
         if (priorContent.trim() && cursor !== lineStart &&
             !leftContainer &&
             !setextHeading &&
@@ -1732,10 +1744,11 @@ export function markdownCodeSpans(text: string, inlineOnly = false): Array<[numb
     let previousQuoteDepth = 0;
     let listWidth = 0;
     let previousContent = '';
-    for (let start = 0; start < text.length;) {
-      const newline = text.indexOf('\n', start);
-      const end = newline < 0 ? text.length : newline + 1;
-      const line = text.slice(start, newline < 0 ? end : newline).replace(/\r$/, '');
+    let previousParagraph: boolean = false;
+    let start = 0;
+    for (const rawLine of splitMarkdownLinesPreservingEndings(text)) {
+      const end = start + rawLine.length;
+      const line = rawLine.replace(/\r\n$|[\r\n]$/, '');
       if (!fencedLines.has(start)) {
         let prefix = 0;
         let quoteDepth = 0;
@@ -1750,13 +1763,16 @@ export function markdownCodeSpans(text: string, inlineOnly = false): Array<[numb
         if (quoteDepth !== previousQuoteDepth) {
           paragraphBreaks.push(start);
           listWidth = 0;
+          previousParagraph = false;
         }
         previousQuoteDepth = quoteDepth;
         const content = line.slice(prefix);
         const listMarker = /^ {0,3}(?:[-+*]|\d{1,9}[.)])[ \t]+/.exec(content);
-        if (listMarker) {
+        const ordered = /^ {0,3}(\d{1,9})[.)][ \t]+/.exec(content);
+        const startsList: boolean = !!listMarker && !(ordered && Number(ordered[1]) !== 1 && previousParagraph);
+        if (startsList) {
           paragraphBreaks.push(start);
-          listWidth = listMarker[0].length;
+          listWidth = listMarker![0].length;
         } else if (listWidth && content.trim()) {
           let indent = 0;
           while (content[indent] === ' ' || content[indent] === '\t') indent += content[indent] === '\t' ? 4 : 1;
@@ -1765,16 +1781,20 @@ export function markdownCodeSpans(text: string, inlineOnly = false): Array<[numb
             listWidth = 0;
           }
         }
-        if (/^ {0,3}#{1,6}(?:[ \t]+|$)/.test(content) ||
-            /^ {0,3}(?:\*(?:[ \t]*\*){2,}|_(?:[ \t]*_){2,}|-(?:[ \t]*-){2,})[ \t]*$/.test(content)) {
+        const standalone = /^ {0,3}#{1,6}(?:[ \t]+|$)/.test(content) ||
+            /^ {0,3}(?:\*(?:[ \t]*\*){2,}|_(?:[ \t]*_){2,}|-(?:[ \t]*-){2,})[ \t]*$/.test(content);
+        const setext: boolean = /^ {0,3}(?:=+|-{1,2})[ \t]*$/.test(content)
+          && canSupplySetextHeadingText(previousContent, previousParagraph);
+        if (standalone) {
           paragraphBreaks.push(start, end);
-        } else if (/^ {0,3}(?:=+|-{1,2})[ \t]*$/.test(content)
-          && canSupplySetextHeadingText(previousContent)) {
+        } else if (setext) {
           paragraphBreaks.push(end);
         }
+        previousParagraph = !!content.trim() && !startsList && !standalone && !setext;
         previousContent = content;
       } else {
         previousContent = '';
+        previousParagraph = false;
         if (!fencedLines.has(end)) paragraphBreaks.push(end);
       }
       start = end;
@@ -1784,8 +1804,12 @@ export function markdownCodeSpans(text: string, inlineOnly = false): Array<[numb
   const blockLineStarts = new Set(paragraphBreaks);
   let breakCursor = 0;
   let paragraph = 0;
+  const delimiterLineStarts = [0];
+  for (const rawLine of splitMarkdownLinesPreservingEndings(text)) {
+    delimiterLineStarts.push(delimiterLineStarts[delimiterLineStarts.length - 1] + rawLine.length);
+  }
   let lineStart = 0;
-  let lineEnd = text.indexOf('\n');
+  let delimiterLineCursor = 0;
   let lastDelimiterLine = -1;
   const delimiters = [...text.matchAll(/`+/g)].flatMap((match) => {
     const index = match.index ?? 0;
@@ -1793,9 +1817,9 @@ export function markdownCodeSpans(text: string, inlineOnly = false): Array<[numb
       breakCursor += 1;
       paragraph += 1;
     }
-    while (lineEnd >= 0 && index > lineEnd) {
-      lineStart = lineEnd + 1;
-      lineEnd = text.indexOf('\n', lineStart);
+    while (delimiterLineStarts[delimiterLineCursor + 1] <= index) {
+      delimiterLineCursor += 1;
+      lineStart = delimiterLineStarts[delimiterLineCursor];
     }
     const firstDelimiterOnLine = lastDelimiterLine !== lineStart;
     lastDelimiterLine = lineStart;
