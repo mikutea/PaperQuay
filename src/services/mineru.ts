@@ -1406,6 +1406,24 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
     lineEnds.push(lineStarts[lineStarts.length - 1] + rawLine.replace(/\r\n$|[\r\n]$/, '').length);
     lineStarts.push(lineStarts[lineStarts.length - 1] + rawLine.length);
   }
+  const tableBoundaryLineStarts = new Set<number>();
+  const tableCells = (line: string) => line.split(/(?<!\\)\|/)
+    .map((cell) => cell.trim()).filter((cell, index, cells) => cell || index > 0 && index < cells.length - 1);
+  for (let index = 1; index < lineEnds.length; index += 1) {
+    const header = source.slice(lineStarts[index - 1], lineEnds[index - 1]);
+    const separator = source.slice(lineStarts[index], lineEnds[index]);
+    if (!header.includes('|') || !separator.includes('|')) continue;
+    const delimiter = tableCells(separator);
+    if (!delimiter.length || tableCells(header).length !== delimiter.length
+      || !delimiter.every((cell) => /^:?-+:?$/.test(cell))) continue;
+    tableBoundaryLineStarts.add(lineStarts[index + 1]);
+    while (index + 1 < lineEnds.length) {
+      const row = source.slice(lineStarts[index + 1], lineEnds[index + 1]);
+      if (!row.trim() || !row.includes('|')) break;
+      index += 1;
+      tableBoundaryLineStarts.add(lineStarts[index + 1]);
+    }
+  }
   const inheritedListWidths: number[] = [];
   let activeQuoteDepth = 0;
   const activeListWidths: number[] = [];
@@ -1671,6 +1689,7 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
             !setextHeading &&
             !listBoundary &&
             !indentedCodeBoundary &&
+            !tableBoundaryLineStarts.has(lineStart) &&
             !/^ {0,3}(?:#{1,6}(?:[ \t]+|$)|(?:\*(?:[ \t]*\*){2,}|_(?:[ \t]*_){2,}|-(?:[ \t]*-){2,})[ \t]*$|`{3,}|~{3,})/.test(priorContent)) {
           output += renderOutside(source.slice(cursor, opening)) + source.slice(opening, openingEnd + 1);
           cursor = openingEnd + 1;
@@ -1725,18 +1744,32 @@ export function markdownCodeSpans(text: string, inlineOnly = false): Array<[numb
   const linkDestinations: Array<[number, number]> = [];
   if (inlineOnly && text.includes('`')) {
     let labelStart = -1;
-    let nextAngleClose = text.indexOf('>');
     for (let index = 0; index < text.length; index += 1) {
       if (text[index] === '\\') { index += 1; continue; }
       if (text[index] === '<') {
-        while (nextAngleClose >= 0 && nextAngleClose <= index) nextAngleClose = text.indexOf('>', nextAngleClose + 1);
-        if (nextAngleClose > index) {
-          const body = text.slice(index + 1, nextAngleClose);
-          // An email autolink containing a backtick is invalid CommonMark, so
-          // only URI autolinks can hide a code delimiter here.
-          if (/^[A-Za-z][A-Za-z0-9+.-]+:[^\s<>]*$/.test(body)) {
-            linkDestinations.push([index + 1, nextAngleClose]);
-            index = nextAngleClose;
+        let quote = '';
+        let end = -1;
+        for (let cursor = index + 1; cursor < text.length; cursor += 1) {
+          const char = text[cursor];
+          if (quote) {
+            if (char === quote) quote = '';
+          } else if (char === '"' || char === "'") {
+            quote = char;
+          } else if (char === '<') {
+            break;
+          } else if (char === '>') {
+            end = cursor;
+            break;
+          }
+        }
+        if (end > index) {
+          const body = text.slice(index + 1, end);
+          // A valid URI autolink or inline HTML tag keeps its backticks inert.
+          // An invalid email autolink such as <a@b.c`foo> does not.
+          if (/^[A-Za-z][A-Za-z0-9+.-]+:[^\s<>]*$/.test(body)
+            || /^\/?[A-Za-z][A-Za-z0-9-]*(?:[ \t]+[^<>]*)?\/?$/.test(body)) {
+            linkDestinations.push([index + 1, end]);
+            index = end;
             continue;
           }
         }
@@ -1760,6 +1793,34 @@ export function markdownCodeSpans(text: string, inlineOnly = false): Array<[numb
         labelStart = -1;
       }
     }
+    const dollars = [...text.matchAll(/\$+/g)].filter((match) => {
+      let escapes = 0;
+      for (let index = (match.index ?? 0) - 1; text[index] === '\\'; index -= 1) escapes += 1;
+      return escapes % 2 === 0 && match[0].length <= 2;
+    });
+    let rawCodeSpans: Array<[number, number]> | undefined;
+    let rawCodeCursor = 0;
+    for (let index = 0; index + 1 < dollars.length; index += 1) {
+      const opening = dollars[index];
+      const closing = dollars[index + 1];
+      if (opening[0].length !== closing[0].length) continue;
+      const start = (opening.index ?? 0) + opening[0].length;
+      const end = closing.index ?? 0;
+      if (start < end && !/\s/.test(text[start]) && !/\s/.test(text[end - 1])
+        && text.indexOf('`', start) >= 0 && text.indexOf('`', start) < end) {
+        // A dollar inside an already-open code span is text, not math. The
+        // first raw code pair is enough to distinguish it from a backtick
+        // beginning inside an authored math token.
+        rawCodeSpans ??= markdownCodeSpans(text);
+        while (rawCodeSpans[rawCodeCursor]?.[1] <= (opening.index ?? 0)) rawCodeCursor += 1;
+        if (!(rawCodeSpans[rawCodeCursor]?.[0] <= (opening.index ?? 0)
+          && (opening.index ?? 0) < rawCodeSpans[rawCodeCursor][1])) {
+          linkDestinations.push([start, end]);
+        }
+      }
+      index += 1;
+    }
+    linkDestinations.sort((left, right) => left[0] - right[0]);
   }
   const paragraphBreaks = inlineOnly
     ? [...text.matchAll(/(?:\r\n|\r|\n)[ \t]*(?:\r\n|\r|\n)/g)].map((match) => (match.index ?? 0) + match[0].length)
@@ -1840,7 +1901,7 @@ export function markdownCodeSpans(text: string, inlineOnly = false): Array<[numb
         }
         const standalone = /^ {0,3}#{1,6}(?:[ \t]+|$)/.test(content) ||
             /^ {0,3}(?:\*(?:[ \t]*\*){2,}|_(?:[ \t]*_){2,}|-(?:[ \t]*-){2,})[ \t]*$/.test(content);
-        const referenceDefinition = /^ {0,3}\[[^\]\r\n]+\]:[ \t]*(?:<[^>\r\n]*>|[^ \t\r\n]+)[ \t]*$/.test(content);
+        const referenceDefinition = /^ {0,3}\[[^\]\r\n]+\]:[ \t]*(?:<[^>\r\n]*>|[^ \t\r\n]+)(?:[ \t]+(?:"[^"\r\n]*"|'[^'\r\n]*'|\([^()\r\n]*\)))?[ \t]*$/.test(content);
         const setext: boolean = /^ {0,3}(?:=+|-{1,2})[ \t]*$/.test(content)
           && canSupplySetextHeadingText(previousContent, previousParagraph);
         if (standalone || referenceDefinition) {

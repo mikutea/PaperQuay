@@ -1,6 +1,6 @@
 import { createElement, isValidElement, type ReactNode } from 'react';
 import { parseEntities } from 'parse-entities';
-import { displayMarkdownFallback, displayMathTagsAsLatex, fencedMarkdownLineStarts, findHtmlTagEnd, mapOutsideLiteralHtmlBlocks, markdownCodeSpans, normalizeMarkdownMathOutsideCodeSpans, splitMarkdownLinesPreservingEndings } from '../../services/mineru.ts';
+import { displayMarkdownFallback, displayMathTagsAsLatex, fencedMarkdownLineStarts, mapOutsideLiteralHtmlBlocks, markdownCodeSpans, normalizeMarkdownMathOutsideCodeSpans, splitMarkdownLinesPreservingEndings } from '../../services/mineru.ts';
 import { normalizeMarkdownMath } from '../../utils/markdown.ts';
 
 const INLINE_TAG_PATTERN = /<\/?(?:sup|sub)\s*>/gi;
@@ -350,18 +350,21 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
   const chunks: string[] = [];
   const stack: Array<{ name: string; adjacent: boolean; start: number }> = [];
   const codeSpans = markdownCodeSpans(markdown, true);
-  const hasUnquotedLessThan = (tag: string) => {
+  const htmlBoundary = (text: string, start: number) => {
     let quote = '';
-    for (let index = 1; index < tag.length; index += 1) {
+    for (let index = start + 1; index < text.length; index += 1) {
+      const char = text[index];
       if (quote) {
-        if (tag[index] === quote) quote = '';
-      } else if (tag[index] === '"' || tag[index] === "'") {
-        quote = tag[index];
-      } else if (tag[index] === '<') {
-        return true;
+        if (char === quote) quote = '';
+      } else if (char === '"' || char === "'") {
+        quote = char;
+      } else if (char === '<') {
+        return { end: -1, nested: index };
+      } else if (char === '>') {
+        return { end: index, nested: -1 };
       }
     }
-    return false;
+    return { end: -1, nested: -1 };
   };
   const insideHtmlTag = (text: string) => {
     const ranges: Array<[number, number]> = [];
@@ -370,12 +373,9 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
         start = text.indexOf('<', start + 1);
         continue;
       }
-      const end = findHtmlTagEnd(text, start);
+      const { end, nested } = htmlBoundary(text, start);
+      if (nested >= 0) { start = nested; continue; }
       if (end < 0) break;
-      if (hasUnquotedLessThan(text.slice(start, end + 1))) {
-        start = text.indexOf('<', start + 1);
-        continue;
-      }
       ranges.push([start, end + 1]);
       start = text.indexOf('<', end + 1);
     }
@@ -447,13 +447,10 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
         start = text.indexOf('<', start + 1);
         continue;
       }
-      const end = findHtmlTagEnd(text, start);
+      const { end, nested } = htmlBoundary(text, start);
+      if (nested >= 0) { start = nested; continue; }
       if (end < 0) break;
       const opening = text.slice(start, end + 1);
-      if (hasUnquotedLessThan(opening)) {
-        start = text.indexOf('<', start + 1);
-        continue;
-      }
       const named = /^<(\/?)([A-Za-z][A-Za-z0-9-]*)\b/.exec(opening);
       const name = named?.[2].toLowerCase();
       const depth = name ? openAttributeTags.get(name) ?? 0 : 0;
@@ -503,7 +500,8 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
   while (search < readableMarkdown.length) {
     const start = readableMarkdown.indexOf('<', search);
     if (start < 0) break;
-    const end = findHtmlTagEnd(readableMarkdown, start);
+    const { end, nested } = htmlBoundary(readableMarkdown, start);
+    if (nested >= 0) { search = nested; continue; }
     if (end < 0) break;
     while (readableCodeSpans[wrapperCodeCursor]?.[1] <= start) wrapperCodeCursor += 1;
     if (readableCodeSpans[wrapperCodeCursor]?.[0] <= start && start < readableCodeSpans[wrapperCodeCursor][1]) {

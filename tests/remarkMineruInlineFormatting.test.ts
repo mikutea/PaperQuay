@@ -84,6 +84,24 @@ test('an invalid email autolink does not hide its code delimiter', () => {
   assert.doesNotMatch(render(source), /katex/);
 });
 
+test('a backtick in an inline HTML attribute cannot open a code span', () => {
+  const source = 'prefix <span title="`foo">x</span> \\(x + H<sub>2</sub>O\\) `end`';
+  assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$/);
+  assert.match(render(source), /katex/);
+});
+
+test('an authored math token cannot open a later code span', () => {
+  const source = '$a`b$ \\(x + H<sub>2</sub>O\\) `end`';
+  assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$/);
+  assert.match(render(source), /katex/);
+});
+
+test('dollar text inside actual inline code cannot hide its closing backtick', () => {
+  const source = '`$a` \\(x + H<sub>2</sub>O\\) b$`';
+  assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$/);
+  assert.match(render(source), /katex/);
+});
+
 test('an inline code formula wrapper remains literal', () => {
   const source = '`<span class="math">H<sub>2</sub>O</span>`';
   assert.equal(normalizeMineruReaderMarkdown(source), source);
@@ -864,6 +882,18 @@ test('a link reference destination backtick cannot span into later paragraph tex
   assert.match(render(source), /katex/);
 });
 
+test('a link reference title backtick cannot span into later paragraph text', () => {
+  const source = '[foo]: /url "ti`tle"\n\\(x + H<sub>2</sub>O\\)\n`end`';
+  assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$/);
+  assert.match(render(source), /katex/);
+});
+
+test('a completed GFM table can precede a raw type-seven HTML block', () => {
+  const source = '| value |\n| --- |\n| cell |\n<x>\nliteral \\(x + H<sub>2</sub>O\\)';
+  assert.equal(normalizeMineruReaderMarkdown(source), source);
+  assert.doesNotMatch(render(source), /katex/);
+});
+
 test('custom HTML blocks do not interrupt a paragraph', () => {
   for (const source of [
     'paragraph\n<x>\n\\(x + H<sub>2</sub>O\\)',
@@ -1205,6 +1235,13 @@ test('many unmatched adjacent tags do not rescan the remaining suffix', () => {
 
   assert.ok(performance.now() - started < 2_000);
   assert.equal(markdown, source);
+});
+
+test('malformed HTML prefixes sharing one closer do not rescan the suffix', () => {
+  const source = `${'<a'.repeat(16_000)}> H<sub>2</sub>O`;
+  const started = performance.now();
+  normalizeMineruReaderMarkdown(source);
+  assert.ok(performance.now() - started < 2_000);
 });
 
 test('equation mathText merges adjacent duplicate script tags for KaTeX', () => {
