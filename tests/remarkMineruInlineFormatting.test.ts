@@ -18,6 +18,7 @@ import {
   displayMarkdownFallback,
   displayMathTagsAsLatex,
   flattenMineruPages,
+  markdownCodeSpans,
   parseMineruMarkdownPages,
 } from '../src/services/mineru.ts';
 import { buildReaderTranslationBlockInputs } from '../src/features/reader/readerTranslationSource.ts';
@@ -708,6 +709,73 @@ test('a standalone equals line is not a setext heading after a block boundary', 
   assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$$/);
   const heading = 'Heading\n===\n    $H<sub>2</sub>O$';
   assert.equal(normalizeMineruReaderMarkdown(heading), heading);
+});
+
+test('a short hyphen setext heading starts an indented code block', () => {
+  for (const underline of ['-', '--']) {
+    const source = `Heading\n${underline}\n    $H<sub>2</sub>O$`;
+    assert.equal(normalizeMineruReaderMarkdown(source), source);
+  }
+  assert.match(normalizeMineruReaderMarkdown('--\n    \\(x + H<sub>2</sub>O\\)'), /\$x \+ H_\{2\}O\$$/);
+});
+
+test('only uppercase HTML declarations protect following raw HTML math text', () => {
+  for (const opening of ['<!doctype html>', '<!foo>']) {
+    const source = `${opening} \\(x + H<sub>2</sub>O\\)`;
+    assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$$/);
+  }
+  const uppercase = '<!DOCTYPE html> \\(x + H<sub>2</sub>O\\)';
+  assert.equal(normalizeMineruReaderMarkdown(uppercase), uppercase);
+});
+
+test('custom HTML blocks do not interrupt a paragraph', () => {
+  for (const source of [
+    'paragraph\n<x>\n\\(x + H<sub>2</sub>O\\)',
+    '<span>paragraph</span>\n<x>\n\\(x + H<sub>2</sub>O\\)',
+    '> paragraph\n> <x>\n> \\(x + H<sub>2</sub>O\\)',
+  ]) {
+    assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$$/);
+  }
+  const separateBlock = 'paragraph\n\n<x>\n$H<sub>2</sub>O$';
+  assert.equal(normalizeMineruReaderMarkdown(separateBlock), separateBlock);
+  const afterRawBlock = '<pre>x</pre>\n<x>\n$H<sub>2</sub>O$';
+  assert.equal(normalizeMineruReaderMarkdown(afterRawBlock), afterRawBlock);
+});
+
+test('a backtick info string containing a backtick cannot start a code fence', () => {
+  const source = '\x60\x60\x60 bad\x60\n\\(x + H<sub>2</sub>O\\)';
+  const markdown = displayMarkdownFallback(source, normalizeMarkdownMath(source));
+  assert.match(markdown, /\$x \+ H_\{2\}O\$$/);
+});
+
+test('list-then-quote fenced examples stay literal in Markdown fallback', () => {
+  const source = '- > \x60\x60\x60text\n  > $H<sub>2</sub>O$\n  > \x60\x60\x60\n\\(x + H<sub>3</sub>O\\)';
+  const markdown = displayMarkdownFallback(source, normalizeMarkdownMath(source));
+  assert.match(markdown, /  > \$H<sub>2<\/sub>O\$/);
+  assert.match(markdown, /\$x \+ H_\{3\}O\$$/);
+});
+
+test('long whitespace in a nested math tag cannot stall tag detection', () => {
+  const source = `x<sup><a ${' '.repeat(4_000)}</sup>`;
+  const started = performance.now();
+  assert.match(displayMathTagsAsLatex(source) ?? '', /^x\^\{\\lt a/);
+  assert.ok(performance.now() - started < 1_000);
+});
+
+test('long quote prefixes cannot stall inline code span detection', () => {
+  const source = `paragraph\n> ${' '.repeat(64_000)}x\x60\x60\x60 H<sub>2</sub>O`;
+  const started = performance.now();
+  assert.deepEqual(markdownCodeSpans(source, true), []);
+  assert.ok(performance.now() - started < 1_500);
+});
+
+test('line-level code prefixes retain quote and single-list recognition', () => {
+  for (const prefix of ['', '   ', '>  >   ', '>    -  ', '123456789. ']) {
+    assert.deepEqual(markdownCodeSpans(`${prefix}\x60\x60\x60x\x60\x60\x60`, true), []);
+  }
+  for (const prefix of ['> x', '1234567890. ', '>   -x']) {
+    assert.equal(markdownCodeSpans(`${prefix}\x60\x60\x60x\x60\x60\x60`, true).length, 1);
+  }
 });
 
 test('raw comment, instruction, and CDATA blocks keep tag examples inert', () => {

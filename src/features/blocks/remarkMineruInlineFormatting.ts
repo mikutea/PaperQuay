@@ -233,7 +233,7 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
     const line = content.replace(/\r?\n$/, '').trimEnd();
     return /^ {0,3}#{1,6}(?:[ \t]+|$)/.test(line)
       || /^ {0,3}(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*){3,})$/.test(line)
-      || (precedingText && /^ {0,3}=+[ \t]*$/.test(line));
+      || (precedingText && /^ {0,3}(?:=+|-{1,2})[ \t]*$/.test(line));
   };
   for (const [index, line] of lines.entries()) {
     if (fencedLines[index]) {

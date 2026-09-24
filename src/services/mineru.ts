@@ -1103,6 +1103,28 @@ function mathTagContentToLatex(content: string): string {
   return output + escapeRaw(content.slice(cursor), cursor);
 }
 
+function containsOtherHtmlTag(content: string): boolean {
+  let opening = -1;
+  for (let index = 0; index < content.length; index += 1) {
+    if (content[index] === '<') {
+      opening = index;
+      continue;
+    }
+    if (content[index] !== '>' || opening < 0) continue;
+    let cursor = opening + 1;
+    while (cursor < index && /\s/.test(content[cursor])) cursor += 1;
+    if (content[cursor] === '/') cursor += 1;
+    while (cursor < index && /\s/.test(content[cursor])) cursor += 1;
+    if (/[A-Za-z]/.test(content[cursor] ?? '')) {
+      cursor += 1;
+      while (cursor < index && /[A-Za-z0-9:-]/.test(content[cursor])) cursor += 1;
+      if (cursor === index || (content[cursor] === '/' && cursor + 1 === index) || /\s/.test(content[cursor] ?? '')) return true;
+    }
+    opening = -1;
+  }
+  return false;
+}
+
 function replaceInnermostMathTags(body: string): string {
   const stack: Array<{ name: string; start: number; end: number; nested: boolean }> = [];
   const replacements: Array<{ start: number; end: number; value: string }> = [];
@@ -1123,7 +1145,7 @@ function replaceInnermostMathTags(body: string): string {
 
     const content = body.slice(opening.end, start);
     // A less-than relation is text; a different HTML tag is not math markup.
-    if (/<\s*\/?\s*[A-Za-z][A-Za-z0-9:-]*(?:\s+[^<>]*)?\s*\/?>/.test(content)) continue;
+    if (containsOtherHtmlTag(content)) continue;
     replacements.push({
       start: opening.start,
       end: start + tag[0].length,
@@ -1194,7 +1216,7 @@ function mergeRepeatedEquationScripts(body: string): string {
     const script = match[1].toLowerCase() === 'sub' ? '_' : '^';
     if (opening === undefined || opening <= cursor || body[opening - 1] !== script) continue;
     const existing = body.slice(opening + 1, closing);
-    if (/<\s*\/?\s*[A-Za-z][A-Za-z0-9:-]*(?:\s+[^<>]*)?\s*\/?>/.test(match[2])) continue;
+    if (containsOtherHtmlTag(match[2])) continue;
     const appended = mathTagContentToLatex(match[2]);
     const delimiter = /\\[A-Za-z]+$/.test(existing) && /^[A-Za-z]/.test(appended) ? ' ' : '';
     grouped += body.slice(cursor, opening - 1) + `${script}{${existing}${delimiter}${appended}}`;
@@ -1206,7 +1228,7 @@ function mergeRepeatedEquationScripts(body: string): string {
     /([_^])(?:\{([^{}]+)\}|(\\(?:[A-Za-z]+|[^A-Za-z\s])|[^\s\\{}_^$]))\s*<\s*(sub|sup)\s*>((?:[^<]|<(?![A-Za-z/]))*)<\s*\/\s*\4\s*>/giu,
     (match, script: string, braced: string | undefined, bare: string | undefined, tag: string, content: string) => {
       if ((script === '_' ? 'sub' : 'sup') !== tag.toLowerCase()) return match;
-      if (/<\s*\/?\s*[A-Za-z][A-Za-z0-9:-]*(?:\s+[^<>]*)?\s*\/?>/.test(content)) return match;
+      if (containsOtherHtmlTag(content)) return match;
       const existing = braced ?? bare ?? '';
       return `${script}{${existing}${existing.startsWith('\\') ? ' ' : ''}${mathTagContentToLatex(content)}}`;
     },
@@ -1296,7 +1318,7 @@ export function fencedMarkdownLineStarts(source: string): Set<number> {
 export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: string) => string): string | null {
   const lower = source.toLowerCase();
   const fencedLines = fencedMarkdownLineStarts(source);
-  const blockStarts = /<!--|<\?|<!\[CDATA\[|<![A-Z]|<\/([A-Za-z][A-Za-z0-9-]*)\s*>|<([A-Za-z][A-Za-z0-9-]*)(?=[\s/>])/gi;
+  const blockStarts = /<!--|<\?|<!\[CDATA\[|<![A-Z]|<\/([A-Za-z][A-Za-z0-9-]*)\s*>|<([A-Za-z][A-Za-z0-9-]*)(?=[\s/>])/g;
   const namedBlockTags = new Set('address article aside base basefont blockquote body caption center col colgroup dd details dialog dir div dl dt fieldset figcaption figure footer form frame frameset h1 h2 h3 h4 h5 h6 head header hr html iframe legend li link main menu menuitem nav noframes ol optgroup option output p param search section summary table tbody td tfoot th thead title tr track ul'.split(' '));
   const lineStarts = [0];
   for (const newline of source.matchAll(/\n/g)) lineStarts.push((newline.index ?? 0) + 1);
@@ -1463,6 +1485,21 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
       if (match[2] && !validCustomOpening(opening, openingEnd)) continue;
       const lineEnd = source.indexOf('\n', openingEnd + 1);
       if (source.slice(openingEnd + 1, lineEnd < 0 ? source.length : lineEnd).trim()) continue;
+      // CommonMark type-7 tags cannot interrupt an ordinary paragraph.
+      if (lineCursor > 0 && !fencedLines.has(lineStarts[lineCursor - 1])) {
+        const priorLine = source.slice(lineStarts[lineCursor - 1], lineStart).trimEnd();
+        let position = 0;
+        while (position < priorLine.length) {
+          let marker = position;
+          while (marker - position < 3 && priorLine[marker] === ' ') marker += 1;
+          if (priorLine[marker] !== '>') break;
+          position = marker + 1;
+          if (priorLine[position] === ' ' || priorLine[position] === '\t') position += 1;
+        }
+        const priorContent = priorLine.slice(position);
+        if (priorContent.trim() && cursor !== lineStart &&
+            !/^ {0,3}(?:#{1,6}(?:[ \t]+|$)|(?:[-*_][ \t]*){3,}|(?:[-+*]|\d{1,9}[.)])[ \t]+|`{3,}|~{3,})/.test(priorContent)) continue;
+      }
     }
     const closing = typeOne ? nextMarker(`</${tag}>`, openingEnd + 1)
       : specialEnding ? nextMarker(specialEnding, opening + match[0].length) : -1;
@@ -1481,6 +1518,31 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
   return found ? output + renderOutside(source.slice(cursor)) : null;
 }
 
+function isLineLevelCodePrefix(prefix: string): boolean {
+  let cursor = 0;
+  const whitespace = () => {
+    while (prefix[cursor] === ' ' || prefix[cursor] === '\t') cursor += 1;
+  };
+  whitespace();
+  while (prefix[cursor] === '>') {
+    cursor += 1;
+    whitespace();
+  }
+  let markerEnd = cursor;
+  if (prefix[cursor] === '-' || prefix[cursor] === '+' || prefix[cursor] === '*') {
+    markerEnd += 1;
+  } else if (/[0-9]/.test(prefix[cursor] ?? '')) {
+    while (markerEnd - cursor < 9 && /[0-9]/.test(prefix[markerEnd] ?? '')) markerEnd += 1;
+    if (prefix[markerEnd] === '.' || prefix[markerEnd] === ')') markerEnd += 1;
+    else markerEnd = cursor;
+  }
+  if (markerEnd > cursor && (prefix[markerEnd] === ' ' || prefix[markerEnd] === '\t')) {
+    cursor = markerEnd;
+    whitespace();
+  }
+  return cursor === prefix.length;
+}
+
 export function markdownCodeSpans(text: string, inlineOnly = false): Array<[number, number]> {
   const blankEnds = inlineOnly
     ? [...text.matchAll(/\r?\n[ \t]*\r?\n/g)].map((match) => (match.index ?? 0) + match[0].length)
@@ -1489,6 +1551,7 @@ export function markdownCodeSpans(text: string, inlineOnly = false): Array<[numb
   let paragraph = 0;
   let lineStart = 0;
   let lineEnd = text.indexOf('\n');
+  let lastDelimiterLine = -1;
   const delimiters = [...text.matchAll(/`+/g)].flatMap((match) => {
     const index = match.index ?? 0;
     while (blankEnds[blankCursor] <= (match.index ?? 0)) {
@@ -1499,12 +1562,14 @@ export function markdownCodeSpans(text: string, inlineOnly = false): Array<[numb
       lineStart = lineEnd + 1;
       lineEnd = text.indexOf('\n', lineStart);
     }
+    const firstDelimiterOnLine = lastDelimiterLine !== lineStart;
+    lastDelimiterLine = lineStart;
     // A line-level triple run is a fence or indented code, not an inline span.
-    if (inlineOnly && match[0].length >= 3) {
+    if (inlineOnly && firstDelimiterOnLine && match[0].length >= 3) {
       let previous = index - 1;
       while (previous >= lineStart && (text[previous] === ' ' || text[previous] === '\t')) previous -= 1;
       if (text[previous] !== '`' &&
-          /^(?:[ \t]*>[ \t]*)*(?:(?:[-+*]|\d{1,9}[.)])[ \t]+)?[ \t]*$/.test(text.slice(lineStart, index))) return [];
+          isLineLevelCodePrefix(text.slice(lineStart, index))) return [];
     }
     let backslashes = 0;
     for (let index = (match.index ?? 0) - 1; text[index] === '\\'; index -= 1) backslashes += 1;
@@ -1555,36 +1620,9 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
   if (!source) return normalized;
 
   // Markdown code fences are inert, including a closer longer than its opener.
-  // Normalize only surrounding text; mid-line runs are not fences.
-  const unquote = (line: string) => {
-    let cursor = 0;
-    let depth = 0;
-    while (cursor < line.length) {
-      let next = cursor;
-      while (next - cursor < 3 && line[next] === ' ') next += 1;
-      if (line[next] !== '>') break;
-      cursor = next + 1;
-      depth += 1;
-      if (line[cursor] === ' ' || line[cursor] === '\t') cursor += 1;
-    }
-    return { content: line.slice(cursor), depth };
-  };
-  const fenceMarker = (line: string) => {
-    let cursor = 0;
-    const listPattern = /( {0,3})(?:[-+*]|\d{1,9}[.)])([ \t]+)/y;
-    while (cursor < line.length) {
-      listPattern.lastIndex = cursor;
-      const list = listPattern.exec(line);
-      if (!list) break;
-      cursor += list[0].length - list[2].length + (list[2].length <= 4 ? list[2].length : 1);
-    }
-    const fencePattern = /( {0,3})(`{3,}|~{3,})(?:[^\n]*)/y;
-    fencePattern.lastIndex = cursor;
-    const fence = fencePattern.exec(line);
-    return fence ? { indent: cursor, run: fence[2] } : null;
-  };
-  const lines = /(?:`{3,}|~{3,})/.test(source) ? source.split(/(?<=\n)/) : [];
-  if (lines.some((line) => fenceMarker(unquote(line).content))) {
+  // Use the same fence boundaries as the reader, including nested containers.
+  const fencedLines = fencedMarkdownLineStarts(source);
+  if (fencedLines.size) {
     const renderOutsideFence = (text: string) => {
       const leading = text.match(/^\s*/)?.[0] ?? '';
       const trailing = text.match(/\s*$/)?.[0] ?? '';
@@ -1628,35 +1666,16 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
     };
     let output = '';
     let outside = '';
-    let fenceLength = 0;
-    let fenceCharacter = '';
-    let fenceIndent = 0;
-    let fenceQuoteDepth = 0;
-    for (const line of lines) {
-      const { content: quotedContent, depth: quoteDepth } = unquote(line);
-      const marker = fenceMarker(quotedContent);
-      const lineIndent = /^( *)/.exec(quotedContent)?.[1].length ?? 0;
-      if (fenceLength > 0 && (quoteDepth !== fenceQuoteDepth ||
-          (fenceIndent > 0 && quotedContent.trim() && lineIndent < fenceIndent))) {
-        fenceLength = 0;
-      }
-      if (marker && fenceLength === 0) {
+    let lineStart = 0;
+    for (const line of source.split(/(?<=\n)/)) {
+      if (fencedLines.has(lineStart)) {
         output += renderOutsideFence(outside);
         outside = '';
-        fenceIndent = marker.indent;
-        fenceQuoteDepth = quoteDepth;
-        fenceLength = marker.run.length;
-        fenceCharacter = marker.run[0];
         output += line;
-      } else if (fenceLength > 0) {
-        output += line;
-        const closing = /^( *)(`{3,}|~{3,})\s*$/.exec(quotedContent.trimEnd());
-        if (closing && closing[1].length <= fenceIndent + 3 && closing[2][0] === fenceCharacter && closing[2].length >= fenceLength) {
-          fenceLength = 0;
-        }
       } else {
         outside += line;
       }
+      lineStart += line.length;
     }
     return output + renderOutsideFence(outside);
   }
