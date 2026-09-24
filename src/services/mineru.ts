@@ -831,7 +831,7 @@ function flushMarkdownBlock(buffer: string[], blocks: MineruBlockBase[]): void {
 
   if (block) {
     // Display the original tagged Markdown; keep normalized content for translation fingerprints.
-    if (/<\s*\/?\s*(?:sup|sub)\s*>/i.test(sourceMarkdown)) {
+    if (/<\/?(?:sup|sub)\s*>/i.test(sourceMarkdown)) {
       block.readerMarkdownSource = sourceMarkdown.trim();
     }
 
@@ -1129,7 +1129,7 @@ function replaceInnermostMathTags(body: string): string {
   const stack: Array<{ name: string; start: number; end: number; nested: boolean }> = [];
   const replacements: Array<{ start: number; end: number; value: string }> = [];
 
-  for (const tag of body.matchAll(/<\s*(\/?)\s*(sub|sup)\s*>/gi)) {
+  for (const tag of body.matchAll(/<(\/?)(sub|sup)\s*>/gi)) {
     const name = tag[2].toLowerCase();
     const start = tag.index ?? 0;
     if (!tag[1]) {
@@ -1175,7 +1175,7 @@ export function displayMathTagsAsLatex(body: string): string | null {
     latex = next;
   }
 
-  return /<\s*\/?\s*(?:sup|sub)\s*>/i.test(latex) ? null : latex;
+  return /<\/?(?:sup|sub)\s*>/i.test(latex) ? null : latex;
 }
 
 export function findHtmlTagEnd(source: string, opening: number, limit = source.length): number {
@@ -1208,7 +1208,7 @@ function mergeRepeatedEquationScripts(body: string): string {
 
   let grouped = '';
   let cursor = 0;
-  for (const match of body.matchAll(/<\s*(sub|sup)\s*>((?:[^<]|<(?![A-Za-z/]))*)<\s*\/\s*\1\s*>/gi)) {
+  for (const match of body.matchAll(/<(sub|sup)\s*>((?:[^<]|<(?![A-Za-z/]))*)<\/\1\s*>/gi)) {
     const start = match.index ?? 0;
     let closing = start - 1;
     while (closing >= cursor && /\s/.test(body[closing])) closing -= 1;
@@ -1225,7 +1225,7 @@ function mergeRepeatedEquationScripts(body: string): string {
   grouped += body.slice(cursor);
 
   return grouped.replace(
-    /([_^])(?:\{([^{}]+)\}|(\\(?:[A-Za-z]+|[^A-Za-z\s])|[^\s\\{}_^$]))\s*<\s*(sub|sup)\s*>((?:[^<]|<(?![A-Za-z/]))*)<\s*\/\s*\4\s*>/giu,
+    /([_^])(?:\{([^{}]+)\}|(\\(?:[A-Za-z]+|[^A-Za-z\s])|[^\s\\{}_^$]))\s*<(sub|sup)\s*>((?:[^<]|<(?![A-Za-z/]))*)<\/\4\s*>/giu,
     (match, script: string, braced: string | undefined, bare: string | undefined, tag: string, content: string) => {
       if ((script === '_' ? 'sub' : 'sup') !== tag.toLowerCase()) return match;
       if (containsOtherHtmlTag(content)) return match;
@@ -1237,7 +1237,7 @@ function mergeRepeatedEquationScripts(body: string): string {
 
 // Line starts occupied by fenced code. Keep the opening quote/list container
 // with the fence so an unclosed fence stops when that container ends.
-function splitMarkdownLinesPreservingEndings(source: string): string[] {
+export function splitMarkdownLinesPreservingEndings(source: string): string[] {
   const lines: string[] = [];
   let start = 0;
   for (let index = 0; index < source.length; index += 1) {
@@ -1257,7 +1257,7 @@ export function fencedMarkdownLineStarts(source: string): Set<number> {
 
   type Container = { kind: 'quote' | 'list'; width: number };
   const listMarker = /(?:[-+*]|\d{1,9}[.)])[ \t]+/y;
-  const openingPrefix = (line: string) => {
+  const openingPrefix = (line: string, paragraphContinues: boolean) => {
     const containers: Container[] = [];
     let cursor = 0;
     while (cursor < line.length) {
@@ -1273,6 +1273,8 @@ export function fencedMarkdownLineStarts(source: string): Set<number> {
       listMarker.lastIndex = next;
       const list = listMarker.exec(line);
       if (!list) break;
+      const ordered = /^(\d{1,9})[.)]/.exec(list[0]);
+      if (paragraphContinues && ordered && Number(ordered[1]) !== 1) break;
       cursor = next + list[0].length;
       containers.push({ kind: 'list', width: cursor - start });
     }
@@ -1304,8 +1306,12 @@ export function fencedMarkdownLineStarts(source: string): Set<number> {
   let activeListContainers: Container[] = [];
   let fenceAllowsBlank = false;
   let lineStart = 0;
+  let previousParagraph = false;
+  let previousQuoteDepth = 0;
   for (const rawLine of splitMarkdownLinesPreservingEndings(source)) {
     const line = rawLine.replace(/\r\n$|[\r\n]$/, '');
+    let openedList = false;
+    let contentStart = 0;
     const continued = fenceRun ? continuation(line, fenceContainers) : null;
     if (fenceRun && (continued !== null || (line.trim() === '' && fenceAllowsBlank))) {
       starts.add(lineStart);
@@ -1314,7 +1320,10 @@ export function fencedMarkdownLineStarts(source: string): Set<number> {
       if (closing && closing[1][0] === fenceRun[0] && closing[1].length >= fenceRun.length) fenceRun = '';
     } else {
       fenceRun = '';
-      const { cursor, containers } = openingPrefix(line);
+      const quoteDepth = markdownQuoteDepth(line);
+      const { cursor, containers } = openingPrefix(line, previousParagraph && quoteDepth === previousQuoteDepth);
+      openedList = containers.some((part) => part.kind === 'list');
+      contentStart = cursor;
       const inherited = activeListContainers.length && continuation(line, activeListContainers) !== null
         ? activeListContainers : [];
       if (containers.some((part) => part.kind === 'list')) activeListContainers = containers;
@@ -1328,6 +1337,12 @@ export function fencedMarkdownLineStarts(source: string): Set<number> {
         starts.add(lineStart);
       }
     }
+    const quoteDepth = markdownQuoteDepth(line);
+    const paragraphText = line.slice(contentStart).trim();
+    previousParagraph = !starts.has(lineStart) && !openedList && !!paragraphText
+      && !/^#{1,6}(?:[ \t]+|$)|^(?:\*(?:[ \t]*\*){2,}|_(?:[ \t]*_){2,}|-(?:[ \t]*-){2,})[ \t]*$/.test(paragraphText)
+      && !/^<(?:!--|\?|!\[CDATA\[|[A-Za-z][A-Za-z0-9-]*(?:\s|\/?>))/.test(paragraphText);
+    previousQuoteDepth = quoteDepth;
     lineStart += rawLine.length;
   }
   return starts;
@@ -1362,7 +1377,7 @@ function markdownQuoteDepth(line: string): number {
 
 export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: string) => string): string | null {
   const fencedLines = fencedMarkdownLineStarts(source);
-  const blockStarts = /<!--|<\?|<!\[CDATA\[|<![A-Z]|<\/([A-Za-z][A-Za-z0-9-]*)\s*>|<([A-Za-z][A-Za-z0-9-]*)(?=[\s/>]|$)/g;
+  const blockStarts = /<!--|<\?|<!\[CDATA\[|<![A-Z]|<\/([A-Za-z][A-Za-z0-9-]*)\s*>|<([A-Za-z][A-Za-z0-9-]*)(?=\s|\/?>|$)/g;
   const namedBlockTags = new Set('address article aside base basefont blockquote body caption center col colgroup dd details dialog dir div dl dt fieldset figcaption figure footer form frame frameset h1 h2 h3 h4 h5 h6 head header hr html iframe legend li link main menu menuitem nav noframes ol optgroup option output p param search section summary table tbody td tfoot th thead title tr track ul'.split(' '));
   const lineStarts = [0];
   for (const newline of source.matchAll(/\n/g)) lineStarts.push((newline.index ?? 0) + 1);
@@ -1893,10 +1908,10 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
         return isLiteralFence ? fenced : body;
       }
 
-      const duplicateScript = /^([\s\S]*([_^])(?:\{[^{}]+\}|[A-Za-z0-9]+))(<\s*(sub|sup)\s*>[\s\S]*)$/i.exec(body);
+      const duplicateScript = /^([\s\S]*([_^])(?:\{[^{}]+\}|[A-Za-z0-9]+))(<(sub|sup)\s*>[\s\S]*)$/i.exec(body);
       if (!isLiteralFence && duplicateScript
         && (duplicateScript[2] === '_' ? 'sub' : 'sup') === duplicateScript[4].toLowerCase()
-        && /<\s*\/\s*(?:sub|sup)\s*>\s*$/i.test(duplicateScript[3])) {
+        && /<\/(?:sub|sup)\s*>\s*$/i.test(duplicateScript[3])) {
         return `$${duplicateScript[1]}$${duplicateScript[3]}`;
       }
 
@@ -1906,7 +1921,7 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
     let output = '';
     let cursor = 0;
     let opening = -1;
-    const tagToken = /<\s*(\/?)\s*(sub|sup)\s*>/giy;
+    const tagToken = /<(\/?)(sub|sup)\s*>/giy;
     const tagStack: string[] = [];
     for (let index = 0; index < segment.length; index += 1) {
       if (segment[index] === '<') {
@@ -1934,7 +1949,7 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
         continue;
       }
       const body = segment.slice(opening + 1, index);
-      if (!body.includes('\n') && /<\s*\/?\s*(?:sup|sub)\s*>/i.test(body)) {
+      if (!body.includes('\n') && /<\/?(?:sup|sub)\s*>/i.test(body)) {
         output += segment.slice(cursor, opening) + renderFence(segment.slice(opening, index + 1), body);
         cursor = index + 1;
       }

@@ -1,9 +1,9 @@
 import { createElement, isValidElement, type ReactNode } from 'react';
 import { parseEntities } from 'parse-entities';
-import { displayMarkdownFallback, displayMathTagsAsLatex, fencedMarkdownLineStarts, findHtmlTagEnd, mapOutsideLiteralHtmlBlocks, markdownCodeSpans, normalizeMarkdownMathOutsideCodeSpans } from '../../services/mineru.ts';
+import { displayMarkdownFallback, displayMathTagsAsLatex, fencedMarkdownLineStarts, findHtmlTagEnd, mapOutsideLiteralHtmlBlocks, markdownCodeSpans, normalizeMarkdownMathOutsideCodeSpans, splitMarkdownLinesPreservingEndings } from '../../services/mineru.ts';
 import { normalizeMarkdownMath } from '../../utils/markdown.ts';
 
-const INLINE_TAG_PATTERN = /<\s*\/?\s*(?:sup|sub)\s*>/gi;
+const INLINE_TAG_PATTERN = /<\/?(?:sup|sub)\s*>/gi;
 const CAPTION_TAG_PATTERN = /<\/?(?:sup|sub)\s*>/gi;
 // Braces keep protected tags outside long math candidates in normalizeMarkdownMath.
 // A private-use marker here can cause repeated scans of a preceding math token.
@@ -108,7 +108,7 @@ function readInlineTag(node: MarkdownNode): { name: 'sup' | 'sub'; closing: bool
     return null;
   }
 
-  const match = /^<\s*(\/?)\s*(sup|sub)\s*>$/i.exec(node.value.trim());
+  const match = /^<(\/?)(sup|sub)\s*>$/i.exec(node.value.trim());
 
   return match
     ? { name: match[2].toLowerCase() as 'sup' | 'sub', closing: Boolean(match[1]) }
@@ -189,7 +189,7 @@ function renderInlineTags(
 }
 
 export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFences = true): string {
-  if (!/<\s*\/?\s*(?:sup|sub)\s*>/i.test(markdown)) {
+  if (!/<\/?(?:sup|sub)\s*>/i.test(markdown)) {
     return normalizeMarkdownMath(markdown);
   }
 
@@ -216,7 +216,7 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
     }
     return line.slice(cursor);
   };
-  const lines = markdown.split(/(?<=\n)/);
+  const lines = splitMarkdownLinesPreservingEndings(markdown);
   // Indentation inside a fenced block is fenced content, not a new indented
   // code block. Keep the fence together before splitting out indented blocks.
   const fenceStarts = fencedMarkdownLineStarts(markdown);
@@ -231,7 +231,7 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
   let candidateInCode = false;
   let candidateSetextText = false;
   const endsStandaloneBlock = (content: string, precedingText: boolean) => {
-    const line = content.replace(/\r?\n$/, '').trimEnd();
+    const line = content.replace(/\r\n$|[\r\n]$/, '').trimEnd();
     return /^ {0,3}#{1,6}(?:[ \t]+|$)/.test(line)
       || /^ {0,3}(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*){3,})$/.test(line)
       || (precedingText && /^ {0,3}(?:=+|-{1,2})[ \t]*$/.test(line));
@@ -369,7 +369,7 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
   }
 
   const canonicalizeInlineTag = (tag: string) => {
-    const [, slash, name] = /<\s*(\/?)\s*(sup|sub)\s*>/i.exec(tag) ?? [];
+    const [, slash, name] = /<(\/?)(sup|sub)\s*>/i.exec(tag) ?? [];
     return name ? `<${slash ? '/' : ''}${name.toLowerCase()}>` : tag;
   };
   const tags: string[] = [];

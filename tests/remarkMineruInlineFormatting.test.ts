@@ -209,6 +209,12 @@ test('explicit spaced inline math converts its paired tag', () => {
   assert.doesNotMatch(render(markdown), /katex-error/);
 });
 
+test('invalid spaced pseudo-tags inside authored math stay literal', () => {
+  const source = '$x< sup>2< /sup>$';
+  assert.equal(displayMathTagsAsLatex('x< sup>2< /sup>'), 'x< sup>2< /sup>');
+  assert.equal(normalizeMineruReaderMarkdown(source), source);
+});
+
 test('JSON-backed and translated tagged prose retains adjacent math', () => {
   const markdown = 'x_i H<sub>2</sub>O';
 
@@ -442,6 +448,14 @@ test('reader normalization leaves four-space and tab-indented code blocks litera
     assert.match(render(markdown), /<pre><code>\$H&lt;sub&gt;2&lt;\/sub&gt;O\$\n<\/code><\/pre>/);
     assert.match(render(markdown), /H<sub>3<\/sub>O/);
   }
+});
+
+test('bare CR indented code remains literal while later math formats', () => {
+  const source = 'text\r\r    $H<sub>2</sub>O$\r\r\\(x + H<sub>3</sub>O\\)';
+  const markdown = normalizeMineruReaderMarkdown(source);
+  assert.match(markdown, /^text\r\r    \$H<sub>2<\/sub>O\$\r\r/);
+  assert.match(markdown, /\$x \+ H_\{3\}O\$$/);
+  assert.match(render(source), /<pre><code>\$H&lt;sub&gt;2&lt;\/sub&gt;O\$/);
 });
 
 test('reader normalization recognizes indented code after blockquote prefixes', () => {
@@ -807,6 +821,12 @@ test('a dedented blockquote paragraph cannot block a new raw HTML block', () => 
   }
 });
 
+test('a slash-delimited pseudo-tag cannot open a type-six raw HTML block', () => {
+  const source = '<div/foo>\n\\(x + H<sub>2</sub>O\\)';
+  assert.match(renderToStaticMarkup(createElement(ReactMarkdown, null, source)), /^<p>&lt;div\/foo&gt;/);
+  assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$$/);
+});
+
 test('Unicode case folding does not shift raw HTML closer offsets', () => {
   for (const closing of ['</pre>', '</PRE>']) {
     const source = `<pre>\nİ\n${closing}\n\\(x + H<sub>2</sub>O\\)`;
@@ -833,6 +853,12 @@ test('an invalid fence opener does not make later paragraph math into code', () 
   assert.match(rawHtml, /^<p>[\s\S]*<\/p>\n<pre><code><\/code><\/pre>$/);
   assert.match(render(source), /<span class="katex">/);
   assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$/);
+});
+
+test('an ordered marker other than one cannot interrupt a paragraph with a fence', () => {
+  const source = 'paragraph\n2. ~~~text\n    \\(x + H<sub>2</sub>O\\)';
+  assert.match(renderToStaticMarkup(createElement(ReactMarkdown, null, source)), /^<p>paragraph\n2\. ~~~text/);
+  assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$$/);
 });
 
 test('a fence opened on a list continuation ends at list dedent', () => {
