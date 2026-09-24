@@ -328,6 +328,41 @@ test('fenced code tags do not exhaust the formatting cap or block later math', (
   assert.match(markdown, /^```text\nH<sub>2<\/sub>O/);
 });
 
+test('fenced tags cannot split later long relation text into expensive normalization', () => {
+  const source = `\x60\x60\x60text\n$x$<sup>${'a'.repeat(10_000)}=b</sup>\n\x60\x60\x60\nH<sub>2</sub>O`;
+  const started = performance.now();
+  const markdown = normalizeMineruReaderMarkdown(source);
+
+  assert.ok(performance.now() - started < 2_000);
+  assert.ok(markdown.startsWith(`\x60\x60\x60text\n$x$<sup>${'a'.repeat(10_000)}=b</sup>\n\x60\x60\x60\n`));
+  assert.match(markdown, /H<sub>2<\/sub>O$/);
+});
+
+test('inline code tags cannot split a long literal relation', () => {
+  const literal = '`$x$<sup>' + 'a'.repeat(10_000) + '=b</sup>`';
+  const source = `${literal}\nH<sub>2</sub>O`;
+  const started = performance.now();
+  const markdown = normalizeMineruReaderMarkdown(source);
+
+  assert.ok(performance.now() - started < 2_000);
+  assert.ok(markdown.startsWith(literal));
+  assert.match(render(markdown), /H<sub>2<\/sub>O/);
+});
+
+test('an unmatched backtick cannot turn a later paragraph into inline code', () => {
+  const source = '`unmatched\n\n\\(x + H<sub>2</sub>O\\)`';
+  assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$`$/);
+  const withFence = `${source}\n\n\x60\x60\x60text\nexample\n\x60\x60\x60`;
+  assert.match(normalizeMineruReaderMarkdown(withFence), /\$x \+ H_\{2\}O\$`/);
+});
+
+test('tilde-fenced tags stay inert while outside math still formats', () => {
+  const source = '~~~text\n$x$<sup>2</sup>\n~~~\n\\(x + H<sub>2</sub>O\\)';
+  const markdown = normalizeMineruReaderMarkdown(source);
+  assert.match(markdown, /^~~~text\n\$x\$<sup>2<\/sup>\n~~~\n/);
+  assert.match(markdown, /\$x \+ H_\{2\}O\$$/);
+});
+
 test('inline formatting enforces one work budget across paragraph siblings', () => {
   const tree = {
     type: 'root',
@@ -639,6 +674,40 @@ test('literal raw HTML blocks keep tag examples inert', () => {
       assert.match(render(markdown), /H<sub>3<\/sub>O/);
     }
   }
+});
+
+test('indented code following a raw HTML block remains literal', () => {
+  const source = '<pre>x</pre>\n    $H<sub>2</sub>O$';
+  assert.equal(normalizeMineruReaderMarkdown(source), source);
+});
+
+test('invalid custom HTML opening does not hide following tagged math', () => {
+  const source = '<x @>\n\\(x + H<sub>2</sub>O\\)';
+  assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$$/);
+  const valid = '<x data-note="a > b">\n$H<sub>2</sub>O$\n\nH<sub>3</sub>O';
+  const markdown = normalizeMineruReaderMarkdown(valid);
+  assert.match(markdown, /^<x data-note="a > b">\n\$H<sub>2<\/sub>O\$/);
+  assert.match(render(markdown), /H<sub>3<\/sub>O/);
+});
+
+test('CRLF blank line ends a generic raw HTML block', () => {
+  const source = '<div>literal</div>\r\n\r\n\\(x + H<sub>2</sub>O\\)';
+  assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$$/);
+});
+
+test('fenced Markdown fallback keeps escaped math text after the fence', () => {
+  const source = '\x60\x60\x60text\nexample\n\x60\x60\x60\n<span class="math">x<sup>50%</sup></span>';
+  const safeNormalized = normalizeMarkdownMath(source.replace('<sup>50%</sup>', String.raw`^{50\%}`));
+  const markdown = displayMarkdownFallback(source, safeNormalized);
+  assert.match(markdown, /\$x\^\{50\\%\}\$$/);
+  assert.doesNotMatch(render(markdown), /katex-error/);
+});
+
+test('a standalone equals line is not a setext heading after a block boundary', () => {
+  const source = '=\n    \\(x + H<sub>2</sub>O\\)';
+  assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$$/);
+  const heading = 'Heading\n===\n    $H<sub>2</sub>O$';
+  assert.equal(normalizeMineruReaderMarkdown(heading), heading);
 });
 
 test('raw comment, instruction, and CDATA blocks keep tag examples inert', () => {

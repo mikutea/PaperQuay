@@ -1,6 +1,6 @@
 import { createElement, isValidElement, type ReactNode } from 'react';
 import { parseEntities } from 'parse-entities';
-import { displayMarkdownFallback, displayMathTagsAsLatex, fencedMarkdownLineStarts, findHtmlTagEnd, mapOutsideLiteralHtmlBlocks } from '../../services/mineru.ts';
+import { displayMarkdownFallback, displayMathTagsAsLatex, fencedMarkdownLineStarts, findHtmlTagEnd, mapOutsideLiteralHtmlBlocks, markdownCodeSpans, normalizeMarkdownMathOutsideCodeSpans } from '../../services/mineru.ts';
 import { normalizeMarkdownMath } from '../../utils/markdown.ts';
 
 const INLINE_TAG_PATTERN = /<\s*\/?\s*(?:sup|sub)\s*>/gi;
@@ -228,16 +228,19 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
   let hasIndentedCode = false;
   let candidateBlank = true;
   let candidateInCode = false;
-  const endsStandaloneBlock = (content: string) => {
+  let candidateSetextText = false;
+  const endsStandaloneBlock = (content: string, precedingText: boolean) => {
     const line = content.replace(/\r?\n$/, '').trimEnd();
     return /^ {0,3}#{1,6}(?:[ \t]+|$)/.test(line)
-      || /^ {0,3}(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*){3,}|=+[ \t]*)$/.test(line);
+      || /^ {0,3}(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*){3,})$/.test(line)
+      || (precedingText && /^ {0,3}=+[ \t]*$/.test(line));
   };
   for (const [index, line] of lines.entries()) {
     if (fencedLines[index]) {
       // The line after a fence is a new block boundary, even without a blank line.
       candidateBlank = true;
       candidateInCode = false;
+      candidateSetextText = false;
       continue;
     }
     const content = unquote(line);
@@ -248,7 +251,9 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
       break;
     }
     candidateInCode = false;
-    candidateBlank = blank || endsStandaloneBlock(content);
+    const standalone = endsStandaloneBlock(content, candidateSetextText);
+    candidateBlank = blank || standalone;
+    candidateSetextText = !blank && !indented && !standalone;
   }
   if (hasIndentedCode) {
     const normalizeOutside = (text: string) => {
@@ -261,11 +266,13 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
     let outside = '';
     let inCode = false;
     let previousBlank = true;
+    let previousSetextText = false;
     for (const [index, line] of lines.entries()) {
       if (fencedLines[index]) {
         outside += line;
         inCode = false;
         previousBlank = true;
+        previousSetextText = false;
         continue;
       }
       const content = unquote(line);
@@ -284,7 +291,9 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
         outside += line;
         inCode = false;
       }
-      previousBlank = blank || endsStandaloneBlock(content);
+      const standalone = endsStandaloneBlock(content, previousSetextText);
+      previousBlank = blank || standalone;
+      previousSetextText = !blank && !indented && !standalone;
     }
     return output + normalizeOutside(outside);
   }
@@ -318,6 +327,8 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
   }
   const chunks: string[] = [];
   const stack: Array<{ name: string; adjacent: boolean; start: number }> = [];
+  const codeSpans = markdownCodeSpans(markdown, true);
+  let codeSpanCursor = 0;
   let chunkCursor = 0;
   let tagCount = 0;
   let tagLineStart = 0;
@@ -329,7 +340,10 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
       tagLineStart = tagLineEnd + 1;
       tagLineEnd = markdown.indexOf('\n', tagLineStart);
     }
-    if (!fenceStarts.has(tagLineStart) && ++tagCount > MAX_INLINE_NODES) return markdown;
+    while (codeSpans[codeSpanCursor]?.[1] <= tagStart) codeSpanCursor += 1;
+    if (fenceStarts.has(tagLineStart)) continue;
+    if (codeSpans[codeSpanCursor]?.[0] <= tagStart && tagStart < codeSpans[codeSpanCursor][1]) continue;
+    if (++tagCount > MAX_INLINE_NODES) return markdown;
     const name = /(?:sup|sub)/i.exec(tag[0])?.[0].toLowerCase() ?? '';
     if (/^<\s*\//.test(tag[0])) {
       const opening = stack[stack.length - 1];
@@ -417,10 +431,10 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
   // Formula wrappers have already received safe tag conversion. Keep ordinary
   // math on the direct path so long relation tokens never reach marker scans.
   if (/[_^\\$=<>~]/.test(markdown.replace(INLINE_TAG_PATTERN, '')) && !pairedAdjacentFence) {
-    return displayMarkdownFallback(markdown, normalizeMarkdownMath(restoreInlineTags(protectedMarkdown)));
+    return displayMarkdownFallback(markdown, normalizeMarkdownMathOutsideCodeSpans(restoreInlineTags(protectedMarkdown)));
   }
 
-  const protectedResult = restoreInlineTags(normalizeMarkdownMath(protectedMarkdown));
+  const protectedResult = restoreInlineTags(normalizeMarkdownMathOutsideCodeSpans(protectedMarkdown));
 
   return protectedResult;
 }

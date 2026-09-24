@@ -1301,7 +1301,7 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
   const lineStarts = [0];
   for (const newline of source.matchAll(/\n/g)) lineStarts.push((newline.index ?? 0) + 1);
   let lineCursor = 0;
-  const blankLines = [...source.matchAll(/\n(?=[ \t]*\n)/g)].map((match) => match.index ?? 0);
+  const blankLines = [...source.matchAll(/\n(?=[ \t]*\r?\n)/g)].map((match) => match.index ?? 0);
   let blankCursor = 0;
   const markerPositions = new Map<string, number[]>([
     ['-->', []], ['?>', []], [']]>', []],
@@ -1391,7 +1391,39 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
     const leading = text.match(/^\s*/)?.[0] ?? '';
     const trailing = text.match(/\s*$/)?.[0] ?? '';
     const body = text.slice(leading.length, text.length - trailing.length);
-    return body ? leading + transform(body) + trailing : text;
+    if (!body) return text;
+    // Keep the indentation with the first content line so CommonMark can
+    // recognize code immediately after a protected HTML block.
+    if (/(?:^|\n)(?: {4,}|\t[ \t]*)$/.test(leading)) return transform(text);
+    return leading + transform(body) + trailing;
+  };
+  const validCustomOpening = (start: number, end: number) => {
+    let position = start + 1;
+    while (/[A-Za-z0-9-]/.test(source[position] ?? '') && position < end) position += 1;
+    while (position < end) {
+      const spacing = position;
+      while ((source[position] === ' ' || source[position] === '\t') && position < end) position += 1;
+      if (source[position] === '/' && position + 1 === end) return true;
+      if (position === end) return true;
+      if (position === spacing || !/[A-Za-z_:]/.test(source[position] ?? '')) return false;
+      position += 1;
+      while (/[A-Za-z0-9:._-]/.test(source[position] ?? '') && position < end) position += 1;
+      while ((source[position] === ' ' || source[position] === '\t') && position < end) position += 1;
+      if (source[position] !== '=') continue;
+      position += 1;
+      while ((source[position] === ' ' || source[position] === '\t') && position < end) position += 1;
+      const quote = source[position] === '"' || source[position] === "'" ? source[position++] : '';
+      const valueStart = position;
+      if (quote) {
+        while (position < end && source[position] !== quote) position += 1;
+        if (position === end) return false;
+        position += 1;
+      } else {
+        while (position < end && !/[\s"'=<>`]/.test(source[position])) position += 1;
+        if (position === valueStart) return false;
+      }
+    }
+    return position === end;
   };
   const throughLineEnd = (end: number) => {
     const newline = source.indexOf('\n', end);
@@ -1428,6 +1460,7 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
     }
     const typeOne = /^(?:pre|textarea|script|style)$/.test(tag);
     if (tag && !typeOne && !namedBlockTags.has(tag)) {
+      if (match[2] && !validCustomOpening(opening, openingEnd)) continue;
       const lineEnd = source.indexOf('\n', openingEnd + 1);
       if (source.slice(openingEnd + 1, lineEnd < 0 ? source.length : lineEnd).trim()) continue;
     }
@@ -1446,6 +1479,76 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
     found = true;
   }
   return found ? output + renderOutside(source.slice(cursor)) : null;
+}
+
+export function markdownCodeSpans(text: string, inlineOnly = false): Array<[number, number]> {
+  const blankEnds = inlineOnly
+    ? [...text.matchAll(/\r?\n[ \t]*\r?\n/g)].map((match) => (match.index ?? 0) + match[0].length)
+    : [];
+  let blankCursor = 0;
+  let paragraph = 0;
+  let lineStart = 0;
+  let lineEnd = text.indexOf('\n');
+  const delimiters = [...text.matchAll(/`+/g)].flatMap((match) => {
+    const index = match.index ?? 0;
+    while (blankEnds[blankCursor] <= (match.index ?? 0)) {
+      blankCursor += 1;
+      paragraph += 1;
+    }
+    while (lineEnd >= 0 && index > lineEnd) {
+      lineStart = lineEnd + 1;
+      lineEnd = text.indexOf('\n', lineStart);
+    }
+    // A line-level triple run is a fence or indented code, not an inline span.
+    if (inlineOnly && match[0].length >= 3) {
+      let previous = index - 1;
+      while (previous >= lineStart && (text[previous] === ' ' || text[previous] === '\t')) previous -= 1;
+      if (text[previous] !== '`' &&
+          /^(?:[ \t]*>[ \t]*)*(?:(?:[-+*]|\d{1,9}[.)])[ \t]+)?[ \t]*$/.test(text.slice(lineStart, index))) return [];
+    }
+    let backslashes = 0;
+    for (let index = (match.index ?? 0) - 1; text[index] === '\\'; index -= 1) backslashes += 1;
+    return [{ index: match.index ?? 0, length: match[0].length, escaped: backslashes % 2, paragraph }];
+  });
+  const nextSame = new Int32Array(delimiters.length).fill(-1);
+  const nextByLength = new Map<number, number>();
+  let nextParagraph = -1;
+  for (let index = delimiters.length - 1; index >= 0; index -= 1) {
+    const delimiter = delimiters[index];
+    if (delimiter.paragraph !== nextParagraph) {
+      nextByLength.clear();
+      nextParagraph = delimiter.paragraph;
+    }
+    nextSame[index] = nextByLength.get(delimiter.length - delimiter.escaped) ?? -1;
+    nextByLength.set(delimiter.length, index);
+  }
+  const spans: Array<[number, number]> = [];
+  for (let index = 0; index < delimiters.length; index += 1) {
+    if (delimiters[index].length <= delimiters[index].escaped) continue;
+    const closingIndex = nextSame[index];
+    if (closingIndex < 0) continue;
+    spans.push([delimiters[index].index + delimiters[index].escaped, delimiters[closingIndex].index + delimiters[closingIndex].length]);
+    index = closingIndex;
+  }
+  return spans;
+}
+
+export function normalizeMarkdownMathOutsideCodeSpans(text: string): string {
+  const spans = markdownCodeSpans(text, true);
+  if (!spans.length) return normalizeMarkdownMath(text);
+  const normalizeOutside = (segment: string) => {
+    const leading = segment.match(/^\s*/)?.[0] ?? '';
+    const trailing = segment.match(/\s*$/)?.[0] ?? '';
+    const body = segment.slice(leading.length, segment.length - trailing.length);
+    return body ? leading + normalizeMarkdownMath(body) + trailing : segment;
+  };
+  let output = '';
+  let cursor = 0;
+  for (const [start, end] of spans) {
+    output += normalizeOutside(text.slice(cursor, start)) + text.slice(start, end);
+    cursor = end;
+  }
+  return output + normalizeOutside(text.slice(cursor));
 }
 
 export function displayMarkdownFallback(source: string | undefined, normalized: string): string {
@@ -1486,8 +1589,41 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
       const leading = text.match(/^\s*/)?.[0] ?? '';
       const trailing = text.match(/\s*$/)?.[0] ?? '';
       const body = text.slice(leading.length, text.length - trailing.length);
+      const closes = {
+        div: [...body.matchAll(/<\/div>/gi)].map((match) => match.index ?? 0),
+        span: [...body.matchAll(/<\/span>/gi)].map((match) => match.index ?? 0),
+      };
+      const closeCursor = { div: 0, span: 0 };
+      let safeBody = '';
+      let bodyCursor = 0;
+      let search = 0;
+      while (search < body.length) {
+        const start = body.indexOf('<', search);
+        if (start < 0) break;
+        const end = findHtmlTagEnd(body, start);
+        if (end < 0) break;
+        const opening = body.slice(start, end + 1);
+        const kind = /^<div\s+class=["']formula["'](?=[\s/>])/i.test(opening) ? 'div'
+          : /^<span\s+class=["']math["'](?=[\s/>])/i.test(opening) ? 'span' : null;
+        if (kind) {
+          const positions = closes[kind];
+          while (positions[closeCursor[kind]] < end + 1) closeCursor[kind] += 1;
+          const closing = positions[closeCursor[kind]];
+          if (closing !== undefined) {
+            const closingEnd = closing + kind.length + 3;
+            const inner = body.slice(end + 1, closing);
+            const latex = displayMathTagsAsLatex(inner);
+            safeBody += body.slice(bodyCursor, end + 1) + (latex ?? inner) + body.slice(closing, closingEnd);
+            bodyCursor = closingEnd;
+            search = bodyCursor;
+            continue;
+          }
+        }
+        search = end + 1;
+      }
+      safeBody += body.slice(bodyCursor);
       return body
-        ? leading + displayMarkdownFallback(body, normalizeMarkdownMath(body)) + trailing
+        ? leading + displayMarkdownFallback(body, normalizeMarkdownMathOutsideCodeSpans(safeBody)) + trailing
         : text;
     };
     let output = '';
@@ -1531,7 +1667,7 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
     return /^\*\*(?:图片说明|表格说明)\*\*/.test(normalized) ? normalized : source;
   }
 
-  const literalHtml = mapOutsideLiteralHtmlBlocks(source, (text) => displayMarkdownFallback(text, normalizeMarkdownMath(text)));
+  const literalHtml = mapOutsideLiteralHtmlBlocks(source, (text) => displayMarkdownFallback(text, normalizeMarkdownMathOutsideCodeSpans(text)));
   if (literalHtml !== null) return literalHtml;
 
   const literalFences = new Set([...source.matchAll(/\$[^$\n]*\$/g)].map(([fenced]) => fenced));
@@ -1640,38 +1776,11 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
     return output + renderInlineMath(segment.slice(cursor));
   };
 
-  const codeSpans = (text: string) => {
-    const delimiters = [...text.matchAll(/`+/g)].flatMap((match) => {
-      let backslashes = 0;
-      for (let index = (match.index ?? 0) - 1; text[index] === '\\'; index -= 1) {
-        backslashes += 1;
-      }
-      return [{ index: match.index ?? 0, length: match[0].length, escaped: backslashes % 2 }];
-    });
-    const nextSame = new Int32Array(delimiters.length).fill(-1);
-    const nextByLength = new Map<number, number>();
-
-    for (let index = delimiters.length - 1; index >= 0; index -= 1) {
-      const delimiter = delimiters[index];
-      nextSame[index] = nextByLength.get(delimiter.length - delimiter.escaped) ?? -1;
-      nextByLength.set(delimiter.length, index);
-    }
-
-    const spans: Array<[number, number]> = [];
-    for (let index = 0; index < delimiters.length; index += 1) {
-      if (delimiters[index].length <= delimiters[index].escaped) continue;
-      const closingIndex = nextSame[index];
-      if (closingIndex < 0) continue;
-      spans.push([delimiters[index].index + delimiters[index].escaped, delimiters[closingIndex].index + delimiters[closingIndex].length]);
-      index = closingIndex;
-    }
-    return spans;
-  };
-
   let output = '';
   let cursor = 0;
-  const normalizedSpans = codeSpans(normalized);
-  const sourceSpans = codeSpans(source);
+  const inlineOnly = !source.includes('```');
+  const normalizedSpans = markdownCodeSpans(normalized, inlineOnly);
+  const sourceSpans = markdownCodeSpans(source, inlineOnly);
 
   for (let index = 0; index < normalizedSpans.length; index += 1) {
     const [start, end] = normalizedSpans[index];
