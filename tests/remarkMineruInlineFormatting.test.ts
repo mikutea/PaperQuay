@@ -889,3 +889,48 @@ test('an unclosed math wrapper does not expose later raw pre content', () => {
 
   assert.match(markdown, /<pre>\n\$H<sub>3<\/sub>O\$$/);
 });
+
+test('raw HTML examples inside a code fence do not hide following math', () => {
+  const source = '```html\n<div>\nexample\n</div>\n```\n\\(x + H<sub>3</sub>O\\)';
+  const markdown = normalizeMineruReaderMarkdown(source);
+
+  assert.match(markdown, /^```html\n<div>\nexample\n<\/div>\n```\n/);
+  assert.match(markdown, /\$x \+ H_\{3\}O\$/);
+});
+
+test('an unclosed generic HTML block stops at its blockquote boundary', () => {
+  const source = '> <div>\n> literal\noutside \\(x + H<sub>2</sub>O\\)';
+  const markdown = normalizeMineruReaderMarkdown(source);
+
+  assert.match(markdown, /outside \$x \+ H_\{2\}O\$/);
+});
+
+test('a quoted code fence ends before later indented literal code', () => {
+  const source = '> ```text\n> literal\n\n    $H<sub>2</sub>O$';
+  const markdown = normalizeMineruReaderMarkdown(source);
+
+  assert.match(markdown, /    \$H<sub>2<\/sub>O\$$/);
+  assert.doesNotMatch(markdown, /H_\{2\}O/);
+});
+
+test('math tag bodies may contain a literal greater-than sign', () => {
+  assert.equal(displayMathTagsAsLatex('x<sup>a>b</sup>'), 'x^{a>b}');
+  assert.doesNotMatch(render('$$x<sup>a>b</sup>$$'), /katex-error|&lt;sup/);
+});
+
+test('an opening display fence is not mistaken for a completed inline fence', () => {
+  const markdown = normalizeMineruReaderMarkdown('$$<sup>2</sup>x$$');
+
+  assert.match(markdown, /^\$\$/);
+  assert.match(markdown, /\$\$$/);
+  assert.doesNotMatch(markdown, /<sup>/);
+  assert.doesNotMatch(render('$$<sup>2</sup>x$$'), /katex-error|&lt;sup/);
+});
+
+test('many unclosed formula wrappers do not rescan every remaining block', () => {
+  const source = '<div class="formula">\nH<sup>2</sup>\n\n'.repeat(20_000);
+  const started = performance.now();
+  normalizeMineruReaderMarkdown(source);
+
+  assert.ok(performance.now() - started < 2_000);
+});

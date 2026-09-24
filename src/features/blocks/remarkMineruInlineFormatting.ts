@@ -1,6 +1,6 @@
 import { createElement, isValidElement, type ReactNode } from 'react';
 import { parseEntities } from 'parse-entities';
-import { displayMarkdownFallback, displayMathTagsAsLatex, mapOutsideLiteralHtmlBlocks } from '../../services/mineru.ts';
+import { displayMarkdownFallback, displayMathTagsAsLatex, fencedMarkdownLineStarts, mapOutsideLiteralHtmlBlocks } from '../../services/mineru.ts';
 import { normalizeMarkdownMath } from '../../utils/markdown.ts';
 
 const INLINE_TAG_PATTERN = /<\s*\/?\s*(?:sup|sub)\s*>/gi;
@@ -218,20 +218,12 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
   const lines = markdown.split(/(?<=\n)/);
   // Indentation inside a fenced block is fenced content, not a new indented
   // code block. Keep the fence together before splitting out indented blocks.
-  let fenceRun = '';
+  const fenceStarts = fencedMarkdownLineStarts(markdown);
+  let lineStart = 0;
   const fencedLines = lines.map((line) => {
-    const content = unquote(line).trimEnd();
-    const marker = /^ {0,3}(`{3,}|~{3,})/.exec(content);
-    if (fenceRun) {
-      if (marker && marker[1][0] === fenceRun[0] && marker[1].length >= fenceRun.length &&
-          /^\s*$/.test(content.slice(marker[0].length))) fenceRun = '';
-      return true;
-    }
-    if (marker) {
-      fenceRun = marker[1];
-      return true;
-    }
-    return false;
+    const fenced = fenceStarts.has(lineStart);
+    lineStart += line.length;
+    return fenced;
   });
   let hasIndentedCode = false;
   let candidateBlank = true;
@@ -294,6 +286,30 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
   // A completed math fence followed by a tag must stay outside that formula.
   // Split at each paired tag so this exception cannot force later, unrelated
   // long math tokens through the protected-marker normalizer.
+  const completedDollarFenceEnds = new Set<number>();
+  let singleDollarOpen = false;
+  let doubleDollarOpen = false;
+  for (let index = 0; index < markdown.length;) {
+    if (markdown[index] === '\\') {
+      index += 2;
+      continue;
+    }
+    if (markdown[index] !== '$') {
+      index += 1;
+      continue;
+    }
+    let end = index + 1;
+    while (markdown[end] === '$') end += 1;
+    for (let pair = index; pair + 1 < end; pair += 2) {
+      if (doubleDollarOpen) completedDollarFenceEnds.add(pair + 1);
+      doubleDollarOpen = !doubleDollarOpen;
+    }
+    if ((end - index) % 2 !== 0) {
+      if (singleDollarOpen) completedDollarFenceEnds.add(end - 1);
+      singleDollarOpen = !singleDollarOpen;
+    }
+    index = end;
+  }
   const chunks: string[] = [];
   const stack: Array<{ name: string; adjacent: boolean; start: number }> = [];
   let chunkCursor = 0;
@@ -316,7 +332,7 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
         }
       }
     } else {
-      stack.push({ name, adjacent: stack.length === 0 && markdown[(tag.index ?? 0) - 1] === '$', start: tag.index ?? 0 });
+      stack.push({ name, adjacent: stack.length === 0 && completedDollarFenceEnds.has((tag.index ?? 0) - 1), start: tag.index ?? 0 });
     }
   }
   if (splitAdjacentFences && chunks.length > 0) {
