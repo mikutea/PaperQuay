@@ -1318,7 +1318,7 @@ export function fencedMarkdownLineStarts(source: string): Set<number> {
 export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: string) => string): string | null {
   const lower = source.toLowerCase();
   const fencedLines = fencedMarkdownLineStarts(source);
-  const blockStarts = /<!--|<\?|<!\[CDATA\[|<![A-Z]|<\/([A-Za-z][A-Za-z0-9-]*)\s*>|<([A-Za-z][A-Za-z0-9-]*)(?=[\s/>])/g;
+  const blockStarts = /<!--|<\?|<!\[CDATA\[|<![A-Z]|<\/([A-Za-z][A-Za-z0-9-]*)\s*>|<([A-Za-z][A-Za-z0-9-]*)(?=[\s/>]|$)/g;
   const namedBlockTags = new Set('address article aside base basefont blockquote body caption center col colgroup dd details dialog dir div dl dt fieldset figcaption figure footer form frame frameset h1 h2 h3 h4 h5 h6 head header hr html iframe legend li link main menu menuitem nav noframes ol optgroup option output p param search section summary table tbody td tfoot th thead title tr track ul'.split(' '));
   const lineStarts = [0];
   for (const newline of source.matchAll(/\n/g)) lineStarts.push((newline.index ?? 0) + 1);
@@ -1460,14 +1460,17 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
     const containers = atBlockStart(lineStart, opening);
     if (containers === null) continue;
     const tag = (match[2] ?? match[1] ?? '').toLowerCase();
+    const typeOne = !!match[2] && /^(?:pre|textarea|script|style)$/.test(tag);
     const specialEnding = match[0].startsWith('<!--') ? '-->'
       : match[0].startsWith('<?') ? '?>'
       : match[0].toLowerCase().startsWith('<![cdata[') ? ']]>' : '';
     const special = !tag;
     const openingLineEnd = source.indexOf('\n', opening);
-    const openingEnd = specialEnding
+    let openingEnd = specialEnding
       ? opening + match[0].length - 1
       : findHtmlTagEnd(source, opening, openingLineEnd < 0 ? source.length : openingLineEnd);
+    // Type-one raw HTML starts at the tag name even if its `>` is absent.
+    if (openingEnd < 0 && typeOne) openingEnd = (openingLineEnd < 0 ? source.length : openingLineEnd) - 1;
     if (openingEnd < 0) continue;
     const mathWrapper = tag === 'div' && /^<div\s+class=["']formula["'](?=[\s/>])/i.test(source.slice(opening, openingEnd + 1)) ? 'div'
       : tag === 'span' && /^<span\s+class=["']math["'](?=[\s/>])/i.test(source.slice(opening, openingEnd + 1)) ? 'span' : null;
@@ -1480,7 +1483,6 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
         continue;
       }
     }
-    const typeOne = /^(?:pre|textarea|script|style)$/.test(tag);
     if (tag && !typeOne && !namedBlockTags.has(tag)) {
       if (match[2] && !validCustomOpening(opening, openingEnd)) continue;
       const lineEnd = source.indexOf('\n', openingEnd + 1);
@@ -1544,18 +1546,66 @@ function isLineLevelCodePrefix(prefix: string): boolean {
 }
 
 export function markdownCodeSpans(text: string, inlineOnly = false): Array<[number, number]> {
-  const blankEnds = inlineOnly
+  const paragraphBreaks = inlineOnly
     ? [...text.matchAll(/\r?\n[ \t]*\r?\n/g)].map((match) => (match.index ?? 0) + match[0].length)
     : [];
-  let blankCursor = 0;
+  if (inlineOnly) {
+    const fencedLines = fencedMarkdownLineStarts(text);
+    let previousQuoteDepth = 0;
+    let listWidth = 0;
+    for (let start = 0; start < text.length;) {
+      const newline = text.indexOf('\n', start);
+      const end = newline < 0 ? text.length : newline + 1;
+      const line = text.slice(start, newline < 0 ? end : newline).replace(/\r$/, '');
+      if (!fencedLines.has(start)) {
+        let prefix = 0;
+        let quoteDepth = 0;
+        while (prefix < line.length) {
+          let marker = prefix;
+          while (marker - prefix < 3 && line[marker] === ' ') marker += 1;
+          if (line[marker] !== '>') break;
+          prefix = marker + 1;
+          if (line[prefix] === ' ' || line[prefix] === '\t') prefix += 1;
+          quoteDepth += 1;
+        }
+        if (quoteDepth !== previousQuoteDepth) {
+          paragraphBreaks.push(start);
+          listWidth = 0;
+        }
+        previousQuoteDepth = quoteDepth;
+        const content = line.slice(prefix);
+        const listMarker = /^ {0,3}(?:[-+*]|\d{1,9}[.)])[ \t]+/.exec(content);
+        if (listMarker) {
+          paragraphBreaks.push(start);
+          listWidth = listMarker[0].length;
+        } else if (listWidth && content.trim()) {
+          let indent = 0;
+          while (content[indent] === ' ' || content[indent] === '\t') indent += content[indent] === '\t' ? 4 : 1;
+          if (indent < listWidth) {
+            paragraphBreaks.push(start);
+            listWidth = 0;
+          }
+        }
+        if (/^ {0,3}#{1,6}(?:[ \t]+|$)/.test(content) ||
+            /^ {0,3}(?:\*(?:[ \t]*\*){2,}|_(?:[ \t]*_){2,}|-(?:[ \t]*-){2,})[ \t]*$/.test(content)) {
+          paragraphBreaks.push(start, end);
+        } else if (/^ {0,3}(?:=+|-{1,2})[ \t]*$/.test(content)) {
+          paragraphBreaks.push(end);
+        }
+      }
+      start = end;
+    }
+    paragraphBreaks.sort((a, b) => a - b);
+  }
+  let breakCursor = 0;
   let paragraph = 0;
   let lineStart = 0;
   let lineEnd = text.indexOf('\n');
   let lastDelimiterLine = -1;
   const delimiters = [...text.matchAll(/`+/g)].flatMap((match) => {
     const index = match.index ?? 0;
-    while (blankEnds[blankCursor] <= (match.index ?? 0)) {
-      blankCursor += 1;
+    while (paragraphBreaks[breakCursor] <= (match.index ?? 0)) {
+      breakCursor += 1;
       paragraph += 1;
     }
     while (lineEnd >= 0 && index > lineEnd) {
@@ -1797,9 +1847,10 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
 
   let output = '';
   let cursor = 0;
-  const inlineOnly = !source.includes('```');
-  const normalizedSpans = markdownCodeSpans(normalized, inlineOnly);
-  const sourceSpans = markdownCodeSpans(source, inlineOnly);
+  // Actual fenced lines were returned intact above. Mid-line triple runs are
+  // inline delimiters and must still stop at paragraph/block boundaries.
+  const normalizedSpans = markdownCodeSpans(normalized, true);
+  const sourceSpans = markdownCodeSpans(source, true);
 
   for (let index = 0; index < normalizedSpans.length; index += 1) {
     const [start, end] = normalizedSpans[index];

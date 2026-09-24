@@ -430,7 +430,7 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
 
   // Formula wrappers have already received safe tag conversion. Keep ordinary
   // math on the direct path so long relation tokens never reach marker scans.
-  if (/[_^\\$=<>~]/.test(markdown.replace(INLINE_TAG_PATTERN, '')) && !pairedAdjacentFence) {
+  if (fenceStarts.size > 0 || (/[_^\\$=<>~]/.test(markdown.replace(INLINE_TAG_PATTERN, '')) && !pairedAdjacentFence)) {
     return displayMarkdownFallback(markdown, normalizeMarkdownMathOutsideCodeSpans(restoreInlineTags(protectedMarkdown)));
   }
 

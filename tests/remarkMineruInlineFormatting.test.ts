@@ -755,6 +755,49 @@ test('list-then-quote fenced examples stay literal in Markdown fallback', () => 
   assert.match(markdown, /\$x \+ H_\{3\}O\$$/);
 });
 
+test('fenced code preserves image paths and spaced percentages', () => {
+  for (const example of ['images/foo.png H<sub>2</sub>O', '1 2% H<sub>2</sub>O']) {
+    const source = `\x60\x60\x60text\n${example}\n\x60\x60\x60`;
+    assert.equal(normalizeMineruReaderMarkdown(source), source);
+  }
+});
+
+test('mid-line triple backticks cannot join code spans across paragraphs', () => {
+  const source = 'prefix \x60\x60\x60\n\n\\(x + H<sub>2</sub>O\\)\n\nsuffix \x60\x60\x60';
+  const markdown = displayMarkdownFallback(source, normalizeMarkdownMath(source));
+  assert.match(markdown, /\$x \+ H_\{2\}O\$/);
+});
+
+test('type-one raw HTML may open at the end of a line', () => {
+  for (const tag of ['pre', 'script', 'style', 'textarea']) {
+    const source = `<${tag}\nliteral \\(x + H<sub>2</sub>O\\)\n</${tag}>`;
+    assert.equal(normalizeMineruReaderMarkdown(source), source);
+  }
+});
+
+test('standalone special closing tags end at the next blank line', () => {
+  for (const tag of ['pre', 'script']) {
+    const source = `</${tag}>\nliteral H<sub>2</sub>O\n\n\\(x + H<sub>3</sub>O\\)`;
+    const markdown = normalizeMineruReaderMarkdown(source);
+    assert.match(markdown, /\$x \+ H_\{3\}O\$$/);
+  }
+});
+
+test('nonblank block starts terminate an inline code span from the prior block', () => {
+  for (const blockStart of ['# ', '> ', '- ']) {
+    const source = `\x60start\n${blockStart}\\(x + H<sub>2</sub>O\\)\n\x60end`;
+    assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$/m);
+  }
+  for (const source of [
+    '> \x60start\n\\(x + H<sub>2</sub>O\\)\n\x60end',
+    '- \x60start\n\\(x + H<sub>2</sub>O\\)\n\x60end',
+  ]) {
+    assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$/m);
+  }
+  assert.equal(markdownCodeSpans('> \x60start\n> end\x60', true).length, 1);
+  assert.equal(markdownCodeSpans('- \x60start\n  end\x60', true).length, 1);
+});
+
 test('long whitespace in a nested math tag cannot stall tag detection', () => {
   const source = `x<sup><a ${' '.repeat(4_000)}</sup>`;
   const started = performance.now();
