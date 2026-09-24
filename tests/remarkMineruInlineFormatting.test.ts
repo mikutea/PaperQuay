@@ -642,6 +642,21 @@ test('raw comment, instruction, and CDATA blocks keep tag examples inert', () =>
   }
 });
 
+test('raw HTML closing lines keep trailing tag examples inert', () => {
+  for (const source of [
+    '<pre>example</pre> $H<sub>2</sub>O$',
+    '<!-- example --> $H<sub>2</sub>O$',
+    '<?example ?> $H<sub>2</sub>O$',
+    '<![CDATA[example]]> $H<sub>2</sub>O$',
+    '<!DOCTYPE html> $H<sub>2</sub>O$',
+  ]) {
+    const markdown = normalizeMineruReaderMarkdown(`${source}\n\nH<sub>3</sub>O`);
+    assert.ok(markdown.startsWith(source), source);
+    assert.doesNotMatch(markdown, /H_\{2\}O/);
+    assert.match(render(markdown), /H<sub>3<\/sub>O/);
+  }
+});
+
 test('an unclosed literal pre block keeps the remaining tag example inert', () => {
   const source = 'H<sub>3</sub>O\n<pre>$H<sub>2</sub>O$';
   const markdown = displayMarkdownFallback(source, normalizeMarkdownMath(source));
@@ -948,6 +963,12 @@ test('math tag bodies distinguish less-than relations from nested HTML', () => {
   assert.doesNotMatch(render('$$x<sup>a<2</sup>$$'), /katex-error|&lt;sup/);
 });
 
+test('repeated math scripts retain a less-than relation in the tag body', () => {
+  assert.equal(displayMathTagsAsLatex('x_i<sub>a<2</sub>'), 'x_{ia\\lt 2}');
+  assert.equal(displayMathTagsAsLatex('x_{i}<sub>a<2</sub>'), 'x_{ia\\lt 2}');
+  assert.doesNotMatch(render('$$x_i<sub>a<2</sub>$$'), /katex-error|&lt;sub/);
+});
+
 test('an opening display fence is not mistaken for a completed inline fence', () => {
   const markdown = normalizeMineruReaderMarkdown('$$<sup>2</sup>x$$');
 
@@ -988,6 +1009,15 @@ test('unclosed HTML in separate quote blocks does not repeatedly search the suff
 
 test('many inline comments on one line do not rescan the prefix', () => {
   const source = `${'x<!-- -->'.repeat(50_000)}H<sub>2</sub>O`;
+  const started = performance.now();
+  const markdown = normalizeMineruReaderMarkdown(source);
+
+  assert.ok(performance.now() - started < 2_000);
+  assert.match(markdown, /H<sub>2<\/sub>O$/);
+});
+
+test('blank lines in a deeply nested list fence do not rescan every container', () => {
+  const source = `${'- '.repeat(4_000)}\x60\x60\x60\n${'\n'.repeat(4_000)}H<sub>2</sub>O`;
   const started = performance.now();
   const markdown = normalizeMineruReaderMarkdown(source);
 

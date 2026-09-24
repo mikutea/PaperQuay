@@ -1171,7 +1171,7 @@ function mergeRepeatedEquationScripts(body: string): string {
 
   let grouped = '';
   let cursor = 0;
-  for (const match of body.matchAll(/<\s*(sub|sup)\s*>([^<]*)<\s*\/\s*\1\s*>/gi)) {
+  for (const match of body.matchAll(/<\s*(sub|sup)\s*>((?:[^<]|<(?![A-Za-z/]))*)<\s*\/\s*\1\s*>/gi)) {
     const start = match.index ?? 0;
     let closing = start - 1;
     while (closing >= cursor && /\s/.test(body[closing])) closing -= 1;
@@ -1179,6 +1179,7 @@ function mergeRepeatedEquationScripts(body: string): string {
     const script = match[1].toLowerCase() === 'sub' ? '_' : '^';
     if (opening === undefined || opening <= cursor || body[opening - 1] !== script) continue;
     const existing = body.slice(opening + 1, closing);
+    if (/<\s*\/?\s*[A-Za-z][A-Za-z0-9:-]*(?:\s+[^<>]*)?\s*\/?>/.test(match[2])) continue;
     const appended = mathTagContentToLatex(match[2]);
     const delimiter = /\\[A-Za-z]+$/.test(existing) && /^[A-Za-z]/.test(appended) ? ' ' : '';
     grouped += body.slice(cursor, opening - 1) + `${script}{${existing}${delimiter}${appended}}`;
@@ -1187,9 +1188,10 @@ function mergeRepeatedEquationScripts(body: string): string {
   grouped += body.slice(cursor);
 
   return grouped.replace(
-    /([_^])(?:\{([^{}]+)\}|(\\(?:[A-Za-z]+|[^A-Za-z\s])|[^\s\\{}_^$]))\s*<\s*(sub|sup)\s*>([^<]*)<\s*\/\s*\4\s*>/giu,
+    /([_^])(?:\{([^{}]+)\}|(\\(?:[A-Za-z]+|[^A-Za-z\s])|[^\s\\{}_^$]))\s*<\s*(sub|sup)\s*>((?:[^<]|<(?![A-Za-z/]))*)<\s*\/\s*\4\s*>/giu,
     (match, script: string, braced: string | undefined, bare: string | undefined, tag: string, content: string) => {
       if ((script === '_' ? 'sub' : 'sup') !== tag.toLowerCase()) return match;
+      if (/<\s*\/?\s*[A-Za-z][A-Za-z0-9:-]*(?:\s+[^<>]*)?\s*\/?>/.test(content)) return match;
       const existing = braced ?? bare ?? '';
       return `${script}{${existing}${existing.startsWith('\\') ? ' ' : ''}${mathTagContentToLatex(content)}}`;
     },
@@ -1248,12 +1250,13 @@ export function fencedMarkdownLineStarts(source: string): Set<number> {
 
   let fenceRun = '';
   let fenceContainers: Container[] = [];
+  let fenceAllowsBlank = false;
   let lineStart = 0;
   while (lineStart < source.length) {
     const newline = source.indexOf('\n', lineStart);
     const line = source.slice(lineStart, newline < 0 ? source.length : newline).replace(/\r$/, '');
     const continued = fenceRun ? continuation(line, fenceContainers) : null;
-    if (fenceRun && (continued !== null || (line.trim() === '' && fenceContainers.every((part) => part.kind === 'list')))) {
+    if (fenceRun && (continued !== null || (line.trim() === '' && fenceAllowsBlank))) {
       starts.add(lineStart);
       const content = (continued === null ? line : line.slice(continued)).trimEnd();
       const closing = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(content);
@@ -1266,6 +1269,7 @@ export function fencedMarkdownLineStarts(source: string): Set<number> {
       if (opening && (opening[1][0] !== '`' || !content.slice(opening[0].length).includes('`'))) {
         fenceRun = opening[1];
         fenceContainers = containers;
+        fenceAllowsBlank = containers.every((part) => part.kind === 'list');
         starts.add(lineStart);
       }
     }
@@ -1369,6 +1373,10 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
     const body = text.slice(leading.length, text.length - trailing.length);
     return body ? leading + transform(body) + trailing : text;
   };
+  const throughLineEnd = (end: number) => {
+    const newline = source.indexOf('\n', end);
+    return newline < 0 ? source.length : newline + 1;
+  };
   for (const match of source.matchAll(blockStarts)) {
     const opening = match.index ?? 0;
     if (opening < cursor || opening < mathWrapperUntil) continue;
@@ -1404,9 +1412,9 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
       : specialEnding ? nextMarker(specialEnding, opening + match[0].length) : -1;
     while (blankLines[blankCursor] < openingEnd + 1) blankCursor += 1;
     const blankLine = typeOne || special ? undefined : blankLines[blankCursor];
-    const naturalEnd = typeOne ? (closing < 0 ? source.length : closing + tag.length + 3)
-      : specialEnding ? (closing < 0 ? source.length : closing + specialEnding.length)
-      : special ? openingEnd + 1
+    const naturalEnd = typeOne ? (closing < 0 ? source.length : throughLineEnd(closing + tag.length + 3))
+      : specialEnding ? (closing < 0 ? source.length : throughLineEnd(closing + specialEnding.length))
+      : special ? throughLineEnd(openingEnd + 1)
       : blankLine === undefined ? source.length : blankLine + 1;
     const blockEnd = containerEnd(openingEnd, naturalEnd, containers);
     output += renderOutside(source.slice(cursor, opening));
