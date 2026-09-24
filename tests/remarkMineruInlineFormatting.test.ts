@@ -65,6 +65,20 @@ test('a spaced less-than relation inside a math script is not an HTML tag', () =
   assert.equal(latex, 'x^{a \\lt  b > c}');
 });
 
+test('a link destination backtick cannot open an inline code span', () => {
+  const source = '[x](https://e/`foo) \\(x + H<sub>2</sub>O\\) `end`';
+  assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$/);
+  assert.match(render(source), /katex/);
+  assert.match(render('[`x`](https://e/foo) H<sub>2</sub>O'), /<code>x<\/code>/);
+});
+
+test('superscript text inside a quoted HTML attribute stays inert', () => {
+  const source = '<span title="H<sub>2</sub>O">x</span>';
+  assert.equal(normalizeMineruReaderMarkdown(source), source);
+  const mixed = `${source} and \\(y + H<sub>3</sub>O\\)`;
+  assert.match(normalizeMineruReaderMarkdown(mixed), /^<span title="H<sub>2<\/sub>O">x<\/span> and \$y \+ H_\{3\}O\$$/);
+});
+
 test('fragmented LaTeX inside formula HTML is repaired before formula conversion', () => {
   const source = '<span class="math">x \\ in I</span>';
 
@@ -802,6 +816,12 @@ test('indented code ends the paragraph before a type-seven HTML block', () => {
   const markdown = normalizeMineruReaderMarkdown(source);
   assert.match(markdown, /literal \\\(x \+ H<sub>2<\/sub>O\\\)/);
   assert.match(markdown, /outside \$y \+ H_\{3\}O\$$/);
+});
+
+test('the installed Markdown renderer treats a reference-following indent as a paragraph', () => {
+  const source = '[foo]: /url\n    \\(x + H<sub>2</sub>O\\)';
+  assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$$/);
+  assert.match(render(source), /katex/);
 });
 
 test('custom HTML blocks do not interrupt a paragraph', () => {

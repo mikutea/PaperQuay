@@ -1722,6 +1722,31 @@ function isLineLevelCodePrefix(prefix: string): boolean {
 }
 
 export function markdownCodeSpans(text: string, inlineOnly = false): Array<[number, number]> {
+  const linkDestinations: Array<[number, number]> = [];
+  if (inlineOnly) {
+    let labelStart = -1;
+    for (let index = 0; index < text.length; index += 1) {
+      if (text[index] === '\\') { index += 1; continue; }
+      if (text[index] === '[') { labelStart = index; continue; }
+      if (text[index] === ']' && text[index + 1] === '(' && labelStart >= 0) {
+        let depth = 1;
+        let end = index + 2;
+        for (; end < text.length && depth; end += 1) {
+          if (text[end] === '\\') { end += 1; continue; }
+          if (text[end] === '\r' || text[end] === '\n') break;
+          if (text[end] === '(') depth += 1;
+          else if (text[end] === ')') depth -= 1;
+        }
+        if (depth === 0) {
+          linkDestinations.push([index + 2, end - 1]);
+        }
+        index = end - 1;
+        labelStart = -1;
+      } else if (text[index] === ']') {
+        labelStart = -1;
+      }
+    }
+  }
   const paragraphBreaks = inlineOnly
     ? [...text.matchAll(/(?:\r\n|\r|\n)[ \t]*(?:\r\n|\r|\n)/g)].map((match) => (match.index ?? 0) + match[0].length)
     : [];
@@ -1829,8 +1854,11 @@ export function markdownCodeSpans(text: string, inlineOnly = false): Array<[numb
   let lineStart = 0;
   let delimiterLineCursor = 0;
   let lastDelimiterLine = -1;
+  let destinationCursor = 0;
   const delimiters = [...text.matchAll(/`+/g)].flatMap((match) => {
     const index = match.index ?? 0;
+    while (linkDestinations[destinationCursor]?.[1] <= index) destinationCursor += 1;
+    if (linkDestinations[destinationCursor]?.[0] <= index && index < linkDestinations[destinationCursor][1]) return [];
     while (paragraphBreaks[breakCursor] <= (match.index ?? 0)) {
       breakCursor += 1;
       paragraph += 1;

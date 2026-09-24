@@ -329,6 +329,25 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
   const chunks: string[] = [];
   const stack: Array<{ name: string; adjacent: boolean; start: number }> = [];
   const codeSpans = markdownCodeSpans(markdown, true);
+  const insideHtmlTag = (text: string) => {
+    const ranges: Array<[number, number]> = [];
+    for (let start = text.indexOf('<'); start >= 0;) {
+      if (!/^<\/?[A-Za-z]/.test(text.slice(start, start + 3))) {
+        start = text.indexOf('<', start + 1);
+        continue;
+      }
+      const end = findHtmlTagEnd(text, start);
+      if (end < 0) break;
+      ranges.push([start, end + 1]);
+      start = text.indexOf('<', end + 1);
+    }
+    let cursor = 0;
+    return (position: number) => {
+      while (ranges[cursor]?.[1] <= position) cursor += 1;
+      return ranges[cursor] !== undefined && ranges[cursor][0] < position;
+    };
+  };
+  const tagInsideHtml = insideHtmlTag(markdown);
   let codeSpanCursor = 0;
   let chunkCursor = 0;
   let tagCount = 0;
@@ -344,6 +363,7 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
     while (codeSpans[codeSpanCursor]?.[1] <= tagStart) codeSpanCursor += 1;
     if (fenceStarts.has(tagLineStart)) continue;
     if (codeSpans[codeSpanCursor]?.[0] <= tagStart && tagStart < codeSpans[codeSpanCursor][1]) continue;
+    if (tagInsideHtml(tagStart)) continue;
     if (++tagCount > MAX_INLINE_NODES) return markdown;
     const name = /(?:sup|sub)/i.exec(tag[0])?.[0].toLowerCase() ?? '';
     if (/^<\s*\//.test(tag[0])) {
@@ -375,11 +395,52 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
   const tags: string[] = [];
   const readableMarkdown = markdown.replace(/\{PQInlineTag/g, `${MARKER_START}${MARKER_START}`);
 
-  const protectInlineTags = (text: string) => text.replace(INLINE_TAG_PATTERN, (tag) => {
-    const marker = `${MARKER_START}${tags.length}${MARKER_END}`;
-    tags.push(tag);
-    return marker;
-  });
+  const protectAttributeTags = (text: string) => {
+    let protectedAttributes = '';
+    let last = 0;
+    const openAttributeTags = new Map<string, number>();
+    for (let start = text.indexOf('<'); start >= 0;) {
+      if (!/^<\/?[A-Za-z]/.test(text.slice(start, start + 3))) {
+        start = text.indexOf('<', start + 1);
+        continue;
+      }
+      const end = findHtmlTagEnd(text, start);
+      if (end < 0) break;
+      const opening = text.slice(start, end + 1);
+      const named = /^<(\/?)([A-Za-z][A-Za-z0-9-]*)\b/.exec(opening);
+      const name = named?.[2].toLowerCase();
+      const depth = name ? openAttributeTags.get(name) ?? 0 : 0;
+      const closesProtectedTag = !!named?.[1] && depth === 1;
+      const hasFormattingInAttribute = !named?.[1] && opening.search(/<\/?(?:sup|sub)\s*>/i) > 0;
+      if (name && depth) {
+        if (named?.[1]) {
+          if (closesProtectedTag) openAttributeTags.delete(name);
+          else openAttributeTags.set(name, depth - 1);
+        } else if (!/\/>$/.test(opening)) {
+          openAttributeTags.set(name, depth + 1);
+        }
+      } else if (name && hasFormattingInAttribute && !/\/>$/.test(opening)) {
+        openAttributeTags.set(name, 1);
+      }
+      if (hasFormattingInAttribute || closesProtectedTag) {
+        protectedAttributes += text.slice(last, start) + `${MARKER_START}${tags.length}${MARKER_END}`;
+        tags.push(opening);
+        last = end + 1;
+      }
+      start = text.indexOf('<', end + 1);
+    }
+    return protectedAttributes + text.slice(last);
+  };
+  const protectInlineTags = (text: string) => {
+    const protectedAttributes = protectAttributeTags(text);
+    const insideTag = insideHtmlTag(protectedAttributes);
+    return protectedAttributes.replace(INLINE_TAG_PATTERN, (tag, offset: number) => {
+      if (insideTag(offset)) return tag;
+      const marker = `${MARKER_START}${tags.length}${MARKER_END}`;
+      tags.push(tag);
+      return marker;
+    });
+  };
   let protectedMarkdown = '';
   let cursor = 0;
 
@@ -432,7 +493,9 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
   // Formula wrappers have already received safe tag conversion. Keep ordinary
   // math on the direct path so long relation tokens never reach marker scans.
   if (fenceStarts.size > 0 || (/[_^\\$=<>~]/.test(markdown.replace(INLINE_TAG_PATTERN, '')) && !pairedAdjacentFence)) {
-    return displayMarkdownFallback(markdown, normalizeMarkdownMathOutsideCodeSpans(restoreInlineTags(protectedMarkdown)));
+    const safeSource = protectAttributeTags(readableMarkdown);
+    const safeNormalized = protectAttributeTags(restoreInlineTags(protectedMarkdown));
+    return restoreInlineTags(displayMarkdownFallback(safeSource, normalizeMarkdownMathOutsideCodeSpans(safeNormalized)));
   }
 
   const protectedResult = restoreInlineTags(normalizeMarkdownMathOutsideCodeSpans(protectedMarkdown));
