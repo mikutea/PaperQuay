@@ -1194,6 +1194,11 @@ export function findHtmlTagEnd(source: string, opening: number, limit = source.l
 }
 
 function mergeRepeatedEquationScripts(body: string): string {
+  const unescapedScript = (source: string, position: number) => {
+    let backslashes = 0;
+    for (let index = position - 1; source[index] === '\\'; index -= 1) backslashes += 1;
+    return backslashes % 2 === 0;
+  };
   const groupStarts = new Map<number, number>();
   const stack: number[] = [];
   for (let index = 0; index < body.length; index += 1) {
@@ -1214,7 +1219,8 @@ function mergeRepeatedEquationScripts(body: string): string {
     while (closing >= cursor && /\s/.test(body[closing])) closing -= 1;
     const opening = groupStarts.get(closing);
     const script = match[1].toLowerCase() === 'sub' ? '_' : '^';
-    if (opening === undefined || opening <= cursor || body[opening - 1] !== script) continue;
+    if (opening === undefined || opening <= cursor || body[opening - 1] !== script
+      || !unescapedScript(body, opening - 1)) continue;
     const existing = body.slice(opening + 1, closing);
     if (containsOtherHtmlTag(match[2])) continue;
     const appended = mathTagContentToLatex(match[2]);
@@ -1226,7 +1232,8 @@ function mergeRepeatedEquationScripts(body: string): string {
 
   return grouped.replace(
     /([_^])(?:\{([^{}]+)\}|(\\(?:[A-Za-z]+|[^A-Za-z\s])|[^\s\\{}_^$]))\s*<(sub|sup)\s*>((?:[^<]|<(?![A-Za-z/]))*)<\/\4\s*>/giu,
-    (match, script: string, braced: string | undefined, bare: string | undefined, tag: string, content: string) => {
+    (match, script: string, braced: string | undefined, bare: string | undefined, tag: string, content: string, offset: number) => {
+      if (!unescapedScript(grouped, offset)) return match;
       if ((script === '_' ? 'sub' : 'sup') !== tag.toLowerCase()) return match;
       if (containsOtherHtmlTag(content)) return match;
       const existing = braced ?? bare ?? '';
@@ -1306,8 +1313,9 @@ export function fencedMarkdownLineStarts(source: string): Set<number> {
   let activeListContainers: Container[] = [];
   let fenceAllowsBlank = false;
   let lineStart = 0;
-  let previousParagraph = false;
+  let previousParagraph: boolean = false;
   let previousQuoteDepth = 0;
+  let previousParagraphText = '';
   for (const rawLine of splitMarkdownLinesPreservingEndings(source)) {
     const line = rawLine.replace(/\r\n$|[\r\n]$/, '');
     let openedList = false;
@@ -1339,9 +1347,13 @@ export function fencedMarkdownLineStarts(source: string): Set<number> {
     }
     const quoteDepth = markdownQuoteDepth(line);
     const paragraphText = line.slice(contentStart).trim();
+    const setextHeading: boolean = previousParagraph && quoteDepth === previousQuoteDepth
+      && /^(?:=+|-{1,2})$/.test(paragraphText) && canSupplySetextHeadingText(previousParagraphText);
     previousParagraph = !starts.has(lineStart) && !openedList && !!paragraphText
+      && !setextHeading
       && !/^#{1,6}(?:[ \t]+|$)|^(?:\*(?:[ \t]*\*){2,}|_(?:[ \t]*_){2,}|-(?:[ \t]*-){2,})[ \t]*$/.test(paragraphText)
       && !/^<(?:!--|\?|!\[CDATA\[|[A-Za-z][A-Za-z0-9-]*(?:\s|\/?>))/.test(paragraphText);
+    previousParagraphText = paragraphText;
     previousQuoteDepth = quoteDepth;
     lineStart += rawLine.length;
   }
@@ -1380,7 +1392,11 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
   const blockStarts = /<!--|<\?|<!\[CDATA\[|<![A-Z]|<\/([A-Za-z][A-Za-z0-9-]*)\s*>|<([A-Za-z][A-Za-z0-9-]*)(?=\s|\/?>|$)/g;
   const namedBlockTags = new Set('address article aside base basefont blockquote body caption center col colgroup dd details dialog dir div dl dt fieldset figcaption figure footer form frame frameset h1 h2 h3 h4 h5 h6 head header hr html iframe legend li link main menu menuitem nav noframes ol optgroup option output p param search section summary table tbody td tfoot th thead title tr track ul'.split(' '));
   const lineStarts = [0];
-  for (const newline of source.matchAll(/\n/g)) lineStarts.push((newline.index ?? 0) + 1);
+  const lineEnds: number[] = [];
+  for (const rawLine of splitMarkdownLinesPreservingEndings(source)) {
+    lineEnds.push(lineStarts[lineStarts.length - 1] + rawLine.replace(/\r\n$|[\r\n]$/, '').length);
+    lineStarts.push(lineStarts[lineStarts.length - 1] + rawLine.length);
+  }
   const inheritedListWidths: number[] = [];
   let activeQuoteDepth = 0;
   const activeListWidths: number[] = [];
@@ -1415,7 +1431,8 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
     inheritedListWidths.push(list ? 0 : activeListWidths[activeListWidths.length - 1] ?? 0);
   }
   let lineCursor = 0;
-  const blankLines = [...source.matchAll(/\n(?=[ \t]*\r?\n)/g)].map((match) => match.index ?? 0);
+  const blankLines = [...source.matchAll(/(?:\r\n|\r|\n)(?=[ \t]*(?:\r\n|\r|\n))/g)]
+    .map((match) => ({ start: match.index ?? 0, end: (match.index ?? 0) + match[0].length }));
   let blankCursor = 0;
   const markerPositions = new Map<string, number[]>([
     ['-->', []], ['?>', []], [']]>', []],
@@ -1480,12 +1497,10 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
   const containerEnd = (afterOpening: number, naturalEnd: number, containers: Array<{ kind: 'quote' | 'list'; width: number }>) => {
     if (containers.length === 0) return naturalEnd;
     const onlyLists = containers.every((container) => container.kind === 'list');
-    let lineStart = source.indexOf('\n', afterOpening);
-    while (lineStart >= 0 && lineStart + 1 < naturalEnd) {
-      lineStart += 1;
-      const nextLine = source.indexOf('\n', lineStart);
-      if (onlyLists && !source.slice(lineStart, nextLine < 0 ? naturalEnd : nextLine).trim()) {
-        lineStart = nextLine;
+    for (let index = lineCursor + 1; lineStarts[index] < naturalEnd && index < lineStarts.length; index += 1) {
+      const lineStart = lineStarts[index];
+      const lineEnd = lineEnds[index] ?? naturalEnd;
+      if (onlyLists && !source.slice(lineStart, lineEnd).trim()) {
         continue;
       }
       let position = lineStart;
@@ -1503,12 +1518,11 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
             position += 1;
           }
           // Blank lines may continue a list's raw HTML block without padding.
-          if (width < container.width && source.slice(position, nextLine < 0 ? naturalEnd : nextLine).trim()) {
+          if (width < container.width && source.slice(position, lineEnd).trim()) {
             return lineStart;
           }
         }
       }
-      lineStart = nextLine;
     }
     return naturalEnd;
   };
@@ -1551,8 +1565,14 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
     return position === end;
   };
   const throughLineEnd = (end: number) => {
-    const newline = source.indexOf('\n', end);
-    return newline < 0 ? source.length : newline + 1;
+    let low = 0;
+    let high = lineStarts.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (lineStarts[middle] <= end) low = middle + 1;
+      else high = middle;
+    }
+    return lineStarts[low] ?? source.length;
   };
   for (const match of source.matchAll(blockStarts)) {
     const opening = match.index ?? 0;
@@ -1563,18 +1583,19 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
     const containers = atBlockStart(lineStart, opening);
     if (containers === null) continue;
     const tag = (match[2] ?? match[1] ?? '').toLowerCase();
-    const typeOne = !!match[2] && /^(?:pre|textarea|script|style)$/.test(tag);
+    const typeOne = !!match[2] && /^(?:pre|textarea|script|style)$/.test(tag)
+      && source[opening + match[0].length] !== '/';
     const specialEnding = match[0].startsWith('<!--') ? '-->'
       : match[0].startsWith('<?') ? '?>'
       : match[0].toLowerCase().startsWith('<![cdata[') ? ']]>' : '';
     const special = !tag;
-    const openingLineEnd = source.indexOf('\n', opening);
+    const openingLineEnd = lineEnds[lineCursor] ?? source.length;
     let openingEnd = specialEnding
       ? opening + match[0].length - 1
-      : findHtmlTagEnd(source, opening, openingLineEnd < 0 ? source.length : openingLineEnd);
+      : findHtmlTagEnd(source, opening, openingLineEnd);
     // Type-one and type-six raw HTML start at the tag name even if `>` is absent.
     if (openingEnd < 0 && (typeOne || namedBlockTags.has(tag))) {
-      openingEnd = (openingLineEnd < 0 ? source.length : openingLineEnd) - 1;
+      openingEnd = openingLineEnd - 1;
     }
     if (openingEnd < 0) continue;
     const mathWrapper = tag === 'div' && /^<div\s+class=["']formula["'](?=[\s/>])/i.test(source.slice(opening, openingEnd + 1)) ? 'div'
@@ -1590,8 +1611,7 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
     }
     if (tag && !typeOne && !namedBlockTags.has(tag)) {
       if (match[2] && !validCustomOpening(opening, openingEnd)) continue;
-      const lineEnd = source.indexOf('\n', openingEnd + 1);
-      if (source.slice(openingEnd + 1, lineEnd < 0 ? source.length : lineEnd).trim()) continue;
+      if (source.slice(openingEnd + 1, openingLineEnd).trim()) continue;
       // CommonMark type-7 tags cannot interrupt an ordinary paragraph.
       if (lineCursor > 0 && !fencedLines.has(lineStarts[lineCursor - 1])) {
         const priorLine = source.slice(lineStarts[lineCursor - 1], lineStart).trimEnd();
@@ -1610,7 +1630,7 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
           && canSupplySetextHeadingText(source.slice(lineStarts[lineCursor - 2], lineStarts[lineCursor - 1]).trimEnd());
         const beforePrior = lineCursor > 1
           ? source.slice(lineStarts[lineCursor - 2], lineStarts[lineCursor - 1]).trimEnd() : '';
-        const leftContainer = markdownQuoteDepth(priorLine) > markdownQuoteDepth(source.slice(lineStart, opening))
+        const leftContainer = markdownQuoteDepth(priorLine) !== markdownQuoteDepth(source.slice(lineStart, opening))
           || (inheritedListWidths[lineCursor - 1] ?? 0) > (inheritedListWidths[lineCursor] ?? 0);
         const orderedMarker = /^ {0,3}(\d{1,9})[.)][ \t]+/.exec(priorContent);
         const listBoundary = /^ {0,3}[-+*][ \t]+/.test(priorContent)
@@ -1631,12 +1651,12 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
     }
     const closing = typeOne ? nextMarker(`</${tag}>`, openingEnd + 1)
       : specialEnding ? nextMarker(specialEnding, opening + match[0].length) : -1;
-    while (blankLines[blankCursor] < openingEnd + 1) blankCursor += 1;
+    while (blankLines[blankCursor]?.start < openingEnd + 1) blankCursor += 1;
     const blankLine = typeOne || special ? undefined : blankLines[blankCursor];
     const naturalEnd = typeOne ? (closing < 0 ? source.length : throughLineEnd(closing + tag.length + 3))
       : specialEnding ? (closing < 0 ? source.length : throughLineEnd(closing + specialEnding.length))
       : special ? throughLineEnd(openingEnd + 1)
-      : blankLine === undefined ? source.length : blankLine + 1;
+      : blankLine === undefined ? source.length : blankLine.end;
     const blockEnd = containerEnd(openingEnd, naturalEnd, containers);
     output += renderOutside(source.slice(cursor, opening));
     cursor = blockEnd;
@@ -1673,9 +1693,41 @@ function isLineLevelCodePrefix(prefix: string): boolean {
 
 export function markdownCodeSpans(text: string, inlineOnly = false): Array<[number, number]> {
   const paragraphBreaks = inlineOnly
-    ? [...text.matchAll(/\r?\n[ \t]*\r?\n/g)].map((match) => (match.index ?? 0) + match[0].length)
+    ? [...text.matchAll(/(?:\r\n|\r|\n)[ \t]*(?:\r\n|\r|\n)/g)].map((match) => (match.index ?? 0) + match[0].length)
     : [];
   if (inlineOnly) {
+    // GFM parses table cells independently: backticks cannot pair across a
+    // cell separator or a body-row boundary.
+    if (text.includes('|')) {
+      const rows = splitMarkdownLinesPreservingEndings(text);
+      const offsets: number[] = [];
+      let offset = 0;
+      for (const row of rows) {
+        offsets.push(offset);
+        offset += row.length;
+      }
+      const cells = (row: string) => row.replace(/\r\n$|[\r\n]$/, '').split(/(?<!\\)\|/)
+        .map((part) => part.trim()).filter((part, index, parts) => part || (index > 0 && index < parts.length - 1));
+      const markRow = (index: number) => {
+        paragraphBreaks.push(offsets[index]);
+        const row = rows[index].replace(/\r\n$|[\r\n]$/, '');
+        for (let cursor = 0; cursor < row.length; cursor += 1) {
+          if (row[cursor] !== '|') continue;
+          let backslashes = 0;
+          for (let previous = cursor - 1; row[previous] === '\\'; previous -= 1) backslashes += 1;
+          if (backslashes % 2 === 0) paragraphBreaks.push(offsets[index] + cursor + 1);
+        }
+      };
+      for (let index = 1; index < rows.length; index += 1) {
+        const delimiter = cells(rows[index]);
+        if (!rows[index - 1].includes('|') || !rows[index].includes('|')
+          || !delimiter.length || !delimiter.every((part) => /^:?-+:?$/.test(part))) continue;
+        markRow(index - 1);
+        markRow(index);
+        while (++index < rows.length && rows[index].includes('|') && rows[index].trim()) markRow(index);
+        index -= 1;
+      }
+    }
     const fencedLines = fencedMarkdownLineStarts(text);
     let previousQuoteDepth = 0;
     let listWidth = 0;

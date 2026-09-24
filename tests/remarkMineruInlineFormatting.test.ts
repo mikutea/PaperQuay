@@ -458,6 +458,11 @@ test('bare CR indented code remains literal while later math formats', () => {
   assert.match(render(source), /<pre><code>\$H&lt;sub&gt;2&lt;\/sub&gt;O\$/);
 });
 
+test('bare CR paragraph breaks stop code spans before later formulae', () => {
+  const source = 'prefix ```\r\r\\(x + H<sub>2</sub>O\\)\r\rsuffix ```';
+  assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$/);
+});
+
 test('reader normalization recognizes indented code after blockquote prefixes', () => {
   const source = '>     $H<sub>2</sub>O$';
   const markdown = normalizeMineruReaderMarkdown(source);
@@ -821,6 +826,11 @@ test('a dedented blockquote paragraph cannot block a new raw HTML block', () => 
   }
 });
 
+test('entering a blockquote ends the outside paragraph before raw HTML', () => {
+  const source = 'paragraph\n> <x>\n> literal \\(x + H<sub>2</sub>O\\)';
+  assert.equal(normalizeMineruReaderMarkdown(source), source);
+});
+
 test('a slash-delimited pseudo-tag cannot open a type-six raw HTML block', () => {
   const source = '<div/foo>\n\\(x + H<sub>2</sub>O\\)';
   assert.match(renderToStaticMarkup(createElement(ReactMarkdown, null, source)), /^<p>&lt;div\/foo&gt;/);
@@ -859,6 +869,11 @@ test('an ordered marker other than one cannot interrupt a paragraph with a fence
   const source = 'paragraph\n2. ~~~text\n    \\(x + H<sub>2</sub>O\\)';
   assert.match(renderToStaticMarkup(createElement(ReactMarkdown, null, source)), /^<p>paragraph\n2\. ~~~text/);
   assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$$/);
+});
+
+test('a setext heading lets a later non-one ordered list open its fence', () => {
+  const source = 'Heading\n===\n2. ~~~text\n   \\(x + H<sub>2</sub>O\\)\n   ~~~';
+  assert.equal(normalizeMineruReaderMarkdown(source), source);
 });
 
 test('a fence opened on a list continuation ends at list dedent', () => {
@@ -927,6 +942,18 @@ test('type-six raw HTML may open at the end of a line', () => {
 
   assert.match(markdown, /^<div\nliteral \$H<sub>2<\/sub>O\$\n\n/);
   assert.match(markdown, /\$x \+ H_\{3\}O\$$/);
+});
+
+test('self-closing special tags end at a blank line like type-seven blocks', () => {
+  for (const tag of ['pre', 'script', 'style', 'textarea']) {
+    const source = `<${tag}/>\nliteral H<sub>2</sub>O\n\n\\(x + H<sub>3</sub>O\\)`;
+    assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{3\}O\$$/);
+  }
+});
+
+test('bare CR raw HTML boundaries leave later formulae active', () => {
+  const source = '<pre>\rliteral H<sub>2</sub>O\r</pre>\r\\(x + H<sub>3</sub>O\\)';
+  assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{3\}O\$$/);
 });
 
 test('an unclosed raw HTML block inside a list ends when the list dedents', () => {
@@ -1135,6 +1162,15 @@ test('math tags merge an existing TeX control-symbol script argument', () => {
 test('unbraced script merging never consumes a second TeX atom', () => {
   assert.equal(displayMathTagsAsLatex('x_ij<sub>2</sub>'), 'x_ij_{2}');
   assert.doesNotMatch(render('$$x_ij<sub>2</sub>$$'), /katex-error/);
+});
+
+test('escaped TeX script markers do not merge with tagged scripts', () => {
+  assert.equal(displayMathTagsAsLatex('x\\_2<sub>3</sub>'), 'x\\_2_{3}');
+});
+
+test('GFM table cells cannot share one inline code span', () => {
+  const source = '| value |\n| --- |\n| `start |\n| \\(x + H<sub>2</sub>O\\) |\n| `end |';
+  assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$/);
 });
 
 test('unbraced punctuation scripts merge before paired tags', () => {
