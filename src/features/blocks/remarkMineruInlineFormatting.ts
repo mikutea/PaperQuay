@@ -320,9 +320,16 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
   const stack: Array<{ name: string; adjacent: boolean; start: number }> = [];
   let chunkCursor = 0;
   let tagCount = 0;
+  let tagLineStart = 0;
+  let tagLineEnd = markdown.indexOf('\n');
   let pairedAdjacentFence = false;
   for (const tag of markdown.matchAll(INLINE_TAG_PATTERN)) {
-    if (++tagCount > MAX_INLINE_NODES) return markdown;
+    const tagStart = tag.index ?? 0;
+    while (tagLineEnd >= 0 && tagStart > tagLineEnd) {
+      tagLineStart = tagLineEnd + 1;
+      tagLineEnd = markdown.indexOf('\n', tagLineStart);
+    }
+    if (!fenceStarts.has(tagLineStart) && ++tagCount > MAX_INLINE_NODES) return markdown;
     const name = /(?:sup|sub)/i.exec(tag[0])?.[0].toLowerCase() ?? '';
     if (/^<\s*\//.test(tag[0])) {
       const opening = stack[stack.length - 1];

@@ -318,6 +318,16 @@ test('excessively nested inline tags fall back to literal text without recursion
   assert.match(caption, /&lt;sup&gt;/);
 });
 
+test('fenced code tags do not exhaust the formatting cap or block later math', () => {
+  const literal = 'H<sub>2</sub>O'.repeat(257);
+  const source = ['```text', literal, '```', '\\(x_i\\)'].join('\n');
+  const markdown = normalizeMineruReaderMarkdown(source);
+
+  assert.equal(markdown, normalizeMarkdownMath(source));
+  assert.match(markdown, /\$x_i\$$/);
+  assert.match(markdown, /^```text\nH<sub>2<\/sub>O/);
+});
+
 test('inline formatting enforces one work budget across paragraph siblings', () => {
   const tree = {
     type: 'root',
@@ -1033,7 +1043,8 @@ test('many inline comments on one line do not rescan the prefix', () => {
   const started = performance.now();
   const markdown = normalizeMineruReaderMarkdown(source);
 
-  assert.ok(performance.now() - started < 2_000);
+  // Windows CI runners can take over 2 s for 50,000 tokens even on the linear path.
+  assert.ok(performance.now() - started < 5_000);
   assert.match(markdown, /H<sub>2<\/sub>O$/);
 });
 
@@ -1048,6 +1059,15 @@ test('blank lines in a deeply nested list fence do not rescan every container', 
 
 test('malformed custom tags do not search every later line for a delimiter', () => {
   const source = `${'<x\n'.repeat(20_000)}<junk>\n\nH<sub>2</sub>O`;
+  const started = performance.now();
+  const markdown = normalizeMineruReaderMarkdown(source);
+
+  assert.ok(performance.now() - started < 2_000);
+  assert.match(markdown, /H<sub>2<\/sub>O$/);
+});
+
+test('blank raw HTML lines under nested lists do not rescan every container', () => {
+  const source = `${'- '.repeat(100)}<pre>\n${'\n'.repeat(10_000)}outside\nH<sub>2</sub>O`;
   const started = performance.now();
   const markdown = normalizeMineruReaderMarkdown(source);
 

@@ -1354,10 +1354,15 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
   };
   const containerEnd = (afterOpening: number, naturalEnd: number, containers: Array<{ kind: 'quote' | 'list'; width: number }>) => {
     if (containers.length === 0) return naturalEnd;
+    const onlyLists = containers.every((container) => container.kind === 'list');
     let lineStart = source.indexOf('\n', afterOpening);
     while (lineStart >= 0 && lineStart + 1 < naturalEnd) {
       lineStart += 1;
       const nextLine = source.indexOf('\n', lineStart);
+      if (onlyLists && !source.slice(lineStart, nextLine < 0 ? naturalEnd : nextLine).trim()) {
+        lineStart = nextLine;
+        continue;
+      }
       let position = lineStart;
       for (const container of containers) {
         if (container.kind === 'quote') {
