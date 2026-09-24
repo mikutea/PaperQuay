@@ -399,6 +399,14 @@ test('caption entities decode in visible text and flattened alt text', () => {
   assert.equal(plainMineruInlineCaption(source), 'CO₂ & H2O');
 });
 
+test('caption pseudo-tags with whitespace after the angle bracket stay literal', () => {
+  const source = 'x< sup>2< /sup> and H<sub >2</sub >O';
+  const html = renderToStaticMarkup(createElement('span', null, ...renderMineruInlineCaption(source)));
+
+  assert.match(html, /x&lt; sup&gt;2&lt; \/sup&gt; and H<sub>2<\/sub>O/);
+  assert.equal(plainMineruInlineCaption(source), 'x< sup>2< /sup> and H2O');
+});
+
 test('caption links, images, and other HTML remain inert literal text', () => {
   const source = '![caption](https://example.invalid/pixel) <a href="https://example.invalid">link</a> <sup>1</sup>';
   const html = renderToStaticMarkup(createElement('span', null, ...renderMineruInlineCaption(source)));
@@ -742,6 +750,14 @@ test('custom HTML blocks do not interrupt a paragraph', () => {
   assert.equal(normalizeMineruReaderMarkdown(afterRawBlock), afterRawBlock);
 });
 
+test('a setext heading ends its paragraph before a type-seven HTML block', () => {
+  const source = 'Heading\n===\n<x>\nliteral H<sub>2</sub>O\n\noutside \\(x + H<sub>3</sub>O\\)';
+  const markdown = normalizeMineruReaderMarkdown(source);
+
+  assert.match(markdown, /^Heading\n===\n<x>\nliteral H<sub>2<\/sub>O\n\n/);
+  assert.match(markdown, /outside \$x \+ H_\{3\}O\$$/);
+});
+
 test('a backtick info string containing a backtick cannot start a code fence', () => {
   const source = '\x60\x60\x60 bad\x60\n\\(x + H<sub>2</sub>O\\)';
   const markdown = displayMarkdownFallback(source, normalizeMarkdownMath(source));
@@ -773,6 +789,14 @@ test('type-one raw HTML may open at the end of a line', () => {
     const source = `<${tag}\nliteral \\(x + H<sub>2</sub>O\\)\n</${tag}>`;
     assert.equal(normalizeMineruReaderMarkdown(source), source);
   }
+});
+
+test('type-six raw HTML may open at the end of a line', () => {
+  const source = '<div\nliteral $H<sub>2</sub>O$\n\n\\(x + H<sub>3</sub>O\\)';
+  const markdown = normalizeMineruReaderMarkdown(source);
+
+  assert.match(markdown, /^<div\nliteral \$H<sub>2<\/sub>O\$\n\n/);
+  assert.match(markdown, /\$x \+ H_\{3\}O\$$/);
 });
 
 test('standalone special closing tags end at the next blank line', () => {

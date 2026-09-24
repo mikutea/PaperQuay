@@ -4,6 +4,7 @@ import { displayMarkdownFallback, displayMathTagsAsLatex, fencedMarkdownLineStar
 import { normalizeMarkdownMath } from '../../utils/markdown.ts';
 
 const INLINE_TAG_PATTERN = /<\s*\/?\s*(?:sup|sub)\s*>/gi;
+const CAPTION_TAG_PATTERN = /<\/?(?:sup|sub)\s*>/gi;
 // Braces keep protected tags outside long math candidates in normalizeMarkdownMath.
 // A private-use marker here can cause repeated scans of a preceding math token.
 const MARKER_START = '{PQInlineTag';
@@ -23,7 +24,7 @@ export function renderMineruInlineCaption(
     return [parseEntities(text)];
   }
 
-  const matches = [...text.matchAll(INLINE_TAG_PATTERN)];
+  const matches = [...text.matchAll(CAPTION_TAG_PATTERN)];
 
   if (matches.length > MAX_INLINE_NODES) {
     return [parseEntities(text)];

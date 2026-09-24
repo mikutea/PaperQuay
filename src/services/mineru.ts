@@ -1469,8 +1469,10 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
     let openingEnd = specialEnding
       ? opening + match[0].length - 1
       : findHtmlTagEnd(source, opening, openingLineEnd < 0 ? source.length : openingLineEnd);
-    // Type-one raw HTML starts at the tag name even if its `>` is absent.
-    if (openingEnd < 0 && typeOne) openingEnd = (openingLineEnd < 0 ? source.length : openingLineEnd) - 1;
+    // Type-one and type-six raw HTML start at the tag name even if `>` is absent.
+    if (openingEnd < 0 && (typeOne || namedBlockTags.has(tag))) {
+      openingEnd = (openingLineEnd < 0 ? source.length : openingLineEnd) - 1;
+    }
     if (openingEnd < 0) continue;
     const mathWrapper = tag === 'div' && /^<div\s+class=["']formula["'](?=[\s/>])/i.test(source.slice(opening, openingEnd + 1)) ? 'div'
       : tag === 'span' && /^<span\s+class=["']math["'](?=[\s/>])/i.test(source.slice(opening, openingEnd + 1)) ? 'span' : null;
@@ -1499,7 +1501,11 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
           if (priorLine[position] === ' ' || priorLine[position] === '\t') position += 1;
         }
         const priorContent = priorLine.slice(position);
+        const setextHeading = /^ {0,3}(?:=+|-{1,2})[ \t]*$/.test(priorContent)
+          && lineCursor > 1
+          && !!source.slice(lineStarts[lineCursor - 2], lineStarts[lineCursor - 1]).trim();
         if (priorContent.trim() && cursor !== lineStart &&
+            !setextHeading &&
             !/^ {0,3}(?:#{1,6}(?:[ \t]+|$)|(?:[-*_][ \t]*){3,}|(?:[-+*]|\d{1,9}[.)])[ \t]+|`{3,}|~{3,})/.test(priorContent)) continue;
       }
     }
