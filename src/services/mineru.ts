@@ -1165,9 +1165,10 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
   let output = '';
   let cursor = 0;
   let found = false;
-  let formulaUntil = 0;
+  let mathWrapperUntil = 0;
   const atBlockStart = (lineStart: number, opening: number) => {
-    if (opening - lineStart > 256) return false;
+    if (opening - lineStart > 256) return null;
+    const containers: Array<{ kind: 'quote' | 'list'; width: number }> = [];
     let position = lineStart;
     while (position < opening) {
       const start = position;
@@ -1175,6 +1176,7 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
       if (source[position] === '>') {
         position += 1;
         if (source[position] === ' ' || source[position] === '\t') position += 1;
+        containers.push({ kind: 'quote', width: 0 });
         continue;
       }
       const marker = /(?:[-+*]|\d{1,9}[.)])[ \t]+/y;
@@ -1182,11 +1184,38 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
       const list = marker.exec(source);
       if (list && position + list[0].length <= opening) {
         position += list[0].length;
+        containers.push({ kind: 'list', width: position - start });
         continue;
       }
-      return position === opening;
+      return position === opening ? containers : null;
     }
-    return true;
+    return containers;
+  };
+  const containerEnd = (afterOpening: number, containers: Array<{ kind: 'quote' | 'list'; width: number }>) => {
+    if (containers.length === 0) return source.length;
+    let lineStart = source.indexOf('\n', afterOpening);
+    while (lineStart >= 0 && lineStart + 1 < source.length) {
+      lineStart += 1;
+      let position = lineStart;
+      for (const container of containers) {
+        if (container.kind === 'quote') {
+          const start = position;
+          while (position - start < 3 && source[position] === ' ') position += 1;
+          if (source[position] !== '>') return lineStart;
+          position += 1;
+          if (source[position] === ' ' || source[position] === '\t') position += 1;
+        } else {
+          let width = 0;
+          while (width < container.width && (source[position] === ' ' || source[position] === '\t')) {
+            width += source[position] === '\t' ? 4 : 1;
+            position += 1;
+          }
+          if (width < container.width) return lineStart;
+        }
+      }
+      lineStart = source.indexOf('\n', lineStart);
+    }
+    return source.length;
   };
   const renderOutside = (text: string) => {
     const leading = text.match(/^\s*/)?.[0] ?? '';
@@ -1196,9 +1225,10 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
   };
   for (const match of source.matchAll(blockStarts)) {
     const opening = match.index ?? 0;
-    if (opening < cursor || opening < formulaUntil) continue;
+    if (opening < cursor || opening < mathWrapperUntil) continue;
     const lineStart = source.lastIndexOf('\n', opening - 1) + 1;
-    if (!atBlockStart(lineStart, opening)) continue;
+    const containers = atBlockStart(lineStart, opening);
+    if (containers === null) continue;
     const tag = (match[2] ?? match[1] ?? '').toLowerCase();
     const specialEnding = match[0].startsWith('<!--') ? '-->'
       : match[0].startsWith('<?') ? '?>'
@@ -1206,10 +1236,14 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
     const special = !tag;
     const openingEnd = lower.indexOf('>', opening + match[0].length);
     if (openingEnd < 0) return output + renderOutside(source.slice(cursor, opening)) + source.slice(opening);
-    if (tag === 'div' && /^<div\s+class=["']formula["']/i.test(source.slice(opening, openingEnd + 1))) {
-      const closing = lower.indexOf('</div>', openingEnd + 1);
-      formulaUntil = closing < 0 ? source.length : closing + '</div>'.length;
-      continue;
+    const mathWrapper = tag === 'div' && /^<div\s+class=["']formula["']/i.test(source.slice(opening, openingEnd + 1)) ? 'div'
+      : tag === 'span' && /^<span\s+class=["']math["']/i.test(source.slice(opening, openingEnd + 1)) ? 'span' : null;
+    if (mathWrapper) {
+      const closing = lower.indexOf(`</${mathWrapper}>`, openingEnd + 1);
+      if (closing >= 0) {
+        mathWrapperUntil = closing + mathWrapper.length + 3;
+        continue;
+      }
     }
     const typeOne = /^(?:pre|textarea|script|style)$/.test(tag);
     if (tag && !typeOne && !namedBlockTags.has(tag)) {
@@ -1220,7 +1254,8 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
       : specialEnding ? lower.indexOf(specialEnding, opening + match[0].length) : -1;
     blankLinePattern.lastIndex = openingEnd + 1;
     const blankLine = typeOne || special ? null : blankLinePattern.exec(source);
-    const blockEnd = typeOne ? (closing < 0 ? source.length : closing + tag.length + 3)
+    const typeOneEnd = typeOne ? containerEnd(openingEnd, containers) : source.length;
+    const blockEnd = typeOne ? (closing < 0 || closing >= typeOneEnd ? typeOneEnd : closing + tag.length + 3)
       : specialEnding ? (closing < 0 ? source.length : closing + specialEnding.length)
       : special ? openingEnd + 1
       : (blankLine === null ? source.length : blankLine.index + 1);
@@ -1354,7 +1389,7 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
       }
 
       const duplicateScript = /^([\s\S]*[_^](?:\{[^{}]+\}|[A-Za-z0-9]+))(<\s*(?:sub|sup)\s*>[\s\S]*)$/i.exec(body);
-      if (duplicateScript && /<\s*\/\s*(?:sub|sup)\s*>\s*$/i.test(duplicateScript[2])) {
+      if (!isLiteralFence && duplicateScript && /<\s*\/\s*(?:sub|sup)\s*>\s*$/i.test(duplicateScript[2])) {
         return `$${duplicateScript[1]}$${duplicateScript[2]}`;
       }
 

@@ -469,7 +469,7 @@ test('existing scripts on later math terms do not create duplicate KaTeX scripts
     const markdown = buildRenderableBlocks(blocks)[0]?.markdown ?? '';
 
     assert.doesNotMatch(render(markdown), /katex-error/);
-    assert.match(markdown, /\$<\s*(?:sub|sup)\s*>/);
+    assert.match(markdown, /y[_^]\{j2\}/);
   }
 });
 
@@ -674,7 +674,7 @@ test('fence-adjacent tags do not make a long math token stall normalization', ()
   const markdown = normalizeMineruReaderMarkdown(source);
 
   assert.ok(performance.now() - started < 2_000);
-  assert.match(markdown, /H<sub>2<\/sub>O/);
+  assert.match(markdown, /H(?:_\{2\}|<sub>2<\/sub>)O/);
   assert.match(markdown, /\$x\$<sup>2<\/sup>/);
 });
 
@@ -817,8 +817,8 @@ test('Markdown autolinks do not become literal HTML blocks', () => {
 });
 
 test('raw pre blocks inside blockquotes and lists leave tag examples untouched', () => {
-  for (const prefix of ['> ', '- ']) {
-    const source = `${prefix}<pre>\n${prefix}$H<sub>2</sub>O$\n${prefix}</pre>\n\nH<sub>3</sub>O`;
+  for (const [opening, continuation] of [['> <pre>', '> '], ['- <pre>', '  ']]) {
+    const source = `${opening}\n${continuation}$H<sub>2</sub>O$\n${continuation}</pre>\n\nH<sub>3</sub>O`;
     const markdown = normalizeMineruReaderMarkdown(source);
     assert.match(markdown, /\$H<sub>2<\/sub>O\$/);
     assert.doesNotMatch(markdown, /H_\{2\}O/);
@@ -833,4 +833,59 @@ test('an unmatched dollar-adjacent tag cannot slow a later long relation', () =>
 
   assert.ok(performance.now() - started < 2_000);
   assert.match(markdown, /A(?:\^\{2\}|<sup>2<\/sup>)/);
+});
+
+test('a completed adjacent tag does not stall an earlier long relation', () => {
+  const source = `${'x'.repeat(20_000)}=foo H<sub>2</sub> and $x$<sup>2</sup>`;
+  const started = performance.now();
+  const markdown = normalizeMineruReaderMarkdown(source);
+
+  assert.ok(performance.now() - started < 2_000);
+  assert.match(markdown, /H(?:_\{2\}|<sub>2<\/sub>)/);
+  assert.match(markdown, /\$x\$<sup>2<\/sup>/);
+});
+
+test('an unclosed pre inside a quote or list ends when its container ends', () => {
+  for (const [opening, inner] of [
+    ['> <pre>', '> literal'],
+    ['- <pre>', '  literal'],
+  ]) {
+    const source = `${opening}\n${inner}\noutside \\(x + H<sub>2</sub>O\\)`;
+    const markdown = normalizeMineruReaderMarkdown(source);
+    assert.match(markdown, /outside \$x \+ H_\{2\}O\$/);
+    assert.doesNotMatch(render(source), /katex-error|&lt;sub/);
+  }
+});
+
+test('an indented line inside a fenced block cannot hide later math', () => {
+  const source = '```text\n\n    example\n```\n\\(x + H<sub>2</sub>O\\)';
+  const markdown = normalizeMineruReaderMarkdown(source);
+
+  assert.match(markdown, /^```text\n\n    example\n```\n/);
+  assert.match(markdown, /\$x \+ H_\{2\}O\$/);
+  assert.doesNotMatch(render(source), /katex-error|&lt;sub/);
+});
+
+test('authored inline math keeps a repeated script tag inside the math fence', () => {
+  const blocks = flattenMineruPages(parseMineruMarkdownPages('$x_i<sub>2</sub>$'));
+  const markdown = buildRenderableBlocks(blocks)[0]?.markdown ?? '';
+
+  assert.equal(markdown, '$x_{i2}$');
+  assert.doesNotMatch(render(markdown), /katex-error|&lt;sub/);
+});
+
+test('multiline math spans reach their existing formula converter', () => {
+  const source = '<span class="math">\nx<sup>2</sup>\n</span>';
+  const markdown = normalizeMineruReaderMarkdown(source);
+
+  assert.doesNotMatch(markdown, /<sup>/);
+  assert.match(markdown, /x\^\{2\}/);
+  assert.doesNotMatch(render(source), /katex-error/);
+});
+
+test('an unclosed math wrapper does not expose later raw pre content', () => {
+  const source = '<span class="math">H<sub>2</sub>O\n\n<pre>\n$H<sub>3</sub>O$';
+  const markdown = normalizeMineruReaderMarkdown(source);
+
+  assert.match(markdown, /<pre>\n\$H<sub>3<\/sub>O\$$/);
 });

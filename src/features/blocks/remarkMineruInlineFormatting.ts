@@ -216,10 +216,32 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
     return line.slice(cursor);
   };
   const lines = markdown.split(/(?<=\n)/);
+  // Indentation inside a fenced block is fenced content, not a new indented
+  // code block. Keep the fence together before splitting out indented blocks.
+  let fenceRun = '';
+  const fencedLines = lines.map((line) => {
+    const content = unquote(line).trimEnd();
+    const marker = /^ {0,3}(`{3,}|~{3,})/.exec(content);
+    if (fenceRun) {
+      if (marker && marker[1][0] === fenceRun[0] && marker[1].length >= fenceRun.length &&
+          /^\s*$/.test(content.slice(marker[0].length))) fenceRun = '';
+      return true;
+    }
+    if (marker) {
+      fenceRun = marker[1];
+      return true;
+    }
+    return false;
+  });
   let hasIndentedCode = false;
   let candidateBlank = true;
   let candidateInCode = false;
-  for (const line of lines) {
+  for (const [index, line] of lines.entries()) {
+    if (fencedLines[index]) {
+      candidateBlank = false;
+      candidateInCode = false;
+      continue;
+    }
     const content = unquote(line);
     const blank = content.trim() === '';
     const indented = /^(?: {4}|\t)/.test(content);
@@ -241,7 +263,13 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
     let outside = '';
     let inCode = false;
     let previousBlank = true;
-    for (const line of lines) {
+    for (const [index, line] of lines.entries()) {
+      if (fencedLines[index]) {
+        outside += line;
+        inCode = false;
+        previousBlank = false;
+        continue;
+      }
       const content = unquote(line);
       const blank = content.trim() === '';
       const indented = /^(?: {4}|\t)/.test(content);
@@ -267,7 +295,7 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
   // Split at each paired tag so this exception cannot force later, unrelated
   // long math tokens through the protected-marker normalizer.
   const chunks: string[] = [];
-  const stack: Array<{ name: string; adjacent: boolean }> = [];
+  const stack: Array<{ name: string; adjacent: boolean; start: number }> = [];
   let chunkCursor = 0;
   let tagCount = 0;
   let pairedAdjacentFence = false;
@@ -282,16 +310,17 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
         pairedAdjacentFence = true;
         if (splitAdjacentFences) {
           const end = (tag.index ?? 0) + tag[0].length;
-          chunks.push(markdown.slice(chunkCursor, end));
+          if (opening.start > chunkCursor) chunks.push(markdown.slice(chunkCursor, opening.start));
+          chunks.push(markdown.slice(opening.start, end));
           chunkCursor = end;
         }
       }
     } else {
-      stack.push({ name, adjacent: stack.length === 0 && markdown[(tag.index ?? 0) - 1] === '$' });
+      stack.push({ name, adjacent: stack.length === 0 && markdown[(tag.index ?? 0) - 1] === '$', start: tag.index ?? 0 });
     }
   }
-  if (splitAdjacentFences && chunks.length > 0 && chunkCursor < markdown.length) {
-    chunks.push(markdown.slice(chunkCursor));
+  if (splitAdjacentFences && chunks.length > 0) {
+    if (chunkCursor < markdown.length) chunks.push(markdown.slice(chunkCursor));
     return chunks.map((chunk) => normalizeMineruReaderMarkdown(chunk, false)).join('');
   }
 
