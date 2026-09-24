@@ -1287,6 +1287,7 @@ export function fencedMarkdownLineStarts(source: string): Set<number> {
 
   let fenceRun = '';
   let fenceContainers: Container[] = [];
+  let activeListContainers: Container[] = [];
   let fenceAllowsBlank = false;
   let lineStart = 0;
   while (lineStart < source.length) {
@@ -1301,12 +1302,16 @@ export function fencedMarkdownLineStarts(source: string): Set<number> {
     } else {
       fenceRun = '';
       const { cursor, containers } = openingPrefix(line);
+      const inherited = activeListContainers.length && continuation(line, activeListContainers) !== null
+        ? activeListContainers : [];
+      if (containers.some((part) => part.kind === 'list')) activeListContainers = containers;
+      else if (!inherited.length && line.trim()) activeListContainers = [];
       const content = line.slice(cursor).trimEnd();
       const opening = /^ {0,3}(`{3,}|~{3,})/.exec(content);
       if (opening && (opening[1][0] !== '`' || !content.slice(opening[0].length).includes('`'))) {
         fenceRun = opening[1];
-        fenceContainers = containers;
-        fenceAllowsBlank = containers.every((part) => part.kind === 'list');
+        fenceContainers = containers.length ? containers : inherited;
+        fenceAllowsBlank = fenceContainers.every((part) => part.kind === 'list');
         starts.add(lineStart);
       }
     }
@@ -1326,6 +1331,20 @@ function canSupplySetextHeadingText(line: string): boolean {
   }
   const content = line.slice(position).trimEnd();
   return !!content.trim() && !/^ {0,3}(?:#{1,6}(?:[ \t]+|$)|(?:[-*_][ \t]*){3,}[ \t]*$|(?:[-+*]|\d{1,9}[.)])[ \t]+|`{3,}|~{3,})/.test(content);
+}
+
+function markdownQuoteDepth(line: string): number {
+  let position = 0;
+  let depth = 0;
+  while (position < line.length) {
+    let marker = position;
+    while (marker - position < 3 && line[marker] === ' ') marker += 1;
+    if (line[marker] !== '>') break;
+    position = marker + 1;
+    if (line[position] === ' ' || line[position] === '\t') position += 1;
+    depth += 1;
+  }
+  return depth;
 }
 
 export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: string) => string): string | null {
@@ -1560,10 +1579,11 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
         const priorContent = priorLine.slice(position);
         const setextHeading = /^ {0,3}(?:=+|-{1,2})[ \t]*$/.test(priorContent)
           && lineCursor > 1
+          && markdownQuoteDepth(priorLine) === markdownQuoteDepth(source.slice(lineStarts[lineCursor - 2], lineStarts[lineCursor - 1]).trimEnd())
           && canSupplySetextHeadingText(source.slice(lineStarts[lineCursor - 2], lineStarts[lineCursor - 1]).trimEnd());
         if (priorContent.trim() && cursor !== lineStart &&
             !setextHeading &&
-            !/^ {0,3}(?:#{1,6}(?:[ \t]+|$)|(?:[-*_][ \t]*){3,}|(?:[-+*]|\d{1,9}[.)])[ \t]+|`{3,}|~{3,})/.test(priorContent)) {
+            !/^ {0,3}(?:#{1,6}(?:[ \t]+|$)|(?:\*(?:[ \t]*\*){2,}|_(?:[ \t]*_){2,}|-(?:[ \t]*-){2,})[ \t]*$|(?:[-+*]|\d{1,9}[.)])[ \t]+|`{3,}|~{3,})/.test(priorContent)) {
           output += renderOutside(source.slice(cursor, opening)) + source.slice(opening, openingEnd + 1);
           cursor = openingEnd + 1;
           found = true;

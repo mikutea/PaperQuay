@@ -792,6 +792,31 @@ test('a backtick info string containing a backtick cannot start a code fence', (
   assert.match(markdown, /\$x \+ H_\{2\}O\$$/);
 });
 
+test('an invalid fence opener does not make later paragraph math into code', () => {
+  const source = '\x60\x60\x60 bad\x60\n\\(x + H<sub>2</sub>O\\)\n\x60\x60\x60';
+  const rawHtml = renderToStaticMarkup(createElement(ReactMarkdown, null, source));
+  assert.match(rawHtml, /^<p>[\s\S]*<\/p>\n<pre><code><\/code><\/pre>$/);
+  assert.match(render(source), /<span class="katex">/);
+  assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$/);
+});
+
+test('a fence opened on a list continuation ends at list dedent', () => {
+  const source = '- item\n  \x60\x60\x60text\n  $H<sub>3</sub>O$\noutside \\(x + H<sub>2</sub>O\\)';
+  const markdown = normalizeMineruReaderMarkdown(source);
+  assert.match(markdown, /  \$H<sub>3<\/sub>O\$/);
+  assert.match(markdown, /outside \$x \+ H_\{2\}O\$$/);
+});
+
+test('a nested blockquote underline cannot complete an outer setext heading', () => {
+  const source = '> Heading\n> > ===\n> > <x>\n> > \\(x + H<sub>2</sub>O\\)';
+  assert.match(normalizeMineruReaderMarkdown(source), /<x>\n> > \$x \+ H_\{2\}O\$$/);
+});
+
+test('emphasized paragraph text is not a thematic-break boundary', () => {
+  const source = 'paragraph\n***continued***\n<x>\n\\(x + H<sub>2</sub>O\\)';
+  assert.match(normalizeMineruReaderMarkdown(source), /<x>\n\$x \+ H_\{2\}O\$$/);
+});
+
 test('list-then-quote fenced examples stay literal in Markdown fallback', () => {
   const source = '- > \x60\x60\x60text\n  > $H<sub>2</sub>O$\n  > \x60\x60\x60\n\\(x + H<sub>3</sub>O\\)';
   const markdown = displayMarkdownFallback(source, normalizeMarkdownMath(source));
