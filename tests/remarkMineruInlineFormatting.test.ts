@@ -553,6 +553,22 @@ test('oversized image fallback does not restore an embedded remote image', () =>
   assert.doesNotMatch(markdown, /https:\/\/example\.invalid\/pixel/);
 });
 
+test('image removal does not substitute its alt code span for later source code', () => {
+  const source = 'prefix ![`alt`](images/foo.png) `literal` and H<sub>3</sub>O';
+  const blocks = flattenMineruPages(parseMineruMarkdownPages(source));
+  const markdown = buildRenderableBlocks(blocks)[0]?.markdown ?? '';
+
+  assert.match(markdown, /`literal`/);
+  assert.doesNotMatch(markdown, /`alt`/);
+});
+
+test('source code is still restored when normalization changes text inside it', () => {
+  const source = '`$H<sub>2</sub>O$` and H<sub>3</sub>O';
+  const blocks = flattenMineruPages(parseMineruMarkdownPages(source));
+
+  assert.match(buildRenderableBlocks(blocks)[0]?.markdown ?? '', /`\$H<sub>2<\/sub>O\$`/);
+});
+
 test('mid-line tildes do not suppress tagged prose recovery', () => {
   const source = 'Use ~~~ here and H<sub>2</sub>O';
   const blocks = flattenMineruPages(parseMineruMarkdownPages(source));
@@ -758,6 +774,18 @@ test('a setext heading ends its paragraph before a type-seven HTML block', () =>
   assert.match(markdown, /outside \$x \+ H_\{3\}O\$$/);
 });
 
+test('an ATX heading cannot supply setext text before a type-seven tag', () => {
+  const source = '# Heading\n===\n<x>\n\\(x + H<sub>2</sub>O\\)';
+
+  assert.match(normalizeMineruReaderMarkdown(source), /<x>\n\$x \+ H_\{2\}O\$$/);
+});
+
+test('a quoted ATX heading cannot supply setext text either', () => {
+  const source = '> # Heading\n> ===\n> <x>\n> \\(x + H<sub>2</sub>O\\)';
+
+  assert.match(normalizeMineruReaderMarkdown(source), /> <x>\n> \$x \+ H_\{2\}O\$$/);
+});
+
 test('a backtick info string containing a backtick cannot start a code fence', () => {
   const source = '\x60\x60\x60 bad\x60\n\\(x + H<sub>2</sub>O\\)';
   const markdown = displayMarkdownFallback(source, normalizeMarkdownMath(source));
@@ -784,6 +812,12 @@ test('mid-line triple backticks cannot join code spans across paragraphs', () =>
   assert.match(markdown, /\$x \+ H_\{2\}O\$/);
 });
 
+test('indented triple-backtick spans in continued paragraphs remain inline code', () => {
+  const source = 'paragraph\n    ```\\(x + H<sub>2</sub>O\\)```';
+
+  assert.equal(normalizeMineruReaderMarkdown(source), source);
+});
+
 test('type-one raw HTML may open at the end of a line', () => {
   for (const tag of ['pre', 'script', 'style', 'textarea']) {
     const source = `<${tag}\nliteral \\(x + H<sub>2</sub>O\\)\n</${tag}>`;
@@ -797,6 +831,18 @@ test('type-six raw HTML may open at the end of a line', () => {
 
   assert.match(markdown, /^<div\nliteral \$H<sub>2<\/sub>O\$\n\n/);
   assert.match(markdown, /\$x \+ H_\{3\}O\$$/);
+});
+
+test('an unclosed raw HTML block inside a list ends when the list dedents', () => {
+  const source = '- item\n  <pre>\n  literal\noutside \\(x + H<sub>2</sub>O\\)';
+
+  assert.match(normalizeMineruReaderMarkdown(source), /outside \$x \+ H_\{2\}O\$$/);
+});
+
+test('an unclosed raw HTML block in a quoted list ends at list dedent', () => {
+  const source = '> - item\n>   <pre>\n>   literal\n> outside \\(x + H<sub>2</sub>O\\)';
+
+  assert.match(normalizeMineruReaderMarkdown(source), /> outside \$x \+ H_\{2\}O\$$/);
 });
 
 test('standalone special closing tags end at the next blank line', () => {

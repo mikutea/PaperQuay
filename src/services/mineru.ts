@@ -1315,6 +1315,19 @@ export function fencedMarkdownLineStarts(source: string): Set<number> {
   return starts;
 }
 
+function canSupplySetextHeadingText(line: string): boolean {
+  let position = 0;
+  while (position < line.length) {
+    let marker = position;
+    while (marker - position < 3 && line[marker] === ' ') marker += 1;
+    if (line[marker] !== '>') break;
+    position = marker + 1;
+    if (line[position] === ' ' || line[position] === '\t') position += 1;
+  }
+  const content = line.slice(position).trimEnd();
+  return !!content.trim() && !/^ {0,3}(?:#{1,6}(?:[ \t]+|$)|(?:[-*_][ \t]*){3,}[ \t]*$|(?:[-+*]|\d{1,9}[.)])[ \t]+|`{3,}|~{3,})/.test(content);
+}
+
 export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: string) => string): string | null {
   const lower = source.toLowerCase();
   const fencedLines = fencedMarkdownLineStarts(source);
@@ -1322,6 +1335,39 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
   const namedBlockTags = new Set('address article aside base basefont blockquote body caption center col colgroup dd details dialog dir div dl dt fieldset figcaption figure footer form frame frameset h1 h2 h3 h4 h5 h6 head header hr html iframe legend li link main menu menuitem nav noframes ol optgroup option output p param search section summary table tbody td tfoot th thead title tr track ul'.split(' '));
   const lineStarts = [0];
   for (const newline of source.matchAll(/\n/g)) lineStarts.push((newline.index ?? 0) + 1);
+  const inheritedListWidths: number[] = [];
+  let activeQuoteDepth = 0;
+  const activeListWidths: number[] = [];
+  for (let index = 0; index < lineStarts.length; index += 1) {
+    const line = source.slice(lineStarts[index], lineStarts[index + 1] ?? source.length);
+    let position = 0;
+    let quoteDepth = 0;
+    while (position < line.length) {
+      let marker = position;
+      while (marker - position < 3 && line[marker] === ' ') marker += 1;
+      if (line[marker] !== '>') break;
+      position = marker + 1;
+      if (line[position] === ' ' || line[position] === '\t') position += 1;
+      quoteDepth += 1;
+    }
+    if (quoteDepth !== activeQuoteDepth) activeListWidths.length = 0;
+    activeQuoteDepth = quoteDepth;
+    const content = line.slice(position);
+    const list = /^ {0,3}(?:[-+*]|\d{1,9}[.)])[ \t]+/.exec(content);
+    if (list) {
+      const width = list[0].length;
+      while (activeListWidths.length && activeListWidths[activeListWidths.length - 1] >= width) activeListWidths.pop();
+      activeListWidths.push(width);
+    } else if (content.trim()) {
+      let indent = 0;
+      for (const character of content) {
+        if (character !== ' ' && character !== '\t') break;
+        indent += character === '\t' ? 4 : 1;
+      }
+      while (activeListWidths.length && activeListWidths[activeListWidths.length - 1] > indent) activeListWidths.pop();
+    }
+    inheritedListWidths.push(list ? 0 : activeListWidths[activeListWidths.length - 1] ?? 0);
+  }
   let lineCursor = 0;
   const blankLines = [...source.matchAll(/\n(?=[ \t]*\r?\n)/g)].map((match) => match.index ?? 0);
   let blankCursor = 0;
@@ -1351,6 +1397,10 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
   const wrapperCloseCursor = { div: 0, span: 0 };
   const atBlockStart = (lineStart: number, opening: number) => {
     if (opening - lineStart > 256) return null;
+    const inheritedWidth = inheritedListWidths[lineCursor];
+    if (inheritedWidth && source.slice(lineStart, opening).trim() === '') {
+      return [{ kind: 'list' as const, width: inheritedWidth }];
+    }
     const containers: Array<{ kind: 'quote' | 'list'; width: number }> = [];
     let position = lineStart;
     while (position < opening) {
@@ -1370,7 +1420,14 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
         containers.push({ kind: 'list', width: position - start });
         continue;
       }
-      return position === opening ? containers : null;
+      if (position !== opening) return null;
+      if (inheritedWidth && !containers.some((container) => container.kind === 'list')) {
+        containers.push({ kind: 'list', width: inheritedWidth });
+      }
+      return containers;
+    }
+    if (inheritedWidth && !containers.some((container) => container.kind === 'list')) {
+      containers.push({ kind: 'list', width: inheritedWidth });
     }
     return containers;
   };
@@ -1503,10 +1560,15 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
         const priorContent = priorLine.slice(position);
         const setextHeading = /^ {0,3}(?:=+|-{1,2})[ \t]*$/.test(priorContent)
           && lineCursor > 1
-          && !!source.slice(lineStarts[lineCursor - 2], lineStarts[lineCursor - 1]).trim();
+          && canSupplySetextHeadingText(source.slice(lineStarts[lineCursor - 2], lineStarts[lineCursor - 1]).trimEnd());
         if (priorContent.trim() && cursor !== lineStart &&
             !setextHeading &&
-            !/^ {0,3}(?:#{1,6}(?:[ \t]+|$)|(?:[-*_][ \t]*){3,}|(?:[-+*]|\d{1,9}[.)])[ \t]+|`{3,}|~{3,})/.test(priorContent)) continue;
+            !/^ {0,3}(?:#{1,6}(?:[ \t]+|$)|(?:[-*_][ \t]*){3,}|(?:[-+*]|\d{1,9}[.)])[ \t]+|`{3,}|~{3,})/.test(priorContent)) {
+          output += renderOutside(source.slice(cursor, opening)) + source.slice(opening, openingEnd + 1);
+          cursor = openingEnd + 1;
+          found = true;
+          continue;
+        }
       }
     }
     const closing = typeOne ? nextMarker(`</${tag}>`, openingEnd + 1)
@@ -1559,6 +1621,7 @@ export function markdownCodeSpans(text: string, inlineOnly = false): Array<[numb
     const fencedLines = fencedMarkdownLineStarts(text);
     let previousQuoteDepth = 0;
     let listWidth = 0;
+    let previousContent = '';
     for (let start = 0; start < text.length;) {
       const newline = text.indexOf('\n', start);
       const end = newline < 0 ? text.length : newline + 1;
@@ -1595,14 +1658,20 @@ export function markdownCodeSpans(text: string, inlineOnly = false): Array<[numb
         if (/^ {0,3}#{1,6}(?:[ \t]+|$)/.test(content) ||
             /^ {0,3}(?:\*(?:[ \t]*\*){2,}|_(?:[ \t]*_){2,}|-(?:[ \t]*-){2,})[ \t]*$/.test(content)) {
           paragraphBreaks.push(start, end);
-        } else if (/^ {0,3}(?:=+|-{1,2})[ \t]*$/.test(content)) {
+        } else if (/^ {0,3}(?:=+|-{1,2})[ \t]*$/.test(content)
+          && canSupplySetextHeadingText(previousContent)) {
           paragraphBreaks.push(end);
         }
+        previousContent = content;
+      } else {
+        previousContent = '';
+        if (!fencedLines.has(end)) paragraphBreaks.push(end);
       }
       start = end;
     }
     paragraphBreaks.sort((a, b) => a - b);
   }
+  const blockLineStarts = new Set(paragraphBreaks);
   let breakCursor = 0;
   let paragraph = 0;
   let lineStart = 0;
@@ -1625,6 +1694,7 @@ export function markdownCodeSpans(text: string, inlineOnly = false): Array<[numb
       let previous = index - 1;
       while (previous >= lineStart && (text[previous] === ' ' || text[previous] === '\t')) previous -= 1;
       if (text[previous] !== '`' &&
+          (lineStart === 0 || blockLineStarts.has(lineStart)) &&
           isLineLevelCodePrefix(text.slice(lineStart, index))) return [];
     }
     let backslashes = 0;
@@ -1857,14 +1927,21 @@ export function displayMarkdownFallback(source: string | undefined, normalized: 
   // inline delimiters and must still stop at paragraph/block boundaries.
   const normalizedSpans = markdownCodeSpans(normalized, true);
   const sourceSpans = markdownCodeSpans(source, true);
+  let sourceSpanCursor = 0;
 
-  for (let index = 0; index < normalizedSpans.length; index += 1) {
-    const [start, end] = normalizedSpans[index];
-    const sourceSpan = sourceSpans[index];
+  for (const [start, end] of normalizedSpans) {
+    const normalizedSpan = normalized.slice(start, end);
+    let restoredSpan = normalizedSpan;
+    while (sourceSpanCursor < sourceSpans.length) {
+      const [sourceStart, sourceEnd] = sourceSpans[sourceSpanCursor++];
+      const candidate = source.slice(sourceStart, sourceEnd);
+      if (candidate === normalizedSpan || normalizeMarkdownMath(candidate) === normalizedSpan) {
+        restoredSpan = candidate;
+        break;
+      }
+    }
     output += renderOutsideCode(normalized.slice(cursor, start));
-    output += sourceSpan
-      ? source.slice(sourceSpan[0], sourceSpan[1])
-      : normalized.slice(start, end);
+    output += restoredSpan;
     cursor = end;
   }
 
