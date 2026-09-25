@@ -1,6 +1,6 @@
 import { createElement, isValidElement, type ReactNode } from 'react';
 import { parseEntities } from 'parse-entities';
-import { displayMarkdownFallback, displayMathTagsAsLatex, fencedMarkdownLineStarts, mapOutsideLiteralHtmlBlocks, markdownCodeSpans, normalizeMarkdownMathOutsideCodeSpans, splitMarkdownLinesPreservingEndings } from '../../services/mineru.ts';
+import { displayMarkdownFallback, displayMathTagsAsLatex, fencedMarkdownLineStarts, gfmTableBoundaryLineStarts, mapOutsideLiteralHtmlBlocks, markdownCodeSpans, normalizeMarkdownMathOutsideCodeSpans, splitMarkdownLinesPreservingEndings } from '../../services/mineru.ts';
 import { normalizeMarkdownMath } from '../../utils/markdown.ts';
 
 const INLINE_TAG_PATTERN = /<\/?(?:sup|sub)\s*>/gi;
@@ -260,9 +260,12 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
   // Indentation inside a fenced block is fenced content, not a new indented
   // code block. Keep the fence together before splitting out indented blocks.
   const fenceStarts = fencedMarkdownLineStarts(markdown);
+  const tableBoundaries = gfmTableBoundaryLineStarts(markdown);
   let lineStart = 0;
+  const afterTable: boolean[] = [];
   const fencedLines = lines.map((line) => {
     const fenced = fenceStarts.has(lineStart);
+    afterTable.push(tableBoundaries.has(lineStart));
     lineStart += line.length;
     return fenced;
   });
@@ -287,6 +290,7 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
     const content = unquote(line);
     const blank = content.trim() === '';
     const indented = isIndentedCode(content);
+    if (afterTable[index]) candidateBlank = true;
     if (indented && (candidateBlank || candidateInCode)) {
       hasIndentedCode = true;
       break;
@@ -319,6 +323,7 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
       const content = unquote(line);
       const blank = content.trim() === '';
       const indented = isIndentedCode(content);
+      if (afterTable[index]) previousBlank = true;
       if (indented && (previousBlank || inCode)) {
         if (outside) {
           output += normalizeOutside(outside);

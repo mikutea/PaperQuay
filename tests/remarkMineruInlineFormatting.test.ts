@@ -96,6 +96,26 @@ test('a URI autolink backtick cannot open an inline code span', () => {
   assert.match(render(source), /katex/);
 });
 
+test('an overlong URI scheme is not an autolink and leaves code literal', () => {
+  const source = '<abcdefghijklmnopqrstuvwxyzabcdefg://e/`foo> \\(x + H<sub>2</sub>O\\) `end`';
+  assert.equal(normalizeMineruReaderMarkdown(source), source);
+  assert.doesNotMatch(render(source), /katex/);
+  const limit = `<a${'b'.repeat(31)}://e/\`foo> \\(x + H<sub>2</sub>O\\) \`end\``;
+  assert.match(normalizeMineruReaderMarkdown(limit), /\$x \+ H_\{2\}O\$/);
+});
+
+test('an invalid inline-link destination leaves its code delimiter active', () => {
+  const source = '[x](url `foo) \\(x + H<sub>2</sub>O\\) `end`';
+  assert.equal(normalizeMineruReaderMarkdown(source), source);
+  assert.doesNotMatch(render(source), /katex/);
+});
+
+test('a valid quoted link title keeps its backtick inert', () => {
+  const source = '[x](url "ti`tle") \\(x + H<sub>2</sub>O\\) `end`';
+  assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$/);
+  assert.match(render(source), /katex/);
+});
+
 test('an invalid email autolink does not hide its code delimiter', () => {
   const source = '<a@b.c`foo> \\(x + H<sub>2</sub>O\\) `end`';
   assert.equal(normalizeMineruReaderMarkdown(source), source);
@@ -979,6 +999,12 @@ test('a link reference title backtick cannot span into later paragraph text', ()
 
 test('a completed GFM table can precede a raw type-seven HTML block', () => {
   const source = '| value |\n| --- |\n| cell |\n<x>\nliteral \\(x + H<sub>2</sub>O\\)';
+  assert.equal(normalizeMineruReaderMarkdown(source), source);
+  assert.doesNotMatch(render(source), /katex/);
+});
+
+test('indented literal code immediately after a GFM table remains literal', () => {
+  const source = '| value |\n| --- |\n| cell |\n    \\(x + H<sub>2</sub>O\\)';
   assert.equal(normalizeMineruReaderMarkdown(source), source);
   assert.doesNotMatch(render(source), /katex/);
 });

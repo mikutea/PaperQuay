@@ -1458,6 +1458,34 @@ function splitMarkdownTableCells(line: string): string[] {
   return cells;
 }
 
+export function gfmTableBoundaryLineStarts(source: string): Set<number> {
+  const lineStarts = [0];
+  const lineEnds: number[] = [];
+  for (const rawLine of splitMarkdownLinesPreservingEndings(source)) {
+    lineEnds.push(lineStarts[lineStarts.length - 1] + rawLine.replace(/\r\n$|[\r\n]$/, '').length);
+    lineStarts.push(lineStarts[lineStarts.length - 1] + rawLine.length);
+  }
+  const boundaries = new Set<number>();
+  const tableCells = (line: string) => splitMarkdownTableCells(line)
+    .map((cell) => cell.trim()).filter((cell, index, cells) => cell || index > 0 && index < cells.length - 1);
+  for (let index = 1; index < lineEnds.length; index += 1) {
+    const header = source.slice(lineStarts[index - 1], lineEnds[index - 1]);
+    const separator = source.slice(lineStarts[index], lineEnds[index]);
+    if (!header.includes('|') || !separator.includes('|')) continue;
+    const delimiter = tableCells(separator);
+    if (!delimiter.length || tableCells(header).length !== delimiter.length
+      || !delimiter.every((cell) => /^:?-+:?$/.test(cell))) continue;
+    boundaries.add(lineStarts[index + 1]);
+    while (index + 1 < lineEnds.length) {
+      const row = source.slice(lineStarts[index + 1], lineEnds[index + 1]);
+      if (!row.trim() || !row.includes('|')) break;
+      index += 1;
+      boundaries.add(lineStarts[index + 1]);
+    }
+  }
+  return boundaries;
+}
+
 export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: string) => string): string | null {
   const fencedLines = fencedMarkdownLineStarts(source);
   const blockStarts = /<!--|<\?|<!\[CDATA\[|<![A-Z]|<\/([A-Za-z][A-Za-z0-9-]*)\s*>|<([A-Za-z][A-Za-z0-9-]*)(?=\s|\/?>|$)/g;
@@ -1468,24 +1496,7 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
     lineEnds.push(lineStarts[lineStarts.length - 1] + rawLine.replace(/\r\n$|[\r\n]$/, '').length);
     lineStarts.push(lineStarts[lineStarts.length - 1] + rawLine.length);
   }
-  const tableBoundaryLineStarts = new Set<number>();
-  const tableCells = (line: string) => splitMarkdownTableCells(line)
-    .map((cell) => cell.trim()).filter((cell, index, cells) => cell || index > 0 && index < cells.length - 1);
-  for (let index = 1; index < lineEnds.length; index += 1) {
-    const header = source.slice(lineStarts[index - 1], lineEnds[index - 1]);
-    const separator = source.slice(lineStarts[index], lineEnds[index]);
-    if (!header.includes('|') || !separator.includes('|')) continue;
-    const delimiter = tableCells(separator);
-    if (!delimiter.length || tableCells(header).length !== delimiter.length
-      || !delimiter.every((cell) => /^:?-+:?$/.test(cell))) continue;
-    tableBoundaryLineStarts.add(lineStarts[index + 1]);
-    while (index + 1 < lineEnds.length) {
-      const row = source.slice(lineStarts[index + 1], lineEnds[index + 1]);
-      if (!row.trim() || !row.includes('|')) break;
-      index += 1;
-      tableBoundaryLineStarts.add(lineStarts[index + 1]);
-    }
-  }
+  const tableBoundaryLineStarts = gfmTableBoundaryLineStarts(source);
   const inheritedListWidths: number[] = [];
   let activeQuoteDepth = 0;
   const activeListWidths: number[] = [];
@@ -1794,6 +1805,46 @@ function isLineLevelCodePrefix(prefix: string): boolean {
   return cursor === prefix.length;
 }
 
+function validInlineLinkTarget(text: string): boolean {
+  let index = 0;
+  while (text[index] === ' ' || text[index] === '\t') index += 1;
+  if (text[index] === '<') {
+    index += 1;
+    while (index < text.length && text[index] !== '>') {
+      if (text[index] === '\\') index += 1;
+      else if (text[index] === '<' || /\s/.test(text[index])) return false;
+      index += 1;
+    }
+    if (text[index] !== '>') return false;
+    index += 1;
+  } else {
+    let depth = 0;
+    while (index < text.length && !/\s/.test(text[index])) {
+      if (text[index] === '\\') { index += 2; continue; }
+      if (text[index] === '<' || text[index] === '>') return false;
+      if (text[index] === '(') depth += 1;
+      else if (text[index] === ')' && --depth < 0) return false;
+      index += 1;
+    }
+    if (depth !== 0) return false;
+  }
+  if (index === text.length) return true;
+  if (text[index] !== ' ' && text[index] !== '\t') return false;
+  while (text[index] === ' ' || text[index] === '\t') index += 1;
+  if (index === text.length) return true;
+  const closing = text[index] === '"' ? '"' : text[index] === "'" ? "'" : text[index] === '(' ? ')' : '';
+  if (!closing) return false;
+  index += 1;
+  while (index < text.length && text[index] !== closing) {
+    if (text[index] === '\\') index += 1;
+    index += 1;
+  }
+  if (text[index] !== closing) return false;
+  index += 1;
+  while (text[index] === ' ' || text[index] === '\t') index += 1;
+  return index === text.length;
+}
+
 export function markdownCodeSpans(text: string, inlineOnly = false): Array<[number, number]> {
   const linkDestinations: Array<[number, number]> = [];
   if (inlineOnly && text.includes('`')) {
@@ -1868,7 +1919,7 @@ export function markdownCodeSpans(text: string, inlineOnly = false): Array<[numb
           const body = text.slice(index + 1, end);
           // A valid URI autolink or inline HTML tag keeps its backticks inert.
           // An invalid email autolink such as <a@b.c`foo> does not.
-          if (/^[A-Za-z][A-Za-z0-9+.-]+:[^\s<>]*$/.test(body)
+          if (/^[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\s<>]*$/.test(body)
             || /^\/[A-Za-z][A-Za-z0-9-]*[ \t]*$/.test(body)
             || /^[A-Za-z][A-Za-z0-9-]*/.test(body) && validHtmlOpening(text, index, end)) {
             linkDestinations.push([index + 1, end]);
@@ -1906,7 +1957,7 @@ export function markdownCodeSpans(text: string, inlineOnly = false): Array<[numb
           if (text[end] === '(') depth += 1;
           else if (text[end] === ')') depth -= 1;
         }
-        if (depth === 0) {
+        if (depth === 0 && validInlineLinkTarget(text.slice(index + 2, end - 1))) {
           linkDestinations.push([index + 2, end - 1]);
         }
         index = end - 1;
