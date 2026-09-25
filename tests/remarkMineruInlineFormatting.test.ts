@@ -136,3 +136,12 @@ test('many unmatched tags across paragraphs do not repeatedly scan siblings', ()
   assert.ok(reads < 8_192, 'unmatched tags should be inspected only a bounded number of times');
   assert.equal(root.children[0].children[0].value, '<sup>');
 });
+
+test('long formula-like prose before a script tag remains bounded', () => {
+  const source = `${'x='.repeat(8_000)}H<sub>2</sub>O`;
+  const started = performance.now();
+  assert.equal(normalizeMineruReaderMarkdown(source), source);
+  assert.ok(performance.now() - started < 2_000, 'the next scan must advance past the script tag');
+  const repeated = `${'x='.repeat(30)}H<sub>2</sub>O`.repeat(120);
+  assert.equal(normalizeMineruReaderMarkdown(repeated), repeated);
+});

@@ -354,6 +354,13 @@ function wrapInlineLatexSegments(line: string, preserveInlineScriptTags = false)
     let end = index;
 
     while (end < protectedLine.length && INLINE_FORMULA_CHAR_PATTERN.test(protectedLine[end])) {
+      if (preserveInlineScriptTags && protectedLine[end] === '<') {
+        const tag = /^<\/?(?:sup|sub)[ \t]*>/i.exec(protectedLine.slice(end, end + 16));
+        if (tag) {
+          end += tag[0].length;
+          break;
+        }
+      }
       if (end > index && /^\s+[A-Za-z]{2,}\b/.test(protectedLine.slice(end))) {
         break;
       }
@@ -363,10 +370,19 @@ function wrapInlineLatexSegments(line: string, preserveInlineScriptTags = false)
 
     const candidate = protectedLine.slice(index, end);
 
+    const scriptTag = preserveInlineScriptTags
+      ? /<\/?(?:sup|sub)[ \t]*>/i.exec(candidate)
+      : null;
+    if (scriptTag) {
+      const nextIndex = index + scriptTag.index + scriptTag[0].length;
+      output += protectedLine.slice(index, nextIndex);
+      index = nextIndex;
+      continue;
+    }
+
     if (
       candidate &&
       looksLikeInlineFormulaSegment(candidate) &&
-      (!preserveInlineScriptTags || !/<\/?(?:sup|sub)[ \t]*>/i.test(candidate)) &&
       isInlineFormulaBoundary(protectedLine[index - 1]) &&
       isInlineFormulaBoundary(protectedLine[end])
     ) {
