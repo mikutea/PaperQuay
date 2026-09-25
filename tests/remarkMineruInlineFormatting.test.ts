@@ -7,6 +7,7 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import { normalizeMarkdownMath } from '../src/utils/markdown.ts';
+import { parseMineruMarkdownPages } from '../src/services/mineru.ts';
 
 import {
   normalizeMineruReaderMarkdown,
@@ -75,6 +76,21 @@ test('formula-image fallback keeps the existing tagged alt text', () => {
   const source = '![H<sub>2</sub>O](images/formula.png)';
   assert.equal(normalizeMineruReaderMarkdown(source), normalizeMarkdownMath(source));
   assert.match(normalizeMineruReaderMarkdown(source), /H<sub>2<\/sub>O/);
+});
+
+test('implicit math before tagged prose still normalizes', () => {
+  assert.match(normalizeMineruReaderMarkdown('x_i H<sub>2</sub>O'), /^\$x_i\$ H<sub>2<\/sub>O$/);
+});
+
+test('full.md fallback script tags display as math subscripts without changing cached text', () => {
+  const direct = { type: 'root', children: [{ type: 'inlineMath', value: 'H<sub>2</sub>O' }] };
+  remarkMineruInlineFormatting()(direct);
+  assert.equal(direct.children[0].value, 'H_{2}O');
+  const pages = parseMineruMarkdownPages('H<sub>2</sub>O');
+  const markdown = pages[0]?.[0]?.content?.markdown;
+  assert.equal(markdown, '$H<sub>2</sub>O$');
+  const html = render(markdown);
+  assert.match(html, /<msub>/);
 });
 
 test('an unmatched outer script leaves nested pairs literal', () => {

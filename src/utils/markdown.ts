@@ -375,7 +375,10 @@ function wrapInlineLatexSegments(line: string, preserveInlineScriptTags = false)
       : null;
     if (scriptTag) {
       const nextIndex = index + scriptTag.index + scriptTag[0].length;
-      output += protectedLine.slice(index, nextIndex);
+      const beforeTag = candidate.slice(0, scriptTag.index);
+      const taggedTokenStart = Math.max(0, beforeTag.search(/\S+$/));
+      output += wrapInlineLatexSegments(beforeTag.slice(0, taggedTokenStart), true);
+      output += protectedLine.slice(index + taggedTokenStart, nextIndex);
       index = nextIndex;
       continue;
     }

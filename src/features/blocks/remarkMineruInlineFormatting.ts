@@ -80,13 +80,27 @@ interface MarkdownNode {
   type: string;
   value?: string;
   children?: MarkdownNode[];
-  data?: { hName?: string };
+  data?: { hName?: string; hChildren?: HastNode[] };
+}
+
+interface HastNode {
+  type: string;
+  value?: string;
+  children?: HastNode[];
 }
 
 function scriptTag(node: MarkdownNode): { name: 'sup' | 'sub'; closing: boolean } | null {
   if (node.type !== 'html' || !node.value) return null;
   const match = /^<(\/)?(sup|sub)[ \t]*>$/i.exec(node.value);
   return match ? { name: match[2].toLowerCase() as 'sup' | 'sub', closing: !!match[1] } : null;
+}
+
+function formatMathScripts(value: string): string {
+  if (value.length > MAX_CAPTION_LENGTH) return value;
+  return value.replace(/<(sub|sup)[ \t]*>([^<>]+)<\/\1[ \t]*>/gi, (match, tag: string, body: string) => {
+    if (/[{}\\$&#_^~]/.test(body)) return match;
+    return `${tag.toLowerCase() === 'sub' ? '_' : '^'}{${body}}`;
+  });
 }
 
 function formatChildren(children: MarkdownNode[], depth: number, budget: { nodes: number }): MarkdownNode[] {
@@ -127,6 +141,14 @@ function formatChildren(children: MarkdownNode[], depth: number, budget: { nodes
         });
         index = closing;
         continue;
+      }
+      if ((node.type === 'inlineMath' || node.type === 'math') && node.value) {
+        const formatted = formatMathScripts(node.value);
+        node.value = formatted;
+        const textNode = node.type === 'math'
+          ? node.data?.hChildren?.[0]?.children?.[0]
+          : node.data?.hChildren?.[0];
+        if (textNode?.type === 'text') textNode.value = formatted;
       }
       if (node.children) node.children = formatChildren(node.children, level + 1, budget);
       output.push(node);
