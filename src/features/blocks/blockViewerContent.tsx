@@ -273,10 +273,7 @@ function AssetFigure({
     shouldLoadAsset ? assetPath : undefined,
   );
   const [previewOpen, setPreviewOpen] = useState(false);
-  const accessibleLabel = useMemo(
-    () => plainMineruInlineCaption(label),
-    [label],
-  );
+  const accessibleLabel = useMemo(() => plainMineruInlineCaption(label), [label]);
 
   useEffect(() => {
     setShouldLoadAsset(false);
