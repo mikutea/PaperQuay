@@ -213,31 +213,37 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
   };
   const unquote = (line: string) => {
     let cursor = 0;
+    let column = 0;
+    const mayEndThematic = /[-*_][ \t]*(?:\r\n|\r|\n)?$/.test(line);
+    const advance = (end: number) => {
+      while (cursor < end) {
+        column += line[cursor] === '\t' ? 4 - column % 4 : 1;
+        cursor += 1;
+      }
+    };
     while (cursor < line.length) {
       let next = cursor;
       while (next - cursor < 3 && line[next] === ' ') next += 1;
       if (line[next] === '>') {
-        cursor = next + 1;
-        if (line[cursor] === ' ' || line[cursor] === '\t') cursor += 1;
+        advance(next + 1);
+        if (line[cursor] === ' ' || line[cursor] === '\t') advance(cursor + 1);
         continue;
       }
-      if (thematicBreakAt(line, cursor)) break;
+      if (mayEndThematic && thematicBreakAt(line, cursor)) break;
       listMarker.lastIndex = next;
       const list = listMarker.exec(line);
       if (!list) break;
       const markerEnd = next + list[0].length;
-      let column = 0;
-      for (let index = 0; index < markerEnd; index += 1) {
-        column += line[index] === '\t' ? 4 - column % 4 : 1;
-      }
+      advance(markerEnd);
       const markerColumn = column;
       let paddingEnd = markerEnd;
+      let paddingColumn = column;
       while (line[paddingEnd] === ' ' || line[paddingEnd] === '\t') {
-        column += line[paddingEnd] === '\t' ? 4 - column % 4 : 1;
+        paddingColumn += line[paddingEnd] === '\t' ? 4 - paddingColumn % 4 : 1;
         paddingEnd += 1;
-        if (column - markerColumn > 4) break;
+        if (paddingColumn - markerColumn > 4) break;
       }
-      cursor = column - markerColumn > 4 ? markerEnd + 1 : paddingEnd;
+      advance(paddingColumn - markerColumn > 4 ? markerEnd + 1 : paddingEnd);
     }
     return line.slice(cursor);
   };

@@ -1302,13 +1302,20 @@ export function fencedMarkdownLineStarts(source: string): Set<number> {
   const openingPrefix = (line: string, paragraphContinues: boolean) => {
     const containers: Container[] = [];
     let cursor = 0;
+    let column = 0;
+    const advance = (end: number) => {
+      while (cursor < end) {
+        column += line[cursor] === '\t' ? 4 - column % 4 : 1;
+        cursor += 1;
+      }
+    };
     while (cursor < line.length) {
-      const start = cursor;
+      const startColumn = column;
       let next = cursor;
-      while (next - start < 3 && line[next] === ' ') next += 1;
+      while (next - cursor < 3 && line[next] === ' ') next += 1;
       if (line[next] === '>') {
-        cursor = next + 1;
-        if (line[cursor] === ' ' || line[cursor] === '\t') cursor += 1;
+        advance(next + 1);
+        if (line[cursor] === ' ' || line[cursor] === '\t') advance(cursor + 1);
         containers.push({ kind: 'quote', width: 0 });
         continue;
       }
@@ -1317,23 +1324,30 @@ export function fencedMarkdownLineStarts(source: string): Set<number> {
       if (!list) break;
       const ordered = /^(\d{1,9})[.)]/.exec(list[0]);
       if (paragraphContinues && ordered && Number(ordered[1]) !== 1) break;
-      cursor = next + list[0].length;
-      containers.push({ kind: 'list', width: markdownColumnAt(line, cursor) - markdownColumnAt(line, start) });
+      advance(next + list[0].length);
+      containers.push({ kind: 'list', width: column - startColumn });
     }
     return { cursor, containers };
   };
   const continuation = (line: string, containers: Container[]) => {
     let cursor = 0;
+    let column = 0;
+    const advance = (end: number) => {
+      while (cursor < end) {
+        column += line[cursor] === '\t' ? 4 - column % 4 : 1;
+        cursor += 1;
+      }
+    };
     for (const container of containers) {
       if (container.kind === 'quote') {
         const start = cursor;
-        while (cursor - start < 3 && line[cursor] === ' ') cursor += 1;
-        if (line[cursor] !== '>') return null;
-        cursor += 1;
-        if (line[cursor] === ' ' || line[cursor] === '\t') cursor += 1;
+        let next = cursor;
+        while (next - start < 3 && line[next] === ' ') next += 1;
+        if (line[next] !== '>') return null;
+        advance(next + 1);
+        if (line[cursor] === ' ' || line[cursor] === '\t') advance(cursor + 1);
       } else {
-        const startColumn = markdownColumnAt(line, cursor);
-        let column = startColumn;
+        const startColumn = column;
         while (column - startColumn < container.width && (line[cursor] === ' ' || line[cursor] === '\t')) {
           column += line[cursor] === '\t' ? 4 - column % 4 : 1;
           cursor += 1;
@@ -1751,9 +1765,41 @@ export function markdownCodeSpans(text: string, inlineOnly = false): Array<[numb
   const linkDestinations: Array<[number, number]> = [];
   if (inlineOnly && text.includes('`')) {
     let labelStart = -1;
+    let commentClose = text.indexOf('-->');
+    let declarationClose = text.indexOf('>');
     for (let index = 0; index < text.length; index += 1) {
       if (text[index] === '\\') { index += 1; continue; }
       if (text[index] === '<') {
+        if (text.startsWith('<!--', index)) {
+          while (commentClose >= 0 && commentClose < index + 4) commentClose = text.indexOf('-->', commentClose + 3);
+          const nested = text.indexOf('<!--', index + 4);
+          if (commentClose >= 0 && (nested < 0 || nested > commentClose)) {
+            const body = text.slice(index + 4, commentClose);
+            if (!body.startsWith('>') && !body.startsWith('->') && !body.endsWith('-') && !body.includes('--')) {
+              linkDestinations.push([index + 4, commentClose]);
+              index = commentClose + 2;
+              continue;
+            }
+          }
+        }
+        const rawClosing = text.startsWith('<?', index) ? '?>'
+          : text.startsWith('<![CDATA[', index) ? ']]>' : '';
+        if (rawClosing) {
+          const end = text.indexOf(rawClosing, index + 2);
+          if (end >= 0) {
+            linkDestinations.push([index + 2, end]);
+            index = end + rawClosing.length - 1;
+            continue;
+          }
+        }
+        if (/^<![A-Z]+[ \t]/.test(text.slice(index, index + 32))) {
+          while (declarationClose >= 0 && declarationClose <= index) declarationClose = text.indexOf('>', declarationClose + 1);
+          if (declarationClose > index) {
+            linkDestinations.push([index + 2, declarationClose]);
+            index = declarationClose;
+            continue;
+          }
+        }
         let quote = '';
         let end = -1;
         for (let cursor = index + 1; cursor < text.length; cursor += 1) {

@@ -96,6 +96,20 @@ test('a malformed inline HTML attribute cannot hide a code delimiter', () => {
   assert.doesNotMatch(render(source), /katex/);
 });
 
+test('a backtick inside an inline HTML comment cannot open a code span', () => {
+  const source = 'prefix <!-- `foo --> \\(x + H<sub>2</sub>O\\) `end`';
+  assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$/);
+  assert.match(render(source), /katex/);
+});
+
+test('other valid inline raw HTML forms keep their backticks inert', () => {
+  for (const raw of ['<?pi `foo?>', '<![CDATA[`foo]]>', '<!DOCTYPE `foo>']) {
+    const source = `prefix ${raw} \\(x + H<sub>2</sub>O\\) \`end\``;
+    assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$/);
+    assert.match(render(source), /katex/);
+  }
+});
+
 test('an authored math token cannot open a later code span', () => {
   const source = '$a`b$ \\(x + H<sub>2</sub>O\\) `end`';
   assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$/);
@@ -1274,6 +1288,13 @@ test('raw-block detection does not rescan malformed tag prefixes', () => {
   const started = performance.now();
   normalizeMineruReaderMarkdown(source);
   assert.ok(performance.now() - started < 2_000);
+});
+
+test('nested list-prefix columns stay linear while scanning fences', () => {
+  const source = `${'- '.repeat(8_000)}H<sub>2</sub>O\n\`\`\``;
+  const started = performance.now();
+  normalizeMineruReaderMarkdown(source);
+  assert.ok(performance.now() - started < 1_000);
 });
 
 test('equation mathText merges adjacent duplicate script tags for KaTeX', () => {
