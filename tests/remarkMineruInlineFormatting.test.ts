@@ -93,6 +93,36 @@ test('full.md fallback script tags display as math subscripts without changing c
   assert.match(html, /<msub>/);
 });
 
+test('nested script tags and percentages inside explicit math render through KaTeX', () => {
+  assert.match(render('$x<sup>a<sub>i</sub></sup>$'), /<msup>/);
+  assert.match(render('$P<sub>95%</sub>$'), /<msub>/);
+  assert.doesNotMatch(render('$P<sub>95%</sub>$'), /katex-error/);
+});
+
+test('adjacent implicit math and a prose script both retain their formatting', () => {
+  const html = render('x_i<sup>2</sup>');
+  assert.match(html, /katex/);
+  assert.match(html, /<sup>2<\/sup>/);
+  assert.match(html, /<msub>/);
+});
+
+test('deep script nesting falls back to entirely literal reader and caption text', () => {
+  const source = '<sup>'.repeat(33) + 'x' + '</sup>'.repeat(33);
+  const reader = render(source);
+  assert.doesNotMatch(reader, /<sup>/);
+  assert.match(reader, /&lt;sup&gt;/);
+  const caption = renderToStaticMarkup(createElement('span', null, ...renderMineruInlineCaption(source)));
+  assert.doesNotMatch(caption, /<sup>/);
+  assert.match(caption, /&lt;sup&gt;/);
+});
+
+test('many nested caption pairs stay bounded', () => {
+  const caption = '<sup>'.repeat(128) + 'x' + '</sup>'.repeat(128);
+  const started = performance.now();
+  assert.deepEqual(renderMineruInlineCaption(caption), [caption]);
+  assert.ok(performance.now() - started < 500);
+});
+
 test('an unmatched outer script leaves nested pairs literal', () => {
   const html = render('<sup>a<sub>b</sub>');
   assert.doesNotMatch(html, /<sup>|<sub>/);

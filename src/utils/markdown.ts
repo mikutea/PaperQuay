@@ -378,7 +378,11 @@ function wrapInlineLatexSegments(line: string, preserveInlineScriptTags = false)
       const beforeTag = candidate.slice(0, scriptTag.index);
       const taggedTokenStart = Math.max(0, beforeTag.search(/\S+$/));
       output += wrapInlineLatexSegments(beforeTag.slice(0, taggedTokenStart), true);
-      output += protectedLine.slice(index + taggedTokenStart, nextIndex);
+      const precedingToken = beforeTag.slice(taggedTokenStart);
+      output += precedingToken.length <= 256 && /[_^]/.test(precedingToken) && looksLikeInlineFormulaSegment(precedingToken)
+        ? wrapInlineLatexSegments(precedingToken, true)
+        : precedingToken;
+      output += protectedLine.slice(index + scriptTag.index, nextIndex);
       index = nextIndex;
       continue;
     }

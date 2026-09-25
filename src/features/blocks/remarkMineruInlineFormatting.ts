@@ -10,49 +10,32 @@ const MAX_READER_MATH_LENGTH = 16_384;
 
 // Captions are plain text, not Markdown or trusted HTML. Only paired MinerU
 // script tags become elements; everything else remains React-escaped text.
-export function renderMineruInlineCaption(text: string, depth = 0): ReactNode[] {
-  if (text.length > MAX_CAPTION_LENGTH || depth >= MAX_DEPTH) return [text];
+export function renderMineruInlineCaption(text: string): ReactNode[] {
+  if (text.length > MAX_CAPTION_LENGTH) return [text];
   const tags = [...text.matchAll(INLINE_TAG)];
   if (tags.length > MAX_TAGS) return [text];
 
-  const nesting: string[] = [];
+  const root: ReactNode[] = [];
+  const nesting: Array<{ name: 'sup' | 'sub'; children: ReactNode[] }> = [];
+  let cursor = 0;
   for (const tag of tags) {
     const name = /^<\/?(sup|sub)/i.exec(tag[0])![1].toLowerCase();
+    const current = nesting.length ? nesting[nesting.length - 1].children : root;
+    current.push(text.slice(cursor, tag.index));
     if (tag[0][1] === '/') {
-      if (nesting.length && nesting.pop() !== name) return [text];
+      if (!nesting.length || nesting[nesting.length - 1].name !== name) return [text];
+      const closed = nesting.pop()!;
+      const parent = nesting.length ? nesting[nesting.length - 1].children : root;
+      parent.push(createElement(closed.name, { key: tag.index }, ...closed.children));
     } else {
-      nesting.push(name);
+      if (nesting.length >= MAX_DEPTH) return [text];
+      nesting.push({ name: name as 'sup' | 'sub', children: [] });
     }
+    cursor = tag.index + tag[0].length;
   }
   if (nesting.length) return [text];
-
-  const output: ReactNode[] = [];
-  let cursor = 0;
-  for (let index = 0; index < tags.length; index += 1) {
-    const opening = tags[index];
-    if (opening[0][1] === '/') continue;
-    const name = /^<(sup|sub)/i.exec(opening[0])![1].toLowerCase() as 'sup' | 'sub';
-    let nesting = 1;
-    let closingIndex = index + 1;
-    for (; closingIndex < tags.length; closingIndex += 1) {
-      const candidate = tags[closingIndex][0];
-      if (/<\/?(sup|sub)/i.exec(candidate)?.[1].toLowerCase() !== name) continue;
-      nesting += candidate[1] === '/' ? -1 : 1;
-      if (nesting === 0) break;
-    }
-    if (nesting !== 0) continue;
-    const closing = tags[closingIndex];
-    output.push(text.slice(cursor, opening.index));
-    output.push(createElement(
-      name,
-      { key: opening.index },
-      ...renderMineruInlineCaption(text.slice(opening.index + opening[0].length, closing.index), depth + 1),
-    ));
-    cursor = closing.index + closing[0].length;
-    index = closingIndex;
-  }
-  output.push(text.slice(cursor));
-  return output;
+  root.push(text.slice(cursor));
+  return root;
 }
 
 export function plainMineruInlineCaption(text: string): string {
@@ -97,10 +80,33 @@ function scriptTag(node: MarkdownNode): { name: 'sup' | 'sub'; closing: boolean 
 
 function formatMathScripts(value: string): string {
   if (value.length > MAX_CAPTION_LENGTH) return value;
-  return value.replace(/<(sub|sup)[ \t]*>([^<>]+)<\/\1[ \t]*>/gi, (match, tag: string, body: string) => {
-    if (/[{}\\$&#_^~]/.test(body)) return match;
-    return `${tag.toLowerCase() === 'sub' ? '_' : '^'}{${body}}`;
-  });
+  const tags = [...value.matchAll(INLINE_TAG)];
+  if (!tags.length || tags.length > MAX_TAGS) return value;
+  const root: string[] = [];
+  const stack: Array<{ name: 'sup' | 'sub'; body: string[] }> = [];
+  let cursor = 0;
+  for (const tag of tags) {
+    const current = stack.length ? stack[stack.length - 1].body : root;
+    const segment = value.slice(cursor, tag.index);
+    if (stack.length && /[{}\\$&#_^~]/.test(segment)) return value;
+    current.push(stack.length ? segment.replace(/%/g, '\\%') : segment);
+    const name = /^<\/?(sup|sub)/i.exec(tag[0])![1].toLowerCase() as 'sup' | 'sub';
+    if (tag[0][1] === '/') {
+      if (!stack.length || stack[stack.length - 1].name !== name) return value;
+      const closed = stack.pop()!;
+      const body = closed.body.join('');
+      if (!body) return value;
+      const parent = stack.length ? stack[stack.length - 1].body : root;
+      parent.push(`${name === 'sub' ? '_' : '^'}{${body}}`);
+    } else {
+      if (stack.length >= MAX_DEPTH) return value;
+      stack.push({ name, body: [] });
+    }
+    cursor = tag.index + tag[0].length;
+  }
+  if (stack.length) return value;
+  root.push(value.slice(cursor));
+  return root.join('');
 }
 
 function formatChildren(children: MarkdownNode[], depth: number, budget: { nodes: number }): MarkdownNode[] {
@@ -126,6 +132,14 @@ function formatChildren(children: MarkdownNode[], depth: number, budget: { nodes
     }
   }
   if (stack.length) return children;
+  // Reject a too-deep sequence before formatting any of its outer pairs.
+  let activeDepth = 0;
+  for (const node of children) {
+    const tag = scriptTag(node);
+    if (!tag) continue;
+    activeDepth += tag.closing ? -1 : 1;
+    if (activeDepth + depth > MAX_DEPTH) return children;
+  }
 
   const formatRange = (start: number, end: number, level: number): MarkdownNode[] => {
     const output: MarkdownNode[] = [];
