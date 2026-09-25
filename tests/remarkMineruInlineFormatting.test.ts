@@ -68,3 +68,31 @@ test('oversized captions stay literal rather than invoking an unbounded parser',
   const text = 'a'.repeat(16_385) + '<sub>2</sub>';
   assert.deepEqual(renderMineruInlineCaption(text), [text]);
 });
+
+test('a paragraph with many ordinary nodes still formats a paired script', () => {
+  const html = render(`${'*a* '.repeat(129)}H<sub>2</sub>O`);
+  assert.match(html, /H<sub>2<\/sub>O/);
+});
+
+test('exceeding the script-tag cap still normalizes unrelated math', () => {
+  const html = render(`${'H<sub>2</sub>O '.repeat(129)}\\(x_i\\)`);
+  assert.match(html, /katex/);
+});
+
+test('many unmatched tags across paragraphs do not repeatedly scan siblings', () => {
+  let reads = 0;
+  const rawTag = () => ({
+    type: 'html',
+    get value() { reads += 1; return '<sup>'; },
+  });
+  const root = {
+    type: 'root',
+    children: Array.from({ length: 32 }, () => ({
+      type: 'paragraph',
+      children: Array.from({ length: 64 }, rawTag),
+    })),
+  };
+  remarkMineruInlineFormatting()(root);
+  assert.ok(reads < 8_192, 'unmatched tags should be inspected only a bounded number of times');
+  assert.equal(root.children[0].children[0].value, '<sup>');
+});

@@ -5,6 +5,7 @@ const INLINE_TAG = /<\/?(?:sup|sub)[ \t]*>/gi;
 const MAX_TAGS = 256;
 const MAX_DEPTH = 32;
 const MAX_CAPTION_LENGTH = 16_384;
+const MAX_AST_NODES = 20_000;
 
 // Captions are plain text, not Markdown or trusted HTML. Only paired MinerU
 // script tags become elements; everything else remains React-escaped text.
@@ -56,7 +57,7 @@ export function plainMineruInlineCaption(text: string): string {
 export function normalizeMineruReaderMarkdown(markdown: string): string {
   const tags = [...markdown.matchAll(INLINE_TAG)];
   if (!tags.length) return normalizeMarkdownMath(markdown);
-  if (tags.length > MAX_TAGS) return markdown;
+  if (tags.length > MAX_TAGS) return normalizeMarkdownMath(markdown);
 
   let marker = 'PQInlineTag';
   for (let attempt = 0; markdown.includes(marker) && attempt < 4; attempt += 1) {
@@ -88,35 +89,48 @@ function scriptTag(node: MarkdownNode): { name: 'sup' | 'sub'; closing: boolean 
   return match ? { name: match[2].toLowerCase() as 'sup' | 'sub', closing: !!match[1] } : null;
 }
 
-function formatChildren(children: MarkdownNode[], depth = 0): MarkdownNode[] {
-  if (children.length > MAX_TAGS || depth >= MAX_DEPTH) return children;
-  const output: MarkdownNode[] = [];
+function formatChildren(children: MarkdownNode[], depth: number, budget: { nodes: number }): MarkdownNode[] {
+  if (depth >= MAX_DEPTH || children.length > budget.nodes) return children;
+  budget.nodes -= children.length;
+
+  // Pair script tags in one pass. Unmatched openers must not repeatedly scan
+  // the rest of a large Markdown paragraph on Electron's renderer thread.
+  const pairs = new Map<number, number>();
+  const stacks = { sup: [] as number[], sub: [] as number[] };
+  let tagCount = 0;
   for (let index = 0; index < children.length; index += 1) {
-    const node = children[index];
-    const opening = scriptTag(node);
-    if (opening && !opening.closing) {
-      let nesting = 1;
-      let closingIndex = index + 1;
-      for (; closingIndex < children.length; closingIndex += 1) {
-        const candidate = scriptTag(children[closingIndex]);
-        if (candidate?.name !== opening.name) continue;
-        nesting += candidate.closing ? -1 : 1;
-        if (nesting === 0) break;
-      }
-      if (nesting === 0) {
+    const tag = scriptTag(children[index]);
+    if (!tag) continue;
+    if (++tagCount > MAX_TAGS) return children;
+    if (tag.closing) {
+      const opening = stacks[tag.name].pop();
+      if (opening !== undefined) pairs.set(opening, index);
+    } else {
+      stacks[tag.name].push(index);
+    }
+  }
+
+  const formatRange = (start: number, end: number, level: number): MarkdownNode[] => {
+    const output: MarkdownNode[] = [];
+    for (let index = start; index < end; index += 1) {
+      const node = children[index];
+      const closing = level < MAX_DEPTH ? pairs.get(index) : undefined;
+      if (closing !== undefined && closing < end) {
+        const name = scriptTag(node)!.name;
         output.push({
           type: 'mineruInlineFormatting',
-          data: { hName: opening.name },
-          children: formatChildren(children.slice(index + 1, closingIndex), depth + 1),
+          data: { hName: name },
+          children: formatRange(index + 1, closing, level + 1),
         });
-        index = closingIndex;
+        index = closing;
         continue;
       }
+      if (node.children) node.children = formatChildren(node.children, level + 1, budget);
+      output.push(node);
     }
-    if (node.children) node.children = formatChildren(node.children, depth + 1);
-    output.push(node);
-  }
-  return output;
+    return output;
+  };
+  return formatRange(0, children.length, depth);
 }
 
 // The installed Markdown parser has already determined code, links, tables,
@@ -124,6 +138,6 @@ function formatChildren(children: MarkdownNode[], depth = 0): MarkdownNode[] {
 export function remarkMineruInlineFormatting() {
   return (tree: unknown) => {
     const root = tree as MarkdownNode;
-    if (root.children) root.children = formatChildren(root.children);
+    if (root.children) root.children = formatChildren(root.children, 0, { nodes: MAX_AST_NODES });
   };
 }
