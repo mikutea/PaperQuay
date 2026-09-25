@@ -118,28 +118,31 @@ function formatChildren(children: MarkdownNode[], depth: number, budget: { nodes
   const pairs = new Map<number, number>();
   const stack: Array<{ name: 'sup' | 'sub'; index: number }> = [];
   let tagCount = 0;
+  let formatTags = true;
   for (let index = 0; index < children.length; index += 1) {
     const tag = scriptTag(children[index]);
     if (!tag) continue;
-    if (++tagCount > MAX_TAGS) return children;
+    if (++tagCount > MAX_TAGS) { formatTags = false; break; }
     if (tag.closing) {
       const opening = stack[stack.length - 1];
-      if (!opening) continue;
-      if (opening.name !== tag.name) return children;
+      if (!opening || opening.name !== tag.name) { formatTags = false; break; }
       pairs.set(stack.pop()!.index, index);
     } else {
       stack.push({ name: tag.name, index });
     }
   }
-  if (stack.length) return children;
+  if (stack.length) formatTags = false;
   // Reject a too-deep sequence before formatting any of its outer pairs.
-  let activeDepth = 0;
-  for (const node of children) {
-    const tag = scriptTag(node);
-    if (!tag) continue;
-    activeDepth += tag.closing ? -1 : 1;
-    if (activeDepth + depth > MAX_DEPTH) return children;
+  if (formatTags) {
+    let activeDepth = 0;
+    for (const node of children) {
+      const tag = scriptTag(node);
+      if (!tag) continue;
+      activeDepth += tag.closing ? -1 : 1;
+      if (activeDepth + depth > MAX_DEPTH) { formatTags = false; break; }
+    }
   }
+  if (!formatTags) pairs.clear();
 
   const formatRange = (start: number, end: number, level: number): MarkdownNode[] => {
     const output: MarkdownNode[] = [];

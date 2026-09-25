@@ -114,6 +114,9 @@ test('deep script nesting falls back to entirely literal reader and caption text
   const caption = renderToStaticMarkup(createElement('span', null, ...renderMineruInlineCaption(source)));
   assert.doesNotMatch(caption, /<sup>/);
   assert.match(caption, /&lt;sup&gt;/);
+  const strayCloser = render('x</sup>' + source);
+  assert.doesNotMatch(strayCloser, /<sup>/);
+  assert.match(strayCloser, /&lt;sup&gt;/);
 });
 
 test('many nested caption pairs stay bounded', () => {
@@ -161,6 +164,9 @@ test('exceeding the script-tag cap still normalizes unrelated math', () => {
   const lineHtml = render(lines);
   assert.doesNotMatch(lineHtml, /\$H&lt;sub&gt;2&lt;\/sub&gt;O\$/);
   assert.match(lineHtml, /katex/);
+  const taggedMath = render(`${'H<sub>2</sub>O '.repeat(129)}$P<sub>95%</sub>$`);
+  assert.match(taggedMath, /<msub>/);
+  assert.doesNotMatch(taggedMath, /katex-error/);
   const manyTags = `${'<sup>'.repeat(10_000)} \\(x_i\\)`;
   assert.equal(normalizeMineruReaderMarkdown(manyTags), manyTags);
 });
