@@ -33,6 +33,14 @@ test('nested pairs and Markdown emphasis retain their visible content', () => {
   assert.match(html, /x<sup><em>2<\/em><sub>n<\/sub><\/sup>/);
 });
 
+test('crossed script tags stay literal rather than partially formatting', () => {
+  const html = render('<sup>a<sub>b</sup>c</sub>');
+  assert.doesNotMatch(html, /<sup>|<sub>/);
+  assert.match(html, /&lt;sup&gt;a&lt;sub&gt;b&lt;\/sup&gt;c&lt;\/sub&gt;/);
+  const caption = renderToStaticMarkup(createElement('span', null, ...renderMineruInlineCaption('<sup>a<sub>b</sup>c</sub>')));
+  assert.match(caption, /&lt;sup&gt;a&lt;sub&gt;b&lt;\/sup&gt;c&lt;\/sub&gt;/);
+});
+
 test('headings and GFM table cells use the same paired-tag display rule', () => {
   assert.match(render('# H<sub>2</sub>O'), /<h1>H<sub>2<\/sub>O<\/h1>/);
   assert.match(render('| value |\n| --- |\n| x<sup>2</sup> |'), /<td>x<sup>2<\/sup><\/td>/);
@@ -77,6 +85,8 @@ test('a paragraph with many ordinary nodes still formats a paired script', () =>
 test('exceeding the script-tag cap still normalizes unrelated math', () => {
   const html = render(`${'H<sub>2</sub>O '.repeat(129)}\\(x_i\\)`);
   assert.match(html, /katex/);
+  const manyTags = `${'<sup>'.repeat(10_000)} \\(x_i\\)`;
+  assert.equal(normalizeMineruReaderMarkdown(manyTags), manyTags);
 });
 
 test('many unmatched tags across paragraphs do not repeatedly scan siblings', () => {

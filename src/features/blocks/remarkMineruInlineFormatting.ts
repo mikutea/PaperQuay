@@ -6,6 +6,7 @@ const MAX_TAGS = 256;
 const MAX_DEPTH = 32;
 const MAX_CAPTION_LENGTH = 16_384;
 const MAX_AST_NODES = 20_000;
+const MAX_OVERFLOW_MATH_LENGTH = 16_384;
 
 // Captions are plain text, not Markdown or trusted HTML. Only paired MinerU
 // script tags become elements; everything else remains React-escaped text.
@@ -13,6 +14,16 @@ export function renderMineruInlineCaption(text: string, depth = 0): ReactNode[] 
   if (text.length > MAX_CAPTION_LENGTH || depth >= MAX_DEPTH) return [text];
   const tags = [...text.matchAll(INLINE_TAG)];
   if (tags.length > MAX_TAGS) return [text];
+
+  const nesting: string[] = [];
+  for (const tag of tags) {
+    const name = /^<\/?(sup|sub)/i.exec(tag[0])![1].toLowerCase();
+    if (tag[0][1] === '/') {
+      if (nesting.length && nesting.pop() !== name) return [text];
+    } else {
+      nesting.push(name);
+    }
+  }
 
   const output: ReactNode[] = [];
   let cursor = 0;
@@ -55,9 +66,17 @@ export function plainMineruInlineCaption(text: string): string {
 // Protect only MinerU's script-tag syntax while the existing math normalizer runs.
 // Markdown block, link, and code boundaries remain the parser's responsibility.
 export function normalizeMineruReaderMarkdown(markdown: string): string {
-  const tags = [...markdown.matchAll(INLINE_TAG)];
-  if (!tags.length) return normalizeMarkdownMath(markdown);
-  if (tags.length > MAX_TAGS) return normalizeMarkdownMath(markdown);
+  let tagCount = 0;
+  for (const _ of markdown.matchAll(INLINE_TAG)) {
+    if (++tagCount > MAX_TAGS) {
+      // Keep ordinary formulas working for realistic blocks, but do not feed
+      // arbitrarily large tag floods into the existing math normalizer.
+      return markdown.length <= MAX_OVERFLOW_MATH_LENGTH
+        ? normalizeMarkdownMath(markdown)
+        : markdown;
+    }
+  }
+  if (!tagCount) return normalizeMarkdownMath(markdown);
 
   let marker = 'PQInlineTag';
   for (let attempt = 0; markdown.includes(marker) && attempt < 4; attempt += 1) {
@@ -96,17 +115,19 @@ function formatChildren(children: MarkdownNode[], depth: number, budget: { nodes
   // Pair script tags in one pass. Unmatched openers must not repeatedly scan
   // the rest of a large Markdown paragraph on Electron's renderer thread.
   const pairs = new Map<number, number>();
-  const stacks = { sup: [] as number[], sub: [] as number[] };
+  const stack: Array<{ name: 'sup' | 'sub'; index: number }> = [];
   let tagCount = 0;
   for (let index = 0; index < children.length; index += 1) {
     const tag = scriptTag(children[index]);
     if (!tag) continue;
     if (++tagCount > MAX_TAGS) return children;
     if (tag.closing) {
-      const opening = stacks[tag.name].pop();
-      if (opening !== undefined) pairs.set(opening, index);
+      const opening = stack[stack.length - 1];
+      if (!opening) continue;
+      if (opening.name !== tag.name) return children;
+      pairs.set(stack.pop()!.index, index);
     } else {
-      stacks[tag.name].push(index);
+      stack.push({ name: tag.name, index });
     }
   }
 
