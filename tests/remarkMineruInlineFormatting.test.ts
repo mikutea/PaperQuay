@@ -65,6 +65,13 @@ test('code samples remain literal and existing formula rendering remains active'
 test('existing MinerU formula wrappers keep subscript conversion', () => {
   assert.match(normalizeMineruReaderMarkdown('<span class="math">x<sub>i</sub></span>'), /\$x_\{i\}\$/);
   assert.match(normalizeMineruReaderMarkdown('<div class="formula">x<sub>i</sub></div>'), /\$\$[\s\S]*x_\{i\}[\s\S]*\$\$/);
+  assert.match(normalizeMineruReaderMarkdown(`${'a'.repeat(16_385)} <span class="math">x<sub>i</sub></span>`), /\$x_\{i\}\$/);
+});
+
+test('an unmatched outer script leaves nested pairs literal', () => {
+  const html = render('<sup>a<sub>b</sub>');
+  assert.doesNotMatch(html, /<sup>|<sub>/);
+  assert.match(html, /&lt;sup&gt;a&lt;sub&gt;b&lt;\/sub&gt;/);
 });
 
 test('figure and table captions format only paired scripts', () => {
@@ -95,6 +102,10 @@ test('a paragraph with many ordinary nodes still formats a paired script', () =>
 test('exceeding the script-tag cap still normalizes unrelated math', () => {
   const html = render(`${'H<sub>2</sub>O '.repeat(129)}\\(x_i\\)`);
   assert.match(html, /katex/);
+  const lines = `${'H<sub>2</sub>O\n'.repeat(129)}\\(x_i\\)`;
+  const lineHtml = render(lines);
+  assert.doesNotMatch(lineHtml, /\$H&lt;sub&gt;2&lt;\/sub&gt;O\$/);
+  assert.match(lineHtml, /katex/);
   const manyTags = `${'<sup>'.repeat(10_000)} \\(x_i\\)`;
   assert.equal(normalizeMineruReaderMarkdown(manyTags), manyTags);
 });

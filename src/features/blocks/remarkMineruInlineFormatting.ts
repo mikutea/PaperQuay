@@ -70,18 +70,10 @@ export function plainMineruInlineCaption(text: string): string {
 export function normalizeMineruReaderMarkdown(markdown: string): string {
   // Preserve the existing formula-wrapper conversion before hiding prose
   // script tags from the math normalizer. Use its same supported wrappers.
-  const source = markdown.length <= MAX_OVERFLOW_MATH_LENGTH
-    ? markdown.replace(MINERU_FORMULA_WRAPPER, (wrapper) => normalizeMarkdownMath(wrapper))
-    : markdown;
+  const source = markdown.replace(MINERU_FORMULA_WRAPPER, (wrapper) => normalizeMarkdownMath(wrapper));
   let tagCount = 0;
   for (const _ of source.matchAll(INLINE_TAG)) {
-    if (++tagCount > MAX_TAGS) {
-      // Keep ordinary formulas working for realistic blocks, but do not feed
-      // arbitrarily large tag floods into the existing math normalizer.
-      return source.length <= MAX_OVERFLOW_MATH_LENGTH
-        ? normalizeMarkdownMath(source)
-        : source;
-    }
+    if (++tagCount > MAX_TAGS && source.length > MAX_OVERFLOW_MATH_LENGTH) return source;
   }
   if (!tagCount) return normalizeMarkdownMath(source);
 
@@ -137,6 +129,7 @@ function formatChildren(children: MarkdownNode[], depth: number, budget: { nodes
       stack.push({ name: tag.name, index });
     }
   }
+  if (stack.length) return children;
 
   const formatRange = (start: number, end: number, level: number): MarkdownNode[] => {
     const output: MarkdownNode[] = [];
