@@ -96,6 +96,22 @@ test('a URI autolink backtick cannot open an inline code span', () => {
   assert.match(render(source), /katex/);
 });
 
+test('a valid email autolink keeps its local-part backtick inert', () => {
+  const source = '<foo`bar@example.com> \\(x + H<sub>2</sub>O\\) `end`';
+  assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$/);
+  assert.match(render(source), /katex/);
+  const invalid = '<foo`bar@bad-.com> \\(x + H<sub>2</sub>O\\) `end`';
+  assert.equal(normalizeMineruReaderMarkdown(invalid), invalid);
+});
+
+test('a resolved full reference label keeps its backtick inert', () => {
+  const source = '[x][a`b] \\(x + H<sub>2</sub>O\\) `end`\n\n[a`b]: /url';
+  assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$/);
+  assert.match(render(source), /katex/);
+  const unresolved = '[x][a`b] \\(x + H<sub>2</sub>O\\) `end`';
+  assert.equal(normalizeMineruReaderMarkdown(unresolved), unresolved);
+});
+
 test('an overlong URI scheme is not an autolink and leaves code literal', () => {
   const source = '<abcdefghijklmnopqrstuvwxyzabcdefg://e/`foo> \\(x + H<sub>2</sub>O\\) `end`';
   assert.equal(normalizeMineruReaderMarkdown(source), source);
@@ -1461,6 +1477,12 @@ test('escaped TeX script markers do not merge with tagged scripts', () => {
 test('GFM table cells cannot share one inline code span', () => {
   const source = '| value |\n| --- |\n| `start |\n| \\(x + H<sub>2</sub>O\\) |\n| `end |';
   assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$/);
+});
+
+test('quoted GFM table cells cannot share one inline code span', () => {
+  const source = '> | left` | \\(x + H<sub>2</sub>O\\) `right |\n> | --- | --- |\n> | a | b |';
+  assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$/);
+  assert.match(render(source), /katex/);
 });
 
 test('noninterrupting ordered marker does not split a multiline code span', () => {

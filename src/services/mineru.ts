@@ -1458,6 +1458,18 @@ function splitMarkdownTableCells(line: string): string[] {
   return cells;
 }
 
+function stripMarkdownTableContainer(line: string): string {
+  let content = line;
+  while (true) {
+    const quote = /^ {0,3}>[ \t]?/.exec(content);
+    if (quote) { content = content.slice(quote[0].length); continue; }
+    const list = /^ {0,3}(?:[-+*]|\d{1,9}[.)])[ \t]+/.exec(content);
+    if (list) { content = content.slice(list[0].length); continue; }
+    break;
+  }
+  return content;
+}
+
 export function gfmTableBoundaryLineStarts(source: string): Set<number> {
   const lineStarts = [0];
   const lineEnds: number[] = [];
@@ -1466,7 +1478,7 @@ export function gfmTableBoundaryLineStarts(source: string): Set<number> {
     lineStarts.push(lineStarts[lineStarts.length - 1] + rawLine.length);
   }
   const boundaries = new Set<number>();
-  const tableCells = (line: string) => splitMarkdownTableCells(line)
+  const tableCells = (line: string) => splitMarkdownTableCells(stripMarkdownTableContainer(line))
     .map((cell) => cell.trim()).filter((cell, index, cells) => cell || index > 0 && index < cells.length - 1);
   for (let index = 1; index < lineEnds.length; index += 1) {
     const header = source.slice(lineStarts[index - 1], lineEnds[index - 1]);
@@ -1848,6 +1860,15 @@ function validInlineLinkTarget(text: string): boolean {
 export function markdownCodeSpans(text: string, inlineOnly = false): Array<[number, number]> {
   const linkDestinations: Array<[number, number]> = [];
   if (inlineOnly && text.includes('`')) {
+    const referenceLabels = new Set<string>();
+    if (text.includes('][')) {
+      const fenced = fencedMarkdownLineStarts(text);
+      for (const match of text.matchAll(/^ {0,3}\[([^\]\r\n]{1,999})\]:[ \t]*(.+?)[ \t]*$/gm)) {
+        if (!fenced.has(match.index ?? 0) && validInlineLinkTarget(match[2])) {
+          referenceLabels.add(match[1].trim().replace(/\s+/g, ' ').toLowerCase());
+        }
+      }
+    }
     let labelDepth = 0;
     let labelCodeSpans: Array<[number, number]> | undefined;
     let labelCodeCursor = 0;
@@ -1920,6 +1941,7 @@ export function markdownCodeSpans(text: string, inlineOnly = false): Array<[numb
           // A valid URI autolink or inline HTML tag keeps its backticks inert.
           // An invalid email autolink such as <a@b.c`foo> does not.
           if (/^[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\s<>]*$/.test(body)
+            || /^[A-Za-z0-9!#$%&'*+/=?^_`{|}~.-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$/.test(body)
             || /^\/[A-Za-z][A-Za-z0-9-]*[ \t]*$/.test(body)
             || /^[A-Za-z][A-Za-z0-9-]*/.test(body) && validHtmlOpening(text, index, end)) {
             linkDestinations.push([index + 1, end]);
@@ -1931,6 +1953,17 @@ export function markdownCodeSpans(text: string, inlineOnly = false): Array<[numb
       if (text[index] === '[' && !bracketIsCode(index)) { labelDepth += 1; continue; }
       if (text[index] === ']' && labelDepth > 0 && !bracketIsCode(index)) {
         labelDepth -= 1;
+        if (text[index + 1] === '[') {
+          const closing = text.indexOf(']', index + 2);
+          if (closing > index + 2) {
+            const label = text.slice(index + 2, closing).trim().replace(/\s+/g, ' ').toLowerCase();
+            if (referenceLabels.has(label)) {
+              linkDestinations.push([index + 2, closing]);
+              index = closing;
+            }
+          }
+          continue;
+        }
         if (text[index + 1] !== '(') continue;
         if (text[index + 2] === '<') {
           let angleEnd = index + 3;
@@ -2009,7 +2042,7 @@ export function markdownCodeSpans(text: string, inlineOnly = false): Array<[numb
         offsets.push(offset);
         offset += row.length;
       }
-      const cells = (row: string) => splitMarkdownTableCells(row.replace(/\r\n$|[\r\n]$/, ''))
+      const cells = (row: string) => splitMarkdownTableCells(stripMarkdownTableContainer(row.replace(/\r\n$|[\r\n]$/, '')))
         .map((part) => part.trim()).filter((part, index, parts) => part || (index > 0 && index < parts.length - 1));
       const markRow = (index: number) => {
         paragraphBreaks.push(offsets[index]);
