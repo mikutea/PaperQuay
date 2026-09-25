@@ -6,8 +6,7 @@ const MAX_TAGS = 256;
 const MAX_DEPTH = 32;
 const MAX_CAPTION_LENGTH = 16_384;
 const MAX_AST_NODES = 20_000;
-const MAX_OVERFLOW_MATH_LENGTH = 16_384;
-const MINERU_FORMULA_WRAPPER = /<div\s+class=["']formula["'][^>]*>.*?<\/div>|<span\s+class=["']math["'][^>]*>.*?<\/span>/gis;
+const MAX_READER_MATH_LENGTH = 16_384;
 
 // Captions are plain text, not Markdown or trusted HTML. Only paired MinerU
 // script tags become elements; everything else remains React-escaped text.
@@ -65,33 +64,16 @@ export function plainMineruInlineCaption(text: string): string {
   return renderMineruInlineCaption(text).map(flatten).join('');
 }
 
-// Protect only MinerU's script-tag syntax while the existing math normalizer runs.
-// Markdown block, link, and code boundaries remain the parser's responsibility.
+// Keep prose script tags for remark, while the existing math normalizer still
+// handles formula wrappers, image fallbacks, and code boundaries as before.
 export function normalizeMineruReaderMarkdown(markdown: string): string {
-  // Preserve the existing formula-wrapper conversion before hiding prose
-  // script tags from the math normalizer. Use its same supported wrappers.
-  const source = markdown.replace(MINERU_FORMULA_WRAPPER, (wrapper) => normalizeMarkdownMath(wrapper));
-  let tagCount = 0;
-  for (const _ of source.matchAll(INLINE_TAG)) {
-    if (++tagCount > MAX_TAGS && source.length > MAX_OVERFLOW_MATH_LENGTH) return source;
+  if (markdown.length > MAX_READER_MATH_LENGTH) {
+    let count = 0;
+    for (const _ of markdown.matchAll(INLINE_TAG)) {
+      if (++count > MAX_TAGS) return markdown;
+    }
   }
-  if (!tagCount) return normalizeMarkdownMath(source);
-
-  let marker = 'PQInlineTag';
-  for (let attempt = 0; source.includes(marker) && attempt < 4; attempt += 1) {
-    marker += `Q${source.length.toString(36)}`;
-  }
-  if (source.includes(marker)) return source;
-
-  const originals: string[] = [];
-  const protectedMarkdown = source.replace(INLINE_TAG, (tag) => {
-    originals.push(tag);
-    return `{${marker}${originals.length - 1}}`;
-  });
-  return normalizeMarkdownMath(protectedMarkdown).replace(
-    new RegExp(`\\{${marker}(\\d+)\\}`, 'g'),
-    (_, index: string) => originals[Number(index)] ?? '',
-  );
+  return normalizeMarkdownMath(markdown, true);
 }
 
 interface MarkdownNode {

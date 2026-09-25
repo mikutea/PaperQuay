@@ -318,7 +318,7 @@ function looksLikeInlineFormulaSegment(value: string) {
   );
 }
 
-function wrapInlineLatexSegments(line: string) {
+function wrapInlineLatexSegments(line: string, preserveInlineScriptTags = false) {
   if (!line.trim() || !/[\\_^=<>~]/.test(line)) {
     return line;
   }
@@ -366,6 +366,7 @@ function wrapInlineLatexSegments(line: string) {
     if (
       candidate &&
       looksLikeInlineFormulaSegment(candidate) &&
+      (!preserveInlineScriptTags || !/<\/?(?:sup|sub)[ \t]*>/i.test(candidate)) &&
       isInlineFormulaBoundary(protectedLine[index - 1]) &&
       isInlineFormulaBoundary(protectedLine[end])
     ) {
@@ -388,7 +389,7 @@ function wrapInlineLatexSegments(line: string) {
   );
 }
 
-export function normalizeMarkdownMath(markdown: string) {
+export function normalizeMarkdownMath(markdown: string, preserveInlineScriptTags = false) {
   if (!markdown.trim()) {
     return markdown;
   }
@@ -475,7 +476,7 @@ export function normalizeMarkdownMath(markdown: string) {
       continue;
     }
 
-    output.push(wrapInlineLatexSegments(cleanedLine));
+    output.push(wrapInlineLatexSegments(cleanedLine, preserveInlineScriptTags));
   }
 
   flushMathFence();

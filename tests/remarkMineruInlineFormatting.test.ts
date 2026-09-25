@@ -6,6 +6,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
+import { normalizeMarkdownMath } from '../src/utils/markdown.ts';
 
 import {
   normalizeMineruReaderMarkdown,
@@ -66,6 +67,14 @@ test('existing MinerU formula wrappers keep subscript conversion', () => {
   assert.match(normalizeMineruReaderMarkdown('<span class="math">x<sub>i</sub></span>'), /\$x_\{i\}\$/);
   assert.match(normalizeMineruReaderMarkdown('<div class="formula">x<sub>i</sub></div>'), /\$\$[\s\S]*x_\{i\}[\s\S]*\$\$/);
   assert.match(normalizeMineruReaderMarkdown(`${'a'.repeat(16_385)} <span class="math">x<sub>i</sub></span>`), /\$x_\{i\}\$/);
+  const adjacent = 'before<div class="formula">x<sub>i</sub></div>after';
+  assert.equal(normalizeMineruReaderMarkdown(adjacent), normalizeMarkdownMath(adjacent));
+});
+
+test('formula-image fallback keeps the existing tagged alt text', () => {
+  const source = '![H<sub>2</sub>O](images/formula.png)';
+  assert.equal(normalizeMineruReaderMarkdown(source), normalizeMarkdownMath(source));
+  assert.match(normalizeMineruReaderMarkdown(source), /H<sub>2<\/sub>O/);
 });
 
 test('an unmatched outer script leaves nested pairs literal', () => {
