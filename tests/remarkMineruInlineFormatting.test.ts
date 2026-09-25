@@ -84,6 +84,12 @@ test('nested link labels keep destination backticks inert', () => {
   assert.match(render(source), /katex/);
 });
 
+test('brackets inside link-label code do not close the link', () => {
+  const source = '[a `]` b](https://e/`foo) \\(x + H<sub>2</sub>O\\) `end`';
+  assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$/);
+  assert.match(render(source), /katex/);
+});
+
 test('a URI autolink backtick cannot open an inline code span', () => {
   const source = '<https://e/`foo> \\(x + H<sub>2</sub>O\\) `end`';
   assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$/);
@@ -861,6 +867,20 @@ test('raw HTML inside long blockquote prefixes stays literal', () => {
   const quote = '> '.repeat(129);
   const source = `${quote}<pre>\n${quote}\\(x + H<sub>2</sub>O\\)`;
   assert.equal(normalizeMineruReaderMarkdown(source), source);
+});
+
+test('retained reader Markdown keeps indentation after a blank line', () => {
+  const blocks = flattenMineruPages(parseMineruMarkdownPages('text\n\n    H<sub>2</sub>O'));
+  const markdown = buildRenderableBlocks(blocks).at(-1)?.markdown ?? '';
+  assert.equal(markdown, '    H<sub>2</sub>O');
+  assert.match(render(markdown), /<pre><code>H&lt;sub&gt;2&lt;\/sub&gt;O\n<\/code><\/pre>/);
+});
+
+test('many HTML candidates after one nested prefix do not rescan it', () => {
+  const source = `${'- '.repeat(4_000)}${'<x '.repeat(4_000)}> H<sub>2</sub>O`;
+  const started = performance.now();
+  normalizeMineruReaderMarkdown(source);
+  assert.ok(performance.now() - started < 1_000);
 });
 
 test('a GFM table pipe after two backslashes still ends before raw HTML', () => {

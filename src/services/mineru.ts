@@ -832,7 +832,7 @@ function flushMarkdownBlock(buffer: string[], blocks: MineruBlockBase[]): void {
   if (block) {
     // Display the original tagged Markdown; keep normalized content for translation fingerprints.
     if (/<\/?(?:sup|sub)\s*>/i.test(sourceMarkdown)) {
-      block.readerMarkdownSource = sourceMarkdown.trim();
+      block.readerMarkdownSource = sourceMarkdown;
     }
 
     blocks.push(block);
@@ -1549,12 +1549,18 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
     span: [...source.matchAll(/<\/span>/gi)].map((match) => match.index ?? 0),
   };
   const wrapperCloseCursor = { div: 0, span: 0 };
+  let invalidPrefixLineStart = -1;
   const atBlockStart = (lineStart: number, opening: number) => {
+    if (lineStart === invalidPrefixLineStart) return null;
+    const invalidPrefix = () => {
+      invalidPrefixLineStart = lineStart;
+      return null;
+    };
     const ordered = /^ {0,3}(\d{1,9})[.)][ \t]+/.exec(source.slice(lineStart, opening));
     if (ordered && Number(ordered[1]) !== 1 && lineCursor > 0) {
       const priorStart = lineStarts[lineCursor - 1];
       const prior = source.slice(priorStart, lineEnds[lineCursor - 1]);
-      if (!fencedLines.has(priorStart) && canSupplySetextHeadingText(prior)) return null;
+      if (!fencedLines.has(priorStart) && canSupplySetextHeadingText(prior)) return invalidPrefix();
     }
     const inheritedWidth = inheritedListWidths[lineCursor];
     if (inheritedWidth && source.slice(lineStart, opening).trim() === '') {
@@ -1562,7 +1568,7 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
       for (let position = lineStart; position < opening; position += 1) {
         indent += source[position] === '\t' ? 4 - indent % 4 : 1;
       }
-      if (indent >= inheritedWidth + 4) return null;
+      if (indent >= inheritedWidth + 4) return invalidPrefix();
       return [{ kind: 'list' as const, width: inheritedWidth }];
     }
     const containers: Array<{ kind: 'quote' | 'list'; width: number }> = [];
@@ -1593,7 +1599,7 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
         continue;
       }
       advance(next);
-      if (position !== opening) return null;
+      if (position !== opening) return invalidPrefix();
       if (inheritedWidth && !containers.some((container) => container.kind === 'list')) {
         containers.push({ kind: 'list', width: inheritedWidth });
       }
@@ -1792,6 +1798,18 @@ export function markdownCodeSpans(text: string, inlineOnly = false): Array<[numb
   const linkDestinations: Array<[number, number]> = [];
   if (inlineOnly && text.includes('`')) {
     let labelDepth = 0;
+    let labelCodeSpans: Array<[number, number]> | undefined;
+    let labelCodeCursor = 0;
+    let excludedCodeCursor = 0;
+    const bracketIsCode = (position: number) => {
+      labelCodeSpans ??= markdownCodeSpans(text);
+      while (labelCodeSpans[labelCodeCursor]?.[1] <= position) labelCodeCursor += 1;
+      const span = labelCodeSpans[labelCodeCursor];
+      if (!span || span[0] > position) return false;
+      while (linkDestinations[excludedCodeCursor]?.[1] <= span[0]) excludedCodeCursor += 1;
+      const excluded = linkDestinations[excludedCodeCursor];
+      return !(excluded && excluded[0] <= span[0] && span[0] < excluded[1]);
+    };
     let commentClose = text.indexOf('-->');
     let declarationClose = text.indexOf('>');
     for (let index = 0; index < text.length; index += 1) {
@@ -1859,8 +1877,8 @@ export function markdownCodeSpans(text: string, inlineOnly = false): Array<[numb
           }
         }
       }
-      if (text[index] === '[') { labelDepth += 1; continue; }
-      if (text[index] === ']' && labelDepth > 0) {
+      if (text[index] === '[' && !bracketIsCode(index)) { labelDepth += 1; continue; }
+      if (text[index] === ']' && labelDepth > 0 && !bracketIsCode(index)) {
         labelDepth -= 1;
         if (text[index + 1] !== '(') continue;
         if (text[index + 2] === '<') {
@@ -2373,7 +2391,9 @@ export function buildRenderableBlocks(
     return {
       block,
       plainText,
-      markdown: displayMarkdownFallback(block.readerMarkdownSource, toMarkdownFragment(block, plainText)),
+      markdown: block.readerMarkdownSource && /^(?: {4}|\t)/.test(block.readerMarkdownSource)
+        ? block.readerMarkdownSource
+        : displayMarkdownFallback(block.readerMarkdownSource, toMarkdownFragment(block, plainText)),
       mathText,
       tableHtml,
       captionText,
