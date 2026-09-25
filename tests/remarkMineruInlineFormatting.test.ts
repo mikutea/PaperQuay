@@ -78,6 +78,12 @@ test('an angle-bracket link destination keeps parentheses and backticks inert', 
   assert.match(render(source), /katex/);
 });
 
+test('nested link labels keep destination backticks inert', () => {
+  const source = '[a [b]](https://e/`foo) \\(x + H<sub>2</sub>O\\) `end`';
+  assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$/);
+  assert.match(render(source), /katex/);
+});
+
 test('a URI autolink backtick cannot open an inline code span', () => {
   const source = '<https://e/`foo> \\(x + H<sub>2</sub>O\\) `end`';
   assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$/);
@@ -855,6 +861,17 @@ test('raw HTML inside long blockquote prefixes stays literal', () => {
   const quote = '> '.repeat(129);
   const source = `${quote}<pre>\n${quote}\\(x + H<sub>2</sub>O\\)`;
   assert.equal(normalizeMineruReaderMarkdown(source), source);
+});
+
+test('a GFM table pipe after two backslashes still ends before raw HTML', () => {
+  const source = '| a \\\\| b |\n| --- | --- |\n| 1 | 2 |\n<x>\n\\(x + H<sub>2</sub>O\\)';
+  assert.equal(normalizeMineruReaderMarkdown(source), source);
+});
+
+test('display math blocks end the scope of an earlier code delimiter', () => {
+  const source = '`start\n$$\nx\n$$\n\\(y + H<sub>2</sub>O\\)\n`end';
+  assert.match(normalizeMineruReaderMarkdown(source), /\$y \+ H_\{2\}O\$/);
+  assert.match(render(source), /katex/);
 });
 
 test('indented code following a raw HTML block remains literal', () => {

@@ -1439,6 +1439,25 @@ function markdownQuoteDepth(line: string): number {
   return depth;
 }
 
+function splitMarkdownTableCells(line: string): string[] {
+  const cells: string[] = [];
+  let start = 0;
+  let backslashes = 0;
+  for (let index = 0; index < line.length; index += 1) {
+    if (line[index] === '\\') {
+      backslashes += 1;
+      continue;
+    }
+    if (line[index] === '|' && backslashes % 2 === 0) {
+      cells.push(line.slice(start, index));
+      start = index + 1;
+    }
+    backslashes = 0;
+  }
+  cells.push(line.slice(start));
+  return cells;
+}
+
 export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: string) => string): string | null {
   const fencedLines = fencedMarkdownLineStarts(source);
   const blockStarts = /<!--|<\?|<!\[CDATA\[|<![A-Z]|<\/([A-Za-z][A-Za-z0-9-]*)\s*>|<([A-Za-z][A-Za-z0-9-]*)(?=\s|\/?>|$)/g;
@@ -1450,7 +1469,7 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
     lineStarts.push(lineStarts[lineStarts.length - 1] + rawLine.length);
   }
   const tableBoundaryLineStarts = new Set<number>();
-  const tableCells = (line: string) => line.split(/(?<!\\)\|/)
+  const tableCells = (line: string) => splitMarkdownTableCells(line)
     .map((cell) => cell.trim()).filter((cell, index, cells) => cell || index > 0 && index < cells.length - 1);
   for (let index = 1; index < lineEnds.length; index += 1) {
     const header = source.slice(lineStarts[index - 1], lineEnds[index - 1]);
@@ -1772,7 +1791,7 @@ function isLineLevelCodePrefix(prefix: string): boolean {
 export function markdownCodeSpans(text: string, inlineOnly = false): Array<[number, number]> {
   const linkDestinations: Array<[number, number]> = [];
   if (inlineOnly && text.includes('`')) {
-    let labelStart = -1;
+    let labelDepth = 0;
     let commentClose = text.indexOf('-->');
     let declarationClose = text.indexOf('>');
     for (let index = 0; index < text.length; index += 1) {
@@ -1840,8 +1859,10 @@ export function markdownCodeSpans(text: string, inlineOnly = false): Array<[numb
           }
         }
       }
-      if (text[index] === '[') { labelStart = index; continue; }
-      if (text[index] === ']' && text[index + 1] === '(' && labelStart >= 0) {
+      if (text[index] === '[') { labelDepth += 1; continue; }
+      if (text[index] === ']' && labelDepth > 0) {
+        labelDepth -= 1;
+        if (text[index + 1] !== '(') continue;
         if (text[index + 2] === '<') {
           let angleEnd = index + 3;
           while (angleEnd < text.length && text[angleEnd] !== '>'
@@ -1855,7 +1876,6 @@ export function markdownCodeSpans(text: string, inlineOnly = false): Array<[numb
             if (text[linkEnd] === ')') {
               linkDestinations.push([index + 2, linkEnd]);
               index = linkEnd;
-              labelStart = -1;
               continue;
             }
           }
@@ -1872,9 +1892,6 @@ export function markdownCodeSpans(text: string, inlineOnly = false): Array<[numb
           linkDestinations.push([index + 2, end - 1]);
         }
         index = end - 1;
-        labelStart = -1;
-      } else if (text[index] === ']') {
-        labelStart = -1;
       }
     }
     const dollars = [...text.matchAll(/\$+/g)].filter((match) => {
@@ -1923,7 +1940,7 @@ export function markdownCodeSpans(text: string, inlineOnly = false): Array<[numb
         offsets.push(offset);
         offset += row.length;
       }
-      const cells = (row: string) => row.replace(/\r\n$|[\r\n]$/, '').split(/(?<!\\)\|/)
+      const cells = (row: string) => splitMarkdownTableCells(row.replace(/\r\n$|[\r\n]$/, ''))
         .map((part) => part.trim()).filter((part, index, parts) => part || (index > 0 && index < parts.length - 1));
       const markRow = (index: number) => {
         paragraphBreaks.push(offsets[index]);
@@ -1951,6 +1968,7 @@ export function markdownCodeSpans(text: string, inlineOnly = false): Array<[numb
     let listItemParagraph = false;
     let previousContent = '';
     let previousParagraph: boolean = false;
+    let flowMathOpen = false;
     let start = 0;
     for (const rawLine of splitMarkdownLinesPreservingEndings(text)) {
       const end = start + rawLine.length;
@@ -1977,6 +1995,20 @@ export function markdownCodeSpans(text: string, inlineOnly = false): Array<[numb
         }
         previousQuoteDepth = quoteDepth;
         const content = line.slice(prefix);
+        if (/^ {0,3}\$\$[ \t]*$/.test(content)) {
+          paragraphBreaks.push(start, end);
+          flowMathOpen = !flowMathOpen;
+          previousContent = '';
+          previousParagraph = false;
+          start = end;
+          continue;
+        }
+        if (flowMathOpen) {
+          previousContent = '';
+          previousParagraph = false;
+          start = end;
+          continue;
+        }
         const listMarker = /^ {0,3}(?:[-+*]|\d{1,9}[.)])[ \t]+/.exec(content);
         const ordered = /^ {0,3}(\d{1,9})[.)][ \t]+/.exec(content);
         const startsList: boolean = !!listMarker && !(ordered && Number(ordered[1]) !== 1 && previousParagraph);
