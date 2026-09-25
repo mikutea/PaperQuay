@@ -62,6 +62,11 @@ test('code samples remain literal and existing formula rendering remains active'
   assert.match(mixed, /katex/);
 });
 
+test('existing MinerU formula wrappers keep subscript conversion', () => {
+  assert.match(normalizeMineruReaderMarkdown('<span class="math">x<sub>i</sub></span>'), /\$x_\{i\}\$/);
+  assert.match(normalizeMineruReaderMarkdown('<div class="formula">x<sub>i</sub></div>'), /\$\$[\s\S]*x_\{i\}[\s\S]*\$\$/);
+});
+
 test('figure and table captions format only paired scripts', () => {
   const text = 'Fig. H<sub>2</sub>O and x<sup>2</sup> <img src=x>';
   const html = renderToStaticMarkup(createElement('span', null, ...renderMineruInlineCaption(text)));
@@ -74,6 +79,11 @@ test('figure and table captions format only paired scripts', () => {
 
 test('oversized captions stay literal rather than invoking an unbounded parser', () => {
   const text = 'a'.repeat(16_385) + '<sub>2</sub>';
+  assert.deepEqual(renderMineruInlineCaption(text), [text]);
+});
+
+test('captions with many unmatched tags stay literal without repeated pairing scans', () => {
+  const text = '<sup>'.repeat(256);
   assert.deepEqual(renderMineruInlineCaption(text), [text]);
 });
 

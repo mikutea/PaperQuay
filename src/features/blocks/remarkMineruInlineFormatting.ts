@@ -7,6 +7,7 @@ const MAX_DEPTH = 32;
 const MAX_CAPTION_LENGTH = 16_384;
 const MAX_AST_NODES = 20_000;
 const MAX_OVERFLOW_MATH_LENGTH = 16_384;
+const MINERU_FORMULA_WRAPPER = /<div\s+class=["']formula["'][^>]*>.*?<\/div>|<span\s+class=["']math["'][^>]*>.*?<\/span>/gis;
 
 // Captions are plain text, not Markdown or trusted HTML. Only paired MinerU
 // script tags become elements; everything else remains React-escaped text.
@@ -24,6 +25,7 @@ export function renderMineruInlineCaption(text: string, depth = 0): ReactNode[] 
       nesting.push(name);
     }
   }
+  if (nesting.length) return [text];
 
   const output: ReactNode[] = [];
   let cursor = 0;
@@ -66,26 +68,31 @@ export function plainMineruInlineCaption(text: string): string {
 // Protect only MinerU's script-tag syntax while the existing math normalizer runs.
 // Markdown block, link, and code boundaries remain the parser's responsibility.
 export function normalizeMineruReaderMarkdown(markdown: string): string {
+  // Preserve the existing formula-wrapper conversion before hiding prose
+  // script tags from the math normalizer. Use its same supported wrappers.
+  const source = markdown.length <= MAX_OVERFLOW_MATH_LENGTH
+    ? markdown.replace(MINERU_FORMULA_WRAPPER, (wrapper) => normalizeMarkdownMath(wrapper))
+    : markdown;
   let tagCount = 0;
-  for (const _ of markdown.matchAll(INLINE_TAG)) {
+  for (const _ of source.matchAll(INLINE_TAG)) {
     if (++tagCount > MAX_TAGS) {
       // Keep ordinary formulas working for realistic blocks, but do not feed
       // arbitrarily large tag floods into the existing math normalizer.
-      return markdown.length <= MAX_OVERFLOW_MATH_LENGTH
-        ? normalizeMarkdownMath(markdown)
-        : markdown;
+      return source.length <= MAX_OVERFLOW_MATH_LENGTH
+        ? normalizeMarkdownMath(source)
+        : source;
     }
   }
-  if (!tagCount) return normalizeMarkdownMath(markdown);
+  if (!tagCount) return normalizeMarkdownMath(source);
 
   let marker = 'PQInlineTag';
-  for (let attempt = 0; markdown.includes(marker) && attempt < 4; attempt += 1) {
-    marker += `Q${markdown.length.toString(36)}`;
+  for (let attempt = 0; source.includes(marker) && attempt < 4; attempt += 1) {
+    marker += `Q${source.length.toString(36)}`;
   }
-  if (markdown.includes(marker)) return markdown;
+  if (source.includes(marker)) return source;
 
   const originals: string[] = [];
-  const protectedMarkdown = markdown.replace(INLINE_TAG, (tag) => {
+  const protectedMarkdown = source.replace(INLINE_TAG, (tag) => {
     originals.push(tag);
     return `{${marker}${originals.length - 1}}`;
   });
