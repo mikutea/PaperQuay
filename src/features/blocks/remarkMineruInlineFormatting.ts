@@ -424,7 +424,11 @@ export function normalizeMineruReaderMarkdown(markdown: string, splitAdjacentFen
     if (++tagCount > MAX_INLINE_NODES) {
       // The cap is also a complexity guard: avoid reprocessing a tag-heavy
       // string unless it contains an authored parenthesized/display formula.
-      return /\\[([]/.test(markdown) ? normalizeMarkdownMathOutsideCodeSpans(markdown) : markdown;
+      return /\\[([]/.test(markdown)
+        ? fenceStarts.size > 0
+          ? displayMarkdownFallback(markdown, markdown)
+          : normalizeMarkdownMathOutsideCodeSpans(markdown)
+        : markdown;
     }
     const name = /(?:sup|sub)/i.exec(tag[0])?.[0].toLowerCase() ?? '';
     if (/^<\s*\//.test(tag[0])) {

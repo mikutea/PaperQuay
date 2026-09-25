@@ -1882,6 +1882,8 @@ export function markdownCodeSpans(text: string, inlineOnly = false): Array<[numb
       for (let index = (match.index ?? 0) - 1; text[index] === '\\'; index -= 1) escapes += 1;
       return escapes % 2 === 0 && match[0].length <= 2;
     });
+    const backticks = [...text.matchAll(/`/g)].map((match) => match.index ?? 0);
+    let backtickCursor = 0;
     let rawCodeSpans: Array<[number, number]> | undefined;
     let rawCodeCursor = 0;
     for (let index = 0; index + 1 < dollars.length; index += 1) {
@@ -1890,8 +1892,9 @@ export function markdownCodeSpans(text: string, inlineOnly = false): Array<[numb
       if (opening[0].length !== closing[0].length) continue;
       const start = (opening.index ?? 0) + opening[0].length;
       const end = closing.index ?? 0;
+      while (backticks[backtickCursor] < start) backtickCursor += 1;
       if (start < end && !/\s/.test(text[start]) && !/\s/.test(text[end - 1])
-        && text.indexOf('`', start) >= 0 && text.indexOf('`', start) < end) {
+        && backticks[backtickCursor] !== undefined && backticks[backtickCursor] < end) {
         // A dollar inside an already-open code span is text, not math. The
         // first raw code pair is enough to distinguish it from a backtick
         // beginning inside an authored math token.

@@ -417,6 +417,20 @@ test('the inline-tag work cap still lets an unrelated authored formula render', 
   assert.match(normalizeMineruReaderMarkdown(source), /\$x_i\$$/);
 });
 
+test('the inline-tag cap leaves explicit formula examples inside a code fence literal', () => {
+  const source = ['```text', '\\(literal_i\\)', '```', 'H<sub>2</sub>O '.repeat(257), '\\(x_i\\)'].join('\n');
+  const markdown = normalizeMineruReaderMarkdown(source);
+  assert.match(markdown, /^```text\n\\\(literal_i\\\)\n```/);
+  assert.match(markdown, /\$x_i\$$/);
+});
+
+test('many dollar pairs and one trailing backtick do not rescan the Markdown tail', () => {
+  const source = `${'$x$\n'.repeat(360_000)}H<sup>2</sup>O\x60`;
+  const started = performance.now();
+  markdownCodeSpans(source, true);
+  assert.ok(performance.now() - started < 3_000);
+});
+
 test('fenced code tags do not exhaust the formatting cap or block later math', () => {
   const literal = 'H<sub>2</sub>O'.repeat(257);
   const source = ['```text', literal, '```', '\\(x_i\\)'].join('\n');
