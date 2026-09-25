@@ -1531,7 +1531,6 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
   };
   const wrapperCloseCursor = { div: 0, span: 0 };
   const atBlockStart = (lineStart: number, opening: number) => {
-    if (opening - lineStart > 256) return null;
     const ordered = /^ {0,3}(\d{1,9})[.)][ \t]+/.exec(source.slice(lineStart, opening));
     if (ordered && Number(ordered[1]) !== 1 && lineCursor > 0) {
       const priorStart = lineStarts[lineCursor - 1];
@@ -1549,23 +1548,32 @@ export function mapOutsideLiteralHtmlBlocks(source: string, transform: (text: st
     }
     const containers: Array<{ kind: 'quote' | 'list'; width: number }> = [];
     let position = lineStart;
-    while (position < opening) {
-      const start = position;
-      while (position - start < 3 && source[position] === ' ') position += 1;
-      if (source[position] === '>') {
+    let column = 0;
+    const advance = (end: number) => {
+      while (position < end) {
+        column += source[position] === '\t' ? 4 - column % 4 : 1;
         position += 1;
-        if (source[position] === ' ' || source[position] === '\t') position += 1;
+      }
+    };
+    while (position < opening) {
+      const startColumn = column;
+      let next = position;
+      while (next - position < 3 && source[next] === ' ') next += 1;
+      if (source[next] === '>') {
+        advance(next + 1);
+        if (source[position] === ' ' || source[position] === '\t') advance(position + 1);
         containers.push({ kind: 'quote', width: 0 });
         continue;
       }
       const marker = /(?:[-+*]|\d{1,9}[.)])[ \t]+/y;
-      marker.lastIndex = position;
+      marker.lastIndex = next;
       const list = marker.exec(source);
-      if (list && position + list[0].length <= opening) {
-        position += list[0].length;
-        containers.push({ kind: 'list', width: markdownColumnAt(source, position, lineStart) - markdownColumnAt(source, start, lineStart) });
+      if (list && next + list[0].length <= opening) {
+        advance(next + list[0].length);
+        containers.push({ kind: 'list', width: column - startColumn });
         continue;
       }
+      advance(next);
       if (position !== opening) return null;
       if (inheritedWidth && !containers.some((container) => container.kind === 'list')) {
         containers.push({ kind: 'list', width: inheritedWidth });
@@ -1792,7 +1800,11 @@ export function markdownCodeSpans(text: string, inlineOnly = false): Array<[numb
             continue;
           }
         }
-        if (/^<![A-Z]+[ \t]/.test(text.slice(index, index + 32))) {
+        let declarationNameEnd = index + 2;
+        if (text.startsWith('<!', index)) {
+          while (/[A-Z]/.test(text[declarationNameEnd] ?? '')) declarationNameEnd += 1;
+        }
+        if (declarationNameEnd > index + 2 && (text[declarationNameEnd] === ' ' || text[declarationNameEnd] === '\t')) {
           while (declarationClose >= 0 && declarationClose <= index) declarationClose = text.indexOf('>', declarationClose + 1);
           if (declarationClose > index) {
             linkDestinations.push([index + 2, declarationClose]);
@@ -1830,6 +1842,24 @@ export function markdownCodeSpans(text: string, inlineOnly = false): Array<[numb
       }
       if (text[index] === '[') { labelStart = index; continue; }
       if (text[index] === ']' && text[index + 1] === '(' && labelStart >= 0) {
+        if (text[index + 2] === '<') {
+          let angleEnd = index + 3;
+          while (angleEnd < text.length && text[angleEnd] !== '>'
+            && text[angleEnd] !== '<' && text[angleEnd] !== '\r' && text[angleEnd] !== '\n') {
+            if (text[angleEnd] === '\\') angleEnd += 1;
+            angleEnd += 1;
+          }
+          if (text[angleEnd] === '>') {
+            let linkEnd = angleEnd + 1;
+            while (text[linkEnd] === ' ' || text[linkEnd] === '\t') linkEnd += 1;
+            if (text[linkEnd] === ')') {
+              linkDestinations.push([index + 2, linkEnd]);
+              index = linkEnd;
+              labelStart = -1;
+              continue;
+            }
+          }
+        }
         let depth = 1;
         let end = index + 2;
         for (; end < text.length && depth; end += 1) {

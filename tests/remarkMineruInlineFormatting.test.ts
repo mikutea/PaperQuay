@@ -72,6 +72,12 @@ test('a link destination backtick cannot open an inline code span', () => {
   assert.match(render('[`x`](https://e/foo) H<sub>2</sub>O'), /<code>x<\/code>/);
 });
 
+test('an angle-bracket link destination keeps parentheses and backticks inert', () => {
+  const source = '[x](<https://e/a)`foo>) \\(x + H<sub>2</sub>O\\) `end`';
+  assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$/);
+  assert.match(render(source), /katex/);
+});
+
 test('a URI autolink backtick cannot open an inline code span', () => {
   const source = '<https://e/`foo> \\(x + H<sub>2</sub>O\\) `end`';
   assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$/);
@@ -108,6 +114,12 @@ test('other valid inline raw HTML forms keep their backticks inert', () => {
     assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$/);
     assert.match(render(source), /katex/);
   }
+});
+
+test('a long valid inline declaration keeps its backtick inert', () => {
+  const source = 'prefix <!ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFG `foo> \\(x + H<sub>2</sub>O\\) `end`';
+  assert.match(normalizeMineruReaderMarkdown(source), /\$x \+ H_\{2\}O\$/);
+  assert.match(render(source), /katex/);
 });
 
 test('an authored math token cannot open a later code span', () => {
@@ -823,6 +835,12 @@ test('literal raw HTML blocks keep tag examples inert', () => {
       assert.match(render(markdown), /H<sub>3<\/sub>O/);
     }
   }
+});
+
+test('raw HTML inside long blockquote prefixes stays literal', () => {
+  const quote = '> '.repeat(129);
+  const source = `${quote}<pre>\n${quote}\\(x + H<sub>2</sub>O\\)`;
+  assert.equal(normalizeMineruReaderMarkdown(source), source);
 });
 
 test('indented code following a raw HTML block remains literal', () => {
