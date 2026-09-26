@@ -318,7 +318,7 @@ function looksLikeInlineFormulaSegment(value: string) {
   );
 }
 
-function wrapInlineLatexSegments(line: string) {
+function wrapInlineLatexSegments(line: string, preserveInlineScriptTags = false) {
   if (!line.trim() || !/[\\_^=<>~]/.test(line)) {
     return line;
   }
@@ -354,6 +354,13 @@ function wrapInlineLatexSegments(line: string) {
     let end = index;
 
     while (end < protectedLine.length && INLINE_FORMULA_CHAR_PATTERN.test(protectedLine[end])) {
+      if (preserveInlineScriptTags && protectedLine[end] === '<') {
+        const tag = /^<\/?(?:sup|sub)[ \t]*>/i.exec(protectedLine.slice(end, end + 16));
+        if (tag) {
+          end += tag[0].length;
+          break;
+        }
+      }
       if (end > index && /^\s+[A-Za-z]{2,}\b/.test(protectedLine.slice(end))) {
         break;
       }
@@ -362,6 +369,23 @@ function wrapInlineLatexSegments(line: string) {
     }
 
     const candidate = protectedLine.slice(index, end);
+
+    const scriptTag = preserveInlineScriptTags
+      ? /<\/?(?:sup|sub)[ \t]*>/i.exec(candidate)
+      : null;
+    if (scriptTag) {
+      const nextIndex = index + scriptTag.index + scriptTag[0].length;
+      const beforeTag = candidate.slice(0, scriptTag.index);
+      const taggedTokenStart = Math.max(0, beforeTag.search(/\S+$/));
+      output += wrapInlineLatexSegments(beforeTag.slice(0, taggedTokenStart), true);
+      const precedingToken = beforeTag.slice(taggedTokenStart);
+      output += precedingToken.length <= 256 && /[_^]/.test(precedingToken) && looksLikeInlineFormulaSegment(precedingToken)
+        ? wrapInlineLatexSegments(precedingToken, true)
+        : precedingToken;
+      output += protectedLine.slice(index + scriptTag.index, nextIndex);
+      index = nextIndex;
+      continue;
+    }
 
     if (
       candidate &&
@@ -388,7 +412,7 @@ function wrapInlineLatexSegments(line: string) {
   );
 }
 
-export function normalizeMarkdownMath(markdown: string) {
+export function normalizeMarkdownMath(markdown: string, preserveInlineScriptTags = false) {
   if (!markdown.trim()) {
     return markdown;
   }
@@ -475,7 +499,7 @@ export function normalizeMarkdownMath(markdown: string) {
       continue;
     }
 
-    output.push(wrapInlineLatexSegments(cleanedLine));
+    output.push(wrapInlineLatexSegments(cleanedLine, preserveInlineScriptTags));
   }
 
   flushMathFence();

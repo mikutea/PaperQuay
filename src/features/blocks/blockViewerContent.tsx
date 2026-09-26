@@ -30,11 +30,14 @@ import type {
   TranslationDisplayMode,
 } from '../../types/reader';
 import { cn } from '../../utils/cn';
-import {
-  normalizeMarkdownMath,
-  normalizeRawLatexExpression,
-} from '../../utils/markdown';
+import { normalizeRawLatexExpression } from '../../utils/markdown';
 import { sanitizeMineruTableHtml } from '../../utils/safeHtml';
+import {
+  normalizeMineruReaderMarkdown,
+  plainMineruInlineCaption,
+  renderMineruInlineCaption,
+  remarkMineruInlineFormatting,
+} from './remarkMineruInlineFormatting';
 
 function hasActiveTextSelection() {
   const selection = window.getSelection();
@@ -166,7 +169,7 @@ function MarkdownContentComponent({
   markdown: string;
   scale: number;
 }) {
-  const normalizedMarkdown = useMemo(() => normalizeMarkdownMath(markdown), [markdown]);
+  const normalizedMarkdown = useMemo(() => normalizeMineruReaderMarkdown(markdown), [markdown]);
   const bodyStyle = {
     fontSize: `${15 * scale}px`,
     lineHeight: `${31 * scale}px`,
@@ -175,7 +178,7 @@ function MarkdownContentComponent({
   return (
     <ReactMarkdown
       className="prose prose-slate max-w-none prose-headings:tracking-tight prose-a:text-indigo-600 prose-strong:text-slate-900 dark:prose-invert dark:prose-strong:text-[var(--pq-text)] [&_.katex]:text-slate-900 dark:[&_.katex]:text-[var(--pq-text)] [&_.katex-display]:my-4 [&_.katex-display]:overflow-x-auto [&_.katex-display]:overflow-y-hidden [&_.katex-display]:py-2"
-      remarkPlugins={[remarkGfm, remarkMath]}
+      remarkPlugins={[remarkGfm, remarkMath, remarkMineruInlineFormatting]}
       rehypePlugins={[[rehypeKatex, { strict: 'ignore', throwOnError: false }]]}
       components={{
         p: ({ children }) => (
@@ -246,6 +249,10 @@ function MarkdownContentComponent({
 
 const MarkdownContent = memo(MarkdownContentComponent);
 
+function InlineCaptionContent({ text }: { text: string }) {
+  return <>{renderMineruInlineCaption(text)}</>;
+}
+
 function AssetFigure({
   assetPath,
   label,
@@ -266,6 +273,7 @@ function AssetFigure({
     shouldLoadAsset ? assetPath : undefined,
   );
   const [previewOpen, setPreviewOpen] = useState(false);
+  const accessibleLabel = useMemo(() => plainMineruInlineCaption(label), [label]);
 
   useEffect(() => {
     setShouldLoadAsset(false);
@@ -315,7 +323,7 @@ function AssetFigure({
             }}
             className="group relative block w-full overflow-hidden bg-slate-50"
           >
-            <img src={dataUrl} alt={label} className="max-h-[420px] w-full object-contain" />
+            <img src={dataUrl} alt={accessibleLabel} className="max-h-[420px] w-full object-contain" />
             <span className="pointer-events-none absolute right-3 top-3 inline-flex items-center rounded-full bg-slate-950/70 px-2.5 py-1 text-xs text-white opacity-0 transition-opacity duration-200 group-hover:opacity-100">
               <Expand className="mr-1.5 h-3.5 w-3.5" strokeWidth={1.9} />
               {l('放大', 'Zoom')}
@@ -352,7 +360,9 @@ function AssetFigure({
             onClick={(event) => event.stopPropagation()}
           >
             <div className="flex items-center justify-between border-b border-slate-200/80 px-5 py-3">
-              <div className="truncate text-sm font-medium text-slate-700">{label}</div>
+              <div className="truncate text-sm font-medium text-slate-700">
+                <InlineCaptionContent text={label} />
+              </div>
               <button
                 type="button"
                 onClick={() => setPreviewOpen(false)}
@@ -362,7 +372,7 @@ function AssetFigure({
               </button>
             </div>
             <div className="max-h-[calc(100vh-140px)] overflow-auto bg-slate-50 p-4">
-              <img src={dataUrl} alt={label} className="mx-auto h-auto max-w-full object-contain" />
+              <img src={dataUrl} alt={accessibleLabel} className="mx-auto h-auto max-w-full object-contain" />
             </div>
           </div>
         </div>
@@ -418,7 +428,7 @@ function TableContentComponent({
                 lineHeight: `${24 * scale}px`,
               }}
             >
-              {captionText}
+              <InlineCaptionContent text={captionText} />
             </div>
           ) : null}
 
