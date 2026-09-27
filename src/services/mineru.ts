@@ -18,7 +18,7 @@ import { joinReadableText } from '../utils/text.ts';
 const STRUCTURAL_CONTENT_KEYS = new Set([
   'type', 'bbox', 'path', 'img_path', 'image_path', 'image_source',
   'table_type', 'table_nest_level', 'level', 'text_level', 'math_type',
-  'list_type', 'item_type', 'sub_type', 'bboxCoordinateSystem', 'bboxPageSize',
+  'list_type', 'item_type', 'sub_type', 'raw_type', 'bboxCoordinateSystem', 'bboxPageSize',
 ]);
 
 function collectTextParts(input: unknown): string[] {
@@ -264,6 +264,12 @@ function renderTableFootnote(input: unknown): string {
     .join(' ');
 }
 
+function renderVisualCaption(input: unknown): string {
+  return Array.isArray(input) && input.every((item) => typeof item === 'string')
+    ? input.map((item) => item.trim()).filter(Boolean).join(' ')
+    : renderInlineMarkdownContent(input).trim();
+}
+
 function renderVisualMarkdownContent(input: unknown, excludeRawMarkdown = false): string {
   const record = getRecord(input);
   const nodeType = typeof record?.type === 'string' ? record.type.toLowerCase() : '';
@@ -280,6 +286,9 @@ function renderVisualMarkdownContent(input: unknown, excludeRawMarkdown = false)
       key === 'table_footnote' || key === 'image_footnote' ||
       key === 'chart_footnote' || key === 'figure_footnote'
         ? renderTableFootnote(value)
+        : key === 'table_caption' || key === 'image_caption' ||
+          key === 'chart_caption' || key === 'figure_caption'
+          ? renderVisualCaption(value)
         : renderInlineMarkdownContent(value).trim())
     .filter(Boolean)
     .join(' ');
@@ -648,7 +657,13 @@ function extractMiddleContent(rawBlock: Record<string, unknown>): Record<string,
     const rawSpan = span as Record<string, unknown>;
     return collectTextParts(rawSpan.content ?? rawSpan.text ?? rawSpan.latex ?? null);
   });
-  const imagePath = [rawBlock.img_path, ...spans.map((span) => (span as Record<string, unknown>).img_path)]
+  const imagePath = [
+    rawBlock.img_path, rawBlock.image_path,
+    ...spans.flatMap((span) => {
+      const rawSpan = span as Record<string, unknown>;
+      return [rawSpan.img_path, rawSpan.image_path];
+    }),
+  ]
     .find((path) => typeof path === 'string' && path.trim());
 
   return {
@@ -1043,9 +1058,13 @@ export function extractTextFromMineruBlock(block: PositionedMineruBlock): string
     const content = getRecord(block.content);
     const markdown = content?.markdown;
     const footnote = renderTableFootnote(content?.table_footnote);
+    const fallback = content
+      ? content.content ?? content.text ?? content.value
+      : block.content;
 
     const tableText = caption || (tableHtml ? stripHtml(tableHtml) : '') ||
-      (typeof markdown === 'string' ? markdown : '');
+      (typeof markdown === 'string' ? markdown : '') ||
+      joinReadableText(collectTextParts(fallback));
     return [tableText, footnote].filter(Boolean).join(' ');
   }
 

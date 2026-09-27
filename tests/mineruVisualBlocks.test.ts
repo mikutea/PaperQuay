@@ -115,6 +115,16 @@ test('flat text does not duplicate generic content already in its canonical text
   assert.equal(extractTextFromMineruBlock(paragraph), 'Hello');
 });
 
+test('non-HTML table OCR remains extracted plain text', () => {
+  const nested = block('table', 'OCR cells');
+  const [flat] = flattenMineruPages(parseMineruPages([{
+    type: 'table', page_idx: 0, table_caption: [], content: 'Flat OCR cells',
+  }]));
+
+  assert.equal(extractTextFromMineruBlock(nested), 'OCR cells');
+  assert.equal(extractTextFromMineruBlock(flat), 'Flat OCR cells');
+});
+
 test('standalone chart and figure notes stay textual blocks', () => {
   const nested = block('figure_caption', 'Figure 1. Results');
   const [flat] = flattenMineruPages(parseMineruPages([{
@@ -217,6 +227,16 @@ test('multiple image footnotes remain separated in Reader and translation', () =
   assert.match(extractTranslatableMarkdownFromMineruBlock(image), /Source A Source B/);
 });
 
+test('multiple root chart captions stay separated without splitting inline nodes', () => {
+  const listCaption = block('chart', { chart_caption: ['Figure 1', 'Overview'] });
+  const inlineCaption = block('chart', {
+    chart_caption: [{ type: 'text', content: 'Figure' }, { type: 'text', content: ' 1' }],
+  });
+
+  assert.match(buildRenderableBlocks([listCaption])[0].markdown, /Figure 1 Overview/);
+  assert.match(buildRenderableBlocks([inlineCaption])[0].markdown, /Figure 1/);
+});
+
 test('middle JSON chart retains its asset path without translating that path', () => {
   const [chart, caption] = flattenMineruPages(parseMineruPages({ pdf_info: [{
     page_idx: 0, page_size: [600, 800], para_blocks: [
@@ -230,6 +250,18 @@ test('middle JSON chart retains its asset path without translating that path', (
   assert.match(buildRenderableBlocks([chart], 'C:/cache/middle.json')[0].assetPath ?? '', /middle-chart\.jpg$/);
   assert.doesNotMatch(extractTranslatableMarkdownFromMineruBlock(chart), /middle-chart\.jpg/);
   assert.match(buildRenderableBlocks([caption])[0].markdown, /Figure 1\. Results/);
+  assert.equal(buildRenderableBlocks([chart])[0].markdown, '');
+});
+
+test('middle JSON chart accepts image_path alias as a visual asset', () => {
+  const [chart] = flattenMineruPages(parseMineruPages({ pdf_info: [{
+    page_idx: 0, para_blocks: [{
+      type: 'chart', lines: [{ spans: [{ image_path: 'images/alias-chart.jpg' }] }],
+    }],
+  }] }));
+
+  assert.match(buildRenderableBlocks([chart], 'C:/cache/middle.json')[0].assetPath ?? '', /alias-chart\.jpg$/);
+  assert.doesNotMatch(extractTranslatableMarkdownFromMineruBlock(chart), /alias-chart\.jpg/);
 });
 
 test('Markdown image fallback translates only the parsed caption, never image markup', () => {
