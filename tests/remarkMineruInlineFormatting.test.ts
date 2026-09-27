@@ -7,7 +7,7 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import { normalizeMarkdownMath } from '../src/utils/markdown.ts';
-import { parseMineruMarkdownPages } from '../src/services/mineru.ts';
+import { buildRenderableBlocks, flattenMineruPages, parseMineruMarkdownPages, parseMineruPages } from '../src/services/mineru.ts';
 
 import {
   normalizeMineruReaderMarkdown,
@@ -22,6 +22,24 @@ function render(markdown: string): string {
     rehypePlugins: [[rehypeKatex, { strict: 'ignore', throwOnError: false }]],
   }, normalizeMineruReaderMarkdown(markdown)));
 }
+
+test('HTML-table caption retains structured inline math without interpreting plain Markdown', () => {
+  const [table] = flattenMineruPages(parseMineruPages([{
+    type: 'table', page_idx: 0,
+    caption_content: [
+      { type: 'text', content: 'Energy *literal*: ' },
+      { type: 'equation_inline', content: 'E=mc^2' },
+    ],
+    html: '<table><tr><td>Cells</td></tr></table>',
+  }]));
+  const [renderable] = buildRenderableBlocks([table]);
+  const html = render(renderable.captionMathMarkdown ?? '');
+
+  assert.match(html, /class="katex"/);
+  assert.match(html, /literal/);
+  assert.doesNotMatch(html, /<em>literal<\/em>/);
+  assert.match(renderable.tableHtml ?? '', /Cells/);
+});
 
 test('structured reading formats paired MinerU superscripts and subscripts', () => {
   const html = render('H<sub>2</sub>O and x<sup>2</sup>');

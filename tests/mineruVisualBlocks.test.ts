@@ -92,6 +92,43 @@ test('table cells remain source and translation text when a generic caption exis
   }
 });
 
+test('captioned non-HTML table keeps OCR cells in summary and RAG source text', () => {
+  const [table] = flattenMineruPages(parseMineruPages([{
+    type: 'table', page_idx: 0, caption: 'Table 1', content: 'OCR cells',
+  }]));
+
+  assert.match(extractTextFromMineruBlock(table), /Table 1 OCR cells/);
+  assert.match(extractTranslatableMarkdownFromMineruBlock(table), /OCR cells/);
+});
+
+test('generic structured table caption retains inline math for HTML-table Reader', () => {
+  const [table] = flattenMineruPages(parseMineruPages([{
+    type: 'table', page_idx: 0,
+    caption_content: [
+      { type: 'text', content: 'Energy *literal*: ' },
+      { type: 'equation_inline', content: 'E=mc^2' },
+    ],
+    html: '<table><tr><td>Cells</td></tr></table>',
+  }]));
+  const [renderable] = buildRenderableBlocks([table]);
+
+  assert.equal(renderable.captionText, 'Energy *literal*: E=mc^2');
+  assert.match(renderable.captionMathMarkdown ?? '', /Energy \\\*literal\\\*: \$E=mc\^2\$/);
+  assert.match(renderable.tableHtml ?? '', /Cells/);
+});
+
+test('blank visual asset and table HTML aliases fall through to valid alternatives', () => {
+  const [image, table] = flattenMineruPages(parseMineruPages([
+    { type: 'image', page_idx: 0, image_source: { path: '' }, img_path: 'images/usable.jpg' },
+    { type: 'table', page_idx: 0, html: '', table_body: '<table><tr><td>Cells</td></tr></table>' },
+  ]));
+
+  assert.match(buildRenderableBlocks([image], 'C:/cache/content_list.json')[0].assetPath ?? '', /usable\.jpg$/);
+  assert.match(buildRenderableBlocks([table])[0].tableHtml ?? '', /Cells/);
+  assert.match(extractTextFromMineruBlock(table), /Cells/);
+  assert.match(extractTranslatableMarkdownFromMineruBlock(table), /Cells/);
+});
+
 test('flat content-list chart uses the image rendering path', () => {
   const [chart] = flattenMineruPages(parseMineruPages([{
     type: 'chart', page_idx: 0, img_path: 'images/flat-chart.jpg',

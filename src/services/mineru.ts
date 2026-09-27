@@ -272,6 +272,40 @@ function renderVisualCaption(input: unknown): string {
     : renderInlineMarkdownContent(input).trim();
 }
 
+function renderCaptionMathPart(input: unknown, depth = 0): { markdown: string; hasMath: boolean } {
+  const literal = (value: string) => value.replace(/[\\`*_{}\[\]()#+.!|$~-]/g, '\\$&');
+  if (depth > 16) return { markdown: literal(renderVisualCaption(input)), hasMath: false };
+  if (typeof input === 'string') return { markdown: literal(input), hasMath: false };
+  if (Array.isArray(input)) {
+    const parts = input.map((item) => renderCaptionMathPart(item, depth + 1));
+    return {
+      markdown: parts.map((part) => part.markdown).join(input.every((item) => typeof item === 'string') ? ' ' : ''),
+      hasMath: parts.some((part) => part.hasMath),
+    };
+  }
+  const record = getRecord(input);
+  if (!record) return { markdown: literal(renderVisualCaption(input)), hasMath: false };
+  if (record.type === 'equation_inline') {
+    const math = extractMathText(record);
+    if (math) return { markdown: `$${math}$`, hasMath: true };
+  }
+  for (const key of ['content', 'text', 'value', 'caption_content']) {
+    if (key in record) return renderCaptionMathPart(record[key], depth + 1);
+  }
+  return { markdown: literal(renderVisualCaption(input)), hasMath: false };
+}
+
+function extractCaptionMathMarkdown(block: PositionedMineruBlock): string | undefined {
+  const content = getRecord(block.content);
+  if (!content) return undefined;
+  const parts = ['table_caption', 'caption', 'caption_content']
+    .filter((key) => key in content)
+    .map((key) => renderCaptionMathPart(content[key]));
+  return parts.some((part) => part.hasMath)
+    ? parts.map((part) => part.markdown).filter(Boolean).join(' ')
+    : undefined;
+}
+
 function renderVisualMarkdownContent(input: unknown, excludeRawMarkdown = false): string {
   const record = getRecord(input);
   const nodeType = typeof record?.type === 'string' ? record.type.toLowerCase() : '';
@@ -378,7 +412,8 @@ export function extractTableHtmlFromMineruBlock(
   block: PositionedMineruBlock,
 ): string | undefined {
   const content = getRecord(block.content);
-  const html = content?.html ?? content?.table_body;
+  const html = [content?.html, content?.table_body]
+    .find((candidate) => typeof candidate === 'string' && candidate.trim());
 
   return typeof html === 'string' && html.trim() ? html : undefined;
 }
@@ -388,11 +423,9 @@ export function extractMineruAssetPathFromBlock(
 ): string | undefined {
   const content = getRecord(block.content);
   const imageSource = getRecord(content?.image_source);
-  const candidate =
-    imageSource?.path ??
-    content?.img_path ??
-    content?.path ??
-    content?.image_path;
+  const candidate = [
+    imageSource?.path, content?.img_path, content?.path, content?.image_path,
+  ].find((path) => typeof path === 'string' && path.trim());
 
   return typeof candidate === 'string' && candidate.trim() ? candidate.trim() : undefined;
 }
@@ -1073,9 +1106,10 @@ export function extractTextFromMineruBlock(block: PositionedMineruBlock): string
       ? content.content ?? content.text ?? content.value
       : block.content;
 
-    const tableText = [caption, tableHtml ? stripHtml(tableHtml) : ''].filter(Boolean).join(' ') ||
-      (typeof markdown === 'string' ? markdown : '') ||
-      joinReadableText(collectTextParts(fallback));
+    const bodyText = tableHtml ? stripHtml(tableHtml) :
+      (typeof markdown === 'string' && markdown.trim()
+        ? markdown : joinReadableText(collectTextParts(fallback)));
+    const tableText = [caption, bodyText].filter(Boolean).join(' ');
     return [tableText, footnote].filter(Boolean).join(' ');
   }
 
@@ -1125,6 +1159,7 @@ export function buildRenderableBlocks(
       mathText,
       tableHtml,
       captionText,
+      captionMathMarkdown: block.type === 'table' ? extractCaptionMathMarkdown(block) : undefined,
       tableFootnoteText,
       assetPath:
         mineruPath && relativeAssetPath

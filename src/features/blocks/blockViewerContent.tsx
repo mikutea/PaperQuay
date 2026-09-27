@@ -384,6 +384,7 @@ function AssetFigure({
 function TableContentComponent({
   assetPath,
   captionText,
+  captionMathMarkdown,
   tableFootnoteText,
   tableHtml,
   fallbackMarkdown,
@@ -394,6 +395,7 @@ function TableContentComponent({
 }: {
   assetPath?: string;
   captionText?: string;
+  captionMathMarkdown?: string;
   tableFootnoteText?: string;
   tableHtml?: string;
   fallbackMarkdown: string;
@@ -430,7 +432,9 @@ function TableContentComponent({
                 lineHeight: `${24 * scale}px`,
               }}
             >
-              <InlineCaptionContent text={captionText} />
+              {captionMathMarkdown
+                ? <MarkdownContent markdown={captionMathMarkdown} scale={scale} />
+                : <InlineCaptionContent text={captionText} />}
             </div>
           ) : null}
 
@@ -550,7 +554,7 @@ function BlockItemComponent({
   registerRef,
 }: BlockItemProps) {
   const l = useLocaleText();
-  const { block, markdown, mathText, plainText, tableHtml, captionText, tableFootnoteText, assetPath } = renderable;
+  const { block, markdown, mathText, plainText, tableHtml, captionText, captionMathMarkdown, tableFootnoteText, assetPath } = renderable;
   const pointerStartRef = useRef<{ x: number; y: number } | null>(null);
   const clickTimerRef = useRef<number | null>(null);
   const hasTranslation = Boolean(translatedText?.trim());
@@ -700,6 +704,7 @@ function BlockItemComponent({
         <TableContent
           assetPath={assetPath}
           captionText={captionText}
+          captionMathMarkdown={captionMathMarkdown}
           tableFootnoteText={tableFootnoteText}
           tableHtml={tableHtml}
           fallbackMarkdown={markdown}
