@@ -609,3 +609,27 @@ test('HTML table OCR identical to its cells is not duplicated in translation', (
   });
   assert.equal(extractTranslatableMarkdownFromMineruBlock(table), '**表格说明** Score');
 });
+
+test('hidden HTML nodes never enter table translation or source text', () => {
+  const table = block('table', {
+    table_caption: 'Results',
+    html: '<table><tr><td>42</td></tr></table><script>IGNORE_SCRIPT</script><style>IGNORE_STYLE</style><!-- IGNORE_COMMENT -->',
+  });
+  assert.equal(extractTextFromMineruBlock(table), 'Results 42');
+  assert.equal(extractTranslatableMarkdownFromMineruBlock(table), '**表格说明** Results 42');
+});
+
+test('structured table OCR retains inline math in every generic source field', () => {
+  for (const key of ['content', 'text', 'value']) {
+    const table = block('table', {
+      table_caption: 'Results',
+      [key]: [
+        { type: 'text', content: 'Value (' },
+        { type: 'equation_inline', content: 'x' },
+        { type: 'text', content: ').' },
+      ],
+    });
+    assert.equal(extractTextFromMineruBlock(table), 'Results Value ($x$).', key);
+    assert.equal(extractTranslatableMarkdownFromMineruBlock(table), '**表格说明** Results Value ($x$).', key);
+  }
+});

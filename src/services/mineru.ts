@@ -14,6 +14,7 @@ import {
   normalizeRawLatexExpression,
 } from '../utils/markdown.ts';
 import { joinReadableText } from '../utils/text.ts';
+import { parseFragment, type DefaultTreeAdapterMap } from 'parse5';
 
 const STRUCTURAL_CONTENT_KEYS = new Set([
   'type', 'bbox', 'path', 'img_path', 'image_path', 'image_source',
@@ -69,7 +70,20 @@ function uniqueNonblankText(parts: string[]): string[] {
 }
 
 function stripHtml(input: string): string {
-  return input.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+  const hiddenTags = new Set(['script', 'style', 'iframe', 'object', 'embed', 'link', 'meta']);
+  const nodes: DefaultTreeAdapterMap['node'][] = [...parseFragment(input).childNodes].reverse();
+  const text: string[] = [];
+  while (nodes.length > 0) {
+    const node = nodes.pop()!;
+    if ('tagName' in node && hiddenTags.has(node.tagName)) continue;
+    if (node.nodeName === '#text' && 'value' in node) text.push(node.value);
+    if ('childNodes' in node) {
+      for (let index = node.childNodes.length - 1; index >= 0; index -= 1) {
+        nodes.push(node.childNodes[index]);
+      }
+    }
+  }
+  return text.join(' ').replace(/\s+/g, ' ').trim();
 }
 
 function removeSpelledMineruTokenNoise(value: string): string {
@@ -1188,8 +1202,8 @@ export function extractTextFromMineruBlock(block: PositionedMineruBlock): string
     const footnote = renderTableFootnote(content?.table_footnote);
     const fallbackText = content
       ? [content.content, content.text, content.value]
-        .map((candidate) => joinReadableText(collectTextParts(candidate)))
-      : [joinReadableText(collectTextParts(block.content))];
+        .map((candidate) => renderVisualCaption(candidate))
+      : [renderVisualCaption(block.content)];
     const bodyText = tableHtml
       ? uniqueNonblankText([stripHtml(tableHtml), ...fallbackText]).join(' ')
       : uniqueNonblankText([
