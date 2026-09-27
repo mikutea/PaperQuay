@@ -952,10 +952,33 @@ function parseJsonObject(text) {
   }
 }
 
+function toWellFormedEmbeddingText(value) {
+  if (typeof value !== 'string' || !/[\uD800-\uDFFF]/.test(value)) return value;
+  if (typeof value.toWellFormed === 'function') return value.toWellFormed();
+
+  let output = '';
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        output += value[index] + value[++index];
+      } else {
+        output += '\uFFFD';
+      }
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      output += '\uFFFD';
+    } else {
+      output += value[index];
+    }
+  }
+  return output;
+}
+
 async function embedTexts(texts, embedding) {
   const body = {
     model: embedding.model,
-    input: texts,
+    input: texts.map(toWellFormedEmbeddingText),
   };
 
   if (embedding.dimensions) {
