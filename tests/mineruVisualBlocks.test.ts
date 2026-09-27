@@ -311,6 +311,28 @@ test('standalone visual-note arrays keep readable separators in Reader and trans
   assert.equal(buildRenderableBlocks([footnote])[0].markdown, '> Source A Source B');
 });
 
+test('structured visual captions retain inline math in source text', () => {
+  const chart = block('chart', {
+    chart_caption: [
+      { type: 'text', content: 'Growth (' },
+      { type: 'equation_inline', content: 'x' },
+      { type: 'text', content: ').' },
+    ],
+  });
+  assert.equal(extractTextFromMineruBlock(chart), 'Growth ($x$).');
+  assert.match(extractTranslatableMarkdownFromMineruBlock(chart), /Growth \(\$x\$\)\./);
+
+  const [standalone] = flattenMineruPages(parseMineruPages([{
+    type: 'chart_caption', page_idx: 0,
+    chart_caption: [
+      { type: 'text', content: 'Growth (' },
+      { type: 'equation_inline', content: 'x' },
+      { type: 'text', content: ').' },
+    ],
+  }]));
+  assert.equal(extractTextFromMineruBlock(standalone), 'Growth ($x$).');
+});
+
 test('visual translation retains caption, footnote, and OCR text together', () => {
   const chart = block('chart', {
     chart_caption: 'Chart 1', chart_footnote: 'Source note',
@@ -508,6 +530,23 @@ test('Markdown image fallback translates only the parsed caption, never image ma
   const translation = extractTranslatableMarkdownFromMineruBlock(image);
   assert.match(translation, /Figure 1/);
   assert.doesNotMatch(translation, /!\[|chart\.png/);
+});
+
+test('Markdown image fallback retains surrounding prose and multiple alt labels', () => {
+  const [image] = flattenMineruPages(parseMineruMarkdownPages(
+    'See ![Trend](trend.png) and ![Map](map.png) for results.',
+  ));
+  const expected = '**图片说明** See Trend and Map for results.';
+  assert.equal(buildRenderableBlocks([image])[0].markdown, expected);
+  assert.equal(extractTranslatableMarkdownFromMineruBlock(image), expected);
+});
+
+test('flat paragraph text takes priority over a visual-only value alias', () => {
+  const [paragraph] = flattenMineruPages(parseMineruPages([{
+    type: 'text', page_idx: 0, text: 'Canonical paragraph', value: 'alternate',
+  }]));
+  assert.equal(buildRenderableBlocks([paragraph])[0].markdown, 'Canonical paragraph');
+  assert.equal(extractTextFromMineruBlock(paragraph), 'Canonical paragraph');
 });
 
 test('captionless Markdown image fallback does not create a translation unit', () => {

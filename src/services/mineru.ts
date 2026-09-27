@@ -125,6 +125,7 @@ function extractTypedContentText(
   block: PositionedMineruBlock,
   preferredKeys: string[],
   allowFallback = true,
+  preserveMath = false,
 ): string {
   const content = getRecord(block.content);
 
@@ -135,7 +136,9 @@ function extractTypedContentText(
   const preferredParts = uniqueNonblankText(preferredKeys
     .map((key) => key.endsWith('_footnote')
       ? renderTableFootnote(content[key])
-      : joinReadableText(collectTextParts(content[key]))));
+      : preserveMath
+        ? renderVisualCaption(content[key])
+        : joinReadableText(collectTextParts(content[key]))));
 
   if (preferredParts.length > 0) {
     return joinReadableText(preferredParts);
@@ -524,7 +527,11 @@ function toMarkdownFragment(block: PositionedMineruBlock, plainText: string): st
     }
     case 'image': {
       const parsedImage = extractMarkdownImage(plainText);
-      const description = visualMarkdown || (parsedImage ? parsedImage.alt : plainText);
+      const rawMarkdown = getRecord(block.content)?.markdown;
+      const markdownDescription = typeof rawMarkdown === 'string'
+        ? stripMarkdownImagePaths(rawMarkdown)
+        : '';
+      const description = markdownDescription || visualMarkdown || (parsedImage ? parsedImage.alt : plainText);
       return description ? `**图片说明** ${description}` : '';
     }
     case 'table': {
@@ -644,6 +651,8 @@ function mapFlatContentType(rawBlock: Record<string, unknown>): string {
 }
 
 function pickFlatContent(rawBlock: Record<string, unknown>): Record<string, unknown> {
+  const blockType = mapFlatContentType(rawBlock);
+  const isVisual = blockType === 'image' || blockType === 'table' || blockType === 'caption';
   const contentKeys = [
     'text',
     'text_level',
@@ -672,13 +681,15 @@ function pickFlatContent(rawBlock: Record<string, unknown>): Record<string, unkn
   const content: Record<string, unknown> = {};
 
   for (const key of contentKeys) {
+    if (key === 'value' && !isVisual && typeof rawBlock.text === 'string' && rawBlock.text.trim()) {
+      continue;
+    }
     if (key in rawBlock) {
       content[key] = rawBlock[key];
     }
   }
 
-  const blockType = mapFlatContentType(rawBlock);
-  if ((blockType === 'image' || blockType === 'table' || blockType === 'caption') && 'content' in rawBlock) {
+  if (isVisual && 'content' in rawBlock) {
     content.content = rawBlock.content;
   }
 
@@ -858,6 +869,10 @@ function extractMarkdownImage(value: string): { alt: string; path: string } | nu
     alt: match[1]?.trim() ?? '',
     path: match[2]?.trim().replace(/^<|>$/g, '') ?? '',
   };
+}
+
+function stripMarkdownImagePaths(value: string): string {
+  return value.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '$1').trim();
 }
 
 function inferMarkdownBlockType(markdown: string): MineruBlockBase['type'] {
@@ -1132,7 +1147,7 @@ export function resolveMineruBlockContentSource(
 
 export function extractTextFromMineruBlock(block: PositionedMineruBlock): string {
   if (block.type === 'table') {
-    const caption = extractCaptionFromMineruBlock(block);
+    const caption = extractTypedContentText(block, ['table_caption', 'caption', 'caption_content'], false, true);
     const tableHtml = extractTableHtmlFromMineruBlock(block);
     const content = getRecord(block.content);
     const markdown = content?.markdown;
@@ -1155,7 +1170,15 @@ export function extractTextFromMineruBlock(block: PositionedMineruBlock): string
       'image_caption', 'chart_caption', 'figure_caption',
       'image_footnote', 'chart_footnote', 'figure_footnote',
       'caption', 'caption_content', 'content', 'text', 'value',
-    ]);
+    ], true, true);
+  }
+
+  if (block.type === 'caption') {
+    return extractTypedContentText(block, [
+      'table_caption', 'image_caption', 'chart_caption', 'figure_caption',
+      'table_footnote', 'image_footnote', 'chart_footnote', 'figure_footnote',
+      'caption', 'caption_content', 'content', 'text', 'value',
+    ], true, true);
   }
 
   if (block.type === 'equation') {
