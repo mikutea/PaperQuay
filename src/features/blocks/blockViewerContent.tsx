@@ -446,7 +446,7 @@ function TableContentComponent({
               {tableFootnoteText ? (
                 <div className="leading-6 text-slate-600 dark:text-[var(--pq-text-muted)]"
                   style={{ fontSize: `${14 * scale}px`, lineHeight: `${24 * scale}px` }}>
-                  <InlineCaptionContent text={tableFootnoteText} />
+                  <MarkdownContent markdown={tableFootnoteText} scale={scale} />
                 </div>
               ) : null}
             </>

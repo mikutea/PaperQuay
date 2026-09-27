@@ -150,3 +150,20 @@ test('Markdown image fallback translates only the parsed caption, never image ma
   assert.match(translation, /Figure 1/);
   assert.doesNotMatch(translation, /!\[|chart\.png/);
 });
+
+test('typed visual roots retain caption, footnote, and OCR fields', () => {
+  const image = block('image', {
+    type: 'image', image_caption: 'Caption', image_footnote: 'Footnote', content: 'OCR',
+  });
+  const translation = extractTranslatableMarkdownFromMineruBlock(image);
+  for (const part of ['Caption', 'Footnote', 'OCR']) assert.match(translation, new RegExp(part));
+});
+
+test('structured table footnotes keep inline math for the HTML-table reader', () => {
+  const table = block('table', {
+    table_caption: [], table_footnote: [{ type: 'equation_inline', content: 'E=mc^2' }],
+    html: '<table><tr><td>Mass</td></tr></table>',
+  });
+  const [renderable] = buildRenderableBlocks([table]);
+  assert.equal(renderable.tableFootnoteText, '$E=mc^2$');
+});

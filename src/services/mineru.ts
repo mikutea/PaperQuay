@@ -253,7 +253,8 @@ function renderInlineMarkdownContent(input: unknown): string {
 
 function renderVisualMarkdownContent(input: unknown, excludeRawMarkdown = false): string {
   const record = getRecord(input);
-  if (!record || typeof record.type === 'string') {
+  const nodeType = typeof record?.type === 'string' ? record.type.toLowerCase() : '';
+  if (!record || nodeType === 'text' || nodeType.includes('equation')) {
     return renderInlineMarkdownContent(input).trim();
   }
 
@@ -1074,7 +1075,7 @@ export function buildRenderableBlocks(
         ? extractCaptionFromMineruBlock(block)
         : undefined;
     const tableFootnoteText = block.type === 'table'
-      ? extractTypedContentText(block, ['table_footnote'], false)
+      ? renderInlineMarkdownContent(getRecord(block.content)?.table_footnote).trim()
       : undefined;
     const relativeAssetPath = extractMineruAssetPathFromBlock(block);
 
