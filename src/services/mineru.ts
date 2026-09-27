@@ -122,7 +122,9 @@ function extractTypedContentText(
     return allowFallback ? joinReadableText(collectTextParts(block.content)) : '';
   }
 
-  const preferredParts = preferredKeys.flatMap((key) => collectTextParts(content[key]));
+  const preferredParts = preferredKeys
+    .flatMap((key) => collectTextParts(content[key]))
+    .filter((part) => part.trim());
 
   if (preferredParts.length > 0) {
     return joinReadableText(preferredParts);
@@ -582,6 +584,8 @@ function pickFlatContent(rawBlock: Record<string, unknown>): Record<string, unkn
     'table_body',
     'table_caption',
     'table_footnote',
+    'caption',
+    'caption_content',
     'image_caption',
     'image_footnote',
     'chart_caption',
@@ -589,6 +593,9 @@ function pickFlatContent(rawBlock: Record<string, unknown>): Record<string, unkn
     'figure_caption',
     'figure_footnote',
     'img_path',
+    'image_path',
+    'path',
+    'image_source',
     'code_body',
     'code_caption',
     'code_footnote',

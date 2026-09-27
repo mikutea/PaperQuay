@@ -107,6 +107,29 @@ test('flat figure retains its own caption and footnote fields', () => {
   assert.match(buildRenderableBlocks([figure], 'C:/cache/content_list.json')[0].assetPath ?? '', /figure\.jpg$/);
 });
 
+test('flat visual blocks retain supported asset aliases and generic captions', () => {
+  for (const [assetField, assetValue] of [
+    ['image_path', 'images/image-path.jpg'],
+    ['path', 'images/path.jpg'],
+    ['image_source', { path: 'images/image-source.jpg' }],
+  ] as const) {
+    const [chart] = flattenMineruPages(parseMineruPages([{
+      type: 'chart', page_idx: 0, caption_content: 'Generic chart caption',
+      [assetField]: assetValue,
+    }]));
+    const [renderable] = buildRenderableBlocks([chart], 'C:/cache/content_list.json');
+
+    assert.match(renderable.assetPath?.replaceAll('\\', '/') ?? '', /images\/.*\.jpg$/);
+    assert.equal(renderable.captionText, 'Generic chart caption');
+    assert.match(extractTranslatableMarkdownFromMineruBlock(chart), /Generic chart caption/);
+  }
+
+  const [table] = flattenMineruPages(parseMineruPages([{
+    type: 'table', page_idx: 0, caption: 'Generic table caption',
+  }]));
+  assert.equal(buildRenderableBlocks([table])[0].captionText, 'Generic table caption');
+});
+
 test('flat text does not duplicate generic content already in its canonical text field', () => {
   const [paragraph] = flattenMineruPages(parseMineruPages([{
     type: 'text', page_idx: 0, text: 'Hello', content: 'Hello',
@@ -148,6 +171,14 @@ test('visual translation retains caption, footnote, and OCR text together', () =
   assert.match(translation, /Source note/);
   assert.match(translation, /OCR labels/);
   assert.doesNotMatch(translation, /images\//);
+});
+
+test('blank visual preferred fields do not hide generic OCR fallback text', () => {
+  const image = block('chart', {
+    chart_caption: '', caption_content: '', content: '', text: '', value: 'OCR labels',
+  });
+
+  assert.equal(extractTextFromMineruBlock(image), 'OCR labels');
 });
 
 test('generic caption_content remains a visible caption', () => {
