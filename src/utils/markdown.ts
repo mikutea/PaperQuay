@@ -352,6 +352,10 @@ function tableDelimiterColumns(line: string): number {
     : 0;
 }
 
+function interruptsMarkdownTable(line: string): boolean {
+  return /^(?: {4}|\t| {0,3}(?:#{1,6}(?:[ \t]|$)|>|(?:[-+*]|\d{1,9}[.)])(?:[ \t]|$)|(?:`{3,}|~{3,})|<(?:!--|\/?(?:div|table|pre|script|style|section|article|blockquote|p)(?:[\s/>]))))/.test(line);
+}
+
 function wrapInlineLatexSegments(line: string, preserveInlineScriptTags = false, tableRow = false): string {
   if (!line.trim() || !/[\\_^=<>~]/.test(line)) {
     return line;
@@ -469,7 +473,7 @@ export function normalizeMarkdownMath(markdown: string, preserveInlineScriptTags
     tableRows.add(index);
     tableRows.add(index + 1);
     let row = index + 2;
-    for (; row < lines.length && splitTableCells(lines[row]).length > 1; row += 1) {
+    for (; row < lines.length && !interruptsMarkdownTable(lines[row]) && splitTableCells(lines[row]).length > 1; row += 1) {
       tableRows.add(row);
     }
     index = row - 1;
@@ -554,7 +558,11 @@ export function normalizeMarkdownMath(markdown: string, preserveInlineScriptTags
       continue;
     }
 
-    output.push(wrapInlineLatexSegments(cleanedLine, preserveInlineScriptTags, tableRows.has(lineIndex)));
+    const tableRow = tableRows.has(lineIndex);
+    const orderedList = !tableRow ? /^([ \t]{0,3}\d{1,9}[.)][ \t]+)(.*)$/.exec(cleanedLine) : null;
+    output.push(orderedList
+      ? orderedList[1] + wrapInlineLatexSegments(orderedList[2], preserveInlineScriptTags)
+      : wrapInlineLatexSegments(cleanedLine, preserveInlineScriptTags, tableRow));
   }
 
   flushMathFence();

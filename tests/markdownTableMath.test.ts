@@ -44,3 +44,18 @@ test('escaped vertical bars inside a table cell are not delimiters', () => {
   const source = '| Label | Formula | Note |\n| --- | --- | --- |\n| Value | x | P(A \\| B)_i |';
   assert.match(normalizeMarkdownMath(source), /\| \$P\(A \\?\| B\)_i\$ \|/);
 });
+
+test('a block starter with pipes ends the preceding GFM table', () => {
+  for (const block of [
+    '# P(A | B) = P(C | D)',
+    '> P(A | B) = P(C | D)',
+    '- P(A | B) = P(C | D)',
+    '1. P(A | B) = P(C | D)',
+  ]) {
+    const source = `A | B\n--- | ---\nx | y\n${block}`;
+    const normalized = normalizeMarkdownMath(source);
+    assert.doesNotMatch(normalized, /\$B\)|C\$/);
+    assert.match(render(source), /<table>/);
+    assert.match(render(source), /<ms>|<mrow>|<mi>/);
+  }
+});
