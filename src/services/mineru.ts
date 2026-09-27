@@ -269,10 +269,9 @@ function renderInlineMarkdownContent(input: unknown): string {
 }
 
 function renderTableFootnote(input: unknown): string {
-  return (Array.isArray(input) ? input : [input])
-    .map((item) => renderInlineMarkdownContent(item).trim())
-    .filter(Boolean)
-    .join(' ');
+  return Array.isArray(input) && input.every((item) => typeof item === 'string')
+    ? input.map((item) => item.trim()).filter(Boolean).join(' ')
+    : renderInlineMarkdownContent(input).trim();
 }
 
 function renderVisualCaption(input: unknown): string {
@@ -497,10 +496,11 @@ function toMarkdownFragment(block: PositionedMineruBlock, plainText: string): st
       const mathText = extractMathText(block.content);
       return mathText ? `$$\n${mathText}\n$$` : structuredMarkdown || safeText;
     }
-    case 'image':
-      return visualMarkdown || plainText
-        ? `**图片说明** ${visualMarkdown || extractMarkdownImage(plainText)?.alt || plainText}`
-        : '';
+    case 'image': {
+      const parsedImage = extractMarkdownImage(plainText);
+      const description = visualMarkdown || (parsedImage ? parsedImage.alt : plainText);
+      return description ? `**图片说明** ${description}` : '';
+    }
     case 'table': {
       const tableBody = extractTableHtmlFromMineruBlock(block);
       const tableText = [visualMarkdown, tableBody ? stripHtml(tableBody) : '']
@@ -652,7 +652,7 @@ function pickFlatContent(rawBlock: Record<string, unknown>): Record<string, unkn
   }
 
   const blockType = mapFlatContentType(rawBlock);
-  if ((blockType === 'image' || blockType === 'table') && 'content' in rawBlock) {
+  if ((blockType === 'image' || blockType === 'table' || blockType === 'caption') && 'content' in rawBlock) {
     content.content = rawBlock.content;
   }
 
@@ -1115,9 +1115,10 @@ export function extractTextFromMineruBlock(block: PositionedMineruBlock): string
       ? content.content ?? content.text ?? content.value
       : block.content;
 
-    const bodyText = tableHtml ? stripHtml(tableHtml) :
-      (typeof markdown === 'string' && markdown.trim()
-        ? markdown : joinReadableText(collectTextParts(fallback)));
+    const fallbackText = joinReadableText(collectTextParts(fallback));
+    const bodyText = tableHtml
+      ? uniqueNonblankText([stripHtml(tableHtml), fallbackText]).join(' ')
+      : (typeof markdown === 'string' && markdown.trim() ? markdown : fallbackText);
     const tableText = [caption, bodyText].filter(Boolean).join(' ');
     return [tableText, footnote].filter(Boolean).join(' ');
   }

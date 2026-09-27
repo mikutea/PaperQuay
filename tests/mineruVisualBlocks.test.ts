@@ -101,6 +101,28 @@ test('captioned non-HTML table keeps OCR cells in summary and RAG source text', 
   assert.match(extractTranslatableMarkdownFromMineruBlock(table), /OCR cells/);
 });
 
+test('HTML table keeps distinct generic OCR content in source text', () => {
+  const [table] = flattenMineruPages(parseMineruPages([{
+    type: 'table', page_idx: 0,
+    html: '<table><tr><td>Score</td></tr></table>',
+    content: 'Confidence: high',
+  }]));
+
+  assert.match(extractTextFromMineruBlock(table), /Score Confidence: high/);
+  assert.match(extractTranslatableMarkdownFromMineruBlock(table), /Confidence: high/);
+});
+
+test('standalone visual note retains content even alongside metadata', () => {
+  const [note] = flattenMineruPages(parseMineruPages([{
+    type: 'chart_footnote', page_idx: 0, sub_type: 'chart', content: 'Source note',
+  }]));
+
+  assert.equal(note.type, 'caption');
+  assert.equal(extractTextFromMineruBlock(note), 'Source note');
+  assert.match(buildRenderableBlocks([note])[0].markdown, /Source note/);
+  assert.doesNotMatch(buildRenderableBlocks([note])[0].markdown, /未提取到/);
+});
+
 test('generic structured table caption retains inline math for HTML-table Reader', () => {
   const [table] = flattenMineruPages(parseMineruPages([{
     type: 'table', page_idx: 0,
@@ -327,6 +349,20 @@ test('multiple table footnotes remain separated in Reader, translation, and sour
   assert.match(extractTranslatableMarkdownFromMineruBlock(table), /Source A Source B/);
 });
 
+test('inline structured table footnote keeps punctuation adjacent to its formula', () => {
+  const table = block('table', {
+    table_footnote: [
+      { type: 'text', content: 'Source (' },
+      { type: 'equation_inline', content: 'x' },
+      { type: 'text', content: ').' },
+    ],
+  });
+  const [renderable] = buildRenderableBlocks([table]);
+
+  assert.equal(renderable.tableFootnoteText, 'Source ($x$).');
+  assert.match(extractTranslatableMarkdownFromMineruBlock(table), /Source \(\$x\$\)\./);
+});
+
 test('multiple image footnotes remain separated in Reader and translation', () => {
   const image = block('image', {
     image_caption: 'Figure 1', image_footnote: ['Source A', 'Source B'],
@@ -408,6 +444,12 @@ test('Markdown image fallback translates only the parsed caption, never image ma
   const translation = extractTranslatableMarkdownFromMineruBlock(image);
   assert.match(translation, /Figure 1/);
   assert.doesNotMatch(translation, /!\[|chart\.png/);
+});
+
+test('captionless Markdown image fallback does not create a translation unit', () => {
+  const [image] = flattenMineruPages(parseMineruMarkdownPages('![](chart.png)'));
+  assert.equal(extractTranslatableMarkdownFromMineruBlock(image), '');
+  assert.equal(buildRenderableBlocks([image])[0].markdown, '');
 });
 
 test('typed visual roots retain caption, footnote, and OCR fields', () => {
