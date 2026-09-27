@@ -72,6 +72,26 @@ test('real table caption and image OCR text remain translatable', () => {
   assert.doesNotMatch(extractTranslatableMarkdownFromMineruBlock(image), /images\//);
 });
 
+test('table cells remain source and translation text when a generic caption exists', () => {
+  for (const [captionKey, bodyKey] of [
+    ['caption', 'table_body'],
+    ['caption_content', 'html'],
+  ] as const) {
+    const [table] = flattenMineruPages(parseMineruPages([{
+      type: 'table', page_idx: 0, [captionKey]: 'Table 1. Results',
+      [bodyKey]: '<table><tr><td>Score</td><td>42</td></tr></table>',
+    }]));
+    const source = extractTextFromMineruBlock(table);
+    const translation = extractTranslatableMarkdownFromMineruBlock(table);
+
+    for (const value of [source, translation]) {
+      assert.match(value, /Table 1\. Results/);
+      assert.match(value, /Score 42/);
+      assert.doesNotMatch(value, /<table/);
+    }
+  }
+});
+
 test('flat content-list chart uses the image rendering path', () => {
   const [chart] = flattenMineruPages(parseMineruPages([{
     type: 'chart', page_idx: 0, img_path: 'images/flat-chart.jpg',

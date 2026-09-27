@@ -460,9 +460,7 @@ function toMarkdownFragment(block: PositionedMineruBlock, plainText: string): st
         ? `**图片说明** ${visualMarkdown || extractMarkdownImage(plainText)?.alt || plainText}`
         : '';
     case 'table': {
-      const tableBody = !extractCaptionFromMineruBlock(block)
-        ? extractTableHtmlFromMineruBlock(block)
-        : undefined;
+      const tableBody = extractTableHtmlFromMineruBlock(block);
       const tableText = [visualMarkdown, tableBody ? stripHtml(tableBody) : '']
         .filter(Boolean)
         .join(' ') || plainText;
@@ -583,6 +581,7 @@ function pickFlatContent(rawBlock: Record<string, unknown>): Record<string, unkn
     'text',
     'text_level',
     'table_body',
+    'html',
     'table_caption',
     'table_footnote',
     'caption',
@@ -1074,7 +1073,7 @@ export function extractTextFromMineruBlock(block: PositionedMineruBlock): string
       ? content.content ?? content.text ?? content.value
       : block.content;
 
-    const tableText = caption || (tableHtml ? stripHtml(tableHtml) : '') ||
+    const tableText = [caption, tableHtml ? stripHtml(tableHtml) : ''].filter(Boolean).join(' ') ||
       (typeof markdown === 'string' ? markdown : '') ||
       joinReadableText(collectTextParts(fallback));
     return [tableText, footnote].filter(Boolean).join(' ');
