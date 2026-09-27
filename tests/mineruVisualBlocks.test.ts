@@ -6,6 +6,7 @@ import {
   extractCaptionFromMineruBlock,
   extractTranslatableMarkdownFromMineruBlock,
   flattenMineruPages,
+  parseMineruMarkdownPages,
   parseMineruPages,
 } from '../src/services/mineru.ts';
 
@@ -139,4 +140,13 @@ test('captionless flat table retains body cells and a source footnote', () => {
   assert.match(translation, /Source: field survey/);
   assert.match(translation, /Score 42/);
   assert.doesNotMatch(translation, /<table>/);
+  const [renderable] = buildRenderableBlocks([table]);
+  assert.equal(renderable.tableFootnoteText, 'Source: field survey');
+});
+
+test('Markdown image fallback translates only the parsed caption, never image markup', () => {
+  const [image] = flattenMineruPages(parseMineruMarkdownPages('![Figure 1](chart.png)'));
+  const translation = extractTranslatableMarkdownFromMineruBlock(image);
+  assert.match(translation, /Figure 1/);
+  assert.doesNotMatch(translation, /!\[|chart\.png/);
 });

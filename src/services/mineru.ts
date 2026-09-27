@@ -251,14 +251,17 @@ function renderInlineMarkdownContent(input: unknown): string {
     .join('');
 }
 
-function renderVisualMarkdownContent(input: unknown): string {
+function renderVisualMarkdownContent(input: unknown, excludeRawMarkdown = false): string {
   const record = getRecord(input);
   if (!record || typeof record.type === 'string') {
     return renderInlineMarkdownContent(input).trim();
   }
 
   return Object.entries(record)
-    .filter(([key]) => !STRUCTURAL_CONTENT_KEYS.has(key) && key !== 'html' && key !== 'table_body')
+    .filter(([key]) =>
+      !STRUCTURAL_CONTENT_KEYS.has(key) &&
+      key !== 'html' && key !== 'table_body' &&
+      !(excludeRawMarkdown && key === 'markdown'))
     .map(([, value]) => renderInlineMarkdownContent(value).trim())
     .filter(Boolean)
     .join(' ');
@@ -402,7 +405,7 @@ function toMarkdownFragment(block: PositionedMineruBlock, plainText: string): st
   const structuredMarkdown = renderInlineMarkdownContent(block.content).trim();
   const visualMarkdown =
     block.type === 'image' || block.type === 'table'
-      ? renderVisualMarkdownContent(block.content)
+      ? renderVisualMarkdownContent(block.content, block.type === 'image')
       : '';
   const safeText = plainText || `未提取到 ${block.type} 文本`;
 
@@ -420,7 +423,9 @@ function toMarkdownFragment(block: PositionedMineruBlock, plainText: string): st
       return mathText ? `$$\n${mathText}\n$$` : structuredMarkdown || safeText;
     }
     case 'image':
-      return visualMarkdown || plainText ? `**图片说明** ${visualMarkdown || plainText}` : '';
+      return visualMarkdown || plainText
+        ? `**图片说明** ${visualMarkdown || extractMarkdownImage(plainText)?.alt || plainText}`
+        : '';
     case 'table': {
       const tableBody = !extractCaptionFromMineruBlock(block)
         ? extractTableHtmlFromMineruBlock(block)
@@ -1068,6 +1073,9 @@ export function buildRenderableBlocks(
       block.type === 'table' || block.type === 'image'
         ? extractCaptionFromMineruBlock(block)
         : undefined;
+    const tableFootnoteText = block.type === 'table'
+      ? extractTypedContentText(block, ['table_footnote'], false)
+      : undefined;
     const relativeAssetPath = extractMineruAssetPathFromBlock(block);
 
     return {
@@ -1077,6 +1085,7 @@ export function buildRenderableBlocks(
       mathText,
       tableHtml,
       captionText,
+      tableFootnoteText,
       assetPath:
         mineruPath && relativeAssetPath
           ? resolveMineruAssetPath(mineruPath, relativeAssetPath)

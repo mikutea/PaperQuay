@@ -93,6 +93,7 @@ export interface RenderableMineruBlock {
   mathText?: string;
   tableHtml?: string;
   captionText?: string;
+  tableFootnoteText?: string;
   assetPath?: string;
   isInteractive: boolean;
 }
