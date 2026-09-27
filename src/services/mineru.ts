@@ -18,7 +18,7 @@ import { joinReadableText } from '../utils/text.ts';
 const STRUCTURAL_CONTENT_KEYS = new Set([
   'type', 'bbox', 'path', 'img_path', 'image_path', 'image_source',
   'table_type', 'table_nest_level', 'level', 'text_level', 'math_type',
-  'list_type', 'item_type', 'bboxCoordinateSystem', 'bboxPageSize',
+  'list_type', 'item_type', 'sub_type', 'bboxCoordinateSystem', 'bboxPageSize',
 ]);
 
 function collectTextParts(input: unknown): string[] {
@@ -406,7 +406,10 @@ function toMarkdownFragment(block: PositionedMineruBlock, plainText: string): st
   const structuredMarkdown = renderInlineMarkdownContent(block.content).trim();
   const visualMarkdown =
     block.type === 'image' || block.type === 'table'
-      ? renderVisualMarkdownContent(block.content, block.type === 'image')
+      ? renderVisualMarkdownContent(
+        block.content,
+        block.type === 'image' || Boolean(extractTableHtmlFromMineruBlock(block)),
+      )
       : '';
   const safeText = plainText || `未提取到 ${block.type} 文本`;
 
@@ -1037,8 +1040,10 @@ export function extractTextFromMineruBlock(block: PositionedMineruBlock): string
   if (block.type === 'table') {
     const caption = extractCaptionFromMineruBlock(block);
     const tableHtml = extractTableHtmlFromMineruBlock(block);
+    const markdown = getRecord(block.content)?.markdown;
 
-    return caption || (tableHtml ? stripHtml(tableHtml) : '');
+    return caption || (tableHtml ? stripHtml(tableHtml) : '') ||
+      (typeof markdown === 'string' ? markdown : '');
   }
 
   if (block.type === 'image') {

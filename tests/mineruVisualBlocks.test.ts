@@ -167,3 +167,25 @@ test('structured table footnotes keep inline math for the HTML-table reader', ()
   const [renderable] = buildRenderableBlocks([table]);
   assert.equal(renderable.tableFootnoteText, '$E=mc^2$');
 });
+
+test('pipe-table Markdown fallback remains summary and RAG source text without a caption', () => {
+  const [table] = flattenMineruPages(parseMineruMarkdownPages('| Label | Score |\n| --- | --- |\n| A | 42 |'));
+  const [renderable] = buildRenderableBlocks([table]);
+  assert.equal(table.type, 'table');
+  assert.equal(renderable.captionText, '');
+  assert.match(renderable.plainText, /A \| 42/);
+});
+
+test('visual sub-type metadata never enters display or translation', () => {
+  const [chart] = flattenMineruPages(parseMineruPages([{
+    type: 'chart', page_idx: 0, chart_caption: 'Figure 1', sub_type: 'chart',
+  }]));
+  assert.equal(extractTranslatableMarkdownFromMineruBlock(chart), '**图片说明** Figure 1');
+});
+
+test('HTML-table Markdown fallback strips markup and does not duplicate cell text', () => {
+  const [table] = flattenMineruPages(parseMineruMarkdownPages('<table><tr><td>Score</td></tr></table>'));
+  const translation = extractTranslatableMarkdownFromMineruBlock(table);
+  assert.equal(table.type, 'table');
+  assert.equal(translation, '**表格说明** Score');
+});
