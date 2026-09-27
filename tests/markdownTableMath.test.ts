@@ -86,3 +86,20 @@ test('HTML block headings are not GFM table headers', () => {
     assert.doesNotMatch(render(source), /<table>/);
   }
 });
+
+test('single-column GFM table keeps the structural outer pipes outside math', () => {
+  const source = '| Formula |\n| --- |\n| T_i |';
+  const normalized = normalizeMarkdownMath(source);
+  assert.match(normalized, /\| \$T_i\$ \|/);
+  assert.match(render(source), /<td><span class="katex">/);
+});
+
+test('nested GFM tables keep formulas within their own cells', () => {
+  for (const source of [
+    '> Label | Formula | Note\n> --- | --- | ---\n> Value | T_i | text',
+    '- Label | Formula | Note\n  --- | --- | ---\n  Value | T_i | text',
+  ]) {
+    assert.match(normalizeMarkdownMath(source), /\| \$T_i\$ \|/);
+    assert.match(render(source), /<td><span class="katex">/);
+  }
+});

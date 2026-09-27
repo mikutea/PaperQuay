@@ -353,7 +353,7 @@ function tableCells(line: string): string[] {
 
 function tableDelimiterColumns(line: string): number {
   const cells = tableCells(line);
-  return cells.length >= 2 && cells.every((cell) => /^:?-+:?$/.test(cell.trim()))
+  return cells.length >= 1 && line.includes('|') && cells.every((cell) => /^:?-+:?$/.test(cell.trim()))
     ? cells.length
     : 0;
 }
@@ -469,12 +469,18 @@ export function normalizeMarkdownMath(markdown: string, preserveInlineScriptTags
   const preparedMarkdown = normalizeExplicitMathSyntax(normalizeMineruFragmentedMathText(markdown));
   const lines = preparedMarkdown.replace(/\r\n?/g, '\n').split('\n');
   const tableRows = new Set<number>();
-  if (lines.some((line) => tableDelimiterColumns(line) > 0)) {
+  if (lines.some((line) => tableDelimiterColumns(line.replace(/^(?:\s*> ?)+/, '')) > 0)) {
     const document = gfmParser.parse(preparedMarkdown);
-    for (const node of document.children) {
-      if (node.type !== 'table' || !node.position) continue;
-      for (let row = node.position.start.line - 1; row < node.position.end.line; row += 1) {
-        tableRows.add(row);
+    const pending = [...document.children];
+    while (pending.length) {
+      const node = pending.pop()!;
+      if (node.type === 'table' && node.position) {
+        for (let row = node.position.start.line - 1; row < node.position.end.line; row += 1) {
+          tableRows.add(row);
+        }
+      }
+      if ('children' in node) {
+        for (const child of node.children) pending.push(child);
       }
     }
   }
