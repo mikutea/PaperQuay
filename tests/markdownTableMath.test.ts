@@ -103,3 +103,15 @@ test('nested GFM tables keep formulas within their own cells', () => {
     assert.match(render(source), /<td><span class="katex">/);
   }
 });
+
+test('nested table headers retain list and quote container markers', () => {
+  for (const source of [
+    '1. T_i | Note\n   --- | ---\n   Value | text',
+    '- T_i | Note\n  --- | ---\n  Value | text',
+    '> T_i | Note\n> --- | ---\n> Value | text',
+  ]) {
+    const normalized = normalizeMarkdownMath(source);
+    assert.match(normalized, /(?:1\. |- |> )\$T_i\$ \| Note/);
+    assert.match(render(source), /<th><span class="katex">/);
+  }
+});

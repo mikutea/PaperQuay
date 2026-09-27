@@ -565,8 +565,13 @@ export function normalizeMarkdownMath(markdown: string, preserveInlineScriptTags
     }
 
     const tableRow = tableRows.has(lineIndex);
+    const tableContainer = tableRow
+      ? /^((?:[ \t]*> ?)*(?:[ \t]{0,3}(?:\d{1,9}[.)]|[-+*])[ \t]+)?)(.*)$/.exec(cleanedLine)
+      : null;
     const orderedList = !tableRow ? /^([ \t]{0,3}\d{1,9}[.)][ \t]+)(.*)$/.exec(cleanedLine) : null;
-    output.push(orderedList
+    output.push(tableContainer && tableContainer[1]
+      ? tableContainer[1] + wrapInlineLatexSegments(tableContainer[2], preserveInlineScriptTags, true)
+      : orderedList
       ? orderedList[1] + wrapInlineLatexSegments(orderedList[2], preserveInlineScriptTags)
       : wrapInlineLatexSegments(cleanedLine, preserveInlineScriptTags, tableRow));
   }
