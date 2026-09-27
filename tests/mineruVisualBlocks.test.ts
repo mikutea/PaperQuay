@@ -95,6 +95,13 @@ test('flat chart preserves generic OCR content alongside its caption', () => {
   assert.match(extractTranslatableMarkdownFromMineruBlock(chart), /OCR labels/);
 });
 
+test('visual value OCR is retained when a caption is also present', () => {
+  const chart = block('chart', { chart_caption: 'Chart 1', value: 'OCR labels' });
+
+  assert.match(extractTextFromMineruBlock(chart), /Chart 1/);
+  assert.match(extractTextFromMineruBlock(chart), /OCR labels/);
+});
+
 test('flat figure retains its own caption and footnote fields', () => {
   const [figure] = flattenMineruPages(parseMineruPages([{
     type: 'figure', page_idx: 0, img_path: 'images/figure.jpg',
@@ -266,6 +273,14 @@ test('multiple root chart captions stay separated without splitting inline nodes
 
   assert.match(buildRenderableBlocks([listCaption])[0].markdown, /Figure 1 Overview/);
   assert.match(buildRenderableBlocks([inlineCaption])[0].markdown, /Figure 1/);
+});
+
+test('multiple generic caption entries stay separated in visual Markdown', () => {
+  for (const key of ['caption', 'caption_content']) {
+    const chart = block('chart', { [key]: ['Figure 1', 'Overview'] });
+    assert.match(buildRenderableBlocks([chart])[0].markdown, /Figure 1 Overview/);
+    assert.match(extractTranslatableMarkdownFromMineruBlock(chart), /Figure 1 Overview/);
+  }
 });
 
 test('middle JSON chart retains its asset path without translating that path', () => {

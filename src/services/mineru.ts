@@ -289,7 +289,8 @@ function renderVisualMarkdownContent(input: unknown, excludeRawMarkdown = false)
       key === 'chart_footnote' || key === 'figure_footnote'
         ? renderTableFootnote(value)
         : key === 'table_caption' || key === 'image_caption' ||
-          key === 'chart_caption' || key === 'figure_caption'
+          key === 'chart_caption' || key === 'figure_caption' ||
+          key === 'caption' || key === 'caption_content'
           ? renderVisualCaption(value)
         : renderInlineMarkdownContent(value).trim())
     .filter(Boolean)
@@ -1079,7 +1080,7 @@ export function extractTextFromMineruBlock(block: PositionedMineruBlock): string
     return extractTypedContentText(block, [
       'image_caption', 'chart_caption', 'figure_caption',
       'image_footnote', 'chart_footnote', 'figure_footnote',
-      'caption', 'caption_content', 'content', 'text',
+      'caption', 'caption_content', 'content', 'text', 'value',
     ]);
   }
 
