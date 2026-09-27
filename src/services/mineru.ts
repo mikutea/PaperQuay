@@ -58,6 +58,16 @@ function getRecord(input: unknown): Record<string, unknown> | null {
     : null;
 }
 
+function uniqueNonblankText(parts: string[]): string[] {
+  const seen = new Set<string>();
+  return parts.filter((part) => {
+    const value = part.trim();
+    if (!value || seen.has(value)) return false;
+    seen.add(value);
+    return true;
+  });
+}
+
 function stripHtml(input: string): string {
   return input.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
 }
@@ -122,9 +132,8 @@ function extractTypedContentText(
     return allowFallback ? joinReadableText(collectTextParts(block.content)) : '';
   }
 
-  const preferredParts = preferredKeys
-    .flatMap((key) => collectTextParts(content[key]))
-    .filter((part) => part.trim());
+  const preferredParts = uniqueNonblankText(preferredKeys
+    .map((key) => joinReadableText(collectTextParts(content[key]))));
 
   if (preferredParts.length > 0) {
     return joinReadableText(preferredParts);
@@ -302,7 +311,7 @@ function extractCaptionMathMarkdown(block: PositionedMineruBlock): string | unde
     .filter((key) => key in content)
     .map((key) => renderCaptionMathPart(content[key]));
   return parts.some((part) => part.hasMath)
-    ? parts.map((part) => part.markdown).filter(Boolean).join(' ')
+    ? uniqueNonblankText(parts.map((part) => part.markdown)).join(' ')
     : undefined;
 }
 
@@ -313,7 +322,7 @@ function renderVisualMarkdownContent(input: unknown, excludeRawMarkdown = false)
     return renderInlineMarkdownContent(input).trim();
   }
 
-  return Object.entries(record)
+  return uniqueNonblankText(Object.entries(record)
     .filter(([key]) =>
       !STRUCTURAL_CONTENT_KEYS.has(key) &&
       key !== 'html' && key !== 'table_body' &&
@@ -327,7 +336,7 @@ function renderVisualMarkdownContent(input: unknown, excludeRawMarkdown = false)
           key === 'caption' || key === 'caption_content'
           ? renderVisualCaption(value)
         : renderInlineMarkdownContent(value).trim())
-    .filter(Boolean)
+    .filter(Boolean))
     .join(' ');
 }
 

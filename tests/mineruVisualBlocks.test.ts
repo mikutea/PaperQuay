@@ -117,6 +117,21 @@ test('generic structured table caption retains inline math for HTML-table Reader
   assert.match(renderable.tableHtml ?? '', /Cells/);
 });
 
+test('matching generic and typed visual caption aliases appear only once', () => {
+  const [image, table] = flattenMineruPages(parseMineruPages([
+    { type: 'image', page_idx: 0, image_caption: 'Figure 1', caption: 'Figure 1' },
+    { type: 'table', page_idx: 0, table_caption: 'Table 1', caption_content: 'Table 1' },
+  ]));
+
+  for (const [visual, caption] of [[image, 'Figure 1'], [table, 'Table 1']] as const) {
+    assert.equal(extractCaptionFromMineruBlock(visual), caption);
+    assert.equal(extractTextFromMineruBlock(visual), caption);
+    assert.equal(extractTranslatableMarkdownFromMineruBlock(visual),
+      `${visual.type === 'image' ? '**图片说明**' : '**表格说明**'} ${caption}`);
+    assert.equal(buildRenderableBlocks([visual])[0].captionText, caption);
+  }
+});
+
 test('blank visual asset and table HTML aliases fall through to valid alternatives', () => {
   const [image, table] = flattenMineruPages(parseMineruPages([
     { type: 'image', page_idx: 0, image_source: { path: '' }, img_path: 'images/usable.jpg' },
