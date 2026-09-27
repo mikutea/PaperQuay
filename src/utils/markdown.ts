@@ -318,7 +318,11 @@ function looksLikeInlineFormulaSegment(value: string) {
   );
 }
 
-function wrapInlineLatexSegments(line: string, preserveInlineScriptTags = false) {
+function isTableRowLine(line: string): boolean {
+  return /^\s*\|/.test(line) || (line.match(/\s\|\s/g)?.length ?? 0) >= 2;
+}
+
+function wrapInlineLatexSegments(line: string, preserveInlineScriptTags = false): string {
   if (!line.trim() || !/[\\_^=<>~]/.test(line)) {
     return line;
   }
@@ -329,6 +333,17 @@ function wrapInlineLatexSegments(line: string, preserveInlineScriptTags = false)
     protectedSegments.push(segment);
     return token;
   });
+
+  // Keep inserted math delimiters inside their GFM table cells. Existing
+  // explicit math is protected above, and ordinary vertical-bar math is not
+  // a table row unless it has Markdown-style cell separators.
+  if (isTableRowLine(protectedLine)) {
+    return protectedLine
+      .split('|')
+      .map((cell) => wrapInlineLatexSegments(cell, preserveInlineScriptTags))
+      .join('|')
+      .replace(/\uE000(\d+)\uE001/g, (_, rawIndex) => protectedSegments[Number(rawIndex)] ?? '');
+  }
 
   let output = '';
   let index = 0;
