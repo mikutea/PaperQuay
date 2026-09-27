@@ -81,3 +81,36 @@ test('flat content-list chart uses the image rendering path', () => {
   assert.equal(renderable.captionText, 'Figure 2. Overview.');
   assert.match(renderable.assetPath?.replaceAll('\\', '/') ?? '', /images\/flat-chart\.jpg$/);
 });
+
+test('visual translation retains caption, footnote, and OCR text together', () => {
+  const chart = block('chart', {
+    chart_caption: 'Chart 1', chart_footnote: 'Source note',
+    content: 'OCR labels', image_source: { path: 'images/chart.jpg' },
+  });
+  const translation = extractTranslatableMarkdownFromMineruBlock(chart);
+
+  assert.match(translation, /Chart 1/);
+  assert.match(translation, /Source note/);
+  assert.match(translation, /OCR labels/);
+  assert.doesNotMatch(translation, /images\//);
+});
+
+test('generic caption_content remains a visible caption', () => {
+  for (const type of ['image', 'table']) {
+    const visual = block(type, { caption_content: [{ type: 'text', content: 'Generic caption' }] });
+    assert.equal(extractCaptionFromMineruBlock(visual), 'Generic caption');
+  }
+});
+
+test('flat table_body remains renderable HTML but never raw translation markup', () => {
+  const [table] = flattenMineruPages(parseMineruPages([{
+    type: 'table', page_idx: 0, table_caption: [],
+    table_body: '<table><tr><td>Score</td></tr></table>',
+  }]));
+  const [renderable] = buildRenderableBlocks([table]);
+
+  assert.equal(renderable.captionText, '');
+  assert.match(renderable.tableHtml ?? '', /<table>/);
+  assert.match(extractTranslatableMarkdownFromMineruBlock(table), /Score/);
+  assert.doesNotMatch(extractTranslatableMarkdownFromMineruBlock(table), /<table>/);
+});

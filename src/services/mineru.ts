@@ -246,7 +246,7 @@ function renderInlineMarkdownContent(input: unknown): string {
   }
 
   return Object.entries(record)
-    .filter(([key]) => !STRUCTURAL_CONTENT_KEYS.has(key) && key !== 'html')
+    .filter(([key]) => !STRUCTURAL_CONTENT_KEYS.has(key) && key !== 'html' && key !== 'table_body')
     .map(([, value]) => renderInlineMarkdownContent(value))
     .join('');
 }
@@ -377,9 +377,9 @@ export function resolveMineruAssetPath(
 export function extractCaptionFromMineruBlock(block: PositionedMineruBlock): string {
   switch (block.type) {
     case 'table':
-      return extractTypedContentText(block, ['table_caption', 'caption'], false);
+      return extractTypedContentText(block, ['table_caption', 'caption', 'caption_content'], false);
     case 'image':
-      return extractTypedContentText(block, ['image_caption', 'chart_caption', 'caption'], false);
+      return extractTypedContentText(block, ['image_caption', 'chart_caption', 'caption', 'caption_content'], false);
     default:
       return '';
   }
@@ -403,7 +403,7 @@ function toMarkdownFragment(block: PositionedMineruBlock, plainText: string): st
       return mathText ? `$$\n${mathText}\n$$` : structuredMarkdown || safeText;
     }
     case 'image':
-      return structuredMarkdown || plainText ? `**图片说明** ${structuredMarkdown || plainText}` : '';
+      return plainText || structuredMarkdown ? `**图片说明** ${plainText || structuredMarkdown}` : '';
     case 'table':
       return structuredMarkdown || plainText ? `**表格说明** ${structuredMarkdown || plainText}` : '';
     case 'caption':
@@ -1013,7 +1013,8 @@ export function extractTextFromMineruBlock(block: PositionedMineruBlock): string
 
   if (block.type === 'image') {
     return extractTypedContentText(block, [
-      'image_caption', 'chart_caption', 'image_footnote', 'chart_footnote', 'caption',
+      'image_caption', 'chart_caption', 'image_footnote', 'chart_footnote',
+      'caption', 'caption_content', 'content', 'text',
     ]);
   }
 
