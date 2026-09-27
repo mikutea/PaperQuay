@@ -1,3 +1,9 @@
+import { unified } from 'unified';
+import remarkParse from 'remark-parse';
+import remarkGfm from 'remark-gfm';
+
+const gfmParser = unified().use(remarkParse).use(remarkGfm);
+
 const MATH_FENCE_START_PATTERN = /^```(?:latex|tex|math|katex)\s*$/i;
 const CODE_FENCE_PATTERN = /^```/;
 const PROTECTED_MATH_PATTERN =
@@ -318,7 +324,41 @@ function looksLikeInlineFormulaSegment(value: string) {
   );
 }
 
-function wrapInlineLatexSegments(line: string, preserveInlineScriptTags = false) {
+function splitTableCells(line: string): string[] {
+  const cells: string[] = [];
+  let start = 0;
+  let backslashes = 0;
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    if (character === '\\') {
+      backslashes += 1;
+      continue;
+    }
+    if (character === '|' && backslashes % 2 === 0) {
+      cells.push(line.slice(start, index));
+      start = index + 1;
+    }
+    backslashes = 0;
+  }
+  cells.push(line.slice(start));
+  return cells;
+}
+
+function tableCells(line: string): string[] {
+  const cells = splitTableCells(line.trim());
+  if (cells[0]?.trim() === '') cells.shift();
+  if (cells[cells.length - 1]?.trim() === '') cells.pop();
+  return cells;
+}
+
+function tableDelimiterColumns(line: string): number {
+  const cells = tableCells(line);
+  return cells.length >= 1 && line.includes('|') && cells.every((cell) => /^:?-+:?$/.test(cell.trim()))
+    ? cells.length
+    : 0;
+}
+
+function wrapInlineLatexSegments(line: string, preserveInlineScriptTags = false, tableRow = false): string {
   if (!line.trim() || !/[\\_^=<>~]/.test(line)) {
     return line;
   }
@@ -329,6 +369,15 @@ function wrapInlineLatexSegments(line: string, preserveInlineScriptTags = false)
     protectedSegments.push(segment);
     return token;
   });
+
+  // Keep inserted math delimiters inside actual GFM table cells. Existing
+  // explicit math is protected above, and escaped pipes remain cell content.
+  if (tableRow) {
+    return splitTableCells(protectedLine)
+      .map((cell) => wrapInlineLatexSegments(cell, preserveInlineScriptTags))
+      .join('|')
+      .replace(/\uE000(\d+)\uE001/g, (token, rawIndex) => protectedSegments[Number(rawIndex)] ?? token);
+  }
 
   let output = '';
   let index = 0;
@@ -408,7 +457,7 @@ function wrapInlineLatexSegments(line: string, preserveInlineScriptTags = false)
 
   return output.replace(
     /\uE000(\d+)\uE001/g,
-    (_, rawIndex) => protectedSegments[Number(rawIndex)] ?? '',
+    (token, rawIndex) => protectedSegments[Number(rawIndex)] ?? token,
   );
 }
 
@@ -419,6 +468,24 @@ export function normalizeMarkdownMath(markdown: string, preserveInlineScriptTags
 
   const preparedMarkdown = normalizeExplicitMathSyntax(normalizeMineruFragmentedMathText(markdown));
   const lines = preparedMarkdown.replace(/\r\n?/g, '\n').split('\n');
+  const tableRowContentStarts = new Map<number, number>();
+  if (lines.some((line) => tableDelimiterColumns(line.replace(/^(?:\s*> ?)+/, '')) > 0)) {
+    const document = gfmParser.parse(preparedMarkdown);
+    const pending = [...document.children];
+    while (pending.length) {
+      const node = pending.pop()!;
+      if (node.type === 'table') {
+        for (const row of node.children) {
+          if (row.position) {
+            tableRowContentStarts.set(row.position.start.line - 1, row.position.start.column - 1);
+          }
+        }
+      }
+      if ('children' in node) {
+        for (const child of node.children) pending.push(child);
+      }
+    }
+  }
   const output: string[] = [];
   let mathFenceBuffer: string[] | null = null;
   let insideOtherFence = false;
@@ -439,7 +506,7 @@ export function normalizeMarkdownMath(markdown: string, preserveInlineScriptTags
     mathFenceBuffer = null;
   };
 
-  for (const line of lines) {
+  for (const [lineIndex, line] of lines.entries()) {
     const cleanedLine = removeMineruFormulaImageNoise(normalizeSeparatedDollarLine(line));
     const trimmed = cleanedLine.trim();
 
@@ -499,7 +566,17 @@ export function normalizeMarkdownMath(markdown: string, preserveInlineScriptTags
       continue;
     }
 
-    output.push(wrapInlineLatexSegments(cleanedLine, preserveInlineScriptTags));
+    const tableContentStart = tableRowContentStarts.get(lineIndex);
+    const orderedList = tableContentStart === undefined
+      ? /^([ \t]{0,3}\d{1,9}[.)][ \t]+)(.*)$/.exec(cleanedLine)
+      : null;
+    output.push(tableContentStart !== undefined
+      ? cleanedLine.slice(0, tableContentStart) + wrapInlineLatexSegments(
+        cleanedLine.slice(tableContentStart), preserveInlineScriptTags, true,
+      )
+      : orderedList
+      ? orderedList[1] + wrapInlineLatexSegments(orderedList[2], preserveInlineScriptTags)
+      : wrapInlineLatexSegments(cleanedLine, preserveInlineScriptTags));
   }
 
   flushMathFence();
