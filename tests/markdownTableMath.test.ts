@@ -29,10 +29,18 @@ test('bare formulas in adjacent GFM table cells stay in their own cells', () => 
 test('math vertical bars in ordinary prose are not treated as table delimiters', () => {
   assert.equal(normalizeMarkdownMath('A = |x| < 1'), '$A = |x| < 1$');
   assert.equal(normalizeMarkdownMath('P(A | B) is conditional'), 'P(A | B) is conditional');
+  assert.equal(normalizeMarkdownMath('P(A | B) = P(C | D)'), '$P(A | B) = P(C | D)$');
 });
 
 test('explicit math in a table remains protected', () => {
   const source = '| Label | Formula |\n| --- | --- |\n| Value | $P(A \\mid B)$ |';
   assert.match(render(source), /<td><span class="katex">/);
   assert.doesNotMatch(render(source), /katex-error/);
+  const withHtml = '| Label | Formula |\n| --- | --- |\n| Value | $x$ <br> |';
+  assert.match(normalizeMarkdownMath(withHtml), /\| Value \| \$x\$ <br> \|/);
+});
+
+test('escaped vertical bars inside a table cell are not delimiters', () => {
+  const source = '| Label | Formula | Note |\n| --- | --- | --- |\n| Value | x | P(A \\| B)_i |';
+  assert.match(normalizeMarkdownMath(source), /\| \$P\(A \\?\| B\)_i\$ \|/);
 });

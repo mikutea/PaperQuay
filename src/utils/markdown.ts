@@ -318,11 +318,41 @@ function looksLikeInlineFormulaSegment(value: string) {
   );
 }
 
-function isTableRowLine(line: string): boolean {
-  return /^\s*\|/.test(line) || (line.match(/\s\|\s/g)?.length ?? 0) >= 2;
+function splitTableCells(line: string): string[] {
+  const cells: string[] = [];
+  let start = 0;
+  let backslashes = 0;
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    if (character === '\\') {
+      backslashes += 1;
+      continue;
+    }
+    if (character === '|' && backslashes % 2 === 0) {
+      cells.push(line.slice(start, index));
+      start = index + 1;
+    }
+    backslashes = 0;
+  }
+  cells.push(line.slice(start));
+  return cells;
 }
 
-function wrapInlineLatexSegments(line: string, preserveInlineScriptTags = false): string {
+function tableCells(line: string): string[] {
+  const cells = splitTableCells(line.trim());
+  if (cells[0]?.trim() === '') cells.shift();
+  if (cells[cells.length - 1]?.trim() === '') cells.pop();
+  return cells;
+}
+
+function tableDelimiterColumns(line: string): number {
+  const cells = tableCells(line);
+  return cells.length >= 2 && cells.every((cell) => /^:?-+:?$/.test(cell.trim()))
+    ? cells.length
+    : 0;
+}
+
+function wrapInlineLatexSegments(line: string, preserveInlineScriptTags = false, tableRow = false): string {
   if (!line.trim() || !/[\\_^=<>~]/.test(line)) {
     return line;
   }
@@ -334,15 +364,13 @@ function wrapInlineLatexSegments(line: string, preserveInlineScriptTags = false)
     return token;
   });
 
-  // Keep inserted math delimiters inside their GFM table cells. Existing
-  // explicit math is protected above, and ordinary vertical-bar math is not
-  // a table row unless it has Markdown-style cell separators.
-  if (isTableRowLine(protectedLine)) {
-    return protectedLine
-      .split('|')
+  // Keep inserted math delimiters inside actual GFM table cells. Existing
+  // explicit math is protected above, and escaped pipes remain cell content.
+  if (tableRow) {
+    return splitTableCells(protectedLine)
       .map((cell) => wrapInlineLatexSegments(cell, preserveInlineScriptTags))
       .join('|')
-      .replace(/\uE000(\d+)\uE001/g, (_, rawIndex) => protectedSegments[Number(rawIndex)] ?? '');
+      .replace(/\uE000(\d+)\uE001/g, (token, rawIndex) => protectedSegments[Number(rawIndex)] ?? token);
   }
 
   let output = '';
@@ -423,7 +451,7 @@ function wrapInlineLatexSegments(line: string, preserveInlineScriptTags = false)
 
   return output.replace(
     /\uE000(\d+)\uE001/g,
-    (_, rawIndex) => protectedSegments[Number(rawIndex)] ?? '',
+    (token, rawIndex) => protectedSegments[Number(rawIndex)] ?? token,
   );
 }
 
@@ -434,6 +462,18 @@ export function normalizeMarkdownMath(markdown: string, preserveInlineScriptTags
 
   const preparedMarkdown = normalizeExplicitMathSyntax(normalizeMineruFragmentedMathText(markdown));
   const lines = preparedMarkdown.replace(/\r\n?/g, '\n').split('\n');
+  const tableRows = new Set<number>();
+  for (let index = 0; index + 1 < lines.length; index += 1) {
+    const columns = tableDelimiterColumns(lines[index + 1]);
+    if (!columns || tableCells(lines[index]).length !== columns) continue;
+    tableRows.add(index);
+    tableRows.add(index + 1);
+    let row = index + 2;
+    for (; row < lines.length && splitTableCells(lines[row]).length > 1; row += 1) {
+      tableRows.add(row);
+    }
+    index = row - 1;
+  }
   const output: string[] = [];
   let mathFenceBuffer: string[] | null = null;
   let insideOtherFence = false;
@@ -454,7 +494,7 @@ export function normalizeMarkdownMath(markdown: string, preserveInlineScriptTags
     mathFenceBuffer = null;
   };
 
-  for (const line of lines) {
+  for (const [lineIndex, line] of lines.entries()) {
     const cleanedLine = removeMineruFormulaImageNoise(normalizeSeparatedDollarLine(line));
     const trimmed = cleanedLine.trim();
 
@@ -514,7 +554,7 @@ export function normalizeMarkdownMath(markdown: string, preserveInlineScriptTags
       continue;
     }
 
-    output.push(wrapInlineLatexSegments(cleanedLine, preserveInlineScriptTags));
+    output.push(wrapInlineLatexSegments(cleanedLine, preserveInlineScriptTags, tableRows.has(lineIndex)));
   }
 
   flushMathFence();
