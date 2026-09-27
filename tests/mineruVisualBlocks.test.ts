@@ -114,3 +114,29 @@ test('flat table_body remains renderable HTML but never raw translation markup',
   assert.match(extractTranslatableMarkdownFromMineruBlock(table), /Score/);
   assert.doesNotMatch(extractTranslatableMarkdownFromMineruBlock(table), /<table>/);
 });
+
+test('image caption math remains delimited while retaining a footnote', () => {
+  const image = block('image', {
+    image_caption: [{ type: 'equation_inline', content: 'E=mc^2' }],
+    image_footnote: 'Measured at room temperature',
+    image_source: { path: 'images/math.jpg' },
+  });
+  const translation = extractTranslatableMarkdownFromMineruBlock(image);
+
+  assert.match(translation, /\$E=mc\^2\$/);
+  assert.match(translation, /Measured at room temperature/);
+  assert.doesNotMatch(translation, /images\//);
+});
+
+test('captionless flat table retains body cells and a source footnote', () => {
+  const [table] = flattenMineruPages(parseMineruPages([{
+    type: 'table', page_idx: 0, table_caption: [],
+    table_footnote: 'Source: field survey',
+    table_body: '<table><tr><td>Score</td><td>42</td></tr></table>',
+  }]));
+  const translation = extractTranslatableMarkdownFromMineruBlock(table);
+
+  assert.match(translation, /Source: field survey/);
+  assert.match(translation, /Score 42/);
+  assert.doesNotMatch(translation, /<table>/);
+});

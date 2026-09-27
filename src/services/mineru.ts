@@ -251,6 +251,19 @@ function renderInlineMarkdownContent(input: unknown): string {
     .join('');
 }
 
+function renderVisualMarkdownContent(input: unknown): string {
+  const record = getRecord(input);
+  if (!record || typeof record.type === 'string') {
+    return renderInlineMarkdownContent(input).trim();
+  }
+
+  return Object.entries(record)
+    .filter(([key]) => !STRUCTURAL_CONTENT_KEYS.has(key) && key !== 'html' && key !== 'table_body')
+    .map(([, value]) => renderInlineMarkdownContent(value).trim())
+    .filter(Boolean)
+    .join(' ');
+}
+
 function cleanMineruListText(value: string): string {
   return removeSpelledMineruTokenNoise(value)
     .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
@@ -387,6 +400,10 @@ export function extractCaptionFromMineruBlock(block: PositionedMineruBlock): str
 
 function toMarkdownFragment(block: PositionedMineruBlock, plainText: string): string {
   const structuredMarkdown = renderInlineMarkdownContent(block.content).trim();
+  const visualMarkdown =
+    block.type === 'image' || block.type === 'table'
+      ? renderVisualMarkdownContent(block.content)
+      : '';
   const safeText = plainText || `未提取到 ${block.type} 文本`;
 
   switch (block.type) {
@@ -403,9 +420,16 @@ function toMarkdownFragment(block: PositionedMineruBlock, plainText: string): st
       return mathText ? `$$\n${mathText}\n$$` : structuredMarkdown || safeText;
     }
     case 'image':
-      return plainText || structuredMarkdown ? `**图片说明** ${plainText || structuredMarkdown}` : '';
-    case 'table':
-      return structuredMarkdown || plainText ? `**表格说明** ${structuredMarkdown || plainText}` : '';
+      return visualMarkdown || plainText ? `**图片说明** ${visualMarkdown || plainText}` : '';
+    case 'table': {
+      const tableBody = !extractCaptionFromMineruBlock(block)
+        ? extractTableHtmlFromMineruBlock(block)
+        : undefined;
+      const tableText = [visualMarkdown, tableBody ? stripHtml(tableBody) : '']
+        .filter(Boolean)
+        .join(' ') || plainText;
+      return tableText ? `**表格说明** ${tableText}` : '';
+    }
     case 'caption':
       return `> ${structuredMarkdown || safeText}`;
     default:
