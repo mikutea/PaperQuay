@@ -469,7 +469,7 @@ export function normalizeMarkdownMath(markdown: string, preserveInlineScriptTags
   const tableRows = new Set<number>();
   for (let index = 0; index + 1 < lines.length; index += 1) {
     const columns = tableDelimiterColumns(lines[index + 1]);
-    if (!columns || tableCells(lines[index]).length !== columns) continue;
+    if (!columns || interruptsMarkdownTable(lines[index]) || tableCells(lines[index]).length !== columns) continue;
     tableRows.add(index);
     tableRows.add(index + 1);
     let row = index + 2;

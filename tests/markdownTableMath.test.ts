@@ -59,3 +59,16 @@ test('a block starter with pipes ends the preceding GFM table', () => {
     assert.match(render(source), /<ms>|<mrow>|<mi>/);
   }
 });
+
+test('a block starter with pipes cannot become a GFM table header', () => {
+  for (const header of [
+    '# Label | Note',
+    '> Label | Note',
+    '- Label | Note',
+    '1. Label | Note',
+  ]) {
+    const source = `${header}\n--- | ---\nP(A | B) = P(C | D)`;
+    assert.match(normalizeMarkdownMath(source), /\$P\(A \| B\) = P\(C \| D\)\$/);
+    assert.doesNotMatch(render(source), /<table>/);
+  }
+});
