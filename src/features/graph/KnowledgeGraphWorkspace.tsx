@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import cytoscape, { type Core, type ElementDefinition, type StylesheetJson } from 'cytoscape';
+import { graphContainerHasSize } from './graphLayoutVisibility.ts';
 import {
   Brain,
   ChevronDown,
@@ -548,6 +549,7 @@ export default function KnowledgeGraphWorkspace() {
   const renderedNodeIdsRef = useRef<Set<string>>(new Set());
   const renderedEdgeIdsRef = useRef<Set<string>>(new Set());
   const renderedLayoutModeRef = useRef<LayoutMode>('global');
+  const pendingLayoutRef = useRef(false);
   const openNoteTab = useTabsStore((state) => state.openNoteTab);
   const [snapshot, setSnapshot] = useState<KnowledgeGraphSnapshot | null>(null);
   const [selectedNode, setSelectedNode] = useState<KnowledgeGraphNode | null>(null);
@@ -796,7 +798,12 @@ export default function KnowledgeGraphWorkspace() {
       renderedNodeIdsRef.current = nextNodeIds;
       renderedEdgeIdsRef.current = nextEdgeIds;
       renderedLayoutModeRef.current = layoutMode;
-      runGraphLayout(cy, layoutMode);
+      if (graphContainerHasSize(containerRef.current)) {
+        pendingLayoutRef.current = false;
+        runGraphLayout(cy, layoutMode);
+      } else {
+        pendingLayoutRef.current = true;
+      }
       return;
     }
 
@@ -842,7 +849,12 @@ export default function KnowledgeGraphWorkspace() {
 
   const rerunLayout = () => {
     if (cyRef.current) {
-      runGraphLayout(cyRef.current, layoutMode);
+      if (graphContainerHasSize(containerRef.current)) {
+        pendingLayoutRef.current = false;
+        runGraphLayout(cyRef.current, layoutMode);
+      } else {
+        pendingLayoutRef.current = true;
+      }
     }
   };
 
@@ -1022,24 +1034,41 @@ export default function KnowledgeGraphWorkspace() {
     setQuickRelationSourceNode(null);
   }, []);
 
+  const createRelationRef = useRef(createRelation);
+  useEffect(() => {
+    createRelationRef.current = createRelation;
+  }, [createRelation]);
+
   useEffect(() => {
     if (!containerRef.current) return;
 
+    const container = containerRef.current;
+
     const cy = cytoscape({
-      container: containerRef.current,
+      container,
       elements: [],
-      style: graphStyles(graphNodeTextColor(containerRef.current)),
+      style: graphStyles(graphNodeTextColor(container)),
       wheelSensitivity: 0.18,
       minZoom: 0.08,
       maxZoom: 2.8,
     });
     cyRef.current = cy;
 
+    const observer = new ResizeObserver(() => {
+      if (!graphContainerHasSize(container)) return;
+      cy.resize();
+      if (pendingLayoutRef.current) {
+        pendingLayoutRef.current = false;
+        runGraphLayout(cy, renderedLayoutModeRef.current);
+      }
+    });
+    observer.observe(container);
+
     cy.on('tap', 'node', (event) => {
       const data = event.target.data() as KnowledgeGraphNode;
       const quickSource = quickRelationSourceRef.current;
       if (quickSource && quickSource.id !== data.id) {
-        void createRelation(quickSource, data).then(() => {
+        void createRelationRef.current(quickSource, data).then(() => {
           setQuickRelationSourceNode(null);
         });
         return;
@@ -1084,10 +1113,11 @@ export default function KnowledgeGraphWorkspace() {
     });
 
     return () => {
+      observer.disconnect();
       cy.destroy();
       cyRef.current = null;
     };
-  }, [createRelation, selectGraphEdge, selectGraphNode]);
+  }, [selectGraphEdge, selectGraphNode]);
 
   useEffect(() => {
     if (!containerRef.current || !cyRef.current) return;
