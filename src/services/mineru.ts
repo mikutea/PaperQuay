@@ -858,21 +858,55 @@ function stripMathFence(value: string): string {
   return (displayMathMatch?.[1] ?? bracketMathMatch?.[1] ?? trimmed).trim();
 }
 
-function extractMarkdownImage(value: string): { alt: string; path: string } | null {
-  const match = value.match(/!\[([^\]]*)\]\(([^)]+)\)/);
+function findMarkdownImage(value: string, from = 0): { start: number; end: number; alt: string; path: string } | null {
+  for (let start = value.indexOf('![', from); start >= 0;) {
+    let labelEnd = start + 2;
+    while (labelEnd < value.length && value[labelEnd] !== ']') {
+      if (value[labelEnd] === '\\') labelEnd += 1;
+      labelEnd += 1;
+    }
+    if (labelEnd >= value.length) return null;
+    if (value[labelEnd + 1] !== '(') {
+      start = value.indexOf('![', labelEnd + 1);
+      continue;
+    }
 
-  if (!match) {
-    return null;
+    let depth = 1;
+    let end = labelEnd + 2;
+    while (end < value.length && depth > 0) {
+      if (value[end] === '\\') {
+        end += 2;
+        continue;
+      }
+      if (value[end] === '(') depth += 1;
+      if (value[end] === ')') depth -= 1;
+      end += 1;
+    }
+    if (depth !== 0) return null;
+
+    const path = value.slice(labelEnd + 2, end - 1).trim().replace(/^<|>$/g, '');
+    if (!path) {
+      start = value.indexOf('![', end);
+      continue;
+    }
+    return { start, end, alt: value.slice(start + 2, labelEnd).trim(), path };
   }
+  return null;
+}
 
-  return {
-    alt: match[1]?.trim() ?? '',
-    path: match[2]?.trim().replace(/^<|>$/g, '') ?? '',
-  };
+function extractMarkdownImage(value: string): { alt: string; path: string } | null {
+  const image = findMarkdownImage(value);
+  return image ? { alt: image.alt, path: image.path } : null;
 }
 
 function stripMarkdownImagePaths(value: string): string {
-  return value.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '$1').trim();
+  let result = '';
+  let from = 0;
+  for (let image = findMarkdownImage(value, from); image; image = findMarkdownImage(value, from)) {
+    result += value.slice(from, image.start) + image.alt;
+    from = image.end;
+  }
+  return (result + value.slice(from)).trim();
 }
 
 function inferMarkdownBlockType(markdown: string): MineruBlockBase['type'] {

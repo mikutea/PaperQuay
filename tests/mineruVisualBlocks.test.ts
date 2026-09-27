@@ -541,6 +541,15 @@ test('Markdown image fallback retains surrounding prose and multiple alt labels'
   assert.equal(extractTranslatableMarkdownFromMineruBlock(image), expected);
 });
 
+test('Markdown image destinations with balanced parentheses do not leak into prose', () => {
+  const [image] = flattenMineruPages(parseMineruMarkdownPages(
+    'See ![Trend](chart(2025).png) for results.',
+  ));
+  const expected = '**图片说明** See Trend for results.';
+  assert.equal(buildRenderableBlocks([image])[0].markdown, expected);
+  assert.equal(extractTranslatableMarkdownFromMineruBlock(image), expected);
+});
+
 test('flat paragraph text takes priority over a visual-only value alias', () => {
   const [paragraph] = flattenMineruPages(parseMineruPages([{
     type: 'text', page_idx: 0, text: 'Canonical paragraph', value: 'alternate',

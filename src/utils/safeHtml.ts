@@ -32,6 +32,10 @@ function sanitizeElement(element: Element) {
       return;
     }
 
+    for (const child of [...element.children]) {
+      sanitizeElement(child);
+    }
+
     while (element.firstChild) {
       parent.insertBefore(element.firstChild, element);
     }
