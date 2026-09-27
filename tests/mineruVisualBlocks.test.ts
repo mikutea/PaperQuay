@@ -310,6 +310,27 @@ test('middle JSON chart accepts image_path alias as a visual asset', () => {
   assert.doesNotMatch(extractTranslatableMarkdownFromMineruBlock(chart), /alias-chart\.jpg/);
 });
 
+test('middle JSON visual blocks retain path and image_source aliases at root or span', () => {
+  for (const [field, value] of [
+    ['path', 'images/path-chart.jpg'],
+    ['image_source', { path: 'images/source-chart.jpg' }],
+  ] as const) {
+    for (const location of ['root', 'span'] as const) {
+      const source = location === 'root'
+        ? { type: 'chart', [field]: value }
+        : { type: 'chart', lines: [{ spans: [{ [field]: value }] }] };
+      const [chart] = flattenMineruPages(parseMineruPages({ pdf_info: [{
+        page_idx: 0, para_blocks: [source],
+      }] }));
+      const path = typeof value === 'string' ? value : value.path;
+
+      assert.equal(buildRenderableBlocks([chart], 'C:/cache/middle.json')[0].assetPath
+        ?.replaceAll('\\', '/'), `C:/cache/${path}`);
+      assert.doesNotMatch(extractTranslatableMarkdownFromMineruBlock(chart), /images\//);
+    }
+  }
+});
+
 test('Markdown image fallback translates only the parsed caption, never image markup', () => {
   const [image] = flattenMineruPages(parseMineruMarkdownPages('![Figure 1](chart.png)'));
   const translation = extractTranslatableMarkdownFromMineruBlock(image);

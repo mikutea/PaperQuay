@@ -666,10 +666,14 @@ function extractMiddleContent(rawBlock: Record<string, unknown>): Record<string,
     return collectTextParts(rawSpan.content ?? rawSpan.text ?? rawSpan.latex ?? null);
   });
   const imagePath = [
-    rawBlock.img_path, rawBlock.image_path,
+    rawBlock.img_path, rawBlock.image_path, rawBlock.path,
+    getRecord(rawBlock.image_source)?.path,
     ...spans.flatMap((span) => {
       const rawSpan = span as Record<string, unknown>;
-      return [rawSpan.img_path, rawSpan.image_path];
+      return [
+        rawSpan.img_path, rawSpan.image_path, rawSpan.path,
+        getRecord(rawSpan.image_source)?.path,
+      ];
     }),
   ]
     .find((path) => typeof path === 'string' && path.trim());
