@@ -3,6 +3,7 @@ import type { BatchProgressState, LibraryPreviewOutcome } from './readerShared';
 import type { WorkspaceItemSource } from '../../types/reader';
 import type { LiteraturePaperTaskState } from '../../types/library';
 import { guessSiblingMarkdownPath } from '../../utils/mineruCache.ts';
+import { mineruSummarySourceVersion } from './documentReaderSummarySource.ts';
 
 export function buildMineruFallbackSummarySourceKey({
   workspaceId,
@@ -18,7 +19,7 @@ export function buildMineruFallbackSummarySourceKey({
   blockCount: number;
 }): string {
   const sourceIdentity = sourcePath?.trim() ? `::${sourcePath.trim()}` : '';
-  return `${workspaceId}::${promptVersion}::${language}::mineru-markdown::blocks${sourceIdentity}::${blockCount}`;
+  return `${workspaceId}::${mineruSummarySourceVersion(promptVersion)}::${language}::mineru-markdown::blocks${sourceIdentity}::${blockCount}`;
 }
 
 function matchingJsonBackedMineruSource(readerSuffix: string, batchSuffix: string): boolean {

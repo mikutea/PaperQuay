@@ -95,6 +95,26 @@ test('flat chart preserves generic OCR content alongside its caption', () => {
   assert.match(extractTranslatableMarkdownFromMineruBlock(chart), /OCR labels/);
 });
 
+test('flat figure retains its own caption and footnote fields', () => {
+  const [figure] = flattenMineruPages(parseMineruPages([{
+    type: 'figure', page_idx: 0, img_path: 'images/figure.jpg',
+    figure_caption: 'Figure 1', figure_footnote: 'Source note',
+  }]));
+
+  assert.equal(figure.type, 'image');
+  assert.match(extractTextFromMineruBlock(figure), /Figure 1/);
+  assert.match(extractTextFromMineruBlock(figure), /Source note/);
+  assert.match(buildRenderableBlocks([figure], 'C:/cache/content_list.json')[0].assetPath ?? '', /figure\.jpg$/);
+});
+
+test('flat text does not duplicate generic content already in its canonical text field', () => {
+  const [paragraph] = flattenMineruPages(parseMineruPages([{
+    type: 'text', page_idx: 0, text: 'Hello', content: 'Hello',
+  }]));
+
+  assert.equal(extractTextFromMineruBlock(paragraph), 'Hello');
+});
+
 test('standalone chart and figure notes stay textual blocks', () => {
   const nested = block('figure_caption', 'Figure 1. Results');
   const [flat] = flattenMineruPages(parseMineruPages([{
@@ -185,6 +205,31 @@ test('multiple table footnotes remain separated in Reader, translation, and sour
   assert.equal(renderable.tableFootnoteText, 'Source A Source B');
   assert.match(extractTextFromMineruBlock(table), /Source A Source B/);
   assert.match(extractTranslatableMarkdownFromMineruBlock(table), /Source A Source B/);
+});
+
+test('multiple image footnotes remain separated in Reader and translation', () => {
+  const image = block('image', {
+    image_caption: 'Figure 1', image_footnote: ['Source A', 'Source B'],
+  });
+  const [renderable] = buildRenderableBlocks([image]);
+
+  assert.match(renderable.markdown, /Source A Source B/);
+  assert.match(extractTranslatableMarkdownFromMineruBlock(image), /Source A Source B/);
+});
+
+test('middle JSON chart retains its asset path without translating that path', () => {
+  const [chart, caption] = flattenMineruPages(parseMineruPages({ pdf_info: [{
+    page_idx: 0, page_size: [600, 800], para_blocks: [
+      { type: 'chart', lines: [{ spans: [{ img_path: 'images/middle-chart.jpg' }] }] },
+      { type: 'image_caption', lines: [{ spans: [{ content: 'Figure 1. Results' }] }] },
+    ],
+  }] }));
+
+  assert.equal(chart.type, 'image');
+  assert.equal(caption.type, 'caption');
+  assert.match(buildRenderableBlocks([chart], 'C:/cache/middle.json')[0].assetPath ?? '', /middle-chart\.jpg$/);
+  assert.doesNotMatch(extractTranslatableMarkdownFromMineruBlock(chart), /middle-chart\.jpg/);
+  assert.match(buildRenderableBlocks([caption])[0].markdown, /Figure 1\. Results/);
 });
 
 test('Markdown image fallback translates only the parsed caption, never image markup', () => {

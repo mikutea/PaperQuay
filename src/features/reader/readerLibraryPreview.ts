@@ -40,6 +40,7 @@ import {
   type SummaryCacheEnvelope,
 } from './readerShared';
 import { buildMineruFallbackSummarySourceKey } from './readerBatchResults';
+import { mineruSummarySourceVersion } from './documentReaderSummarySource';
 import { writeTranslationCache } from './readerTranslationCache';
 
 type LocaleTextFn = (zh: string, en: string) => string;
@@ -412,7 +413,7 @@ export async function buildLibraryPreviewSummaryRequest({
       if (documentText.trim()) {
         return {
           summaryInputs,
-          sourceKey: `${item.workspaceId}::${SUMMARY_PROMPT_VERSION}::${summaryLanguage}::mineru-markdown::${candidatePath}::${blocks.length}`,
+          sourceKey: `${item.workspaceId}::${mineruSummarySourceVersion(SUMMARY_PROMPT_VERSION)}::${summaryLanguage}::mineru-markdown::${candidatePath}::${blocks.length}`,
           documentText,
           errorMessage: '',
         };
@@ -427,7 +428,7 @@ export async function buildLibraryPreviewSummaryRequest({
   if (!documentText.trim()) {
     return {
       summaryInputs,
-      sourceKey: `${item.workspaceId}::${SUMMARY_PROMPT_VERSION}::${summaryLanguage}::mineru-markdown::empty`,
+      sourceKey: `${item.workspaceId}::${mineruSummarySourceVersion(SUMMARY_PROMPT_VERSION)}::${summaryLanguage}::mineru-markdown::empty`,
       documentText: '',
       errorMessage: l(
         '未能生成可用的 MinerU Markdown 内容。',

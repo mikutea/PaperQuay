@@ -17,6 +17,12 @@ type BuildMineruMarkdownDocument = (
 ) => string;
 type Localize = (zh: string, en: string) => string;
 
+// MinerU block extraction now includes visual captions, OCR, and footnotes.
+// Invalidate only MinerU summaries; PDF-text summaries are unaffected.
+export function mineruSummarySourceVersion(promptVersion: string): string {
+  return `${promptVersion}-visual-v2`;
+}
+
 export function buildPaperSummarySourceKey({
   item,
   promptVersion,
@@ -56,7 +62,7 @@ export function buildPaperSummarySourceKey({
     return '';
   }
 
-  return `${item.itemKey}::${promptVersion}::${summaryLanguage}::mineru-markdown::${mineruPath || currentJsonName}::${blockCount}`;
+  return `${item.itemKey}::${mineruSummarySourceVersion(promptVersion)}::${summaryLanguage}::mineru-markdown::${mineruPath || currentJsonName}::${blockCount}`;
 }
 
 export function resolveMineruMarkdownCandidatePaths({

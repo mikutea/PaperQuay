@@ -231,10 +231,12 @@ function renderInlineMarkdownContent(input: unknown): string {
     'table_caption',
     'image_caption',
     'chart_caption',
+    'figure_caption',
     'caption',
     'table_footnote',
     'image_footnote',
     'chart_footnote',
+    'figure_footnote',
     'content',
     'value',
   ]) {
@@ -275,7 +277,8 @@ function renderVisualMarkdownContent(input: unknown, excludeRawMarkdown = false)
       key !== 'html' && key !== 'table_body' &&
       !(excludeRawMarkdown && key === 'markdown'))
     .map(([key, value]) =>
-      key === 'table_footnote'
+      key === 'table_footnote' || key === 'image_footnote' ||
+      key === 'chart_footnote' || key === 'figure_footnote'
         ? renderTableFootnote(value)
         : renderInlineMarkdownContent(value).trim())
     .filter(Boolean)
@@ -410,7 +413,7 @@ export function extractCaptionFromMineruBlock(block: PositionedMineruBlock): str
     case 'table':
       return extractTypedContentText(block, ['table_caption', 'caption', 'caption_content'], false);
     case 'image':
-      return extractTypedContentText(block, ['image_caption', 'chart_caption', 'caption', 'caption_content'], false);
+      return extractTypedContentText(block, ['image_caption', 'chart_caption', 'figure_caption', 'caption', 'caption_content'], false);
     default:
       return '';
   }
@@ -574,7 +577,8 @@ function pickFlatContent(rawBlock: Record<string, unknown>): Record<string, unkn
     'image_footnote',
     'chart_caption',
     'chart_footnote',
-    'content',
+    'figure_caption',
+    'figure_footnote',
     'img_path',
     'code_body',
     'code_caption',
@@ -587,6 +591,11 @@ function pickFlatContent(rawBlock: Record<string, unknown>): Record<string, unkn
     if (key in rawBlock) {
       content[key] = rawBlock[key];
     }
+  }
+
+  const blockType = mapFlatContentType(rawBlock);
+  if ((blockType === 'image' || blockType === 'table') && 'content' in rawBlock) {
+    content.content = rawBlock.content;
   }
 
   return Object.keys(content).length > 0 ? content : { value: rawBlock.content ?? null };
@@ -619,61 +628,33 @@ function parseFlatContentList(items: unknown[]): MineruPage[] {
 }
 
 function mapMiddleBlockType(rawType: unknown): string {
-  const type = typeof rawType === 'string' ? rawType : 'paragraph';
-  const lowerType = type.toLowerCase();
-
-  if (lowerType.includes('title')) {
-    return 'title';
-  }
-
-  if (lowerType.includes('table')) {
-    return 'table';
-  }
-
-  if (lowerType.includes('image')) {
-    return 'image';
-  }
-
-  if (lowerType.includes('equation')) {
-    return 'equation';
-  }
-
-  if (lowerType.includes('list')) {
-    return 'list';
-  }
-
-  return 'paragraph';
+  const type = normalizeRawBlockType(rawType);
+  return ['title', 'table', 'image', 'caption', 'equation', 'list'].includes(type)
+    ? type
+    : 'paragraph';
 }
 
 function extractMiddleContent(rawBlock: Record<string, unknown>): Record<string, unknown> {
   const lines = Array.isArray(rawBlock.lines) ? rawBlock.lines : [];
-  const spanTextParts = lines.flatMap((line) => {
+  const spans = lines.flatMap((line) => {
     if (!line || typeof line !== 'object') {
       return [];
     }
 
-    const spans = (line as Record<string, unknown>).spans;
-
-    if (!Array.isArray(spans)) {
-      return [];
-    }
-
-    return spans.flatMap((span) => {
-      if (!span || typeof span !== 'object') {
-        return [];
-      }
-
-      const rawSpan = span as Record<string, unknown>;
-
-      return collectTextParts(
-        rawSpan.content ?? rawSpan.text ?? rawSpan.latex ?? rawSpan.img_path ?? null,
-      );
-    });
+    const items = (line as Record<string, unknown>).spans;
+    return Array.isArray(items) ? items.filter((span) => span && typeof span === 'object') : [];
   });
+  const spanTextParts = spans.flatMap((span) => {
+    const rawSpan = span as Record<string, unknown>;
+    return collectTextParts(rawSpan.content ?? rawSpan.text ?? rawSpan.latex ?? null);
+  });
+  const imagePath = [rawBlock.img_path, ...spans.map((span) => (span as Record<string, unknown>).img_path)]
+    .find((path) => typeof path === 'string' && path.trim());
 
   return {
     text: joinReadableText(spanTextParts),
     raw_type: rawBlock.type,
+    ...(imagePath ? { img_path: imagePath } : {}),
   };
 }
 
@@ -1070,7 +1051,8 @@ export function extractTextFromMineruBlock(block: PositionedMineruBlock): string
 
   if (block.type === 'image') {
     return extractTypedContentText(block, [
-      'image_caption', 'chart_caption', 'image_footnote', 'chart_footnote',
+      'image_caption', 'chart_caption', 'figure_caption',
+      'image_footnote', 'chart_footnote', 'figure_footnote',
       'caption', 'caption_content', 'content', 'text',
     ]);
   }
