@@ -448,19 +448,35 @@ export function resolveMineruAssetPath(
     return undefined;
   }
 
-  if (/^[a-zA-Z]:[\\/]/.test(assetPath) || assetPath.startsWith('/') || assetPath.startsWith('\\')) {
-    return assetPath;
-  }
-
-  if (/^[a-zA-Z]+:\/\//.test(assetPath)) {
-    return assetPath;
-  }
-
   if (mineruPath.startsWith('cloud:')) {
     return undefined;
   }
 
-  return joinPath(getDirectoryPath(mineruPath), assetPath);
+  const root = getDirectoryPath(mineruPath);
+  const normalizedAsset = assetPath.replace(/\\/g, '/');
+  if (/^[a-zA-Z][a-zA-Z\d+.-]*:/.test(normalizedAsset) && !/^[a-zA-Z]:\//.test(normalizedAsset)) {
+    return undefined;
+  }
+  if (normalizedAsset.split('/').includes('..')) {
+    return undefined;
+  }
+
+  const absolute = /^[a-zA-Z]:\//.test(normalizedAsset) || normalizedAsset.startsWith('/');
+  const candidate = absolute
+    ? assetPath
+    : root.startsWith('\\\\')
+      ? `${root}\\${assetPath}`
+      : joinPath(root, assetPath);
+  const normalizedRoot = root.replace(/\\/g, '/').replace(/\/+$/, '') || '/';
+  const normalizedCandidate = candidate.replace(/\\/g, '/');
+  const caseInsensitive = /^[a-zA-Z]:/.test(normalizedRoot) || normalizedRoot.startsWith('//');
+  const boundary = caseInsensitive ? normalizedRoot.toLowerCase() : normalizedRoot;
+  const path = caseInsensitive ? normalizedCandidate.toLowerCase() : normalizedCandidate;
+  if (!path.startsWith(boundary === '/' ? '/' : `${boundary}/`)) {
+    return undefined;
+  }
+
+  return candidate;
 }
 
 export function extractCaptionFromMineruBlock(block: PositionedMineruBlock): string {
@@ -1114,15 +1130,15 @@ export function extractTextFromMineruBlock(block: PositionedMineruBlock): string
     const content = getRecord(block.content);
     const markdown = content?.markdown;
     const footnote = renderTableFootnote(content?.table_footnote);
-    const fallback = content
+    const fallbackText = content
       ? [content.content, content.text, content.value]
-        .find((candidate) => joinReadableText(collectTextParts(candidate)).trim())
-      : block.content;
-
-    const fallbackText = joinReadableText(collectTextParts(fallback));
+        .map((candidate) => joinReadableText(collectTextParts(candidate)))
+      : [joinReadableText(collectTextParts(block.content))];
     const bodyText = tableHtml
-      ? uniqueNonblankText([stripHtml(tableHtml), fallbackText]).join(' ')
-      : (typeof markdown === 'string' && markdown.trim() ? markdown : fallbackText);
+      ? uniqueNonblankText([stripHtml(tableHtml), ...fallbackText]).join(' ')
+      : uniqueNonblankText([
+        ...(typeof markdown === 'string' ? [markdown] : []), ...fallbackText,
+      ]).join(' ');
     const tableText = [caption, bodyText].filter(Boolean).join(' ');
     return [tableText, footnote].filter(Boolean).join(' ');
   }

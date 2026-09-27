@@ -9,6 +9,7 @@ import {
   flattenMineruPages,
   parseMineruMarkdownPages,
   parseMineruPages,
+  resolveMineruAssetPath,
 } from '../src/services/mineru.ts';
 
 function block(type: string, content: unknown) {
@@ -27,6 +28,16 @@ test('MinerU chart retains its asset and caption without translating its image p
   assert.equal(renderable.captionText, 'Figure 1. Trend.');
   assert.match(extractTranslatableMarkdownFromMineruBlock(chart), /Figure 1\. Trend\./);
   assert.doesNotMatch(extractTranslatableMarkdownFromMineruBlock(chart), /images\//);
+});
+
+test('MinerU visual assets stay under their local extraction directory', () => {
+  const source = 'C:/cache/content_list_v2.json';
+  assert.match(resolveMineruAssetPath(source, 'images/chart.jpg')?.replaceAll('\\', '/') ?? '', /C:\/cache\/images\/chart\.jpg$/);
+  assert.equal(resolveMineruAssetPath(source, 'https://example.com/chart.jpg'), undefined);
+  assert.equal(resolveMineruAssetPath(source, 'file:///C:/private/chart.jpg'), undefined);
+  assert.equal(resolveMineruAssetPath(source, '../private/chart.jpg'), undefined);
+  assert.equal(resolveMineruAssetPath(source, 'C:/private/chart.jpg'), undefined);
+  assert.equal(resolveMineruAssetPath(source, 'C:/cache/images/chart.jpg'), 'C:/cache/images/chart.jpg');
 });
 
 test('captionless visual block has no false translation unit', () => {
@@ -265,6 +276,14 @@ test('non-HTML table OCR remains extracted plain text', () => {
 
   assert.equal(extractTextFromMineruBlock(nested), 'OCR cells');
   assert.equal(extractTextFromMineruBlock(flat), 'Flat OCR cells');
+});
+
+test('non-HTML table OCR retains distinct content text and value fields', () => {
+  const table = block('table', { content: 'OCR cells', text: 'Row labels', value: 'Confidence high' });
+  const source = extractTextFromMineruBlock(table);
+  for (const part of ['OCR cells', 'Row labels', 'Confidence high']) {
+    assert.match(source, new RegExp(part));
+  }
 });
 
 test('standalone chart and figure notes stay textual blocks', () => {
