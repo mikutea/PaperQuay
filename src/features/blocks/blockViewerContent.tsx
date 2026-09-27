@@ -424,7 +424,7 @@ function TableContentComponent({
         <MarkdownContent markdown={translatedText || fallbackMarkdown} scale={scale} />
       ) : (
         <>
-          {captionText ? (
+          {captionText && sanitizedTableHtml ? (
             <div
               className="font-medium leading-6 text-slate-600 dark:text-[var(--pq-text-muted)]"
               style={{

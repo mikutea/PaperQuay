@@ -133,7 +133,9 @@ function extractTypedContentText(
   }
 
   const preferredParts = uniqueNonblankText(preferredKeys
-    .map((key) => joinReadableText(collectTextParts(content[key]))));
+    .map((key) => key.endsWith('_footnote')
+      ? renderTableFootnote(content[key])
+      : joinReadableText(collectTextParts(content[key]))));
 
   if (preferredParts.length > 0) {
     return joinReadableText(preferredParts);
@@ -628,6 +630,7 @@ function pickFlatContent(rawBlock: Record<string, unknown>): Record<string, unkn
     'table_footnote',
     'caption',
     'caption_content',
+    'value',
     'image_caption',
     'image_footnote',
     'chart_caption',

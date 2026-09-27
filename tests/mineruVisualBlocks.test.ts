@@ -197,6 +197,16 @@ test('flat chart preserves generic OCR content alongside its caption', () => {
   assert.match(extractTranslatableMarkdownFromMineruBlock(chart), /OCR labels/);
 });
 
+test('flat chart retains OCR value alongside its caption', () => {
+  const [chart] = flattenMineruPages(parseMineruPages([{
+    type: 'chart', page_idx: 0, chart_caption: 'Chart 1', value: 'OCR labels',
+  }]));
+  for (const value of [extractTextFromMineruBlock(chart), extractTranslatableMarkdownFromMineruBlock(chart)]) {
+    assert.match(value, /Chart 1/);
+    assert.match(value, /OCR labels/);
+  }
+});
+
 test('visual value OCR is retained when a caption is also present', () => {
   const chart = block('chart', { chart_caption: 'Chart 1', value: 'OCR labels' });
 
@@ -369,6 +379,20 @@ test('inline structured table footnote keeps punctuation adjacent to its formula
 
   assert.equal(renderable.tableFootnoteText, 'Source ($x$).');
   assert.match(extractTranslatableMarkdownFromMineruBlock(table), /Source \(\$x\$\)\./);
+});
+
+test('structured chart footnote keeps inline math in source and translation', () => {
+  const chart = block('image', {
+    chart_caption: 'Chart 1',
+    chart_footnote: [
+      { type: 'text', content: 'Source (' },
+      { type: 'equation_inline', content: 'x' },
+      { type: 'text', content: ').' },
+    ],
+  });
+
+  assert.match(extractTextFromMineruBlock(chart), /Source \(\$x\$\)\./);
+  assert.match(extractTranslatableMarkdownFromMineruBlock(chart), /Source \(\$x\$\)\./);
 });
 
 test('multiple image footnotes remain separated in Reader and translation', () => {
