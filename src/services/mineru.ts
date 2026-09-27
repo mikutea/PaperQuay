@@ -1040,10 +1040,13 @@ export function extractTextFromMineruBlock(block: PositionedMineruBlock): string
   if (block.type === 'table') {
     const caption = extractCaptionFromMineruBlock(block);
     const tableHtml = extractTableHtmlFromMineruBlock(block);
-    const markdown = getRecord(block.content)?.markdown;
+    const content = getRecord(block.content);
+    const markdown = content?.markdown;
+    const footnote = renderInlineMarkdownContent(content?.table_footnote).trim();
 
-    return caption || (tableHtml ? stripHtml(tableHtml) : '') ||
+    const tableText = caption || (tableHtml ? stripHtml(tableHtml) : '') ||
       (typeof markdown === 'string' ? markdown : '');
+    return [tableText, footnote].filter(Boolean).join(' ');
   }
 
   if (block.type === 'image') {

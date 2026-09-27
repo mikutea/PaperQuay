@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   buildRenderableBlocks,
   extractCaptionFromMineruBlock,
+  extractTextFromMineruBlock,
   extractTranslatableMarkdownFromMineruBlock,
   flattenMineruPages,
   parseMineruMarkdownPages,
@@ -142,6 +143,13 @@ test('captionless flat table retains body cells and a source footnote', () => {
   assert.doesNotMatch(translation, /<table>/);
   const [renderable] = buildRenderableBlocks([table]);
   assert.equal(renderable.tableFootnoteText, 'Source: field survey');
+  assert.match(extractTextFromMineruBlock(table), /Source: field survey/);
+});
+
+test('footnote-only table remains a plain-text source for summary and RAG', () => {
+  const table = block('table', { table_caption: [], table_footnote: 'Source: field survey' });
+
+  assert.equal(extractTextFromMineruBlock(table), 'Source: field survey');
 });
 
 test('Markdown image fallback translates only the parsed caption, never image markup', () => {
