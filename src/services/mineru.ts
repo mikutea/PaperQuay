@@ -15,6 +15,12 @@ import {
 } from '../utils/markdown.ts';
 import { joinReadableText } from '../utils/text.ts';
 
+const STRUCTURAL_CONTENT_KEYS = new Set([
+  'type', 'bbox', 'path', 'img_path', 'image_path', 'image_source',
+  'table_type', 'table_nest_level', 'level', 'text_level', 'math_type',
+  'list_type', 'item_type', 'bboxCoordinateSystem', 'bboxPageSize',
+]);
+
 function collectTextParts(input: unknown): string[] {
   if (input == null) {
     return [];
@@ -34,24 +40,8 @@ function collectTextParts(input: unknown): string[] {
 
   if (typeof input === 'object') {
     const record = input as Record<string, unknown>;
-    const ignoredKeys = new Set([
-      'type',
-      'bbox',
-      'path',
-      'image_source',
-      'table_type',
-      'table_nest_level',
-      'level',
-      'text_level',
-      'math_type',
-      'list_type',
-      'item_type',
-      'bboxCoordinateSystem',
-      'bboxPageSize',
-    ]);
-
     return Object.entries(record).flatMap(([key, value]) => {
-      if (ignoredKeys.has(key)) {
+      if (STRUCTURAL_CONTENT_KEYS.has(key)) {
         return [];
       }
 
@@ -124,11 +114,12 @@ function joinPath(basePath: string, ...segments: string[]): string {
 function extractTypedContentText(
   block: PositionedMineruBlock,
   preferredKeys: string[],
+  allowFallback = true,
 ): string {
   const content = getRecord(block.content);
 
   if (!content) {
-    return joinReadableText(collectTextParts(block.content));
+    return allowFallback ? joinReadableText(collectTextParts(block.content)) : '';
   }
 
   const preferredParts = preferredKeys.flatMap((key) => collectTextParts(content[key]));
@@ -137,7 +128,7 @@ function extractTypedContentText(
     return joinReadableText(preferredParts);
   }
 
-  return joinReadableText(collectTextParts(block.content));
+  return allowFallback ? joinReadableText(collectTextParts(block.content)) : '';
 }
 
 function normalizeRawBlockType(rawType: unknown): string {
@@ -153,6 +144,10 @@ function normalizeRawBlockType(rawType: unknown): string {
   }
 
   if (lowerType.includes('image')) {
+    return 'image';
+  }
+
+  if (lowerType.includes('chart') || lowerType.includes('figure')) {
     return 'image';
   }
 
@@ -231,7 +226,11 @@ function renderInlineMarkdownContent(input: unknown): string {
     'caption_content',
     'table_caption',
     'image_caption',
+    'chart_caption',
     'caption',
+    'table_footnote',
+    'image_footnote',
+    'chart_footnote',
     'content',
     'value',
   ]) {
@@ -247,7 +246,7 @@ function renderInlineMarkdownContent(input: unknown): string {
   }
 
   return Object.entries(record)
-    .filter(([key]) => key !== 'type' && key !== 'math_type')
+    .filter(([key]) => !STRUCTURAL_CONTENT_KEYS.has(key) && key !== 'html')
     .map(([, value]) => renderInlineMarkdownContent(value))
     .join('');
 }
@@ -378,9 +377,9 @@ export function resolveMineruAssetPath(
 export function extractCaptionFromMineruBlock(block: PositionedMineruBlock): string {
   switch (block.type) {
     case 'table':
-      return extractTypedContentText(block, ['table_caption', 'caption']);
+      return extractTypedContentText(block, ['table_caption', 'caption'], false);
     case 'image':
-      return extractTypedContentText(block, ['image_caption', 'caption']);
+      return extractTypedContentText(block, ['image_caption', 'chart_caption', 'caption'], false);
     default:
       return '';
   }
@@ -404,9 +403,9 @@ function toMarkdownFragment(block: PositionedMineruBlock, plainText: string): st
       return mathText ? `$$\n${mathText}\n$$` : structuredMarkdown || safeText;
     }
     case 'image':
-      return `**图片说明** ${structuredMarkdown || safeText}`;
+      return structuredMarkdown || plainText ? `**图片说明** ${structuredMarkdown || plainText}` : '';
     case 'table':
-      return `**表格说明** ${structuredMarkdown || safeText}`;
+      return structuredMarkdown || plainText ? `**表格说明** ${structuredMarkdown || plainText}` : '';
     case 'caption':
       return `> ${structuredMarkdown || safeText}`;
     default:
@@ -502,6 +501,10 @@ function mapFlatContentType(rawBlock: Record<string, unknown>): string {
     return 'image';
   }
 
+  if (lowerType.includes('chart') || lowerType.includes('figure')) {
+    return 'image';
+  }
+
   if (lowerType.includes('list')) {
     return 'list';
   }
@@ -518,6 +521,8 @@ function pickFlatContent(rawBlock: Record<string, unknown>): Record<string, unkn
     'table_footnote',
     'image_caption',
     'image_footnote',
+    'chart_caption',
+    'chart_footnote',
     'img_path',
     'code_body',
     'code_caption',
@@ -1007,7 +1012,9 @@ export function extractTextFromMineruBlock(block: PositionedMineruBlock): string
   }
 
   if (block.type === 'image') {
-    return extractTypedContentText(block, ['image_caption', 'image_footnote', 'caption']);
+    return extractTypedContentText(block, [
+      'image_caption', 'chart_caption', 'image_footnote', 'chart_footnote', 'caption',
+    ]);
   }
 
   if (block.type === 'equation') {
