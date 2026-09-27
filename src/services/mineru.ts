@@ -316,7 +316,11 @@ function extractCaptionMathMarkdown(block: PositionedMineruBlock): string | unde
     : undefined;
 }
 
-function renderVisualMarkdownContent(input: unknown, excludeRawMarkdown = false): string {
+function renderVisualMarkdownContent(
+  input: unknown,
+  excludeRawMarkdown = false,
+  tableCellText = '',
+): string {
   const record = getRecord(input);
   const nodeType = typeof record?.type === 'string' ? record.type.toLowerCase() : '';
   if (!record || nodeType === 'text' || nodeType.includes('equation')) {
@@ -328,15 +332,16 @@ function renderVisualMarkdownContent(input: unknown, excludeRawMarkdown = false)
       !STRUCTURAL_CONTENT_KEYS.has(key) &&
       key !== 'html' && key !== 'table_body' &&
       !(excludeRawMarkdown && key === 'markdown'))
-    .map(([key, value]) =>
-      key === 'table_footnote' || key === 'image_footnote' ||
-      key === 'chart_footnote' || key === 'figure_footnote'
-        ? renderTableFootnote(value)
-        : key === 'table_caption' || key === 'image_caption' ||
-          key === 'chart_caption' || key === 'figure_caption' ||
-          key === 'caption' || key === 'caption_content'
-          ? renderVisualCaption(value)
-        : renderInlineMarkdownContent(value).trim())
+    .map(([key, value]) => {
+      const rendered =
+        key === 'table_footnote' || key === 'image_footnote' ||
+        key === 'chart_footnote' || key === 'figure_footnote'
+          ? renderTableFootnote(value)
+          : renderVisualCaption(value);
+      return tableCellText && ['content', 'text', 'value'].includes(key) && rendered === tableCellText
+        ? ''
+        : rendered;
+    })
     .filter(Boolean))
     .join(' ');
 }
@@ -492,11 +497,14 @@ export function extractCaptionFromMineruBlock(block: PositionedMineruBlock): str
 
 function toMarkdownFragment(block: PositionedMineruBlock, plainText: string): string {
   const structuredMarkdown = renderInlineMarkdownContent(block.content).trim();
+  const tableBody = block.type === 'table' ? extractTableHtmlFromMineruBlock(block) : undefined;
+  const tableCellText = tableBody ? stripHtml(tableBody) : '';
   const visualMarkdown =
     block.type === 'image' || block.type === 'table'
       ? renderVisualMarkdownContent(
         block.content,
-        block.type === 'image' || Boolean(extractTableHtmlFromMineruBlock(block)),
+        block.type === 'image' || Boolean(tableBody),
+        tableCellText,
       )
       : '';
   const safeText = plainText || `未提取到 ${block.type} 文本`;
@@ -520,14 +528,13 @@ function toMarkdownFragment(block: PositionedMineruBlock, plainText: string): st
       return description ? `**图片说明** ${description}` : '';
     }
     case 'table': {
-      const tableBody = extractTableHtmlFromMineruBlock(block);
-      const tableText = [visualMarkdown, tableBody ? stripHtml(tableBody) : '']
+      const tableText = [visualMarkdown, tableCellText]
         .filter(Boolean)
         .join(' ') || plainText;
       return tableText ? `**表格说明** ${tableText}` : '';
     }
     case 'caption':
-      return `> ${structuredMarkdown || safeText}`;
+      return `> ${renderVisualMarkdownContent(block.content) || structuredMarkdown || safeText}`;
     default:
       return structuredMarkdown || safeText;
   }

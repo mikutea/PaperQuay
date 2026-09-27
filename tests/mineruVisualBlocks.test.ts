@@ -298,6 +298,19 @@ test('standalone chart and figure notes stay textual blocks', () => {
   assert.match(buildRenderableBlocks([flat])[0].markdown, /Source: survey/);
 });
 
+test('standalone visual-note arrays keep readable separators in Reader and translation', () => {
+  const [caption] = flattenMineruPages(parseMineruPages([{
+    type: 'chart_caption', page_idx: 0, chart_caption: ['Figure 1', 'Overview'],
+  }]));
+  const [footnote] = flattenMineruPages(parseMineruPages([{
+    type: 'image_footnote', page_idx: 0, image_footnote: ['Source A', 'Source B'],
+  }]));
+
+  assert.equal(buildRenderableBlocks([caption])[0].markdown, '> Figure 1 Overview');
+  assert.equal(extractTranslatableMarkdownFromMineruBlock(caption), '> Figure 1 Overview');
+  assert.equal(buildRenderableBlocks([footnote])[0].markdown, '> Source A Source B');
+});
+
 test('visual translation retains caption, footnote, and OCR text together', () => {
   const chart = block('chart', {
     chart_caption: 'Chart 1', chart_footnote: 'Source note',
@@ -540,4 +553,11 @@ test('HTML-table Markdown fallback strips markup and does not duplicate cell tex
   const translation = extractTranslatableMarkdownFromMineruBlock(table);
   assert.equal(table.type, 'table');
   assert.equal(translation, '**表格说明** Score');
+});
+
+test('HTML table OCR identical to its cells is not duplicated in translation', () => {
+  const table = block('table', {
+    html: '<table><tr><td>Score</td></tr></table>', content: 'Score',
+  });
+  assert.equal(extractTranslatableMarkdownFromMineruBlock(table), '**表格说明** Score');
 });

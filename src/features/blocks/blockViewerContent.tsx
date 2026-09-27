@@ -165,9 +165,11 @@ const EquationContent = memo(EquationContentComponent);
 function MarkdownContentComponent({
   markdown,
   scale,
+  suppressImages = false,
 }: {
   markdown: string;
   scale: number;
+  suppressImages?: boolean;
 }) {
   const normalizedMarkdown = useMemo(() => normalizeMineruReaderMarkdown(markdown), [markdown]);
   const bodyStyle = {
@@ -240,6 +242,7 @@ function MarkdownContentComponent({
             {children}
           </blockquote>
         ),
+        ...(suppressImages ? { img: () => null } : {}),
       }}
     >
       {normalizedMarkdown}
@@ -421,7 +424,7 @@ function TableContentComponent({
       />
 
       {showTranslatedOnly ? (
-        <MarkdownContent markdown={translatedText || fallbackMarkdown} scale={scale} />
+        <MarkdownContent markdown={translatedText || fallbackMarkdown} scale={scale} suppressImages />
       ) : (
         <>
           {captionText && sanitizedTableHtml ? (
@@ -450,12 +453,12 @@ function TableContentComponent({
               {tableFootnoteText ? (
                 <div className="leading-6 text-slate-600 dark:text-[var(--pq-text-muted)]"
                   style={{ fontSize: `${14 * scale}px`, lineHeight: `${24 * scale}px` }}>
-                  <MarkdownContent markdown={tableFootnoteText} scale={scale} />
+                  <MarkdownContent markdown={tableFootnoteText} scale={scale} suppressImages />
                 </div>
               ) : null}
             </>
           ) : (
-            <MarkdownContent markdown={fallbackMarkdown} scale={scale} />
+            <MarkdownContent markdown={fallbackMarkdown} scale={scale} suppressImages />
           )}
 
           {showBilingual && translatedText ? (
@@ -464,7 +467,7 @@ function TableContentComponent({
                 <Languages className="h-3.5 w-3.5" strokeWidth={1.9} />
                 {l('译文', 'Translation')}
               </div>
-              <MarkdownContent markdown={translatedText} scale={scale} />
+              <MarkdownContent markdown={translatedText} scale={scale} suppressImages />
             </div>
           ) : null}
         </>
