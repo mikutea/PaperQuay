@@ -135,6 +135,10 @@ function normalizeRawBlockType(rawType: unknown): string {
   const type = typeof rawType === 'string' ? rawType : 'paragraph';
   const lowerType = type.toLowerCase();
 
+  if (/^(?:chart|figure|image|table)_(?:caption|footnote)$/.test(lowerType)) {
+    return 'caption';
+  }
+
   if (lowerType.includes('title')) {
     return 'title';
   }
@@ -251,6 +255,13 @@ function renderInlineMarkdownContent(input: unknown): string {
     .join('');
 }
 
+function renderTableFootnote(input: unknown): string {
+  return (Array.isArray(input) ? input : [input])
+    .map((item) => renderInlineMarkdownContent(item).trim())
+    .filter(Boolean)
+    .join(' ');
+}
+
 function renderVisualMarkdownContent(input: unknown, excludeRawMarkdown = false): string {
   const record = getRecord(input);
   const nodeType = typeof record?.type === 'string' ? record.type.toLowerCase() : '';
@@ -263,7 +274,10 @@ function renderVisualMarkdownContent(input: unknown, excludeRawMarkdown = false)
       !STRUCTURAL_CONTENT_KEYS.has(key) &&
       key !== 'html' && key !== 'table_body' &&
       !(excludeRawMarkdown && key === 'markdown'))
-    .map(([, value]) => renderInlineMarkdownContent(value).trim())
+    .map(([key, value]) =>
+      key === 'table_footnote'
+        ? renderTableFootnote(value)
+        : renderInlineMarkdownContent(value).trim())
     .filter(Boolean)
     .join(' ');
 }
@@ -522,6 +536,10 @@ function mapFlatContentType(rawBlock: Record<string, unknown>): string {
     return textLevel && textLevel > 0 ? 'title' : 'paragraph';
   }
 
+  if (/^(?:chart|figure|image|table)_(?:caption|footnote)$/.test(lowerType)) {
+    return 'caption';
+  }
+
   if (lowerType.includes('equation')) {
     return 'equation';
   }
@@ -556,6 +574,7 @@ function pickFlatContent(rawBlock: Record<string, unknown>): Record<string, unkn
     'image_footnote',
     'chart_caption',
     'chart_footnote',
+    'content',
     'img_path',
     'code_body',
     'code_caption',
@@ -1042,7 +1061,7 @@ export function extractTextFromMineruBlock(block: PositionedMineruBlock): string
     const tableHtml = extractTableHtmlFromMineruBlock(block);
     const content = getRecord(block.content);
     const markdown = content?.markdown;
-    const footnote = renderInlineMarkdownContent(content?.table_footnote).trim();
+    const footnote = renderTableFootnote(content?.table_footnote);
 
     const tableText = caption || (tableHtml ? stripHtml(tableHtml) : '') ||
       (typeof markdown === 'string' ? markdown : '');
@@ -1083,7 +1102,7 @@ export function buildRenderableBlocks(
         ? extractCaptionFromMineruBlock(block)
         : undefined;
     const tableFootnoteText = block.type === 'table'
-      ? renderInlineMarkdownContent(getRecord(block.content)?.table_footnote).trim()
+      ? renderTableFootnote(getRecord(block.content)?.table_footnote)
       : undefined;
     const relativeAssetPath = extractMineruAssetPathFromBlock(block);
 

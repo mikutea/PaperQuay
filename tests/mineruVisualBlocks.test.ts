@@ -11,7 +11,7 @@ import {
   parseMineruPages,
 } from '../src/services/mineru.ts';
 
-function block(type: string, content: Record<string, unknown>) {
+function block(type: string, content: unknown) {
   return flattenMineruPages(parseMineruPages([[{ type, content, bbox: [10, 20, 300, 220] }]]))[0];
 }
 
@@ -84,6 +84,29 @@ test('flat content-list chart uses the image rendering path', () => {
   assert.match(renderable.assetPath?.replaceAll('\\', '/') ?? '', /images\/flat-chart\.jpg$/);
 });
 
+test('flat chart preserves generic OCR content alongside its caption', () => {
+  const [chart] = flattenMineruPages(parseMineruPages([{
+    type: 'chart', page_idx: 0, chart_caption: 'Chart 1', content: 'OCR labels',
+  }]));
+
+  assert.equal(chart.type, 'image');
+  assert.match(extractTextFromMineruBlock(chart), /Chart 1/);
+  assert.match(extractTextFromMineruBlock(chart), /OCR labels/);
+  assert.match(extractTranslatableMarkdownFromMineruBlock(chart), /OCR labels/);
+});
+
+test('standalone chart and figure notes stay textual blocks', () => {
+  const nested = block('figure_caption', 'Figure 1. Results');
+  const [flat] = flattenMineruPages(parseMineruPages([{
+    type: 'chart_footnote', page_idx: 0, content: 'Source: survey',
+  }]));
+
+  assert.equal(nested.type, 'caption');
+  assert.equal(flat.type, 'caption');
+  assert.match(buildRenderableBlocks([nested])[0].markdown, /Figure 1\. Results/);
+  assert.match(buildRenderableBlocks([flat])[0].markdown, /Source: survey/);
+});
+
 test('visual translation retains caption, footnote, and OCR text together', () => {
   const chart = block('chart', {
     chart_caption: 'Chart 1', chart_footnote: 'Source note',
@@ -150,6 +173,18 @@ test('footnote-only table remains a plain-text source for summary and RAG', () =
   const table = block('table', { table_caption: [], table_footnote: 'Source: field survey' });
 
   assert.equal(extractTextFromMineruBlock(table), 'Source: field survey');
+});
+
+test('multiple table footnotes remain separated in Reader, translation, and source text', () => {
+  const table = block('table', {
+    table_caption: [], table_footnote: ['Source A', 'Source B'],
+    html: '<table><tr><td>Score</td></tr></table>',
+  });
+  const [renderable] = buildRenderableBlocks([table]);
+
+  assert.equal(renderable.tableFootnoteText, 'Source A Source B');
+  assert.match(extractTextFromMineruBlock(table), /Source A Source B/);
+  assert.match(extractTranslatableMarkdownFromMineruBlock(table), /Source A Source B/);
 });
 
 test('Markdown image fallback translates only the parsed caption, never image markup', () => {
