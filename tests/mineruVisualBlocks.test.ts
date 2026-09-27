@@ -112,6 +112,14 @@ test('HTML table keeps distinct generic OCR content in source text', () => {
   assert.match(extractTranslatableMarkdownFromMineruBlock(table), /Confidence: high/);
 });
 
+test('blank generic table content falls through to OCR text and value aliases', () => {
+  for (const [key, value] of [['text', 'OCR text cells'], ['value', 'OCR value cells']] as const) {
+    const table = block('table', { content: '', [key]: value });
+    assert.equal(extractTextFromMineruBlock(table), value);
+    assert.match(extractTranslatableMarkdownFromMineruBlock(table), new RegExp(value));
+  }
+});
+
 test('standalone visual note retains content even alongside metadata', () => {
   const [note] = flattenMineruPages(parseMineruPages([{
     type: 'chart_footnote', page_idx: 0, sub_type: 'chart', content: 'Source note',

@@ -1112,7 +1112,8 @@ export function extractTextFromMineruBlock(block: PositionedMineruBlock): string
     const markdown = content?.markdown;
     const footnote = renderTableFootnote(content?.table_footnote);
     const fallback = content
-      ? content.content ?? content.text ?? content.value
+      ? [content.content, content.text, content.value]
+        .find((candidate) => joinReadableText(collectTextParts(candidate)).trim())
       : block.content;
 
     const fallbackText = joinReadableText(collectTextParts(fallback));
