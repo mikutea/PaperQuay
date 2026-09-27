@@ -1,3 +1,9 @@
+import { unified } from 'unified';
+import remarkParse from 'remark-parse';
+import remarkGfm from 'remark-gfm';
+
+const gfmParser = unified().use(remarkParse).use(remarkGfm);
+
 const MATH_FENCE_START_PATTERN = /^```(?:latex|tex|math|katex)\s*$/i;
 const CODE_FENCE_PATTERN = /^```/;
 const PROTECTED_MATH_PATTERN =
@@ -352,10 +358,6 @@ function tableDelimiterColumns(line: string): number {
     : 0;
 }
 
-function interruptsMarkdownTable(line: string): boolean {
-  return /^(?: {4}|\t| {0,3}(?:#{1,6}(?:[ \t]|$)|>|(?:[-+*]|\d{1,9}[.)])(?:[ \t]|$)|(?:`{3,}|~{3,})|<(?:!--|\/?(?:div|table|pre|script|style|section|article|blockquote|p)(?:[\s/>]))))/.test(line);
-}
-
 function wrapInlineLatexSegments(line: string, preserveInlineScriptTags = false, tableRow = false): string {
   if (!line.trim() || !/[\\_^=<>~]/.test(line)) {
     return line;
@@ -467,16 +469,14 @@ export function normalizeMarkdownMath(markdown: string, preserveInlineScriptTags
   const preparedMarkdown = normalizeExplicitMathSyntax(normalizeMineruFragmentedMathText(markdown));
   const lines = preparedMarkdown.replace(/\r\n?/g, '\n').split('\n');
   const tableRows = new Set<number>();
-  for (let index = 0; index + 1 < lines.length; index += 1) {
-    const columns = tableDelimiterColumns(lines[index + 1]);
-    if (!columns || interruptsMarkdownTable(lines[index]) || tableCells(lines[index]).length !== columns) continue;
-    tableRows.add(index);
-    tableRows.add(index + 1);
-    let row = index + 2;
-    for (; row < lines.length && !interruptsMarkdownTable(lines[row]) && splitTableCells(lines[row]).length > 1; row += 1) {
-      tableRows.add(row);
+  if (lines.some((line) => tableDelimiterColumns(line) > 0)) {
+    const document = gfmParser.parse(preparedMarkdown);
+    for (const node of document.children) {
+      if (node.type !== 'table' || !node.position) continue;
+      for (let row = node.position.start.line - 1; row < node.position.end.line; row += 1) {
+        tableRows.add(row);
+      }
     }
-    index = row - 1;
   }
   const output: string[] = [];
   let mathFenceBuffer: string[] | null = null;

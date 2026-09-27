@@ -72,3 +72,17 @@ test('a block starter with pipes cannot become a GFM table header', () => {
     assert.doesNotMatch(render(source), /<table>/);
   }
 });
+
+test('indented code is not a GFM table delimiter', () => {
+  const source = 'Label | Note\n    --- | ---\nP(A | B) = P(C | D)';
+  assert.match(normalizeMarkdownMath(source), /\$P\(A \| B\) = P\(C \| D\)\$/);
+  assert.doesNotMatch(render(source), /<table>/);
+});
+
+test('HTML block headings are not GFM table headers', () => {
+  for (const tag of ['h1', 'ul', 'form', 'figure']) {
+    const source = `<${tag}>Label | Formula</${tag}>\n--- | ---\nP(A | B) = P(C | D)`;
+    assert.match(normalizeMarkdownMath(source), /\$P\(A \| B\) = P\(C \| D\)\$/);
+    assert.doesNotMatch(render(source), /<table>/);
+  }
+});
