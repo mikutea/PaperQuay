@@ -468,15 +468,17 @@ export function normalizeMarkdownMath(markdown: string, preserveInlineScriptTags
 
   const preparedMarkdown = normalizeExplicitMathSyntax(normalizeMineruFragmentedMathText(markdown));
   const lines = preparedMarkdown.replace(/\r\n?/g, '\n').split('\n');
-  const tableRows = new Set<number>();
+  const tableRowContentStarts = new Map<number, number>();
   if (lines.some((line) => tableDelimiterColumns(line.replace(/^(?:\s*> ?)+/, '')) > 0)) {
     const document = gfmParser.parse(preparedMarkdown);
     const pending = [...document.children];
     while (pending.length) {
       const node = pending.pop()!;
-      if (node.type === 'table' && node.position) {
-        for (let row = node.position.start.line - 1; row < node.position.end.line; row += 1) {
-          tableRows.add(row);
+      if (node.type === 'table') {
+        for (const row of node.children) {
+          if (row.position) {
+            tableRowContentStarts.set(row.position.start.line - 1, row.position.start.column - 1);
+          }
         }
       }
       if ('children' in node) {
@@ -564,16 +566,17 @@ export function normalizeMarkdownMath(markdown: string, preserveInlineScriptTags
       continue;
     }
 
-    const tableRow = tableRows.has(lineIndex);
-    const tableContainer = tableRow
-      ? /^((?:[ \t]*> ?)*(?:[ \t]{0,3}(?:\d{1,9}[.)]|[-+*])[ \t]+)?)(.*)$/.exec(cleanedLine)
+    const tableContentStart = tableRowContentStarts.get(lineIndex);
+    const orderedList = tableContentStart === undefined
+      ? /^([ \t]{0,3}\d{1,9}[.)][ \t]+)(.*)$/.exec(cleanedLine)
       : null;
-    const orderedList = !tableRow ? /^([ \t]{0,3}\d{1,9}[.)][ \t]+)(.*)$/.exec(cleanedLine) : null;
-    output.push(tableContainer && tableContainer[1]
-      ? tableContainer[1] + wrapInlineLatexSegments(tableContainer[2], preserveInlineScriptTags, true)
+    output.push(tableContentStart !== undefined
+      ? cleanedLine.slice(0, tableContentStart) + wrapInlineLatexSegments(
+        cleanedLine.slice(tableContentStart), preserveInlineScriptTags, true,
+      )
       : orderedList
       ? orderedList[1] + wrapInlineLatexSegments(orderedList[2], preserveInlineScriptTags)
-      : wrapInlineLatexSegments(cleanedLine, preserveInlineScriptTags, tableRow));
+      : wrapInlineLatexSegments(cleanedLine, preserveInlineScriptTags));
   }
 
   flushMathFence();
