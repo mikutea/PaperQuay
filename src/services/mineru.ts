@@ -17,7 +17,7 @@ import { joinReadableText } from '../utils/text.ts';
 import { parseFragment, type DefaultTreeAdapterMap } from 'parse5';
 
 const STRUCTURAL_CONTENT_KEYS = new Set([
-  'type', 'bbox', 'path', 'img_path', 'image_path', 'image_source',
+  'type', 'bbox', 'path', 'img_path', 'image_path', 'image_source', 'asset_paths',
   'table_type', 'table_nest_level', 'level', 'text_level', 'math_type',
   'list_type', 'item_type', 'sub_type', 'raw_type', 'bboxCoordinateSystem', 'bboxPageSize',
 ]);
@@ -458,12 +458,11 @@ export function extractTableHtmlFromMineruBlock(
   block: PositionedMineruBlock,
 ): string | undefined {
   const content = getRecord(block.content);
-  const html = [content?.html, content?.table_body]
-    .find((candidate) => {
-      if (typeof candidate !== 'string' || !candidate.trim()) return false;
-      const visible = getVisibleHtmlContent(candidate);
-      return Boolean(visible.text || visible.hasTable);
-    });
+  const candidates = [content?.html, content?.table_body]
+    .filter((candidate): candidate is string => typeof candidate === 'string' && Boolean(candidate.trim()))
+    .map((html) => ({ html, ...getVisibleHtmlContent(html) }));
+  const html = (candidates.find((candidate) => candidate.text) ??
+    candidates.find((candidate) => candidate.hasTable))?.html;
 
   return typeof html === 'string' && html.trim() ? html : undefined;
 }
@@ -476,6 +475,7 @@ export function extractMineruAssetPathFromBlock(
   const imageSource = getRecord(content?.image_source);
   const candidate = [
     imageSource?.path, content?.img_path, content?.path, content?.image_path,
+    ...(Array.isArray(content?.asset_paths) ? content.asset_paths : []),
   ].find((path) => typeof path === 'string' && path.trim() &&
     (!mineruPath || resolveMineruAssetPath(mineruPath, path.trim())));
 
@@ -715,6 +715,9 @@ function pickFlatContent(rawBlock: Record<string, unknown>): Record<string, unkn
   const content: Record<string, unknown> = {};
 
   for (const key of contentKeys) {
+    if (!isVisual && /^(?:(?:image|chart|figure|table)_(?:caption|footnote)|caption(?:_content)?)$/.test(key)) {
+      continue;
+    }
     if (key === 'value' && !isVisual && typeof rawBlock.text === 'string' && rawBlock.text.trim()) {
       continue;
     }
@@ -777,7 +780,7 @@ function extractMiddleContent(rawBlock: Record<string, unknown>): Record<string,
     const rawSpan = span as Record<string, unknown>;
     return collectTextParts(rawSpan.content ?? rawSpan.text ?? rawSpan.latex ?? null);
   });
-  const imagePath = [
+  const imagePaths = [
     rawBlock.img_path, rawBlock.image_path, rawBlock.path,
     getRecord(rawBlock.image_source)?.path,
     ...spans.flatMap((span) => {
@@ -788,12 +791,13 @@ function extractMiddleContent(rawBlock: Record<string, unknown>): Record<string,
       ];
     }),
   ]
-    .find((path) => typeof path === 'string' && path.trim());
+    .filter((path): path is string => typeof path === 'string' && Boolean(path.trim()))
+    .map((path) => path.trim());
 
   return {
     text: joinReadableText(spanTextParts),
     raw_type: rawBlock.type,
-    ...(imagePath ? { img_path: imagePath } : {}),
+    ...(imagePaths.length ? { img_path: imagePaths[0], asset_paths: [...new Set(imagePaths)] } : {}),
   };
 }
 

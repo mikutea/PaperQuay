@@ -676,3 +676,34 @@ test('structured visual captions escape prose but preserve inline math', () => {
   const [standalone] = flattenMineruPages(parseMineruPages([{ type: 'chart_caption', chart_caption: caption }]));
   assert.equal(buildRenderableBlocks([standalone])[0].markdown, '> Energy \\*literal\\*: $x$');
 });
+
+test('nonvisual flat blocks ignore visual caption metadata', () => {
+  for (const key of ['caption', 'caption_content', 'image_caption', 'chart_caption', 'figure_caption']) {
+    const [paragraph] = flattenMineruPages(parseMineruPages([{ type: 'text', text: 'Canonical paragraph', [key]: 'metadata label' }]));
+    assert.equal(buildRenderableBlocks([paragraph])[0].markdown, 'Canonical paragraph', key);
+    assert.equal(extractTextFromMineruBlock(paragraph), 'Canonical paragraph', key);
+    assert.equal(extractTranslatableMarkdownFromMineruBlock(paragraph), 'Canonical paragraph', key);
+  }
+});
+
+test('visible table alias takes priority over an empty table shell', () => {
+  const table = block('table', {
+    html: '<table><script>ignored</script></table>',
+    table_body: '<table><tr><td>42</td></tr></table>',
+  });
+  assert.equal(buildRenderableBlocks([table])[0].tableHtml, '<table><tr><td>42</td></tr></table>');
+  assert.equal(extractTextFromMineruBlock(table), '42');
+  assert.equal(buildRenderableBlocks([block('table', { html: '<table></table>' })])[0].tableHtml, '<table></table>');
+});
+
+test('middle image aliases remain available until local path resolution', () => {
+  for (const rejected of ['https://example.com/chart.png', '../outside.png', 'D:/outside.png']) {
+    const [image] = flattenMineruPages(parseMineruPages({ pdf_info: [{ page_idx: 0, para_blocks: [{
+      type: 'image', img_path: rejected,
+      lines: [{ spans: [{ img_path: 'images/chart.png' }] }],
+    }] }] }));
+    assert.equal(buildRenderableBlocks([image], 'C:/cache/middle.json')[0].assetPath, 'C:\\cache\\images\\chart.png', rejected);
+    assert.equal(extractTextFromMineruBlock(image), '');
+    assert.equal(extractTranslatableMarkdownFromMineruBlock(image), '');
+  }
+});
