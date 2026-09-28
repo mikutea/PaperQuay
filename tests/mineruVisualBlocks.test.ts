@@ -647,3 +647,32 @@ test('HTML tables expose only distinct generic OCR to the original Reader', () =
   });
   assert.equal(buildRenderableBlocks([duplicate])[0].tableOcrMarkdown, '');
 });
+
+test('visual assets continue past rejected path aliases', () => {
+  const chart = block('chart', {
+    image_source: { path: 'https://example.com/chart.png' }, img_path: 'images/chart.png',
+  });
+  assert.equal(buildRenderableBlocks([chart], 'C:/cache/content_list.json')[0].assetPath, 'C:\\cache\\images\\chart.png');
+});
+
+test('hidden-only preferred HTML falls back to visible table_body', () => {
+  const table = block('table', {
+    html: '<script>IGNORE</script>', table_body: '<table><tr><td>42</td></tr></table>',
+  });
+  assert.equal(buildRenderableBlocks([table])[0].tableHtml, '<table><tr><td>42</td></tr></table>');
+  assert.equal(extractTextFromMineruBlock(table), '42');
+  assert.equal(extractTranslatableMarkdownFromMineruBlock(table), '**表格说明** 42');
+});
+
+test('structured visual captions escape prose but preserve inline math', () => {
+  const caption = [
+    { type: 'text', content: 'Energy *literal*: ' },
+    { type: 'equation_inline', content: 'x' },
+  ];
+  const chart = block('chart', { chart_caption: caption });
+  assert.equal(buildRenderableBlocks([chart])[0].markdown, '**图片说明** Energy \\*literal\\*: $x$');
+  assert.equal(extractTranslatableMarkdownFromMineruBlock(chart), '**图片说明** Energy \\*literal\\*: $x$');
+  assert.equal(extractTextFromMineruBlock(chart), 'Energy *literal*: $x$');
+  const [standalone] = flattenMineruPages(parseMineruPages([{ type: 'chart_caption', chart_caption: caption }]));
+  assert.equal(buildRenderableBlocks([standalone])[0].markdown, '> Energy \\*literal\\*: $x$');
+});

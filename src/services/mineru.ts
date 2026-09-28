@@ -69,13 +69,15 @@ function uniqueNonblankText(parts: string[]): string[] {
   });
 }
 
-function stripHtml(input: string): string {
+function getVisibleHtmlContent(input: string): { text: string; hasTable: boolean } {
   const hiddenTags = new Set(['script', 'style', 'iframe', 'object', 'embed', 'link', 'meta']);
   const nodes: DefaultTreeAdapterMap['node'][] = [...parseFragment(input).childNodes].reverse();
   const text: string[] = [];
+  let hasTable = false;
   while (nodes.length > 0) {
     const node = nodes.pop()!;
     if ('tagName' in node && hiddenTags.has(node.tagName)) continue;
+    if ('tagName' in node && node.tagName === 'table') hasTable = true;
     if (node.nodeName === '#text' && 'value' in node) text.push(node.value);
     if ('childNodes' in node) {
       for (let index = node.childNodes.length - 1; index >= 0; index -= 1) {
@@ -83,7 +85,11 @@ function stripHtml(input: string): string {
       }
     }
   }
-  return text.join(' ').replace(/\s+/g, ' ').trim();
+  return { text: text.join(' ').replace(/\s+/g, ' ').trim(), hasTable };
+}
+
+function stripHtml(input: string): string {
+  return getVisibleHtmlContent(input).text;
 }
 
 function removeSpelledMineruTokenNoise(value: string): string {
@@ -215,7 +221,13 @@ function extractMathText(input: unknown): string {
   return normalizeRawLatexExpression(joinReadableText(collectTextParts(input)));
 }
 
-function renderInlineMarkdownContent(input: unknown): string {
+function escapeMarkdownProse(value: string): string {
+  return value.replace(/[\\`*_{}\[\]#|$~]/g, '\\$&')
+    .replace(/^([ \t]*)([-+>])(?=[ \t])/gm, '$1\\$2')
+    .replace(/^([ \t]*\d+)([.)])(?=[ \t])/gm, '$1\\$2');
+}
+
+function renderInlineMarkdownContent(input: unknown, escapeProse = false): string {
   if (input == null) {
     return '';
   }
@@ -225,7 +237,7 @@ function renderInlineMarkdownContent(input: unknown): string {
   }
 
   if (Array.isArray(input)) {
-    return input.map((item) => renderInlineMarkdownContent(item)).join('');
+    return input.map((item) => renderInlineMarkdownContent(item, escapeProse)).join('');
   }
 
   const record = getRecord(input);
@@ -238,7 +250,9 @@ function renderInlineMarkdownContent(input: unknown): string {
 
   if (nodeType === 'text') {
     const textContent = record.content ?? record.text ?? record.value;
-    return typeof textContent === 'string' ? textContent : renderInlineMarkdownContent(textContent);
+    return typeof textContent === 'string'
+      ? escapeProse ? escapeMarkdownProse(textContent) : textContent
+      : renderInlineMarkdownContent(textContent, escapeProse);
   }
 
   if (nodeType === 'equation_inline') {
@@ -274,7 +288,7 @@ function renderInlineMarkdownContent(input: unknown): string {
       continue;
     }
 
-    const rendered = renderInlineMarkdownContent(record[key]);
+    const rendered = renderInlineMarkdownContent(record[key], escapeProse);
 
     if (rendered) {
       return rendered;
@@ -283,20 +297,20 @@ function renderInlineMarkdownContent(input: unknown): string {
 
   return Object.entries(record)
     .filter(([key]) => !STRUCTURAL_CONTENT_KEYS.has(key) && key !== 'html' && key !== 'table_body')
-    .map(([, value]) => renderInlineMarkdownContent(value))
+    .map(([, value]) => renderInlineMarkdownContent(value, escapeProse))
     .join('');
 }
 
-function renderTableFootnote(input: unknown): string {
+function renderTableFootnote(input: unknown, escapeProse = false): string {
   return Array.isArray(input) && input.every((item) => typeof item === 'string')
     ? input.map((item) => item.trim()).filter(Boolean).join(' ')
-    : renderInlineMarkdownContent(input).trim();
+    : renderInlineMarkdownContent(input, escapeProse).trim();
 }
 
-function renderVisualCaption(input: unknown): string {
+function renderVisualCaption(input: unknown, escapeProse = false): string {
   return Array.isArray(input) && input.every((item) => typeof item === 'string')
     ? input.map((item) => item.trim()).filter(Boolean).join(' ')
-    : renderInlineMarkdownContent(input).trim();
+    : renderInlineMarkdownContent(input, escapeProse).trim();
 }
 
 function renderCaptionMathPart(input: unknown, depth = 0): { markdown: string; hasMath: boolean } {
@@ -341,7 +355,7 @@ function renderVisualMarkdownContent(
   const record = getRecord(input);
   const nodeType = typeof record?.type === 'string' ? record.type.toLowerCase() : '';
   if (!record || nodeType === 'text' || nodeType.includes('equation')) {
-    return renderInlineMarkdownContent(input).trim();
+    return renderInlineMarkdownContent(input, true).trim();
   }
 
   return uniqueNonblankText(Object.entries(record)
@@ -353,9 +367,9 @@ function renderVisualMarkdownContent(
       const rendered =
         key === 'table_footnote' || key === 'image_footnote' ||
         key === 'chart_footnote' || key === 'figure_footnote'
-          ? renderTableFootnote(value)
-          : renderVisualCaption(value);
-      return tableCellText && ['content', 'text', 'value'].includes(key) && rendered === tableCellText
+          ? renderTableFootnote(value, true)
+          : renderVisualCaption(value, true);
+      return tableCellText && ['content', 'text', 'value'].includes(key) && renderVisualCaption(value) === tableCellText
         ? ''
         : rendered;
     })
@@ -445,19 +459,25 @@ export function extractTableHtmlFromMineruBlock(
 ): string | undefined {
   const content = getRecord(block.content);
   const html = [content?.html, content?.table_body]
-    .find((candidate) => typeof candidate === 'string' && candidate.trim());
+    .find((candidate) => {
+      if (typeof candidate !== 'string' || !candidate.trim()) return false;
+      const visible = getVisibleHtmlContent(candidate);
+      return Boolean(visible.text || visible.hasTable);
+    });
 
   return typeof html === 'string' && html.trim() ? html : undefined;
 }
 
 export function extractMineruAssetPathFromBlock(
   block: PositionedMineruBlock,
+  mineruPath?: string,
 ): string | undefined {
   const content = getRecord(block.content);
   const imageSource = getRecord(content?.image_source);
   const candidate = [
     imageSource?.path, content?.img_path, content?.path, content?.image_path,
-  ].find((path) => typeof path === 'string' && path.trim());
+  ].find((path) => typeof path === 'string' && path.trim() &&
+    (!mineruPath || resolveMineruAssetPath(mineruPath, path.trim())));
 
   return typeof candidate === 'string' && candidate.trim() ? candidate.trim() : undefined;
 }
@@ -1256,19 +1276,20 @@ export function buildRenderableBlocks(
         ? extractCaptionFromMineruBlock(block)
         : undefined;
     const tableFootnoteText = block.type === 'table'
-      ? renderTableFootnote(getRecord(block.content)?.table_footnote)
+      ? renderTableFootnote(getRecord(block.content)?.table_footnote, true)
       : undefined;
     const tableContent = tableHtml ? getRecord(block.content) : null;
     const alreadyVisible = new Set([
       tableHtml ? stripHtml(tableHtml) : '',
-      tableFootnoteText,
+      renderTableFootnote(tableContent?.table_footnote),
       ...['table_caption', 'caption', 'caption_content'].map((key) => renderVisualCaption(tableContent?.[key])),
     ]);
     const tableOcrMarkdown = tableContent
-      ? uniqueNonblankText(['content', 'text', 'value'].map((key) => renderVisualCaption(tableContent[key])))
-        .filter((text) => !alreadyVisible.has(text)).join(' ')
+      ? uniqueNonblankText(['content', 'text', 'value']
+        .filter((key) => !alreadyVisible.has(renderVisualCaption(tableContent[key])))
+        .map((key) => renderVisualCaption(tableContent[key], true))).join(' ')
       : undefined;
-    const relativeAssetPath = extractMineruAssetPathFromBlock(block);
+    const relativeAssetPath = extractMineruAssetPathFromBlock(block, mineruPath);
 
     return {
       block,
