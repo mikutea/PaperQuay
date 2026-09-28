@@ -69,23 +69,33 @@ function uniqueNonblankText(parts: string[]): string[] {
   });
 }
 
-function getVisibleHtmlContent(input: string): { text: string; hasTable: boolean } {
+function getVisibleHtmlContent(input: string): { text: string; hasTable: boolean; captions: string[] } {
   const hiddenTags = new Set(['script', 'style', 'iframe', 'object', 'embed', 'link', 'meta']);
-  const nodes: DefaultTreeAdapterMap['node'][] = [...parseFragment(input).childNodes].reverse();
+  const nodes: { node: DefaultTreeAdapterMap['node']; captionParts?: string[] }[] =
+    [...parseFragment(input).childNodes].reverse().map((node) => ({ node }));
   const text: string[] = [];
+  const captions: string[][] = [];
   let hasTable = false;
   while (nodes.length > 0) {
-    const node = nodes.pop()!;
+    let { node, captionParts } = nodes.pop()!;
     if ('tagName' in node && hiddenTags.has(node.tagName)) continue;
     if ('tagName' in node && node.tagName === 'table') hasTable = true;
-    if (node.nodeName === '#text' && 'value' in node) text.push(node.value);
+    if ('tagName' in node && node.tagName === 'caption') {
+      captionParts = [];
+      captions.push(captionParts);
+    }
+    if (node.nodeName === '#text' && 'value' in node) {
+      text.push(node.value);
+      captionParts?.push(node.value);
+    }
     if ('childNodes' in node) {
       for (let index = node.childNodes.length - 1; index >= 0; index -= 1) {
-        nodes.push(node.childNodes[index]);
+        nodes.push({ node: node.childNodes[index], captionParts });
       }
     }
   }
-  return { text: text.join(' ').replace(/\s+/g, ' ').trim(), hasTable };
+  const normalize = (parts: string[]) => parts.join(' ').replace(/\s+/g, ' ').trim();
+  return { text: normalize(text), hasTable, captions: captions.map(normalize).filter(Boolean) };
 }
 
 function stripHtml(input: string): string {
@@ -233,7 +243,7 @@ function renderInlineMarkdownContent(input: unknown, escapeProse = false): strin
   }
 
   if (typeof input === 'string' || typeof input === 'number' || typeof input === 'boolean') {
-    return String(input);
+    return escapeProse ? escapeMarkdownProse(String(input)) : String(input);
   }
 
   if (Array.isArray(input)) {
@@ -303,13 +313,13 @@ function renderInlineMarkdownContent(input: unknown, escapeProse = false): strin
 
 function renderTableFootnote(input: unknown, escapeProse = false): string {
   return Array.isArray(input) && input.every((item) => typeof item === 'string')
-    ? input.map((item) => item.trim()).filter(Boolean).join(' ')
+    ? input.map((item) => renderInlineMarkdownContent(item, escapeProse).trim()).filter(Boolean).join(' ')
     : renderInlineMarkdownContent(input, escapeProse).trim();
 }
 
 function renderVisualCaption(input: unknown, escapeProse = false): string {
   return Array.isArray(input) && input.every((item) => typeof item === 'string')
-    ? input.map((item) => item.trim()).filter(Boolean).join(' ')
+    ? input.map((item) => renderInlineMarkdownContent(item, escapeProse).trim()).filter(Boolean).join(' ')
     : renderInlineMarkdownContent(input, escapeProse).trim();
 }
 
@@ -365,6 +375,7 @@ function renderVisualMarkdownContent(
       !(excludeRawMarkdown && key === 'markdown'))
     .map(([key, value]) => {
       const rendered =
+        key === 'markdown' ? renderInlineMarkdownContent(value) :
         key === 'table_footnote' || key === 'image_footnote' ||
         key === 'chart_footnote' || key === 'figure_footnote'
           ? renderTableFootnote(value, true)
@@ -461,7 +472,8 @@ export function extractTableHtmlFromMineruBlock(
   const candidates = [content?.html, content?.table_body]
     .filter((candidate): candidate is string => typeof candidate === 'string' && Boolean(candidate.trim()))
     .map((html) => ({ html, ...getVisibleHtmlContent(html) }));
-  const html = (candidates.find((candidate) => candidate.text) ??
+  const html = (candidates.find((candidate) => candidate.hasTable && candidate.text) ??
+    candidates.find((candidate) => candidate.text) ??
     candidates.find((candidate) => candidate.hasTable))?.html;
 
   return typeof html === 'string' && html.trim() ? html : undefined;
@@ -521,10 +533,24 @@ export function resolveMineruAssetPath(
   return candidate;
 }
 
+function withoutEmbeddedTableCaptions(block: PositionedMineruBlock, html?: string): PositionedMineruBlock {
+  const content = getRecord(block.content);
+  if (!content || !html) return block;
+  const captions = new Set(getVisibleHtmlContent(html).captions);
+  if (!captions.size) return block;
+  return {
+    ...block,
+    content: Object.fromEntries(Object.entries(content).filter(([key, value]) =>
+      !['table_caption', 'caption', 'caption_content'].includes(key) ||
+      !captions.has(renderVisualCaption(value).replace(/\s+/g, ' ').trim()))),
+  };
+}
+
 export function extractCaptionFromMineruBlock(block: PositionedMineruBlock): string {
   switch (block.type) {
     case 'table':
-      return extractTypedContentText(block, ['table_caption', 'caption', 'caption_content'], false);
+      return extractTypedContentText(withoutEmbeddedTableCaptions(block, extractTableHtmlFromMineruBlock(block)),
+        ['table_caption', 'caption', 'caption_content'], false);
     case 'image':
       return extractTypedContentText(block, ['image_caption', 'chart_caption', 'figure_caption', 'caption', 'caption_content'], false);
     default:
@@ -539,7 +565,7 @@ function toMarkdownFragment(block: PositionedMineruBlock, plainText: string): st
   const visualMarkdown =
     block.type === 'image' || block.type === 'table'
       ? renderVisualMarkdownContent(
-        block.content,
+        withoutEmbeddedTableCaptions(block, tableBody).content,
         block.type === 'image' || Boolean(tableBody),
         tableCellText,
       )
@@ -569,7 +595,7 @@ function toMarkdownFragment(block: PositionedMineruBlock, plainText: string): st
       return description ? `**图片说明** ${description}` : '';
     }
     case 'table': {
-      const tableText = [visualMarkdown, tableCellText]
+      const tableText = [visualMarkdown, escapeMarkdownProse(tableCellText)]
         .filter(Boolean)
         .join(' ') || plainText;
       return tableText ? `**表格说明** ${tableText}` : '';
@@ -1219,8 +1245,9 @@ export function resolveMineruBlockContentSource(
 
 export function extractTextFromMineruBlock(block: PositionedMineruBlock): string {
   if (block.type === 'table') {
-    const caption = extractTypedContentText(block, ['table_caption', 'caption', 'caption_content'], false, true);
     const tableHtml = extractTableHtmlFromMineruBlock(block);
+    const caption = extractTypedContentText(withoutEmbeddedTableCaptions(block, tableHtml),
+      ['table_caption', 'caption', 'caption_content'], false, true);
     const content = getRecord(block.content);
     const markdown = content?.markdown;
     const footnote = renderTableFootnote(content?.table_footnote);
@@ -1302,7 +1329,8 @@ export function buildRenderableBlocks(
       mathText,
       tableHtml,
       captionText,
-      captionMathMarkdown: block.type === 'table' ? extractCaptionMathMarkdown(block) : undefined,
+      captionMathMarkdown: block.type === 'table'
+        ? extractCaptionMathMarkdown(withoutEmbeddedTableCaptions(block, tableHtml)) : undefined,
       tableFootnoteText,
       tableOcrMarkdown,
       assetPath:

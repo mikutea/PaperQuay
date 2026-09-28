@@ -707,3 +707,53 @@ test('middle image aliases remain available until local path resolution', () => 
     assert.equal(extractTranslatableMarkdownFromMineruBlock(image), '');
   }
 });
+
+test('embedded HTML table captions are not repeated in source translation or Reader headings', () => {
+  for (const key of ['table_caption', 'caption', 'caption_content']) {
+    const table = block('table', {
+      [key]: 'Table 1', html: '<table><caption>Table 1</caption><tr><td>42</td></tr></table>',
+    });
+    const [renderable] = buildRenderableBlocks([table]);
+    assert.equal(renderable.plainText, 'Table 1 42', key);
+    assert.equal(renderable.markdown, '**表格说明** Table 1 42', key);
+    assert.equal(renderable.captionText, '', key);
+    assert.match(renderable.tableHtml ?? '', /<caption>Table 1<\/caption>/);
+  }
+  const distinct = block('table', {
+    table_caption: 'Overview', html: '<table><caption>Table 1</caption><tr><td>42</td></tr></table>',
+  });
+  assert.equal(buildRenderableBlocks([distinct])[0].captionText, 'Overview');
+  assert.equal(extractTextFromMineruBlock(distinct), 'Overview Table 1 42');
+  const literal = block('table', {
+    caption: 'Table *literal*', html: '<table><caption>Table *literal*</caption><tr><td>42</td></tr></table>',
+  });
+  assert.equal(extractTranslatableMarkdownFromMineruBlock(literal), '**表格说明** Table \\*literal\\* 42');
+});
+
+test('primitive visual captions and footnotes preserve literal Markdown punctuation', () => {
+  for (const caption of ['Energy *literal*', ['Energy', '*literal*']]) {
+    const chart = block('chart', { chart_caption: caption });
+    assert.equal(buildRenderableBlocks([chart])[0].markdown, '**图片说明** Energy \\*literal\\*');
+    assert.equal(extractTextFromMineruBlock(chart), 'Energy *literal*');
+    assert.equal(extractTranslatableMarkdownFromMineruBlock(chart), '**图片说明** Energy \\*literal\\*');
+    const note = block('chart_caption', { caption_content: caption });
+    assert.equal(buildRenderableBlocks([note])[0].markdown, '> Energy \\*literal\\*');
+    const table = block('table', { table_footnote: caption, html: '<table><tr><td>42</td></tr></table>' });
+    assert.equal(buildRenderableBlocks([table])[0].tableFootnoteText, 'Energy \\*literal\\*');
+  }
+});
+
+test('readable table aliases take priority over visible non-table fragments', () => {
+  const table = block('table', {
+    html: '<div>conversion failed</div>', table_body: '<table><tr><td>42</td></tr></table>',
+  });
+  assert.equal(buildRenderableBlocks([table])[0].tableHtml, '<table><tr><td>42</td></tr></table>');
+  assert.equal(extractTextFromMineruBlock(table), '42');
+  assert.equal(extractTranslatableMarkdownFromMineruBlock(table), '**表格说明** 42');
+});
+
+test('literal visual prose handling does not escape actual Markdown table fallback', () => {
+  const markdown = '| Label | Value |\n| --- | --- |\n| A | $x_i$ |';
+  const [table] = flattenMineruPages(parseMineruMarkdownPages(markdown));
+  assert.equal(buildRenderableBlocks([table])[0].markdown, `**表格说明** ${markdown}`);
+});
