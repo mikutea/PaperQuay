@@ -560,7 +560,7 @@ function withoutEmbeddedTableText(block: PositionedMineruBlock, html?: string): 
   if (!content || !html) return block;
   const visible = getVisibleHtmlContent(html);
   const captions = new Set(visible.captions);
-  const body = new Set([visible.text, ...visible.cells]);
+  const body = new Set([visible.text, visible.cells.join(' '), ...visible.cells]);
   return {
     ...block,
     content: Object.fromEntries(Object.entries(content).filter(([key, value]) => {

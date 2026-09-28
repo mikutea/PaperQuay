@@ -809,3 +809,29 @@ test('generic OCR duplicates of individual visible cells are omitted without dro
   assert.equal(buildRenderableBlocks([distinct])[0].tableOcrMarkdown, 'Score details');
   assert.equal(extractTextFromMineruBlock(distinct), 'Score 42 Score details');
 });
+
+test('generic OCR matching combined cells is omitted when HTML has an embedded caption', () => {
+  for (const key of ['content', 'text', 'value']) {
+    const content = {
+      html: '<table><caption>Table 1</caption><tr><th>Score</th><td>42</td></tr></table>',
+      table_caption: 'Table 1', table_footnote: 'Source', [key]: 'Score \n 42',
+    };
+    const nested = block('table', content);
+    const [flat] = flattenMineruPages(parseMineruPages([{ type: 'table', ...content }]));
+    for (const table of [nested, flat]) {
+      const [renderable] = buildRenderableBlocks([table]);
+      assert.equal(renderable.tableOcrMarkdown, '', key);
+      assert.equal(renderable.captionText, '', key);
+      assert.equal(renderable.plainText, 'Table 1 Score 42 Source', key);
+      assert.equal(renderable.markdown, '**表格说明** Table 1 Score 42 Source', key);
+      assert.equal(extractTranslatableMarkdownFromMineruBlock(table), renderable.markdown, key);
+    }
+    assert.deepEqual(nested.content, content);
+  }
+  const distinct = block('table', {
+    html: '<table><caption>Table 1</caption><tr><th>Score</th><td>42</td></tr></table>',
+    content: 'Score 42 details',
+  });
+  assert.equal(buildRenderableBlocks([distinct])[0].tableOcrMarkdown, 'Score 42 details');
+  assert.equal(extractTextFromMineruBlock(distinct), 'Table 1 Score 42 Score 42 details');
+});
