@@ -240,7 +240,7 @@ function MarkdownContentComponent({
             {children}
           </blockquote>
         ),
-        img: () => null,
+        img: ({ alt }) => <>{alt}</>,
       }}
     >
       {normalizedMarkdown}

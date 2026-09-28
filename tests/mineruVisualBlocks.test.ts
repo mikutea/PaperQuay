@@ -835,3 +835,47 @@ test('generic OCR matching combined cells is omitted when HTML has an embedded c
   assert.equal(buildRenderableBlocks([distinct])[0].tableOcrMarkdown, 'Score 42 details');
   assert.equal(extractTextFromMineruBlock(distinct), 'Table 1 Score 42 Score 42 details');
 });
+
+test('table footnotes already visible in footer cells are not repeated', () => {
+  for (const footer of ['<td>Source A</td>', '<td>Source</td><td>A</td>']) {
+    const content = {
+      html: `<table><caption>Table 1</caption><tr><td>Score</td></tr><tfoot><tr>${footer}</tr></tfoot></table>`,
+      table_footnote: 'Source A',
+    };
+    const nested = block('table', content);
+    const [flat] = flattenMineruPages(parseMineruPages([{ type: 'table', ...content }]));
+    for (const table of [nested, flat]) {
+      const [renderable] = buildRenderableBlocks([table]);
+      assert.equal(renderable.tableFootnoteText, '');
+      assert.equal(renderable.plainText, 'Table 1 Score Source A');
+      assert.equal(renderable.markdown, '**表格说明** Table 1 Score Source A');
+      assert.equal(extractTranslatableMarkdownFromMineruBlock(table), renderable.markdown);
+    }
+    assert.deepEqual(nested.content, content);
+    const distinct = block('table', { ...content, table_footnote: 'Source A details' });
+    assert.equal(buildRenderableBlocks([distinct])[0].tableFootnoteText, 'Source A details');
+  }
+});
+
+test('image caption OCR and footnote order is independent of property insertion order', () => {
+  const permutations = [
+    ['content', 'footnote', 'caption'], ['content', 'caption', 'footnote'],
+    ['caption', 'content', 'footnote'], ['caption', 'footnote', 'content'],
+    ['footnote', 'caption', 'content'], ['footnote', 'content', 'caption'],
+  ];
+  for (const type of ['image', 'chart', 'figure']) {
+    for (const keys of permutations) {
+      const values = { content: 'OCR labels', footnote: 'Source', caption: 'Figure 1' };
+      const fields = Object.fromEntries(keys.map((key) => [
+        key === 'content' ? key : `${type}_${key}`, values[key as keyof typeof values],
+      ]));
+      const nested = block(type, { type, ...fields });
+      const [flat] = flattenMineruPages(parseMineruPages([{ type, ...fields }]));
+      for (const image of [nested, flat]) {
+        assert.equal(extractTextFromMineruBlock(image), 'Figure 1 OCR labels Source');
+        assert.equal(buildRenderableBlocks([image])[0].markdown, '**图片说明** Figure 1 OCR labels Source');
+        assert.equal(extractTranslatableMarkdownFromMineruBlock(image), '**图片说明** Figure 1 OCR labels Source');
+      }
+    }
+  }
+});

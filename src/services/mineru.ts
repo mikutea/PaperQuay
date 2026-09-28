@@ -22,6 +22,9 @@ const STRUCTURAL_CONTENT_KEYS = new Set([
   'list_type', 'item_type', 'sub_type', 'raw_type', 'bboxCoordinateSystem', 'bboxPageSize',
 ]);
 
+const IMAGE_CAPTION_KEYS = ['image_caption', 'chart_caption', 'figure_caption', 'caption', 'caption_content'];
+const IMAGE_FOOTNOTE_KEYS = ['image_footnote', 'chart_footnote', 'figure_footnote'];
+
 function collectTextParts(input: unknown): string[] {
   if (input == null) {
     return [];
@@ -69,16 +72,17 @@ function uniqueNonblankText(parts: string[]): string[] {
   });
 }
 
-function getVisibleHtmlContent(input: string): { text: string; hasTable: boolean; captions: string[]; cells: string[] } {
+function getVisibleHtmlContent(input: string): { text: string; hasTable: boolean; captions: string[]; cells: string[]; footers: string[] } {
   const hiddenTags = new Set(['script', 'style', 'iframe', 'object', 'embed', 'link', 'meta']);
-  const nodes: { node: DefaultTreeAdapterMap['node']; captionParts?: string[]; cellParts?: string[] }[] =
+  const nodes: { node: DefaultTreeAdapterMap['node']; captionParts?: string[]; cellParts?: string[]; footerParts?: string[] }[] =
     [...parseFragment(input).childNodes].reverse().map((node) => ({ node }));
   const text: string[] = [];
   const captions: string[][] = [];
   const cells: string[][] = [];
+  const footers: string[][] = [];
   let hasTable = false;
   while (nodes.length > 0) {
-    let { node, captionParts, cellParts } = nodes.pop()!;
+    let { node, captionParts, cellParts, footerParts } = nodes.pop()!;
     if ('tagName' in node && hiddenTags.has(node.tagName)) continue;
     if ('tagName' in node && node.tagName === 'table') hasTable = true;
     if ('tagName' in node && node.tagName === 'caption') {
@@ -89,19 +93,24 @@ function getVisibleHtmlContent(input: string): { text: string; hasTable: boolean
       cellParts = [];
       cells.push(cellParts);
     }
+    if ('tagName' in node && node.tagName === 'tfoot') {
+      footerParts = [];
+      footers.push(footerParts);
+    }
     if (node.nodeName === '#text' && 'value' in node) {
       text.push(node.value);
       captionParts?.push(node.value);
       cellParts?.push(node.value);
+      footerParts?.push(node.value);
     }
     if ('childNodes' in node) {
       for (let index = node.childNodes.length - 1; index >= 0; index -= 1) {
-        nodes.push({ node: node.childNodes[index], captionParts, cellParts });
+        nodes.push({ node: node.childNodes[index], captionParts, cellParts, footerParts });
       }
     }
   }
   const normalize = (parts: string[]) => parts.join(' ').replace(/\s+/g, ' ').trim();
-  return { text: normalize(text), hasTable, captions: captions.map(normalize).filter(Boolean), cells: cells.map(normalize).filter(Boolean) };
+  return { text: normalize(text), hasTable, captions: captions.map(normalize).filter(Boolean), cells: cells.map(normalize).filter(Boolean), footers: footers.map(normalize).filter(Boolean) };
 }
 
 function stripHtml(input: string): string {
@@ -409,6 +418,17 @@ function renderTableMarkdownContent(input: unknown, tableCellText: string, hasHt
   ]).join(' ');
 }
 
+function renderImageMarkdownContent(input: unknown): string {
+  const record = getRecord(input);
+  if (!record) return renderVisualMarkdownContent(input, true);
+  const textKeys = [...IMAGE_CAPTION_KEYS, 'content', 'text', 'value'];
+  const otherKeys = Object.keys(record)
+    .filter((key) => !textKeys.includes(key) && !IMAGE_FOOTNOTE_KEYS.includes(key));
+  const ordered = Object.fromEntries([...textKeys, ...otherKeys, ...IMAGE_FOOTNOTE_KEYS]
+    .map((key) => [key, record[key]]));
+  return renderVisualMarkdownContent(ordered, true);
+}
+
 function cleanMineruListText(value: string): string {
   return removeSpelledMineruTokenNoise(value)
     .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
@@ -560,12 +580,12 @@ function withoutEmbeddedTableText(block: PositionedMineruBlock, html?: string): 
   if (!content || !html) return block;
   const visible = getVisibleHtmlContent(html);
   const captions = new Set(visible.captions);
-  const body = new Set([visible.text, visible.cells.join(' '), ...visible.cells]);
+  const body = new Set([visible.text, visible.cells.join(' '), ...visible.cells, ...visible.footers]);
   return {
     ...block,
     content: Object.fromEntries(Object.entries(content).filter(([key, value]) => {
       const alreadyVisible = ['table_caption', 'caption', 'caption_content'].includes(key)
-        ? captions : ['content', 'text', 'value'].includes(key) ? body : null;
+        ? captions : ['content', 'text', 'value', 'table_footnote'].includes(key) ? body : null;
       return !alreadyVisible || !alreadyVisible.has(renderVisualCaption(value).replace(/\s+/g, ' ').trim());
     })),
   };
@@ -594,7 +614,7 @@ function toMarkdownFragment(block: PositionedMineruBlock, plainText: string): st
         tableCellText,
         Boolean(tableBody),
       )
-      : block.type === 'image' ? renderVisualMarkdownContent(block.content, true) : '';
+      : block.type === 'image' ? renderImageMarkdownContent(block.content) : '';
   const safeText = plainText || `未提取到 ${block.type} 文本`;
 
   switch (block.type) {
@@ -1290,9 +1310,7 @@ export function extractTextFromMineruBlock(block: PositionedMineruBlock): string
 
   if (block.type === 'image') {
     return extractTypedContentText(block, [
-      'image_caption', 'chart_caption', 'figure_caption',
-      'image_footnote', 'chart_footnote', 'figure_footnote',
-      'caption', 'caption_content', 'content', 'text', 'value',
+      ...IMAGE_CAPTION_KEYS, 'content', 'text', 'value', ...IMAGE_FOOTNOTE_KEYS,
     ], true, true);
   }
 
@@ -1330,16 +1348,17 @@ export function buildRenderableBlocks(
       block.type === 'table' || block.type === 'image'
         ? extractCaptionFromMineruBlock(block)
         : undefined;
+    const tableContent = block.type === 'table'
+      ? getRecord(withoutEmbeddedTableText(block, tableHtml).content) : null;
     const tableFootnoteText = block.type === 'table'
-      ? renderTableFootnote(getRecord(block.content)?.table_footnote, true)
+      ? renderTableFootnote(tableContent?.table_footnote, true)
       : undefined;
-    const tableContent = tableHtml ? getRecord(withoutEmbeddedTableText(block, tableHtml).content) : null;
     const alreadyVisible = new Set([
       tableHtml ? stripHtml(tableHtml) : '',
       renderTableFootnote(tableContent?.table_footnote),
       ...['table_caption', 'caption', 'caption_content'].map((key) => renderVisualCaption(tableContent?.[key])),
     ]);
-    const tableOcrMarkdown = tableContent
+    const tableOcrMarkdown = tableHtml && tableContent
       ? uniqueNonblankText(['content', 'text', 'value']
         .filter((key) => !alreadyVisible.has(renderVisualCaption(tableContent[key])))
         .map((key) => renderVisualCaption(tableContent[key], true))).join(' ')
