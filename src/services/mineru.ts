@@ -1258,6 +1258,16 @@ export function buildRenderableBlocks(
     const tableFootnoteText = block.type === 'table'
       ? renderTableFootnote(getRecord(block.content)?.table_footnote)
       : undefined;
+    const tableContent = tableHtml ? getRecord(block.content) : null;
+    const alreadyVisible = new Set([
+      tableHtml ? stripHtml(tableHtml) : '',
+      tableFootnoteText,
+      ...['table_caption', 'caption', 'caption_content'].map((key) => renderVisualCaption(tableContent?.[key])),
+    ]);
+    const tableOcrMarkdown = tableContent
+      ? uniqueNonblankText(['content', 'text', 'value'].map((key) => renderVisualCaption(tableContent[key])))
+        .filter((text) => !alreadyVisible.has(text)).join(' ')
+      : undefined;
     const relativeAssetPath = extractMineruAssetPathFromBlock(block);
 
     return {
@@ -1269,6 +1279,7 @@ export function buildRenderableBlocks(
       captionText,
       captionMathMarkdown: block.type === 'table' ? extractCaptionMathMarkdown(block) : undefined,
       tableFootnoteText,
+      tableOcrMarkdown,
       assetPath:
         mineruPath && relativeAssetPath
           ? resolveMineruAssetPath(mineruPath, relativeAssetPath)

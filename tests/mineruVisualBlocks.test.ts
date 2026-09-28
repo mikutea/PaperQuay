@@ -633,3 +633,17 @@ test('structured table OCR retains inline math in every generic source field', (
     assert.equal(extractTranslatableMarkdownFromMineruBlock(table), '**表格说明** Results Value ($x$).', key);
   }
 });
+
+test('HTML tables expose only distinct generic OCR to the original Reader', () => {
+  for (const key of ['content', 'text', 'value']) {
+    const table = block('table', {
+      table_caption: 'Results', html: '<table><tr><td>Score</td></tr></table>',
+      [key]: 'Extra OCR',
+    });
+    assert.equal(buildRenderableBlocks([table])[0].tableOcrMarkdown, 'Extra OCR', key);
+  }
+  const duplicate = block('table', {
+    table_caption: 'Results', html: '<table><tr><td>Score</td></tr></table>', content: 'Score',
+  });
+  assert.equal(buildRenderableBlocks([duplicate])[0].tableOcrMarkdown, '');
+});

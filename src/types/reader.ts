@@ -95,6 +95,7 @@ export interface RenderableMineruBlock {
   captionText?: string;
   captionMathMarkdown?: string;
   tableFootnoteText?: string;
+  tableOcrMarkdown?: string;
   assetPath?: string;
   isInteractive: boolean;
 }

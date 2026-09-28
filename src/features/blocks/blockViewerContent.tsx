@@ -387,6 +387,7 @@ function TableContentComponent({
   captionText,
   captionMathMarkdown,
   tableFootnoteText,
+  tableOcrMarkdown,
   tableHtml,
   fallbackMarkdown,
   translatedText,
@@ -398,6 +399,7 @@ function TableContentComponent({
   captionText?: string;
   captionMathMarkdown?: string;
   tableFootnoteText?: string;
+  tableOcrMarkdown?: string;
   tableHtml?: string;
   fallbackMarkdown: string;
   translatedText?: string;
@@ -448,6 +450,7 @@ function TableContentComponent({
                   dangerouslySetInnerHTML={{ __html: sanitizedTableHtml }}
                 />
               </div>
+              {tableOcrMarkdown ? <MarkdownContent markdown={tableOcrMarkdown} scale={scale} /> : null}
               {tableFootnoteText ? (
                 <div className="leading-6 text-slate-600 dark:text-[var(--pq-text-muted)]"
                   style={{ fontSize: `${14 * scale}px`, lineHeight: `${24 * scale}px` }}>
@@ -555,7 +558,7 @@ function BlockItemComponent({
   registerRef,
 }: BlockItemProps) {
   const l = useLocaleText();
-  const { block, markdown, mathText, plainText, tableHtml, captionText, captionMathMarkdown, tableFootnoteText, assetPath } = renderable;
+  const { block, markdown, mathText, plainText, tableHtml, captionText, captionMathMarkdown, tableFootnoteText, tableOcrMarkdown, assetPath } = renderable;
   const pointerStartRef = useRef<{ x: number; y: number } | null>(null);
   const clickTimerRef = useRef<number | null>(null);
   const hasTranslation = Boolean(translatedText?.trim());
@@ -707,6 +710,7 @@ function BlockItemComponent({
           captionText={captionText}
           captionMathMarkdown={captionMathMarkdown}
           tableFootnoteText={tableFootnoteText}
+          tableOcrMarkdown={tableOcrMarkdown}
           tableHtml={tableHtml}
           fallbackMarkdown={markdown}
           translatedText={translatedText}
