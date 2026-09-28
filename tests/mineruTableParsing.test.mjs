@@ -52,12 +52,14 @@ test('MinerU reuses each table candidate parse across renderable and translation
     assert.equal(JSON.stringify(block), original);
     assert.deepEqual(takeCounts(), { [empty]: 1, [html]: 1 });
     for (const extract of [
-      mineru.extractTextFromMineruBlock, mineru.extractCaptionFromMineruBlock,
+      mineru.extractTextFromMineruBlock,
       mineru.extractTranslatableMarkdownFromMineruBlock,
     ]) {
       extract(block);
       assert.deepEqual(takeCounts(), { [empty]: 1, [html]: 1 });
     }
+    assert.equal(mineru.extractCaptionFromMineruBlock(block), 'Table 1');
+    assert.deepEqual(takeCounts(), {});
     // No persistent cache: subsequent calls must see edits to the input.
     block.content.table_body = '<table><tr><td>Updated</td></tr></table>';
     assert.match(mineru.buildRenderableBlocks([block])[0].plainText, /Updated/);

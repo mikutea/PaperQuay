@@ -93,6 +93,8 @@ export interface RenderableMineruBlock {
   mathText?: string;
   tableHtml?: string;
   captionText?: string;
+  // Separate table heading; labels still use captionText when HTML embeds it.
+  tableDisplayCaptionText?: string;
   captionMathMarkdown?: string;
   tableFootnoteText?: string;
   tableOcrMarkdown?: string;

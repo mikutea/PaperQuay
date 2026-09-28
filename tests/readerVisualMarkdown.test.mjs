@@ -55,6 +55,98 @@ test('Reader preserves inline image alt text without creating fetching image ele
   }
 });
 
+test('Reader and review figure metadata retain caption labels without duplicated table headings', async () => {
+  const fixtureTable = '<table><caption>Table 1</caption><tbody><tr><td>42</td></tr></tbody></table>';
+  const fixtureImage = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
+  const server = await createServer({
+    configFile: false, logLevel: 'silent', plugins: [
+      react(),
+      {
+        name: 'reader-caption-fixtures', enforce: 'pre',
+        transform(code, id) {
+          const path = id.replaceAll('\\', '/');
+          if (path.endsWith('/src/features/blocks/blockViewerContent.tsx')) {
+            // Supply an already loaded image; do not exercise native asset I/O in SSR.
+            return code.replace("const [dataUrl, setDataUrl] = useState('');",
+              `const [dataUrl, setDataUrl] = useState(${JSON.stringify(fixtureImage)});`);
+          }
+          if (path.endsWith('/src/services/libraryAgent.ts')) {
+            return `${code}\nexport { collectMineruReviewFigures };`;
+          }
+        },
+      },
+    ],
+    server: { middlewareMode: true }, appType: 'custom',
+  });
+  try {
+    const { BlockItem } = await server.ssrLoadModule('/src/features/blocks/blockViewerContent.tsx');
+    const { parseMineruPages, flattenMineruPages, buildRenderableBlocks } =
+      await server.ssrLoadModule('/src/services/mineru.ts');
+    const { collectMineruReviewFigures } = await server.ssrLoadModule('/src/services/libraryAgent.ts');
+    const blocks = flattenMineruPages(parseMineruPages([
+      {
+        type: 'image', img_path: 'images/growth.png', image_caption: [
+          { type: 'text', content: 'Growth (' },
+          { type: 'equation_inline', content: 'x' },
+          { type: 'text', content: ').' },
+        ],
+      },
+      { type: 'table', img_path: 'images/table.png', table_caption: 'Table 1', html: fixtureTable },
+    ]));
+    blocks.push(...flattenMineruPages(parseMineruPages({ pdf_info: [{ para_blocks: [
+      { type: 'image', blocks: [
+        { type: 'image_body', lines: [{ spans: [{ img_path: 'images/nested-growth.png' }] }] },
+        { type: 'image_caption', lines: [{ spans: [
+          { type: 'text', content: 'Growth (' }, { type: 'inline_equation', content: 'x' },
+          { type: 'text', content: ').' },
+        ] }] },
+      ] },
+      { type: 'table', blocks: [
+        { type: 'table_body', lines: [{ spans: [{ img_path: 'images/nested-table.png', html: fixtureTable }] }] },
+        { type: 'table_caption', lines: [{ spans: [{ type: 'text', content: 'Table 1' }] }] },
+      ] },
+    ] }] })));
+    const figures = collectMineruReviewFigures(blocks, 'C:/cache/middle.json');
+    assert.deepEqual(figures.map((figure) => figure.caption), ['Growth (x).', 'Table 1', 'Growth (x).', 'Table 1']);
+    // Fixed, known-safe markup only. This stub does not validate the browser sanitizer.
+    globalThis.window = {};
+    globalThis.DOMParser = class {
+      parseFromString(html) {
+        assert.equal(html, fixtureTable);
+        return { querySelectorAll: () => [], body: { children: [], innerHTML: html } };
+      }
+    };
+    for (const renderable of buildRenderableBlocks(blocks, 'C:/cache/middle.json')) {
+      for (const mode of ['original', 'translated', 'bilingual']) {
+        const html = renderToStaticMarkup(createElement(BlockItem, {
+          renderable, active: false, hovered: false, flashing: false, scale: 1,
+          showBlockMeta: false, compactMode: false,
+          translatedText: renderable.markdown, translationDisplayMode: mode,
+          onClick() {}, registerRef() {},
+        }));
+        const nodes = [...parseFragment(html).childNodes];
+        const text = [];
+        const labels = [];
+        while (nodes.length) {
+          const node = nodes.shift();
+          if (node.nodeName === '#text') text.push(node.value);
+          if (node.tagName === 'img') labels.push(node.attrs.find((attr) => attr.name === 'alt')?.value);
+          if (node.childNodes) nodes.unshift(...node.childNodes);
+        }
+        assert.deepEqual(labels, [renderable.captionText]);
+        if (renderable.block.type === 'table') {
+          const copies = mode === 'bilingual' ? 2 : 1;
+          assert.equal(text.join(' ').split('Table 1').length - 1, copies);
+        }
+      }
+    }
+  } finally {
+    delete globalThis.window;
+    delete globalThis.DOMParser;
+    await server.close();
+  }
+});
+
 test('Reader standalone visual notes match source order in original translated and bilingual modes', async () => {
   const server = await createServer({
     configFile: false, logLevel: 'silent', plugins: [react()],

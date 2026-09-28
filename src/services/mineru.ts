@@ -177,7 +177,7 @@ function extractTypedContentText(
   block: PositionedMineruBlock,
   preferredKeys: string[],
   allowFallback = true,
-  preserveMath = false,
+  preserveMath: boolean | 'plain' = false,
 ): string {
   const content = getRecord(block.content);
 
@@ -189,7 +189,7 @@ function extractTypedContentText(
     .map((key) => key.endsWith('_footnote')
       ? renderTableFootnote(content[key])
       : preserveMath
-        ? renderVisualCaption(content[key])
+        ? renderVisualCaption(content[key], false, preserveMath === 'plain')
         : joinReadableText(collectTextParts(content[key]))));
 
   if (preferredParts.length > 0) {
@@ -259,7 +259,7 @@ function escapeMarkdownProse(value: string): string {
     .replace(/^([ \t]*\d+)([.)])(?=[ \t])/gm, '$1\\$2');
 }
 
-function renderInlineMarkdownContent(input: unknown, escapeProse = false): string {
+function renderInlineMarkdownContent(input: unknown, escapeProse = false, plainMath = false): string {
   if (input == null) {
     return '';
   }
@@ -269,7 +269,7 @@ function renderInlineMarkdownContent(input: unknown, escapeProse = false): strin
   }
 
   if (Array.isArray(input)) {
-    return input.map((item) => renderInlineMarkdownContent(item, escapeProse)).join('');
+    return input.map((item) => renderInlineMarkdownContent(item, escapeProse, plainMath)).join('');
   }
 
   const record = getRecord(input);
@@ -284,17 +284,17 @@ function renderInlineMarkdownContent(input: unknown, escapeProse = false): strin
     const textContent = record.content ?? record.text ?? record.value;
     return typeof textContent === 'string'
       ? escapeProse ? escapeMarkdownProse(textContent) : textContent
-      : renderInlineMarkdownContent(textContent, escapeProse);
+      : renderInlineMarkdownContent(textContent, escapeProse, plainMath);
   }
 
   if (nodeType === 'equation_inline') {
     const mathText = extractMathText(record);
-    return mathText ? `$${mathText}$` : '';
+    return mathText ? plainMath ? mathText : `$${mathText}$` : '';
   }
 
   if (nodeType.includes('equation')) {
     const mathText = extractMathText(record);
-    return mathText ? `$$\n${mathText}\n$$` : '';
+    return mathText ? plainMath ? mathText : `$$\n${mathText}\n$$` : '';
   }
 
   for (const key of [
@@ -320,7 +320,7 @@ function renderInlineMarkdownContent(input: unknown, escapeProse = false): strin
       continue;
     }
 
-    const rendered = renderInlineMarkdownContent(record[key], escapeProse);
+    const rendered = renderInlineMarkdownContent(record[key], escapeProse, plainMath);
 
     if (rendered) {
       return rendered;
@@ -329,7 +329,7 @@ function renderInlineMarkdownContent(input: unknown, escapeProse = false): strin
 
   return Object.entries(record)
     .filter(([key]) => !STRUCTURAL_CONTENT_KEYS.has(key) && key !== 'html' && key !== 'table_body')
-    .map(([, value]) => renderInlineMarkdownContent(value, escapeProse))
+    .map(([, value]) => renderInlineMarkdownContent(value, escapeProse, plainMath))
     .join('');
 }
 
@@ -339,10 +339,10 @@ function renderTableFootnote(input: unknown, escapeProse = false): string {
     : renderInlineMarkdownContent(input, escapeProse).trim();
 }
 
-function renderVisualCaption(input: unknown, escapeProse = false): string {
+function renderVisualCaption(input: unknown, escapeProse = false, plainMath = false): string {
   return Array.isArray(input) && input.every((item) => typeof item === 'string')
-    ? input.map((item) => renderInlineMarkdownContent(item, escapeProse).trim()).filter(Boolean).join(' ')
-    : renderInlineMarkdownContent(input, escapeProse).trim();
+    ? input.map((item) => renderInlineMarkdownContent(item, escapeProse, plainMath).trim()).filter(Boolean).join(' ')
+    : renderInlineMarkdownContent(input, escapeProse, plainMath).trim();
 }
 
 function renderCaptionMathPart(input: unknown, depth = 0): { markdown: string; hasMath: boolean } {
@@ -609,20 +609,19 @@ function readTableContent(block: PositionedMineruBlock): TableContent | undefine
   };
 }
 
-function extractBlockCaption(block: PositionedMineruBlock, table?: TableContent): string {
+function extractBlockCaption(block: PositionedMineruBlock): string {
   switch (block.type) {
     case 'table':
-      return extractTypedContentText(table?.readableBlock ?? block,
-        ['table_caption', 'caption', 'caption_content'], false);
+      return extractTypedContentText(block, ['table_caption', 'caption', 'caption_content'], false, 'plain');
     case 'image':
-      return extractTypedContentText(block, ['image_caption', 'chart_caption', 'figure_caption', 'caption', 'caption_content'], false);
+      return extractTypedContentText(block, IMAGE_CAPTION_KEYS, false, 'plain');
     default:
       return '';
   }
 }
 
 export function extractCaptionFromMineruBlock(block: PositionedMineruBlock): string {
-  return extractBlockCaption(block, readTableContent(block));
+  return extractBlockCaption(block);
 }
 
 function toMarkdownFragment(block: PositionedMineruBlock, plainText: string, table?: TableContent): string {
@@ -859,36 +858,66 @@ function mapMiddleBlockType(rawType: unknown): string {
 }
 
 function extractMiddleContent(rawBlock: Record<string, unknown>): Record<string, unknown> {
-  const lines = Array.isArray(rawBlock.lines) ? rawBlock.lines : [];
-  const spans = lines.flatMap((line) => {
-    if (!line || typeof line !== 'object') {
-      return [];
+  const visualType = mapMiddleBlockType(rawBlock.type);
+  const isVisual = visualType === 'image' || visualType === 'table';
+  type Role = 'body' | 'caption' | 'footnote';
+  const pending: { record: Record<string, unknown>; role: Role }[] = [{ record: rawBlock, role: 'body' }];
+  const seen = new Set<Record<string, unknown>>();
+  const records: Record<string, unknown>[] = [];
+  const spans: Record<string, unknown>[] = [];
+  const spanTextParts: string[] = [];
+  const notes = { caption: [] as unknown[], footnote: [] as unknown[] };
+  while (pending.length) {
+    const { record, role: inheritedRole } = pending.pop()!;
+    if (seen.has(record)) continue;
+    seen.add(record);
+    records.push(record);
+    const type = typeof record.type === 'string' ? record.type.toLowerCase() : '';
+    const role: Role = isVisual && /^(?:image|chart|figure|table)_(?:caption|footnote)$/.test(type)
+      ? type.endsWith('_caption') ? 'caption' : 'footnote' : inheritedRole;
+    const lines = Array.isArray(record.lines) ? record.lines : [];
+    for (const line of lines) {
+      const items = getRecord(line)?.spans;
+      const lineSpans = Array.isArray(items) ? items.map(getRecord).filter((item) => item !== null) : [];
+      for (const span of lineSpans) spans.push(span);
+      if (role === 'body') {
+        for (const span of lineSpans) {
+          for (const part of collectTextParts(span.content ?? span.text ?? span.latex ?? null)) spanTextParts.push(part);
+        }
+      } else {
+        const inline = lineSpans.filter((span) => (span.content ?? span.text ?? span.latex) != null)
+          .map((span) => ({
+            type: span.type === 'inline_equation' ? 'equation_inline' :
+              span.type === 'interline_equation' ? 'equation' : span.type ?? 'text',
+            content: span.content ?? span.text ?? span.latex,
+          }));
+        if (inline.length) {
+          if (notes[role].length) notes[role].push({ type: 'text', content: ' ' });
+          for (const part of inline) notes[role].push(part);
+        }
+      }
     }
-
-    const items = (line as Record<string, unknown>).spans;
-    return Array.isArray(items) ? items.filter((span) => span && typeof span === 'object') : [];
-  });
-  const spanTextParts = spans.flatMap((span) => {
-    const rawSpan = span as Record<string, unknown>;
-    return collectTextParts(rawSpan.content ?? rawSpan.text ?? rawSpan.latex ?? null);
-  });
-  const imagePaths = [
-    rawBlock.img_path, rawBlock.image_path, rawBlock.path,
-    getRecord(rawBlock.image_source)?.path,
-    ...spans.flatMap((span) => {
-      const rawSpan = span as Record<string, unknown>;
-      return [
-        rawSpan.img_path, rawSpan.image_path, rawSpan.path,
-        getRecord(rawSpan.image_source)?.path,
-      ];
-    }),
-  ]
+    if (isVisual && Array.isArray(record.blocks)) {
+      for (let index = record.blocks.length - 1; index >= 0; index -= 1) {
+        const child = getRecord(record.blocks[index]);
+        if (child) pending.push({ record: child, role });
+      }
+    }
+  }
+  const imagePaths = [...records, ...spans].flatMap((record) => [
+    record.img_path, record.image_path, record.path, getRecord(record.image_source)?.path,
+  ])
     .filter((path): path is string => typeof path === 'string' && Boolean(path.trim()))
     .map((path) => path.trim());
+  const html = visualType === 'table'
+    ? spans.map((span) => span.html).find((value) => typeof value === 'string' && value.trim()) : undefined;
 
   return {
     text: joinReadableText(spanTextParts),
     raw_type: rawBlock.type,
+    ...(notes.caption.length ? { caption: notes.caption } : {}),
+    ...(notes.footnote.length ? { [visualType === 'table' ? 'table_footnote' : 'image_footnote']: notes.footnote } : {}),
+    ...(html ? { html } : {}),
     ...(imagePaths.length ? { img_path: imagePaths[0], asset_paths: [...new Set(imagePaths)] } : {}),
   };
 }
@@ -1372,7 +1401,7 @@ export function buildRenderableBlocks(
     const tableHtml = table?.html;
     const captionText =
       block.type === 'table' || block.type === 'image'
-        ? extractBlockCaption(block, table)
+        ? extractBlockCaption(block)
         : undefined;
     const tableContent = table ? getRecord(table.readableBlock.content) : null;
     const tableFootnoteText = block.type === 'table'
@@ -1397,6 +1426,7 @@ export function buildRenderableBlocks(
       mathText,
       tableHtml,
       captionText,
+      tableDisplayCaptionText: table ? extractBlockCaption(table.readableBlock) : undefined,
       captionMathMarkdown: table ? extractCaptionMathMarkdown(table.readableBlock) : undefined,
       tableFootnoteText,
       tableOcrMarkdown,

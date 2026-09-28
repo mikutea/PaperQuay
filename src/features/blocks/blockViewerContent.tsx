@@ -385,6 +385,7 @@ function AssetFigure({
 function TableContentComponent({
   assetPath,
   captionText,
+  displayCaptionText,
   captionMathMarkdown,
   tableFootnoteText,
   tableOcrMarkdown,
@@ -397,6 +398,7 @@ function TableContentComponent({
 }: {
   assetPath?: string;
   captionText?: string;
+  displayCaptionText?: string;
   captionMathMarkdown?: string;
   tableFootnoteText?: string;
   tableOcrMarkdown?: string;
@@ -408,6 +410,7 @@ function TableContentComponent({
   scale: number;
 }) {
   const l = useLocaleText();
+  const visibleCaptionText = displayCaptionText ?? captionText;
   const sanitizedTableHtml = useMemo(
     () => (tableHtml ? sanitizeMineruTableHtml(tableHtml) : ''),
     [tableHtml],
@@ -427,7 +430,7 @@ function TableContentComponent({
         <MarkdownContent markdown={translatedText || fallbackMarkdown} scale={scale} />
       ) : (
         <>
-          {captionText && sanitizedTableHtml ? (
+          {visibleCaptionText && sanitizedTableHtml ? (
             <div
               className="font-medium leading-6 text-slate-600 dark:text-[var(--pq-text-muted)]"
               style={{
@@ -437,7 +440,7 @@ function TableContentComponent({
             >
               {captionMathMarkdown
                 ? <MarkdownContent markdown={captionMathMarkdown} scale={scale} />
-                : <InlineCaptionContent text={captionText} />}
+                : <InlineCaptionContent text={visibleCaptionText} />}
             </div>
           ) : null}
 
@@ -709,6 +712,7 @@ function BlockItemComponent({
           assetPath={assetPath}
           captionText={captionText}
           captionMathMarkdown={captionMathMarkdown}
+          displayCaptionText={renderable.tableDisplayCaptionText}
           tableFootnoteText={tableFootnoteText}
           tableOcrMarkdown={tableOcrMarkdown}
           tableHtml={tableHtml}

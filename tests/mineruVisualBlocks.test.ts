@@ -16,6 +16,81 @@ function block(type: string, content: unknown) {
   return flattenMineruPages(parseMineruPages([[{ type, content, bbox: [10, 20, 300, 220] }]]))[0];
 }
 
+test('visual caption labels preserve inline-node adjacency without adding math delimiters', () => {
+  const caption = [
+    { type: 'text', content: 'Growth (' },
+    { type: 'equation_inline', content: 'x' },
+    { type: 'text', content: ').' },
+  ];
+  for (const type of ['image', 'chart', 'figure', 'table']) {
+    const visual = block(type, { [`${type}_caption`]: caption });
+    assert.equal(extractCaptionFromMineruBlock(visual), 'Growth (x).');
+    assert.equal(buildRenderableBlocks([visual])[0].captionText, 'Growth (x).');
+    assert.match(extractTranslatableMarkdownFromMineruBlock(visual), /Growth \(\$x\$\)\./);
+  }
+});
+
+test('embedded table captions remain label metadata without separate body duplication', () => {
+  const html = '<table><caption>Table 1</caption><tr><td>42</td></tr></table>';
+  const table = block('table', { table_caption: 'Table 1', html });
+  const original = JSON.stringify(table);
+  const [renderable] = buildRenderableBlocks([table]);
+  assert.equal(extractCaptionFromMineruBlock(table), 'Table 1');
+  assert.equal(renderable.captionText, 'Table 1');
+  assert.equal(renderable.tableDisplayCaptionText, '');
+  assert.equal(renderable.plainText, 'Table 1 42');
+  assert.equal(renderable.markdown, '**表格说明** Table 1 42');
+  assert.equal(JSON.stringify(table), original);
+});
+
+test('nested middle JSON visuals retain body assets captions footnotes and table HTML', () => {
+  for (const type of ['image', 'chart', 'figure', 'table']) {
+    const raw = { pdf_info: [{ page_idx: 0, page_size: [600, 800], para_blocks: [{
+      type, bbox: [10, 20, 300, 220], blocks: [
+        { type: `${type}_footnote`, lines: [{ spans: [{ type: 'text', content: 'Source A' }] }] },
+        { type: `${type}_body`, blocks: [{
+          lines: [{ spans: [{
+            img_path: `images/${type}.png`, content: 'OCR label',
+            ...(type === 'table' ? { html: '<table><tr><td>42</td></tr></table>' } : {}),
+          }] }],
+        }] },
+        { type: `${type}_caption`, lines: [{ spans: [{ type: 'text', content: 'Figure 1' }] }] },
+      ],
+    }] }] };
+    const original = JSON.stringify(raw);
+    const [visual] = flattenMineruPages(parseMineruPages(raw));
+    const [renderable] = buildRenderableBlocks([visual], 'C:/cache/middle.json');
+    assert.equal(renderable.assetPath?.replaceAll('\\', '/'), `C:/cache/images/${type}.png`);
+    assert.equal(extractCaptionFromMineruBlock(visual), 'Figure 1');
+    assert.equal(renderable.captionText, 'Figure 1');
+    assert.equal(renderable.plainText, `Figure 1 ${type === 'table' ? '42 ' : ''}OCR label Source A`);
+    assert.match(renderable.markdown, /Figure 1.*OCR label.*Source A/);
+    assert.doesNotMatch(renderable.markdown, /images\/|<table/);
+    if (type === 'table') assert.match(renderable.tableHtml ?? '', /<td>42<\/td>/);
+    assert.equal(JSON.stringify(raw), original);
+  }
+});
+
+test('nested middle captions inherit their role and preserve typed formula adjacency', () => {
+  const [visual] = flattenMineruPages(parseMineruPages({ pdf_info: [{ para_blocks: [{
+    type: 'image', blocks: [
+      { type: 'image_body', image_path: 'https://example.com/rejected.png', blocks: [{
+        lines: [{ spans: [{ image_source: { path: 'images/local.png' } }] }],
+      }] },
+      { type: 'image_caption', blocks: [{ lines: [{ spans: [
+        { type: 'text', content: 'Growth (' },
+        { type: 'inline_equation', content: 'x' },
+        { type: 'text', content: ').' },
+      ] }] }] },
+    ],
+  }] }] }));
+  const [renderable] = buildRenderableBlocks([visual], 'C:/cache/middle.json');
+  assert.equal(renderable.captionText, 'Growth (x).');
+  assert.equal(renderable.plainText, 'Growth ($x$).');
+  assert.equal(renderable.markdown, '**图片说明** Growth ($x$).');
+  assert.equal(renderable.assetPath?.replaceAll('\\', '/'), 'C:/cache/images/local.png');
+});
+
 test('standalone visual notes keep caption, OCR and footnote order across source and Markdown', () => {
   for (const role of ['table', 'image', 'chart', 'figure']) {
     for (const kind of ['caption', 'footnote']) {
@@ -736,7 +811,8 @@ test('embedded HTML table captions are not repeated in source translation or Rea
     const [renderable] = buildRenderableBlocks([table]);
     assert.equal(renderable.plainText, 'Table 1 42', key);
     assert.equal(renderable.markdown, '**表格说明** Table 1 42', key);
-    assert.equal(renderable.captionText, '', key);
+    assert.equal(renderable.captionText, 'Table 1', key);
+    assert.equal(renderable.tableDisplayCaptionText, '', key);
     assert.match(renderable.tableHtml ?? '', /<caption>Table 1<\/caption>/);
   }
   const distinct = block('table', {
@@ -841,7 +917,8 @@ test('generic OCR matching combined cells is omitted when HTML has an embedded c
     for (const table of [nested, flat]) {
       const [renderable] = buildRenderableBlocks([table]);
       assert.equal(renderable.tableOcrMarkdown, '', key);
-      assert.equal(renderable.captionText, '', key);
+      assert.equal(renderable.captionText, 'Table 1', key);
+      assert.equal(renderable.tableDisplayCaptionText, '', key);
       assert.equal(renderable.plainText, 'Table 1 Score 42 Source', key);
       assert.equal(renderable.markdown, '**表格说明** Table 1 Score 42 Source', key);
       assert.equal(extractTranslatableMarkdownFromMineruBlock(table), renderable.markdown, key);
