@@ -757,3 +757,25 @@ test('literal visual prose handling does not escape actual Markdown table fallba
   const [table] = flattenMineruPages(parseMineruMarkdownPages(markdown));
   assert.equal(buildRenderableBlocks([table])[0].markdown, `**表格说明** ${markdown}`);
 });
+
+test('non-HTML tables order caption body and footnote independently of field storage order', () => {
+  for (const key of ['content', 'text', 'value']) {
+    const fields = { table_footnote: 'Source', [key]: 'Cells', table_caption: 'Table 1' };
+    const [flat] = flattenMineruPages(parseMineruPages([{ type: 'table', ...fields }]));
+    const nested = block('table', fields);
+    for (const table of [flat, nested]) {
+      assert.equal(extractTextFromMineruBlock(table), 'Table 1 Cells Source', key);
+      assert.equal(buildRenderableBlocks([table])[0].markdown, '**表格说明** Table 1 Cells Source', key);
+      assert.equal(extractTranslatableMarkdownFromMineruBlock(table), '**表格说明** Table 1 Cells Source', key);
+    }
+  }
+});
+
+test('HTML table translation orders cells and distinct OCR before the footnote', () => {
+  const table = block('table', {
+    table_footnote: 'Source', content: 'Extra OCR', table_caption: 'Table 1',
+    html: '<table><tr><td>Cells</td></tr></table>',
+  });
+  assert.equal(extractTextFromMineruBlock(table), 'Table 1 Cells Extra OCR Source');
+  assert.equal(extractTranslatableMarkdownFromMineruBlock(table), '**表格说明** Table 1 Cells Extra OCR Source');
+});

@@ -388,6 +388,21 @@ function renderVisualMarkdownContent(
     .join(' ');
 }
 
+function renderTableMarkdownContent(input: unknown, tableCellText: string, hasHtml: boolean): string {
+  const record = getRecord(input);
+  if (!record) return renderVisualMarkdownContent(input);
+  const captionKeys = ['table_caption', 'caption', 'caption_content'];
+  const caption = Object.fromEntries(captionKeys.map((key) => [key, record[key]]));
+  const body = Object.fromEntries(Object.entries(record)
+    .filter(([key]) => !captionKeys.includes(key) && key !== 'table_footnote'));
+  return uniqueNonblankText([
+    renderVisualMarkdownContent(caption),
+    escapeMarkdownProse(tableCellText),
+    renderVisualMarkdownContent(body, hasHtml, tableCellText),
+    renderTableFootnote(record.table_footnote, true),
+  ]).join(' ');
+}
+
 function cleanMineruListText(value: string): string {
   return removeSpelledMineruTokenNoise(value)
     .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
@@ -563,13 +578,13 @@ function toMarkdownFragment(block: PositionedMineruBlock, plainText: string): st
   const tableBody = block.type === 'table' ? extractTableHtmlFromMineruBlock(block) : undefined;
   const tableCellText = tableBody ? stripHtml(tableBody) : '';
   const visualMarkdown =
-    block.type === 'image' || block.type === 'table'
-      ? renderVisualMarkdownContent(
+    block.type === 'table'
+      ? renderTableMarkdownContent(
         withoutEmbeddedTableCaptions(block, tableBody).content,
-        block.type === 'image' || Boolean(tableBody),
         tableCellText,
+        Boolean(tableBody),
       )
-      : '';
+      : block.type === 'image' ? renderVisualMarkdownContent(block.content, true) : '';
   const safeText = plainText || `未提取到 ${block.type} 文本`;
 
   switch (block.type) {
@@ -595,9 +610,7 @@ function toMarkdownFragment(block: PositionedMineruBlock, plainText: string): st
       return description ? `**图片说明** ${description}` : '';
     }
     case 'table': {
-      const tableText = [visualMarkdown, escapeMarkdownProse(tableCellText)]
-        .filter(Boolean)
-        .join(' ') || plainText;
+      const tableText = visualMarkdown || plainText;
       return tableText ? `**表格说明** ${tableText}` : '';
     }
     case 'caption':
