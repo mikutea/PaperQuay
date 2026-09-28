@@ -69,33 +69,39 @@ function uniqueNonblankText(parts: string[]): string[] {
   });
 }
 
-function getVisibleHtmlContent(input: string): { text: string; hasTable: boolean; captions: string[] } {
+function getVisibleHtmlContent(input: string): { text: string; hasTable: boolean; captions: string[]; cells: string[] } {
   const hiddenTags = new Set(['script', 'style', 'iframe', 'object', 'embed', 'link', 'meta']);
-  const nodes: { node: DefaultTreeAdapterMap['node']; captionParts?: string[] }[] =
+  const nodes: { node: DefaultTreeAdapterMap['node']; captionParts?: string[]; cellParts?: string[] }[] =
     [...parseFragment(input).childNodes].reverse().map((node) => ({ node }));
   const text: string[] = [];
   const captions: string[][] = [];
+  const cells: string[][] = [];
   let hasTable = false;
   while (nodes.length > 0) {
-    let { node, captionParts } = nodes.pop()!;
+    let { node, captionParts, cellParts } = nodes.pop()!;
     if ('tagName' in node && hiddenTags.has(node.tagName)) continue;
     if ('tagName' in node && node.tagName === 'table') hasTable = true;
     if ('tagName' in node && node.tagName === 'caption') {
       captionParts = [];
       captions.push(captionParts);
     }
+    if ('tagName' in node && (node.tagName === 'td' || node.tagName === 'th')) {
+      cellParts = [];
+      cells.push(cellParts);
+    }
     if (node.nodeName === '#text' && 'value' in node) {
       text.push(node.value);
       captionParts?.push(node.value);
+      cellParts?.push(node.value);
     }
     if ('childNodes' in node) {
       for (let index = node.childNodes.length - 1; index >= 0; index -= 1) {
-        nodes.push({ node: node.childNodes[index], captionParts });
+        nodes.push({ node: node.childNodes[index], captionParts, cellParts });
       }
     }
   }
   const normalize = (parts: string[]) => parts.join(' ').replace(/\s+/g, ' ').trim();
-  return { text: normalize(text), hasTable, captions: captions.map(normalize).filter(Boolean) };
+  return { text: normalize(text), hasTable, captions: captions.map(normalize).filter(Boolean), cells: cells.map(normalize).filter(Boolean) };
 }
 
 function stripHtml(input: string): string {
@@ -487,7 +493,8 @@ export function extractTableHtmlFromMineruBlock(
   const candidates = [content?.html, content?.table_body]
     .filter((candidate): candidate is string => typeof candidate === 'string' && Boolean(candidate.trim()))
     .map((html) => ({ html, ...getVisibleHtmlContent(html) }));
-  const html = (candidates.find((candidate) => candidate.hasTable && candidate.text) ??
+  const html = (candidates.find((candidate) => candidate.hasTable && candidate.cells.length > 0) ??
+    candidates.find((candidate) => candidate.hasTable && candidate.text) ??
     candidates.find((candidate) => candidate.text) ??
     candidates.find((candidate) => candidate.hasTable))?.html;
 
@@ -548,23 +555,26 @@ export function resolveMineruAssetPath(
   return candidate;
 }
 
-function withoutEmbeddedTableCaptions(block: PositionedMineruBlock, html?: string): PositionedMineruBlock {
+function withoutEmbeddedTableText(block: PositionedMineruBlock, html?: string): PositionedMineruBlock {
   const content = getRecord(block.content);
   if (!content || !html) return block;
-  const captions = new Set(getVisibleHtmlContent(html).captions);
-  if (!captions.size) return block;
+  const visible = getVisibleHtmlContent(html);
+  const captions = new Set(visible.captions);
+  const body = new Set([visible.text, ...visible.cells]);
   return {
     ...block,
-    content: Object.fromEntries(Object.entries(content).filter(([key, value]) =>
-      !['table_caption', 'caption', 'caption_content'].includes(key) ||
-      !captions.has(renderVisualCaption(value).replace(/\s+/g, ' ').trim()))),
+    content: Object.fromEntries(Object.entries(content).filter(([key, value]) => {
+      const alreadyVisible = ['table_caption', 'caption', 'caption_content'].includes(key)
+        ? captions : ['content', 'text', 'value'].includes(key) ? body : null;
+      return !alreadyVisible || !alreadyVisible.has(renderVisualCaption(value).replace(/\s+/g, ' ').trim());
+    })),
   };
 }
 
 export function extractCaptionFromMineruBlock(block: PositionedMineruBlock): string {
   switch (block.type) {
     case 'table':
-      return extractTypedContentText(withoutEmbeddedTableCaptions(block, extractTableHtmlFromMineruBlock(block)),
+      return extractTypedContentText(withoutEmbeddedTableText(block, extractTableHtmlFromMineruBlock(block)),
         ['table_caption', 'caption', 'caption_content'], false);
     case 'image':
       return extractTypedContentText(block, ['image_caption', 'chart_caption', 'figure_caption', 'caption', 'caption_content'], false);
@@ -580,7 +590,7 @@ function toMarkdownFragment(block: PositionedMineruBlock, plainText: string): st
   const visualMarkdown =
     block.type === 'table'
       ? renderTableMarkdownContent(
-        withoutEmbeddedTableCaptions(block, tableBody).content,
+        withoutEmbeddedTableText(block, tableBody).content,
         tableCellText,
         Boolean(tableBody),
       )
@@ -1259,9 +1269,10 @@ export function resolveMineruBlockContentSource(
 export function extractTextFromMineruBlock(block: PositionedMineruBlock): string {
   if (block.type === 'table') {
     const tableHtml = extractTableHtmlFromMineruBlock(block);
-    const caption = extractTypedContentText(withoutEmbeddedTableCaptions(block, tableHtml),
+    const readableBlock = withoutEmbeddedTableText(block, tableHtml);
+    const caption = extractTypedContentText(readableBlock,
       ['table_caption', 'caption', 'caption_content'], false, true);
-    const content = getRecord(block.content);
+    const content = getRecord(readableBlock.content);
     const markdown = content?.markdown;
     const footnote = renderTableFootnote(content?.table_footnote);
     const fallbackText = content
@@ -1322,7 +1333,7 @@ export function buildRenderableBlocks(
     const tableFootnoteText = block.type === 'table'
       ? renderTableFootnote(getRecord(block.content)?.table_footnote, true)
       : undefined;
-    const tableContent = tableHtml ? getRecord(block.content) : null;
+    const tableContent = tableHtml ? getRecord(withoutEmbeddedTableText(block, tableHtml).content) : null;
     const alreadyVisible = new Set([
       tableHtml ? stripHtml(tableHtml) : '',
       renderTableFootnote(tableContent?.table_footnote),
@@ -1343,7 +1354,7 @@ export function buildRenderableBlocks(
       tableHtml,
       captionText,
       captionMathMarkdown: block.type === 'table'
-        ? extractCaptionMathMarkdown(withoutEmbeddedTableCaptions(block, tableHtml)) : undefined,
+        ? extractCaptionMathMarkdown(withoutEmbeddedTableText(block, tableHtml)) : undefined,
       tableFootnoteText,
       tableOcrMarkdown,
       assetPath:

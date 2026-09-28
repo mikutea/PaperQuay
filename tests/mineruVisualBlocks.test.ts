@@ -779,3 +779,33 @@ test('HTML table translation orders cells and distinct OCR before the footnote',
   assert.equal(extractTextFromMineruBlock(table), 'Table 1 Cells Extra OCR Source');
   assert.equal(extractTranslatableMarkdownFromMineruBlock(table), '**表格说明** Table 1 Cells Extra OCR Source');
 });
+
+test('table aliases with visible cells outrank caption-only or hidden-cell shells', () => {
+  for (const html of [
+    '<table><caption>conversion failed</caption></table>',
+    '<table><caption>conversion failed</caption><tr><td><script>ignored</script></td></tr></table>',
+  ]) {
+    const table = block('table', { html, table_body: '<table><tr><th>Score</th><td>42</td></tr></table>' });
+    const [renderable] = buildRenderableBlocks([table]);
+    assert.equal(renderable.tableHtml, '<table><tr><th>Score</th><td>42</td></tr></table>');
+    assert.equal(renderable.plainText, 'Score 42');
+    assert.equal(renderable.markdown, '**表格说明** Score 42');
+  }
+});
+
+test('generic OCR duplicates of individual visible cells are omitted without dropping distinct prose', () => {
+  for (const key of ['content', 'text', 'value']) {
+    const content = { html: '<table><tr><th>Score</th><td>42</td></tr></table>', [key]: 'Score' };
+    const table = block('table', content);
+    const [renderable] = buildRenderableBlocks([table]);
+    assert.equal(renderable.tableOcrMarkdown, '', key);
+    assert.equal(renderable.plainText, 'Score 42', key);
+    assert.equal(renderable.markdown, '**表格说明** Score 42', key);
+    assert.deepEqual(table.content, content);
+  }
+  const distinct = block('table', {
+    html: '<table><tr><th>Score</th><td>42</td></tr></table>', content: 'Score details',
+  });
+  assert.equal(buildRenderableBlocks([distinct])[0].tableOcrMarkdown, 'Score details');
+  assert.equal(extractTextFromMineruBlock(distinct), 'Score 42 Score details');
+});
