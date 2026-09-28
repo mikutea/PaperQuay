@@ -16,6 +16,26 @@ function block(type: string, content: unknown) {
   return flattenMineruPages(parseMineruPages([[{ type, content, bbox: [10, 20, 300, 220] }]]))[0];
 }
 
+test('standalone visual notes keep caption, OCR and footnote order across source and Markdown', () => {
+  for (const role of ['table', 'image', 'chart', 'figure']) {
+    for (const kind of ['caption', 'footnote']) {
+      for (const nested of [false, true]) {
+        const content = {
+          text: 'OCR label', [`${role}_footnote`]: ['Source A', 'Source B'],
+          [`${role}_caption`]: [{ type: 'text', content: 'Figure *1*' }],
+        };
+        const raw = { type: `${role}_${kind}`, ...(nested ? { content } : content) };
+        const [note] = flattenMineruPages(parseMineruPages(nested ? [[raw]] : [raw]));
+        const snapshot = JSON.stringify(note);
+        assert.equal(extractTextFromMineruBlock(note), 'Figure *1* OCR label Source A Source B');
+        assert.equal(extractTranslatableMarkdownFromMineruBlock(note), '> Figure \\*1\\* OCR label Source A Source B');
+        assert.equal(buildRenderableBlocks([note])[0].markdown, '> Figure \\*1\\* OCR label Source A Source B');
+        assert.equal(JSON.stringify(note), snapshot);
+      }
+    }
+  }
+});
+
 test('MinerU chart retains its asset and caption without translating its image path', () => {
   const chart = block('chart', {
     image_source: { path: 'images/chart.jpg' },
