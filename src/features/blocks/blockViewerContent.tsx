@@ -240,6 +240,7 @@ function MarkdownContentComponent({
             {children}
           </blockquote>
         ),
+        img: ({ alt }) => <>{alt}</>,
       }}
     >
       {normalizedMarkdown}
@@ -384,6 +385,10 @@ function AssetFigure({
 function TableContentComponent({
   assetPath,
   captionText,
+  displayCaptionText,
+  captionMathMarkdown,
+  tableFootnoteText,
+  tableOcrMarkdown,
   tableHtml,
   fallbackMarkdown,
   translatedText,
@@ -393,6 +398,10 @@ function TableContentComponent({
 }: {
   assetPath?: string;
   captionText?: string;
+  displayCaptionText?: string;
+  captionMathMarkdown?: string;
+  tableFootnoteText?: string;
+  tableOcrMarkdown?: string;
   tableHtml?: string;
   fallbackMarkdown: string;
   translatedText?: string;
@@ -401,6 +410,7 @@ function TableContentComponent({
   scale: number;
 }) {
   const l = useLocaleText();
+  const visibleCaptionText = displayCaptionText ?? captionText;
   const sanitizedTableHtml = useMemo(
     () => (tableHtml ? sanitizeMineruTableHtml(tableHtml) : ''),
     [tableHtml],
@@ -420,7 +430,7 @@ function TableContentComponent({
         <MarkdownContent markdown={translatedText || fallbackMarkdown} scale={scale} />
       ) : (
         <>
-          {captionText ? (
+          {visibleCaptionText && sanitizedTableHtml ? (
             <div
               className="font-medium leading-6 text-slate-600 dark:text-[var(--pq-text-muted)]"
               style={{
@@ -428,18 +438,29 @@ function TableContentComponent({
                 lineHeight: `${24 * scale}px`,
               }}
             >
-              <InlineCaptionContent text={captionText} />
+              {captionMathMarkdown
+                ? <MarkdownContent markdown={captionMathMarkdown} scale={scale} />
+                : <InlineCaptionContent text={visibleCaptionText} />}
             </div>
           ) : null}
 
           {sanitizedTableHtml ? (
-            <div className="overflow-auto rounded-[20px] border border-slate-200/80 bg-white shadow-[0_10px_24px_rgba(15,23,42,0.05)] dark:border-[var(--pq-border)] dark:bg-[var(--pq-surface-1)] dark:shadow-[0_10px_24px_rgba(0,0,0,0.18)]">
-              <div
-                className="mineru-table min-w-max p-4"
-                style={{ fontSize: `${14 * scale}px` }}
-                dangerouslySetInnerHTML={{ __html: sanitizedTableHtml }}
-              />
-            </div>
+            <>
+              <div className="overflow-auto rounded-[20px] border border-slate-200/80 bg-white shadow-[0_10px_24px_rgba(15,23,42,0.05)] dark:border-[var(--pq-border)] dark:bg-[var(--pq-surface-1)] dark:shadow-[0_10px_24px_rgba(0,0,0,0.18)]">
+                <div
+                  className="mineru-table min-w-max p-4"
+                  style={{ fontSize: `${14 * scale}px` }}
+                  dangerouslySetInnerHTML={{ __html: sanitizedTableHtml }}
+                />
+              </div>
+              {tableOcrMarkdown ? <MarkdownContent markdown={tableOcrMarkdown} scale={scale} /> : null}
+              {tableFootnoteText ? (
+                <div className="leading-6 text-slate-600 dark:text-[var(--pq-text-muted)]"
+                  style={{ fontSize: `${14 * scale}px`, lineHeight: `${24 * scale}px` }}>
+                  <MarkdownContent markdown={tableFootnoteText} scale={scale} />
+                </div>
+              ) : null}
+            </>
           ) : (
             <MarkdownContent markdown={fallbackMarkdown} scale={scale} />
           )}
@@ -540,7 +561,7 @@ function BlockItemComponent({
   registerRef,
 }: BlockItemProps) {
   const l = useLocaleText();
-  const { block, markdown, mathText, plainText, tableHtml, captionText, assetPath } = renderable;
+  const { block, markdown, mathText, plainText, tableHtml, captionText, captionMathMarkdown, tableFootnoteText, tableOcrMarkdown, assetPath } = renderable;
   const pointerStartRef = useRef<{ x: number; y: number } | null>(null);
   const clickTimerRef = useRef<number | null>(null);
   const hasTranslation = Boolean(translatedText?.trim());
@@ -690,6 +711,10 @@ function BlockItemComponent({
         <TableContent
           assetPath={assetPath}
           captionText={captionText}
+          captionMathMarkdown={captionMathMarkdown}
+          displayCaptionText={renderable.tableDisplayCaptionText}
+          tableFootnoteText={tableFootnoteText}
+          tableOcrMarkdown={tableOcrMarkdown}
           tableHtml={tableHtml}
           fallbackMarkdown={markdown}
           translatedText={translatedText}

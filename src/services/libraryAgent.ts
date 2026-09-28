@@ -660,7 +660,7 @@ function collectMineruReviewFigures(
       continue;
     }
 
-    const relativeAssetPath = extractMineruAssetPathFromBlock(block);
+    const relativeAssetPath = extractMineruAssetPathFromBlock(block, mineruPath);
     const assetPath = relativeAssetPath
       ? resolveMineruAssetPath(mineruPath, relativeAssetPath)
       : undefined;

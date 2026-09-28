@@ -65,7 +65,7 @@ test('buildPaperSummarySourceKey distinguishes pdf text and MinerU markdown sour
       currentJsonName: 'content_list_v2.json',
       blockCount: 12,
     }),
-    'paper-1::prompt-v1::English::mineru-markdown::D:/cache/content_list_v2.json::12',
+    'paper-1::prompt-v1-visual-v2::English::mineru-markdown::D:/cache/content_list_v2.json::12',
   );
 });
 

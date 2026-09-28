@@ -14,6 +14,27 @@ import {
   normalizeRawLatexExpression,
 } from '../utils/markdown.ts';
 import { joinReadableText } from '../utils/text.ts';
+import { parseFragment, type DefaultTreeAdapterMap } from 'parse5';
+
+const STRUCTURAL_CONTENT_KEYS = new Set([
+  'type', 'bbox', 'path', 'img_path', 'image_path', 'image_source', 'asset_paths',
+  'table_type', 'table_nest_level', 'level', 'text_level', 'math_type',
+  'list_type', 'item_type', 'sub_type', 'raw_type', 'bboxCoordinateSystem', 'bboxPageSize',
+]);
+
+const IMAGE_CAPTION_KEYS = ['image_caption', 'chart_caption', 'figure_caption', 'caption', 'caption_content'];
+const IMAGE_FOOTNOTE_KEYS = ['image_footnote', 'chart_footnote', 'figure_footnote'];
+const VISUAL_NOTE_TEXT_KEYS = ['table_caption', ...IMAGE_CAPTION_KEYS, 'content', 'text', 'value'];
+const VISUAL_NOTE_FOOTNOTE_KEYS = ['table_footnote', ...IMAGE_FOOTNOTE_KEYS];
+
+type VisibleHtmlContent = {
+  text: string; hasTable: boolean; captions: string[]; cells: string[]; footers: string[];
+};
+type TableContent = {
+  html?: string;
+  visible?: VisibleHtmlContent;
+  readableBlock: PositionedMineruBlock;
+};
 
 function collectTextParts(input: unknown): string[] {
   if (input == null) {
@@ -34,24 +55,8 @@ function collectTextParts(input: unknown): string[] {
 
   if (typeof input === 'object') {
     const record = input as Record<string, unknown>;
-    const ignoredKeys = new Set([
-      'type',
-      'bbox',
-      'path',
-      'image_source',
-      'table_type',
-      'table_nest_level',
-      'level',
-      'text_level',
-      'math_type',
-      'list_type',
-      'item_type',
-      'bboxCoordinateSystem',
-      'bboxPageSize',
-    ]);
-
     return Object.entries(record).flatMap(([key, value]) => {
-      if (ignoredKeys.has(key)) {
+      if (STRUCTURAL_CONTENT_KEYS.has(key)) {
         return [];
       }
 
@@ -68,8 +73,55 @@ function getRecord(input: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function stripHtml(input: string): string {
-  return input.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+function uniqueNonblankText(parts: string[]): string[] {
+  const seen = new Set<string>();
+  return parts.filter((part) => {
+    const value = part.trim();
+    if (!value || seen.has(value)) return false;
+    seen.add(value);
+    return true;
+  });
+}
+
+function getVisibleHtmlContent(input: string): VisibleHtmlContent {
+  const hiddenTags = new Set(['script', 'style', 'iframe', 'object', 'embed', 'link', 'meta']);
+  const nodes: { node: DefaultTreeAdapterMap['node']; captionParts?: string[]; cellParts?: string[]; footerParts?: string[] }[] =
+    [...parseFragment(input).childNodes].reverse().map((node) => ({ node }));
+  const text: string[] = [];
+  const captions: string[][] = [];
+  const cells: string[][] = [];
+  const footers: string[][] = [];
+  let hasTable = false;
+  while (nodes.length > 0) {
+    let { node, captionParts, cellParts, footerParts } = nodes.pop()!;
+    if ('tagName' in node && hiddenTags.has(node.tagName)) continue;
+    if ('tagName' in node && node.tagName === 'table') hasTable = true;
+    if ('tagName' in node && node.tagName === 'caption') {
+      captionParts = [];
+      captions.push(captionParts);
+    }
+    if ('tagName' in node && (node.tagName === 'td' || node.tagName === 'th')) {
+      cellParts = [];
+      cells.push(cellParts);
+    }
+    if ('tagName' in node && node.tagName === 'tfoot') {
+      footerParts = [];
+      footers.push(footerParts);
+    }
+    if (node.nodeName === '#text' && 'value' in node) {
+      text.push(node.value);
+      captionParts?.push(node.value);
+      cellParts?.push(node.value);
+      footerParts?.push(node.value);
+    }
+    if ('childNodes' in node) {
+      for (let index = node.childNodes.length - 1; index >= 0; index -= 1) {
+        nodes.push({ node: node.childNodes[index], captionParts, cellParts, footerParts });
+      }
+    }
+  }
+  const normalize = (parts: string[]) => parts.join(' ').replace(/\s+/g, ' ').trim();
+  return { text: normalize(text), hasTable, captions: captions.map(normalize).filter(Boolean), cells: cells.map(normalize).filter(Boolean), footers: footers.map(normalize).filter(Boolean) };
 }
 
 function removeSpelledMineruTokenNoise(value: string): string {
@@ -124,25 +176,36 @@ function joinPath(basePath: string, ...segments: string[]): string {
 function extractTypedContentText(
   block: PositionedMineruBlock,
   preferredKeys: string[],
+  allowFallback = true,
+  preserveMath: boolean | 'plain' = false,
 ): string {
   const content = getRecord(block.content);
 
   if (!content) {
-    return joinReadableText(collectTextParts(block.content));
+    return allowFallback ? joinReadableText(collectTextParts(block.content)) : '';
   }
 
-  const preferredParts = preferredKeys.flatMap((key) => collectTextParts(content[key]));
+  const preferredParts = uniqueNonblankText(preferredKeys
+    .map((key) => key.endsWith('_footnote')
+      ? renderTableFootnote(content[key])
+      : preserveMath
+        ? renderVisualCaption(content[key], false, preserveMath === 'plain')
+        : joinReadableText(collectTextParts(content[key]))));
 
   if (preferredParts.length > 0) {
     return joinReadableText(preferredParts);
   }
 
-  return joinReadableText(collectTextParts(block.content));
+  return allowFallback ? joinReadableText(collectTextParts(block.content)) : '';
 }
 
 function normalizeRawBlockType(rawType: unknown): string {
   const type = typeof rawType === 'string' ? rawType : 'paragraph';
   const lowerType = type.toLowerCase();
+
+  if (/^(?:chart|figure|image|table)_(?:caption|footnote)$/.test(lowerType)) {
+    return 'caption';
+  }
 
   if (lowerType.includes('title')) {
     return 'title';
@@ -153,6 +216,10 @@ function normalizeRawBlockType(rawType: unknown): string {
   }
 
   if (lowerType.includes('image')) {
+    return 'image';
+  }
+
+  if (lowerType.includes('chart') || lowerType.includes('figure')) {
     return 'image';
   }
 
@@ -186,17 +253,23 @@ function extractMathText(input: unknown): string {
   return normalizeRawLatexExpression(joinReadableText(collectTextParts(input)));
 }
 
-function renderInlineMarkdownContent(input: unknown): string {
+function escapeMarkdownProse(value: string): string {
+  return value.replace(/[\\`*_{}\[\]#|$~]/g, '\\$&')
+    .replace(/^([ \t]*)([-+>])(?=[ \t])/gm, '$1\\$2')
+    .replace(/^([ \t]*\d+)([.)])(?=[ \t])/gm, '$1\\$2');
+}
+
+function renderInlineMarkdownContent(input: unknown, escapeProse = false, plainMath = false): string {
   if (input == null) {
     return '';
   }
 
   if (typeof input === 'string' || typeof input === 'number' || typeof input === 'boolean') {
-    return String(input);
+    return escapeProse ? escapeMarkdownProse(String(input)) : String(input);
   }
 
   if (Array.isArray(input)) {
-    return input.map((item) => renderInlineMarkdownContent(item)).join('');
+    return input.map((item) => renderInlineMarkdownContent(item, escapeProse, plainMath)).join('');
   }
 
   const record = getRecord(input);
@@ -209,17 +282,19 @@ function renderInlineMarkdownContent(input: unknown): string {
 
   if (nodeType === 'text') {
     const textContent = record.content ?? record.text ?? record.value;
-    return typeof textContent === 'string' ? textContent : renderInlineMarkdownContent(textContent);
+    return typeof textContent === 'string'
+      ? escapeProse ? escapeMarkdownProse(textContent) : textContent
+      : renderInlineMarkdownContent(textContent, escapeProse, plainMath);
   }
 
   if (nodeType === 'equation_inline') {
     const mathText = extractMathText(record);
-    return mathText ? `$${mathText}$` : '';
+    return mathText ? plainMath ? mathText : `$${mathText}$` : '';
   }
 
   if (nodeType.includes('equation')) {
     const mathText = extractMathText(record);
-    return mathText ? `$$\n${mathText}\n$$` : '';
+    return mathText ? plainMath ? mathText : `$$\n${mathText}\n$$` : '';
   }
 
   for (const key of [
@@ -231,7 +306,13 @@ function renderInlineMarkdownContent(input: unknown): string {
     'caption_content',
     'table_caption',
     'image_caption',
+    'chart_caption',
+    'figure_caption',
     'caption',
+    'table_footnote',
+    'image_footnote',
+    'chart_footnote',
+    'figure_footnote',
     'content',
     'value',
   ]) {
@@ -239,7 +320,7 @@ function renderInlineMarkdownContent(input: unknown): string {
       continue;
     }
 
-    const rendered = renderInlineMarkdownContent(record[key]);
+    const rendered = renderInlineMarkdownContent(record[key], escapeProse, plainMath);
 
     if (rendered) {
       return rendered;
@@ -247,9 +328,113 @@ function renderInlineMarkdownContent(input: unknown): string {
   }
 
   return Object.entries(record)
-    .filter(([key]) => key !== 'type' && key !== 'math_type')
-    .map(([, value]) => renderInlineMarkdownContent(value))
+    .filter(([key]) => !STRUCTURAL_CONTENT_KEYS.has(key) && key !== 'html' && key !== 'table_body')
+    .map(([, value]) => renderInlineMarkdownContent(value, escapeProse, plainMath))
     .join('');
+}
+
+function renderTableFootnote(input: unknown, escapeProse = false): string {
+  return Array.isArray(input) && input.every((item) => typeof item === 'string')
+    ? input.map((item) => renderInlineMarkdownContent(item, escapeProse).trim()).filter(Boolean).join(' ')
+    : renderInlineMarkdownContent(input, escapeProse).trim();
+}
+
+function renderVisualCaption(input: unknown, escapeProse = false, plainMath = false): string {
+  return Array.isArray(input) && input.every((item) => typeof item === 'string')
+    ? input.map((item) => renderInlineMarkdownContent(item, escapeProse, plainMath).trim()).filter(Boolean).join(' ')
+    : renderInlineMarkdownContent(input, escapeProse, plainMath).trim();
+}
+
+function renderCaptionMathPart(input: unknown, depth = 0): { markdown: string; hasMath: boolean } {
+  const literal = (value: string) => value.replace(/[\\`*_{}\[\]()#+.!|$~-]/g, '\\$&');
+  if (depth > 16) return { markdown: literal(renderVisualCaption(input)), hasMath: false };
+  if (typeof input === 'string') return { markdown: literal(input), hasMath: false };
+  if (Array.isArray(input)) {
+    const parts = input.map((item) => renderCaptionMathPart(item, depth + 1));
+    return {
+      markdown: parts.map((part) => part.markdown).join(input.every((item) => typeof item === 'string') ? ' ' : ''),
+      hasMath: parts.some((part) => part.hasMath),
+    };
+  }
+  const record = getRecord(input);
+  if (!record) return { markdown: literal(renderVisualCaption(input)), hasMath: false };
+  if (record.type === 'equation_inline') {
+    const math = extractMathText(record);
+    if (math) return { markdown: `$${math}$`, hasMath: true };
+  }
+  for (const key of ['content', 'text', 'value', 'caption_content']) {
+    if (key in record) return renderCaptionMathPart(record[key], depth + 1);
+  }
+  return { markdown: literal(renderVisualCaption(input)), hasMath: false };
+}
+
+function extractCaptionMathMarkdown(block: PositionedMineruBlock): string | undefined {
+  const content = getRecord(block.content);
+  if (!content) return undefined;
+  const parts = ['table_caption', 'caption', 'caption_content']
+    .filter((key) => key in content)
+    .map((key) => renderCaptionMathPart(content[key]));
+  return parts.some((part) => part.hasMath)
+    ? uniqueNonblankText(parts.map((part) => part.markdown)).join(' ')
+    : undefined;
+}
+
+function renderVisualMarkdownContent(
+  input: unknown,
+  excludeRawMarkdown = false,
+  tableCellText = '',
+): string {
+  const record = getRecord(input);
+  const nodeType = typeof record?.type === 'string' ? record.type.toLowerCase() : '';
+  if (!record || nodeType === 'text' || nodeType.includes('equation')) {
+    return renderInlineMarkdownContent(input, true).trim();
+  }
+
+  return uniqueNonblankText(Object.entries(record)
+    .filter(([key]) =>
+      !STRUCTURAL_CONTENT_KEYS.has(key) &&
+      key !== 'html' && key !== 'table_body' &&
+      !(excludeRawMarkdown && key === 'markdown'))
+    .map(([key, value]) => {
+      const rendered =
+        key === 'markdown' ? renderInlineMarkdownContent(value) :
+        key === 'table_footnote' || key === 'image_footnote' ||
+        key === 'chart_footnote' || key === 'figure_footnote'
+          ? renderTableFootnote(value, true)
+          : renderVisualCaption(value, true);
+      return tableCellText && ['content', 'text', 'value'].includes(key) && renderVisualCaption(value) === tableCellText
+        ? ''
+        : rendered;
+    })
+    .filter(Boolean))
+    .join(' ');
+}
+
+function renderTableMarkdownContent(input: unknown, tableCellText: string, hasHtml: boolean): string {
+  const record = getRecord(input);
+  if (!record) return renderVisualMarkdownContent(input);
+  const captionKeys = ['table_caption', 'caption', 'caption_content'];
+  const caption = Object.fromEntries(captionKeys.map((key) => [key, record[key]]));
+  const body = Object.fromEntries(Object.entries(record)
+    .filter(([key]) => !captionKeys.includes(key) && key !== 'table_footnote'));
+  return uniqueNonblankText([
+    renderVisualMarkdownContent(caption),
+    escapeMarkdownProse(tableCellText),
+    renderVisualMarkdownContent(body, hasHtml, tableCellText),
+    renderTableFootnote(record.table_footnote, true),
+  ]).join(' ');
+}
+
+function renderOrderedVisualMarkdownContent(
+  input: unknown, textKeys: string[], footnoteKeys: string[], excludeRawMarkdown = false,
+): string {
+  const record = getRecord(input);
+  if (!record) return renderVisualMarkdownContent(input, excludeRawMarkdown);
+  const otherKeys = Object.keys(record)
+    .filter((key) => !textKeys.includes(key) && !footnoteKeys.includes(key));
+  const ordered = Object.fromEntries([...textKeys, ...otherKeys, ...footnoteKeys]
+    .map((key) => [key, record[key]]));
+  return renderVisualMarkdownContent(ordered, excludeRawMarkdown);
 }
 
 function cleanMineruListText(value: string): string {
@@ -329,25 +514,34 @@ export function renderListMarkdownContent(input: unknown): string {
   return items.map((item) => `- ${item}`).join('\n');
 }
 
+function readTableHtml(block: PositionedMineruBlock) {
+  const content = getRecord(block.content);
+  const candidates = [...new Set([content?.html, content?.table_body]
+    .filter((candidate): candidate is string => typeof candidate === 'string' && Boolean(candidate.trim())))]
+    .map((html) => ({ html, visible: getVisibleHtmlContent(html) }));
+  return candidates.find(({ visible }) => visible.hasTable && visible.cells.length > 0) ??
+    candidates.find(({ visible }) => visible.hasTable && visible.text) ??
+    candidates.find(({ visible }) => visible.text) ??
+    candidates.find(({ visible }) => visible.hasTable);
+}
+
 export function extractTableHtmlFromMineruBlock(
   block: PositionedMineruBlock,
 ): string | undefined {
-  const content = getRecord(block.content);
-  const html = content?.html ?? content?.table_body;
-
-  return typeof html === 'string' && html.trim() ? html : undefined;
+  return readTableHtml(block)?.html;
 }
 
 export function extractMineruAssetPathFromBlock(
   block: PositionedMineruBlock,
+  mineruPath?: string,
 ): string | undefined {
   const content = getRecord(block.content);
   const imageSource = getRecord(content?.image_source);
-  const candidate =
-    imageSource?.path ??
-    content?.img_path ??
-    content?.path ??
-    content?.image_path;
+  const candidate = [
+    imageSource?.path, content?.img_path, content?.path, content?.image_path,
+    ...(Array.isArray(content?.asset_paths) ? content.asset_paths : []),
+  ].find((path) => typeof path === 'string' && path.trim() &&
+    (!mineruPath || resolveMineruAssetPath(mineruPath, path.trim())));
 
   return typeof candidate === 'string' && candidate.trim() ? candidate.trim() : undefined;
 }
@@ -360,34 +554,89 @@ export function resolveMineruAssetPath(
     return undefined;
   }
 
-  if (/^[a-zA-Z]:[\\/]/.test(assetPath) || assetPath.startsWith('/') || assetPath.startsWith('\\')) {
-    return assetPath;
-  }
-
-  if (/^[a-zA-Z]+:\/\//.test(assetPath)) {
-    return assetPath;
-  }
-
   if (mineruPath.startsWith('cloud:')) {
     return undefined;
   }
 
-  return joinPath(getDirectoryPath(mineruPath), assetPath);
+  const root = getDirectoryPath(mineruPath);
+  const normalizedAsset = assetPath.replace(/\\/g, '/');
+  if (/^[a-zA-Z][a-zA-Z\d+.-]*:/.test(normalizedAsset) && !/^[a-zA-Z]:\//.test(normalizedAsset)) {
+    return undefined;
+  }
+  if (normalizedAsset.split('/').includes('..')) {
+    return undefined;
+  }
+
+  const absolute = /^[a-zA-Z]:\//.test(normalizedAsset) || normalizedAsset.startsWith('/');
+  const candidate = absolute
+    ? assetPath
+    : root.startsWith('\\\\')
+      ? `${root}\\${assetPath}`
+      : joinPath(root, assetPath);
+  const normalizedRoot = root.replace(/\\/g, '/').replace(/\/+$/, '') || '/';
+  const normalizedCandidate = candidate.replace(/\\/g, '/');
+  const caseInsensitive = /^[a-zA-Z]:/.test(normalizedRoot) || normalizedRoot.startsWith('//');
+  const boundary = caseInsensitive ? normalizedRoot.toLowerCase() : normalizedRoot;
+  const path = caseInsensitive ? normalizedCandidate.toLowerCase() : normalizedCandidate;
+  if (!path.startsWith(boundary === '/' ? '/' : `${boundary}/`)) {
+    return undefined;
+  }
+
+  return candidate;
 }
 
-export function extractCaptionFromMineruBlock(block: PositionedMineruBlock): string {
+function withoutEmbeddedTableText(block: PositionedMineruBlock, visible?: VisibleHtmlContent): PositionedMineruBlock {
+  const content = getRecord(block.content);
+  if (!content || !visible) return block;
+  const captions = new Set(visible.captions);
+  const body = new Set([visible.text, visible.cells.join(' '), ...visible.cells, ...visible.footers]);
+  return {
+    ...block,
+    content: Object.fromEntries(Object.entries(content).filter(([key, value]) => {
+      const alreadyVisible = ['table_caption', 'caption', 'caption_content'].includes(key)
+        ? captions : ['content', 'text', 'value', 'table_footnote'].includes(key) ? body : null;
+      return !alreadyVisible || !alreadyVisible.has(renderVisualCaption(value).replace(/\s+/g, ' ').trim());
+    })),
+  };
+}
+
+function readTableContent(block: PositionedMineruBlock): TableContent | undefined {
+  if (block.type !== 'table') return undefined;
+  const parsed = readTableHtml(block);
+  return {
+    ...parsed,
+    readableBlock: withoutEmbeddedTableText(block, parsed?.visible),
+  };
+}
+
+function extractBlockCaption(block: PositionedMineruBlock): string {
   switch (block.type) {
     case 'table':
-      return extractTypedContentText(block, ['table_caption', 'caption']);
+      return extractTypedContentText(block, ['table_caption', 'caption', 'caption_content'], false, 'plain');
     case 'image':
-      return extractTypedContentText(block, ['image_caption', 'caption']);
+      return extractTypedContentText(block, IMAGE_CAPTION_KEYS, false, 'plain');
     default:
       return '';
   }
 }
 
-function toMarkdownFragment(block: PositionedMineruBlock, plainText: string): string {
+export function extractCaptionFromMineruBlock(block: PositionedMineruBlock): string {
+  return extractBlockCaption(block);
+}
+
+function toMarkdownFragment(block: PositionedMineruBlock, plainText: string, table?: TableContent): string {
   const structuredMarkdown = renderInlineMarkdownContent(block.content).trim();
+  const tableCellText = table?.visible?.text ?? '';
+  const visualMarkdown =
+    block.type === 'table'
+      ? renderTableMarkdownContent(
+        table?.readableBlock.content ?? block.content,
+        tableCellText,
+        Boolean(table?.html),
+      )
+      : block.type === 'image' ? renderOrderedVisualMarkdownContent(
+        block.content, [...IMAGE_CAPTION_KEYS, 'content', 'text', 'value'], IMAGE_FOOTNOTE_KEYS, true,
+      ) : '';
   const safeText = plainText || `未提取到 ${block.type} 文本`;
 
   switch (block.type) {
@@ -403,12 +652,21 @@ function toMarkdownFragment(block: PositionedMineruBlock, plainText: string): st
       const mathText = extractMathText(block.content);
       return mathText ? `$$\n${mathText}\n$$` : structuredMarkdown || safeText;
     }
-    case 'image':
-      return `**图片说明** ${structuredMarkdown || safeText}`;
-    case 'table':
-      return `**表格说明** ${structuredMarkdown || safeText}`;
+    case 'image': {
+      const parsedImage = extractMarkdownImage(plainText);
+      const rawMarkdown = getRecord(block.content)?.markdown;
+      const markdownDescription = typeof rawMarkdown === 'string'
+        ? stripMarkdownImagePaths(rawMarkdown)
+        : '';
+      const description = markdownDescription || visualMarkdown || (parsedImage ? parsedImage.alt : plainText);
+      return description ? `**图片说明** ${description}` : '';
+    }
+    case 'table': {
+      const tableText = visualMarkdown || plainText;
+      return tableText ? `**表格说明** ${tableText}` : '';
+    }
     case 'caption':
-      return `> ${structuredMarkdown || safeText}`;
+      return `> ${renderOrderedVisualMarkdownContent(block.content, VISUAL_NOTE_TEXT_KEYS, VISUAL_NOTE_FOOTNOTE_KEYS) || structuredMarkdown || safeText}`;
     default:
       return structuredMarkdown || safeText;
   }
@@ -490,6 +748,10 @@ function mapFlatContentType(rawBlock: Record<string, unknown>): string {
     return textLevel && textLevel > 0 ? 'title' : 'paragraph';
   }
 
+  if (/^(?:chart|figure|image|table)_(?:caption|footnote)$/.test(lowerType)) {
+    return 'caption';
+  }
+
   if (lowerType.includes('equation')) {
     return 'equation';
   }
@@ -502,6 +764,10 @@ function mapFlatContentType(rawBlock: Record<string, unknown>): string {
     return 'image';
   }
 
+  if (lowerType.includes('chart') || lowerType.includes('figure')) {
+    return 'image';
+  }
+
   if (lowerType.includes('list')) {
     return 'list';
   }
@@ -510,15 +776,28 @@ function mapFlatContentType(rawBlock: Record<string, unknown>): string {
 }
 
 function pickFlatContent(rawBlock: Record<string, unknown>): Record<string, unknown> {
+  const blockType = mapFlatContentType(rawBlock);
+  const isVisual = blockType === 'image' || blockType === 'table' || blockType === 'caption';
   const contentKeys = [
     'text',
     'text_level',
     'table_body',
+    'html',
     'table_caption',
     'table_footnote',
+    'caption',
+    'caption_content',
+    'value',
     'image_caption',
     'image_footnote',
+    'chart_caption',
+    'chart_footnote',
+    'figure_caption',
+    'figure_footnote',
     'img_path',
+    'image_path',
+    'path',
+    'image_source',
     'code_body',
     'code_caption',
     'code_footnote',
@@ -527,9 +806,19 @@ function pickFlatContent(rawBlock: Record<string, unknown>): Record<string, unkn
   const content: Record<string, unknown> = {};
 
   for (const key of contentKeys) {
+    if (!isVisual && /^(?:(?:image|chart|figure|table)_(?:caption|footnote)|caption(?:_content)?)$/.test(key)) {
+      continue;
+    }
+    if (key === 'value' && !isVisual && typeof rawBlock.text === 'string' && rawBlock.text.trim()) {
+      continue;
+    }
     if (key in rawBlock) {
       content[key] = rawBlock[key];
     }
+  }
+
+  if (isVisual && 'content' in rawBlock) {
+    content.content = rawBlock.content;
   }
 
   return Object.keys(content).length > 0 ? content : { value: rawBlock.content ?? null };
@@ -562,61 +851,74 @@ function parseFlatContentList(items: unknown[]): MineruPage[] {
 }
 
 function mapMiddleBlockType(rawType: unknown): string {
-  const type = typeof rawType === 'string' ? rawType : 'paragraph';
-  const lowerType = type.toLowerCase();
-
-  if (lowerType.includes('title')) {
-    return 'title';
-  }
-
-  if (lowerType.includes('table')) {
-    return 'table';
-  }
-
-  if (lowerType.includes('image')) {
-    return 'image';
-  }
-
-  if (lowerType.includes('equation')) {
-    return 'equation';
-  }
-
-  if (lowerType.includes('list')) {
-    return 'list';
-  }
-
-  return 'paragraph';
+  const type = normalizeRawBlockType(rawType);
+  return ['title', 'table', 'image', 'caption', 'equation', 'list'].includes(type)
+    ? type
+    : 'paragraph';
 }
 
 function extractMiddleContent(rawBlock: Record<string, unknown>): Record<string, unknown> {
-  const lines = Array.isArray(rawBlock.lines) ? rawBlock.lines : [];
-  const spanTextParts = lines.flatMap((line) => {
-    if (!line || typeof line !== 'object') {
-      return [];
-    }
-
-    const spans = (line as Record<string, unknown>).spans;
-
-    if (!Array.isArray(spans)) {
-      return [];
-    }
-
-    return spans.flatMap((span) => {
-      if (!span || typeof span !== 'object') {
-        return [];
+  const visualType = mapMiddleBlockType(rawBlock.type);
+  const isVisual = visualType === 'image' || visualType === 'table';
+  type Role = 'body' | 'caption' | 'footnote';
+  const pending: { record: Record<string, unknown>; role: Role }[] = [{ record: rawBlock, role: 'body' }];
+  const seen = new Set<Record<string, unknown>>();
+  const records: Record<string, unknown>[] = [];
+  const spans: Record<string, unknown>[] = [];
+  const spanTextParts: string[] = [];
+  const notes = { caption: [] as unknown[], footnote: [] as unknown[] };
+  while (pending.length) {
+    const { record, role: inheritedRole } = pending.pop()!;
+    if (seen.has(record)) continue;
+    seen.add(record);
+    records.push(record);
+    const type = typeof record.type === 'string' ? record.type.toLowerCase() : '';
+    const role: Role = isVisual && /^(?:image|chart|figure|table)_(?:caption|footnote)$/.test(type)
+      ? type.endsWith('_caption') ? 'caption' : 'footnote' : inheritedRole;
+    const lines = Array.isArray(record.lines) ? record.lines : [];
+    for (const line of lines) {
+      const items = getRecord(line)?.spans;
+      const lineSpans = Array.isArray(items) ? items.map(getRecord).filter((item) => item !== null) : [];
+      for (const span of lineSpans) spans.push(span);
+      if (role === 'body') {
+        for (const span of lineSpans) {
+          for (const part of collectTextParts(span.content ?? span.text ?? span.latex ?? null)) spanTextParts.push(part);
+        }
+      } else {
+        const inline = lineSpans.filter((span) => (span.content ?? span.text ?? span.latex) != null)
+          .map((span) => ({
+            type: span.type === 'inline_equation' ? 'equation_inline' :
+              span.type === 'interline_equation' ? 'equation' : span.type ?? 'text',
+            content: span.content ?? span.text ?? span.latex,
+          }));
+        if (inline.length) {
+          if (notes[role].length) notes[role].push({ type: 'text', content: ' ' });
+          for (const part of inline) notes[role].push(part);
+        }
       }
-
-      const rawSpan = span as Record<string, unknown>;
-
-      return collectTextParts(
-        rawSpan.content ?? rawSpan.text ?? rawSpan.latex ?? rawSpan.img_path ?? null,
-      );
-    });
-  });
+    }
+    if (isVisual && Array.isArray(record.blocks)) {
+      for (let index = record.blocks.length - 1; index >= 0; index -= 1) {
+        const child = getRecord(record.blocks[index]);
+        if (child) pending.push({ record: child, role });
+      }
+    }
+  }
+  const imagePaths = [...records, ...spans].flatMap((record) => [
+    record.img_path, record.image_path, record.path, getRecord(record.image_source)?.path,
+  ])
+    .filter((path): path is string => typeof path === 'string' && Boolean(path.trim()))
+    .map((path) => path.trim());
+  const html = visualType === 'table'
+    ? spans.map((span) => span.html).find((value) => typeof value === 'string' && value.trim()) : undefined;
 
   return {
     text: joinReadableText(spanTextParts),
     raw_type: rawBlock.type,
+    ...(notes.caption.length ? { caption: notes.caption } : {}),
+    ...(notes.footnote.length ? { [visualType === 'table' ? 'table_footnote' : 'image_footnote']: notes.footnote } : {}),
+    ...(html ? { html } : {}),
+    ...(imagePaths.length ? { img_path: imagePaths[0], asset_paths: [...new Set(imagePaths)] } : {}),
   };
 }
 
@@ -715,17 +1017,55 @@ function stripMathFence(value: string): string {
   return (displayMathMatch?.[1] ?? bracketMathMatch?.[1] ?? trimmed).trim();
 }
 
-function extractMarkdownImage(value: string): { alt: string; path: string } | null {
-  const match = value.match(/!\[([^\]]*)\]\(([^)]+)\)/);
+function findMarkdownImage(value: string, from = 0): { start: number; end: number; alt: string; path: string } | null {
+  for (let start = value.indexOf('![', from); start >= 0;) {
+    let labelEnd = start + 2;
+    while (labelEnd < value.length && value[labelEnd] !== ']') {
+      if (value[labelEnd] === '\\') labelEnd += 1;
+      labelEnd += 1;
+    }
+    if (labelEnd >= value.length) return null;
+    if (value[labelEnd + 1] !== '(') {
+      start = value.indexOf('![', labelEnd + 1);
+      continue;
+    }
 
-  if (!match) {
-    return null;
+    let depth = 1;
+    let end = labelEnd + 2;
+    while (end < value.length && depth > 0) {
+      if (value[end] === '\\') {
+        end += 2;
+        continue;
+      }
+      if (value[end] === '(') depth += 1;
+      if (value[end] === ')') depth -= 1;
+      end += 1;
+    }
+    if (depth !== 0) return null;
+
+    const path = value.slice(labelEnd + 2, end - 1).trim().replace(/^<|>$/g, '');
+    if (!path) {
+      start = value.indexOf('![', end);
+      continue;
+    }
+    return { start, end, alt: value.slice(start + 2, labelEnd).trim(), path };
   }
+  return null;
+}
 
-  return {
-    alt: match[1]?.trim() ?? '',
-    path: match[2]?.trim().replace(/^<|>$/g, '') ?? '',
-  };
+function extractMarkdownImage(value: string): { alt: string; path: string } | null {
+  const image = findMarkdownImage(value);
+  return image ? { alt: image.alt, path: image.path } : null;
+}
+
+function stripMarkdownImagePaths(value: string): string {
+  let result = '';
+  let from = 0;
+  for (let image = findMarkdownImage(value, from); image; image = findMarkdownImage(value, from)) {
+    result += value.slice(from, image.start) + image.alt;
+    from = image.end;
+  }
+  return (result + value.slice(from)).trim();
 }
 
 function inferMarkdownBlockType(markdown: string): MineruBlockBase['type'] {
@@ -998,16 +1338,37 @@ export function resolveMineruBlockContentSource(
     : block;
 }
 
-export function extractTextFromMineruBlock(block: PositionedMineruBlock): string {
+function extractBlockText(block: PositionedMineruBlock, table?: TableContent): string {
   if (block.type === 'table') {
-    const caption = extractCaptionFromMineruBlock(block);
-    const tableHtml = extractTableHtmlFromMineruBlock(block);
-
-    return caption || (tableHtml ? stripHtml(tableHtml) : '');
+    const readableBlock = table?.readableBlock ?? block;
+    const caption = extractTypedContentText(readableBlock,
+      ['table_caption', 'caption', 'caption_content'], false, true);
+    const content = getRecord(readableBlock.content);
+    const markdown = content?.markdown;
+    const footnote = renderTableFootnote(content?.table_footnote);
+    const fallbackText = content
+      ? [content.content, content.text, content.value]
+        .map((candidate) => renderVisualCaption(candidate))
+      : [renderVisualCaption(block.content)];
+    const bodyText = table?.html
+      ? uniqueNonblankText([table.visible?.text ?? '', ...fallbackText]).join(' ')
+      : uniqueNonblankText([
+        ...(typeof markdown === 'string' ? [markdown] : []), ...fallbackText,
+      ]).join(' ');
+    const tableText = [caption, bodyText].filter(Boolean).join(' ');
+    return [tableText, footnote].filter(Boolean).join(' ');
   }
 
   if (block.type === 'image') {
-    return extractTypedContentText(block, ['image_caption', 'image_footnote', 'caption']);
+    return extractTypedContentText(block, [
+      ...IMAGE_CAPTION_KEYS, 'content', 'text', 'value', ...IMAGE_FOOTNOTE_KEYS,
+    ], true, true);
+  }
+
+  if (block.type === 'caption') {
+    return extractTypedContentText(block, [
+      ...VISUAL_NOTE_TEXT_KEYS, ...VISUAL_NOTE_FOOTNOTE_KEYS,
+    ], true, true);
   }
 
   if (block.type === 'equation') {
@@ -1017,11 +1378,16 @@ export function extractTextFromMineruBlock(block: PositionedMineruBlock): string
   return joinReadableText(collectTextParts(block.content));
 }
 
+export function extractTextFromMineruBlock(block: PositionedMineruBlock): string {
+  return extractBlockText(block, readTableContent(block));
+}
+
 export function extractTranslatableMarkdownFromMineruBlock(
   block: PositionedMineruBlock,
 ): string {
-  const plainText = extractTextFromMineruBlock(block);
-  return toMarkdownFragment(block, plainText);
+  const table = readTableContent(block);
+  const plainText = extractBlockText(block, table);
+  return toMarkdownFragment(block, plainText, table);
 }
 
 export function buildRenderableBlocks(
@@ -1029,22 +1395,41 @@ export function buildRenderableBlocks(
   mineruPath?: string,
 ): RenderableMineruBlock[] {
   return blocks.map((block) => {
-    const plainText = extractTextFromMineruBlock(block);
+    const table = readTableContent(block);
+    const plainText = extractBlockText(block, table);
     const mathText = block.type === 'equation' ? extractMathText(block.content) : undefined;
-    const tableHtml = block.type === 'table' ? extractTableHtmlFromMineruBlock(block) : undefined;
+    const tableHtml = table?.html;
     const captionText =
       block.type === 'table' || block.type === 'image'
-        ? extractCaptionFromMineruBlock(block)
+        ? extractBlockCaption(block)
         : undefined;
-    const relativeAssetPath = extractMineruAssetPathFromBlock(block);
+    const tableContent = table ? getRecord(table.readableBlock.content) : null;
+    const tableFootnoteText = block.type === 'table'
+      ? renderTableFootnote(tableContent?.table_footnote, true)
+      : undefined;
+    const alreadyVisible = new Set([
+      table?.visible?.text ?? '',
+      renderTableFootnote(tableContent?.table_footnote),
+      ...['table_caption', 'caption', 'caption_content'].map((key) => renderVisualCaption(tableContent?.[key])),
+    ]);
+    const tableOcrMarkdown = tableHtml && tableContent
+      ? uniqueNonblankText(['content', 'text', 'value']
+        .filter((key) => !alreadyVisible.has(renderVisualCaption(tableContent[key])))
+        .map((key) => renderVisualCaption(tableContent[key], true))).join(' ')
+      : undefined;
+    const relativeAssetPath = extractMineruAssetPathFromBlock(block, mineruPath);
 
     return {
       block,
       plainText,
-      markdown: toMarkdownFragment(block, plainText),
+      markdown: toMarkdownFragment(block, plainText, table),
       mathText,
       tableHtml,
       captionText,
+      tableDisplayCaptionText: table ? extractBlockCaption(table.readableBlock) : undefined,
+      captionMathMarkdown: table ? extractCaptionMathMarkdown(table.readableBlock) : undefined,
+      tableFootnoteText,
+      tableOcrMarkdown,
       assetPath:
         mineruPath && relativeAssetPath
           ? resolveMineruAssetPath(mineruPath, relativeAssetPath)

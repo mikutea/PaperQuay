@@ -35,7 +35,7 @@ test('Reader and batch overview keys reuse comparable sources but never path-onl
     sourcePath: 'D:/cache/content_list_v2.json',
     blockCount: 12,
   });
-  assert.equal(fallbackKey, 'native-library:paper-1::summary-prompt-v4::Chinese::mineru-markdown::blocks::D:/cache/content_list_v2.json::12');
+  assert.equal(fallbackKey, 'native-library:paper-1::summary-prompt-v4-visual-v2::Chinese::mineru-markdown::blocks::D:/cache/content_list_v2.json::12');
   assert.equal(overviewSourceKeysMatch({
     ...base,
     storedKey: jsonBackedReaderKey,
@@ -44,6 +44,11 @@ test('Reader and batch overview keys reuse comparable sources but never path-onl
   assert.equal(overviewSourceKeysMatch({
     ...base,
     storedKey: jsonBackedReaderKey,
+    resolvedKey: fallbackKey,
+  }), false);
+  assert.equal(overviewSourceKeysMatch({
+    ...base,
+    storedKey: jsonBackedReaderKey.replace('summary-prompt-v4', 'summary-prompt-v4-visual-v2'),
     resolvedKey: fallbackKey,
   }), true);
   for (const resolvedKey of [

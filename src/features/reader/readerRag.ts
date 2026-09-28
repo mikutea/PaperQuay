@@ -260,9 +260,12 @@ export function prepareReaderRagDocument(input: {
     const mineruChunks = uniqueChunks(buildMineruRagChunks(input.mineruBlocks));
 
     if (mineruSourceText && mineruChunks.length > 0) {
+      const chunkSignature = textSignature(mineruChunks
+        .map((chunk) => `${chunk.pageIndex ?? 'na'}:${chunk.blockId ?? 'na'}:${chunk.text}`)
+        .join('\n'));
       sources.push({
         sourceType: 'mineru-markdown',
-        sourceSignature: textSignature(mineruSourceText),
+        sourceSignature: `${textSignature(mineruSourceText)}::${chunkSignature}`,
         chunks: mineruChunks,
       });
     }
