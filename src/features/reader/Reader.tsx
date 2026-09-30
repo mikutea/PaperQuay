@@ -176,7 +176,7 @@ function Reader({ workspaceActive = true }: ReaderProps) {
   const [readerAssistantActivePanel, setReaderAssistantActivePanel] = useState<AssistantPanelKey>('chat');
   const [readerAssistantDetached, setReaderAssistantDetached] = useState(false);
   const [readerAssistantPanelWidth, setReaderAssistantPanelWidth] = useState(() =>
-    loadStoredNumber(ASSISTANT_PANEL_WIDTH_STORAGE_KEY, 408),
+    Math.max(MIN_ASSISTANT_PANEL_WIDTH, loadStoredNumber(ASSISTANT_PANEL_WIDTH_STORAGE_KEY, 408)),
   );
   const [readerAssistantPanelResizing, setReaderAssistantPanelResizing] = useState(false);
   const [readerQaSessions, setReaderQaSessions] = useState<DocumentChatSession[]>(() => [

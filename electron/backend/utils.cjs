@@ -844,12 +844,12 @@ function pickStreamThinkingDelta(data, apiMode) {
 
     if (
       eventType === 'response.reasoning_summary_text.delta' ||
-      eventType === 'response.reasoning_summary.delta' ||
-      eventType.includes('reasoning_summary')
+      eventType === 'response.reasoning_summary.delta'
     ) {
       return rawText(data?.delta) || rawText(data?.text) || rawText(data?.summary?.text);
     }
 
+    // Summary done/part events carry snapshots, not appendable deltas.
     return '';
   }
 
@@ -927,6 +927,8 @@ async function readOpenAiStreamResponse(response, options = {}, handlers = {}) {
       parser.feed(tail);
     }
 
+    // Flush compatible providers that omit the final blank event separator.
+    parser.feed('\n\n');
     parser.reset({ consume: true });
   } catch (error) {
     throw new Error(`OpenAI-compatible stream returned invalid SSE JSON: ${toError(error)}`);

@@ -3045,6 +3045,7 @@ function DocumentReaderTab({
     setQaError('');
 
     let streamedAnswer = '';
+    let streamedThinking = '';
 
     try {
       const qaRequest = await resolveQaRequest();
@@ -3067,15 +3068,15 @@ function DocumentReaderTab({
         const updatedAssistantMessage: DocumentChatMessage = {
           ...nextAssistantMessage,
           content: answer,
+          thinking: streamedThinking,
           qaContext: qaRequest.qaContext,
           citations: qaRequest.citations,
-          createdAt: Date.now(),
         };
 
         setQaSessions((current) =>
           updateQaSession(current, {
             ...pendingSession,
-            updatedAt: updatedAssistantMessage.createdAt,
+            updatedAt: Date.now(),
             messages: [
               ...nextMessages,
               updatedAssistantMessage,
@@ -3104,6 +3105,10 @@ function DocumentReaderTab({
         },
         {
           onDelta: (_delta, fullText) => updateStreamingAnswer(fullText),
+          onThinking: (_delta, fullText) => {
+            streamedThinking = fullText;
+            updateStreamingAnswer(streamedAnswer);
+          },
         },
       );
 

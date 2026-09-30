@@ -16,6 +16,7 @@ import {
   type ReactNode,
 } from 'react';
 import ReactMarkdown from 'react-markdown';
+import { createPortal } from 'react-dom';
 import rehypeKatex from 'rehype-katex';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -274,7 +275,40 @@ function AssetFigure({
     shouldLoadAsset ? assetPath : undefined,
   );
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [originalSize, setOriginalSize] = useState(false);
+  const closePreviewRef = useRef<HTMLButtonElement | null>(null);
   const accessibleLabel = useMemo(() => plainMineruInlineCaption(label), [label]);
+
+  useEffect(() => {
+    if (!previewOpen) return;
+    const previousFocus = document.activeElement as HTMLElement | null;
+    closePreviewRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        setPreviewOpen(false);
+      }
+      if (event.key === 'Tab') {
+        const buttons = closePreviewRef.current?.parentElement?.querySelectorAll('button');
+        if (!buttons?.length) return;
+        const first = buttons[0];
+        const last = buttons[buttons.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
+    };
+    document.addEventListener('keydown', onKeyDown, true);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown, true);
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
+  }, [previewOpen]);
 
   useEffect(() => {
     setShouldLoadAsset(false);
@@ -320,6 +354,7 @@ function AssetFigure({
             type="button"
             onClick={(event) => {
               event.stopPropagation();
+              setOriginalSize(false);
               setPreviewOpen(true);
             }}
             className="group relative block w-full overflow-hidden bg-slate-50"
@@ -348,35 +383,42 @@ function AssetFigure({
         )}
       </div>
 
-      {previewOpen && dataUrl ? (
+      {previewOpen && dataUrl ? createPortal(
         <div
-          className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/76 p-6 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-label={l('图片预览', 'Image preview')}
+          className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/75 p-3 backdrop-blur-sm sm:p-6"
           onClick={(event) => {
             event.stopPropagation();
             setPreviewOpen(false);
           }}
         >
           <div
-            className="max-h-full max-w-[min(1200px,100vw-48px)] overflow-hidden rounded-[28px] border border-white/15 bg-white shadow-[0_28px_90px_rgba(15,23,42,0.35)]"
+            className="flex h-full max-h-[900px] w-full max-w-[1200px] min-w-0 flex-col overflow-hidden rounded-[28px] border border-[var(--pq-border)] bg-[var(--pq-surface)] shadow-[0_28px_90px_rgba(15,23,42,0.35)]"
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="flex items-center justify-between border-b border-slate-200/80 px-5 py-3">
-              <div className="truncate text-sm font-medium text-slate-700">
+            <div className="flex shrink-0 items-center gap-3 border-b border-[var(--pq-border)] px-4 py-3">
+              <div title={accessibleLabel} className="min-w-0 flex-1 truncate text-sm font-medium text-[var(--pq-text)]">
                 <InlineCaptionContent text={label} />
               </div>
+              <button type="button" onClick={() => setOriginalSize((value) => !value)} className="shrink-0 whitespace-nowrap rounded-xl border border-[var(--pq-border)] px-3 py-1.5 text-sm text-[var(--pq-text)] hover:bg-[var(--pq-hover)]">
+                {originalSize ? l('适应窗口', 'Fit to window') : l('原始尺寸', 'Original size')}
+              </button>
               <button
+                ref={closePreviewRef}
                 type="button"
                 onClick={() => setPreviewOpen(false)}
-                className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 transition hover:bg-slate-50"
+                className="shrink-0 whitespace-nowrap rounded-xl border border-[var(--pq-border)] px-3 py-1.5 text-sm text-[var(--pq-text)] transition hover:bg-[var(--pq-hover)]"
               >
                 {l('关闭', 'Close')}
               </button>
             </div>
-            <div className="max-h-[calc(100vh-140px)] overflow-auto bg-slate-50 p-4">
-              <img src={dataUrl} alt={accessibleLabel} className="mx-auto h-auto max-w-full object-contain" />
+            <div className="min-h-0 flex-1 overflow-auto bg-[var(--pq-surface-2)] p-4">
+              <img src={dataUrl} alt={accessibleLabel} className={originalSize ? 'block max-w-none' : 'block h-full w-full object-contain'} />
             </div>
           </div>
-        </div>
+        </div>, document.body,
       ) : null}
     </>
   );

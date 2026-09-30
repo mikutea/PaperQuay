@@ -930,31 +930,14 @@ function createAiCommands(context) {
         return;
       }
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split(/\r?\n/);
-        buffer = lines.pop() ?? '';
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed.startsWith('data:')) continue;
-
-          const payload = trimmed.slice(5).trim();
-          if (payload === '[DONE]') continue;
-
-          try {
-            const delta = pickStreamTextDelta(JSON.parse(payload), options.apiMode);
-            if (delta) sender.send('paperquay:event', QA_STREAM_EVENT, { requestId, kind: 'delta', text: delta });
-          } catch {}
-        }
-      }
+      await readOpenAiStreamResponse(response, options, {
+        onTextDelta(text) {
+          sender.send('paperquay:event', QA_STREAM_EVENT, { requestId, kind: 'delta', text });
+        },
+        onThinkingDelta(text) {
+          sender.send('paperquay:event', QA_STREAM_EVENT, { requestId, kind: 'thinking', text });
+        },
+      });
 
       sender.send('paperquay:event', QA_STREAM_EVENT, { requestId, kind: 'done' });
     },
