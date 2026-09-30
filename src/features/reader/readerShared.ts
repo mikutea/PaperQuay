@@ -610,6 +610,7 @@ export interface MineruCacheManifest {
   pdfPath: string;
   savedAt: string;
   sourceKind: 'cloud' | 'manual-json' | 'sibling-json';
+  sourcePath?: string;
   batchId?: string;
   dataId?: string;
   fileName?: string;

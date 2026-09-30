@@ -129,6 +129,7 @@ import {
   resolveActiveQaSession,
   resolveQaModelPreset,
   resolveQaSessionSelection,
+  isQaRequestSessionSelected,
 } from './documentReaderQaSessions';
 import {
   buildQuoteMarkdown as buildNoteQuoteMarkdown,
@@ -892,6 +893,7 @@ function DocumentReaderTab({
       item,
       pdfPath: currentPdfPath,
       sourceKind,
+      sourcePath,
       contentJsonText,
       middleJsonText,
       markdownText,
@@ -903,6 +905,7 @@ function DocumentReaderTab({
       item: WorkspaceItem;
       pdfPath: string;
       sourceKind: Parameters<typeof writeMineruParseCache>[0]['sourceKind'];
+      sourcePath?: string;
       contentJsonText?: string | null;
       middleJsonText?: string | null;
       markdownText?: string | null;
@@ -915,6 +918,7 @@ function DocumentReaderTab({
         item,
         pdfPath: currentPdfPath,
         sourceKind,
+        sourcePath,
         contentJsonText,
         middleJsonText,
         markdownText,
@@ -1195,6 +1199,7 @@ function DocumentReaderTab({
                   item: nextResolvedItem,
                   pdfPath: resolvedSource.path,
                   sourceKind: 'sibling-json',
+                  sourcePath: siblingJsonPath,
                   contentJsonText: siblingJsonPath.toLowerCase().endsWith('middle.json') ? null : jsonText,
                   middleJsonText: siblingJsonPath.toLowerCase().endsWith('middle.json') ? jsonText : null,
                 }).catch(() => undefined);
@@ -1236,6 +1241,7 @@ function DocumentReaderTab({
                 item: nextResolvedItem,
                 pdfPath: resolvedSource.path,
                 sourceKind: 'sibling-json',
+                sourcePath: siblingMarkdownPath,
                 markdownText,
               }).catch(() => undefined);
             } catch {
@@ -1421,6 +1427,7 @@ function DocumentReaderTab({
           item: currentDocument,
           pdfPath,
           sourceKind: 'manual-json',
+          sourcePath: path,
           contentJsonText: jsonText,
         }).catch(() => undefined);
       }
@@ -3120,10 +3127,14 @@ function DocumentReaderTab({
         setStatusMessage(formatQaContextStatus(qaRequest.qaContext, lRef.current));
       }
     } catch (nextError) {
-      const sessionStillActive =
+      const workspaceStillActive =
         qaHistoryReadyWorkspaceRef.current === currentDocument.workspaceId;
+      const sessionStillActive = isQaRequestSessionSelected(
+        qaHistoryReadyWorkspaceRef.current, currentDocument.workspaceId,
+        selectedQaSessionIdRef.current, currentSession.id,
+      );
 
-      if (!streamedAnswer.trim() && sessionStillActive) {
+      if (!streamedAnswer.trim() && workspaceStillActive) {
         // 保留用户刚输入的消息，只移除空的 assistant 消息。
         const sessionWithUserMessage: DocumentChatSession = {
           ...previousSession,
@@ -3134,10 +3145,12 @@ function DocumentReaderTab({
         };
 
         setQaSessions((current) => updateQaSession(current, sessionWithUserMessage));
-        setSelectedQaSessionId((current) =>
-          current === currentSession.id ? previousSelectedSessionId : current,
-        );
-        setQaAttachments(previousAttachments);
+        if (sessionStillActive) {
+          setSelectedQaSessionId((current) =>
+            current === currentSession.id ? previousSelectedSessionId : current,
+          );
+          setQaAttachments(previousAttachments);
+        }
       }
 
       if (sessionStillActive) {
