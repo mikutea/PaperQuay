@@ -13,7 +13,12 @@ Windows x64 artifacts:
 
 The binaries are not code-signed. Windows SmartScreen may show an unrecognized-app warning; verify the published SHA-256 before running them.
 
-## Changes since app-v0.1.26-mikutea.9
+## Changes since app-v0.1.26-mikutea.10
+
+- Updates Tiptap and XML/ZIP dependencies to address reported advisories; MinerU ZIP extraction now rejects pre-existing symlink or junction paths outside its output directory ([#20](https://github.com/mikutea/PaperQuay/pull/20)).
+- Updates the packaged Electron runtime and the release/build toolchain, including electron-builder, Vite, and PostCSS. The complete npm dependency audit reports zero advisories for this lockfile ([#21](https://github.com/mikutea/PaperQuay/pull/21)).
+
+## Earlier changes in app-v0.1.26-mikutea.10 (since .9)
 
 - Structured Reading now displays MinerU superscripts/subscripts and keeps inline math inside its Markdown table cells ([#10](https://github.com/mikutea/PaperQuay/pull/10), [#11](https://github.com/mikutea/PaperQuay/pull/11)).
 - MinerU visual captions, notes, and assets remain attached to their source blocks; numeric-keyed page dictionaries and empty cross-page table fragments retain their content sources ([#12](https://github.com/mikutea/PaperQuay/pull/12), [#17](https://github.com/mikutea/PaperQuay/pull/17), [#18](https://github.com/mikutea/PaperQuay/pull/18)).
@@ -66,7 +71,12 @@ Windows x64 构建：
 
 这些二进制文件未做代码签名，Windows SmartScreen 可能提示“无法识别的应用”；运行前请核对发布页中的 SHA-256。
 
-## 相比 app-v0.1.26-mikutea.9 的更新
+## 相比 app-v0.1.26-mikutea.10 的更新
+
+- 更新 Tiptap 及 XML／ZIP 依赖以处理已报告的安全告警；MinerU 解压会拒绝通过预置符号链接或目录联接写出目标目录的路径（[#20](https://github.com/mikutea/PaperQuay/pull/20)）。
+- 更新打包后的 Electron 运行时和 electron-builder、Vite、PostCSS 等构建发布工具链；此锁文件的完整 npm 依赖审计报告为 0 项告警（[#21](https://github.com/mikutea/PaperQuay/pull/21)）。
+
+## .10 中已有的更新（相对 .9）
 
 - 结构化阅读正确显示 MinerU 上下标，并避免 Markdown 表格中的行内公式跨单元格解析（[#10](https://github.com/mikutea/PaperQuay/pull/10)、[#11](https://github.com/mikutea/PaperQuay/pull/11)）。
 - 保留 MinerU 图表的标题、注释和资源关联；兼容以数字页码为键的页面字典，并让跨页空表格片段引用原始内容（[#12](https://github.com/mikutea/PaperQuay/pull/12)、[#17](https://github.com/mikutea/PaperQuay/pull/17)、[#18](https://github.com/mikutea/PaperQuay/pull/18)）。
