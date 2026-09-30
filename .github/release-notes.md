@@ -13,7 +13,16 @@ Windows x64 artifacts:
 
 The binaries are not code-signed. Windows SmartScreen may show an unrecognized-app warning; verify the published SHA-256 before running them.
 
-## Changes since app-v0.1.26-mikutea.10
+## Changes since app-v0.1.26-mikutea.11
+
+- Restores readable dark-mode Reader Markdown and knowledge-graph labels, including live theme changes ([#23](https://github.com/mikutea/PaperQuay/pull/23)).
+- Shows waiting, provider-supplied reasoning and answer-stream progress in document QA; keeps reasoning separately expandable, handles failed/empty streams, and avoids duplicating final reasoning snapshots ([#23](https://github.com/mikutea/PaperQuay/pull/23)).
+- Fits tall figure previews to the window, supports original-size scrolling and Escape/focus return, and restores a usable default QA-sidebar width ([#23](https://github.com/mikutea/PaperQuay/pull/23)).
+- Preserves local MinerU figure locations when reopening cached results. Source content must match the cached artifact before its directory is reused; late QA failures no longer overwrite a newly selected session's error or attachments ([#24](https://github.com/mikutea/PaperQuay/pull/24)).
+
+Local figure assets still depend on their original directory. Older manual-import caches without source provenance may require selecting the original JSON once again.
+
+## Earlier changes in app-v0.1.26-mikutea.11 (since .10)
 
 - Updates Tiptap and XML/ZIP dependencies to address reported advisories; MinerU ZIP extraction now rejects pre-existing symlink or junction paths outside its output directory ([#20](https://github.com/mikutea/PaperQuay/pull/20)).
 - Updates the packaged Electron runtime and the release/build toolchain, including electron-builder, Vite, and PostCSS. The complete npm dependency audit reports zero advisories for this lockfile ([#21](https://github.com/mikutea/PaperQuay/pull/21)).
@@ -71,7 +80,16 @@ Windows x64 构建：
 
 这些二进制文件未做代码签名，Windows SmartScreen 可能提示“无法识别的应用”；运行前请核对发布页中的 SHA-256。
 
-## 相比 app-v0.1.26-mikutea.10 的更新
+## 相比 app-v0.1.26-mikutea.11 的更新
+
+- 修复阅读器 Markdown 和知识图谱在深色模式下的文字可读性，并支持实时切换主题（[#23](https://github.com/mikutea/PaperQuay/pull/23)）。
+- 文档问答显示等待、模型返回的思考内容及回答流进度；思考内容可独立展开，正确处理失败或空响应，避免重复显示最终思考摘要（[#23](https://github.com/mikutea/PaperQuay/pull/23)）。
+- 长图预览适配窗口，支持原始尺寸滚动、Esc 关闭与焦点返回，并恢复问答侧栏的合理默认宽度（[#23](https://github.com/mikutea/PaperQuay/pull/23)）。
+- 重开缓存结果时保留本地 MinerU 图片的来源位置，只有源内容与对应缓存一致才复用其目录；旧问答会话的延迟失败不再覆盖新会话的错误提示或附件（[#24](https://github.com/mikutea/PaperQuay/pull/24)）。
+
+本地图片仍依赖原始目录。旧的手动导入缓存若未记录来源，可能需要重新选择一次原 JSON。
+
+## .11 中已有的更新（相对 .10）
 
 - 更新 Tiptap 及 XML／ZIP 依赖以处理已报告的安全告警；MinerU 解压会拒绝通过预置符号链接或目录联接写出目标目录的路径（[#20](https://github.com/mikutea/PaperQuay/pull/20)）。
 - 更新打包后的 Electron 运行时和 electron-builder、Vite、PostCSS 等构建发布工具链；此锁文件的完整 npm 依赖审计报告为 0 项告警（[#21](https://github.com/mikutea/PaperQuay/pull/21)）。
