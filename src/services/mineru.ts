@@ -540,8 +540,15 @@ export function extractMineruAssetPathFromBlock(
   const candidate = [
     imageSource?.path, content?.img_path, content?.path, content?.image_path,
     ...(Array.isArray(content?.asset_paths) ? content.asset_paths : []),
-  ].find((path) => typeof path === 'string' && path.trim() &&
-    (!mineruPath || resolveMineruAssetPath(mineruPath, path.trim())));
+  ].find((path) => {
+    if (typeof path !== 'string') return false;
+    const trimmed = path.trim();
+    const segments = trimmed.split(/[\\/]/);
+    const fileName = segments[segments.length - 1];
+    // Merged cross-page tables can retain only a directory such as "images/".
+    if (!trimmed || /[\\/]$/.test(trimmed) || fileName === '.' || fileName === '..') return false;
+    return !mineruPath || Boolean(resolveMineruAssetPath(mineruPath, trimmed));
+  });
 
   return typeof candidate === 'string' && candidate.trim() ? candidate.trim() : undefined;
 }
@@ -1305,6 +1312,7 @@ export function flattenMineruPages(pages: MineruPage[]): PositionedMineruBlock[]
     })),
   );
   let lastTextParagraph: PositionedMineruBlock | null = null;
+  let lastContentfulTable: PositionedMineruBlock | null = null;
 
   return blocks.map((block) => {
     const blockText = extractTextFromMineruBlock(block).trim();
@@ -1323,6 +1331,16 @@ export function flattenMineruPages(pages: MineruPage[]): PositionedMineruBlock[]
 
     if (block.type === 'paragraph' && blockText) {
       lastTextParagraph = block;
+    }
+
+    if (block.type === 'table') {
+      const hasTableContent = Boolean(
+        blockText || extractTableHtmlFromMineruBlock(block) || extractMineruAssetPathFromBlock(block)
+      );
+      if (!hasTableContent && lastContentfulTable) {
+        return { ...block, contentSourceBlockId: lastContentfulTable.blockId };
+      }
+      if (hasTableContent) lastContentfulTable = block;
     }
 
     return block;
