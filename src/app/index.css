@@ -1574,6 +1574,21 @@ textarea,
   animation: pq-menu-drop 0.16s ease-out both;
 }
 
+@keyframes pq-menu-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.pq-model-menu-above {
+  animation-name: pq-menu-rise;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .pq-msg-in,
   .pq-model-menu {
