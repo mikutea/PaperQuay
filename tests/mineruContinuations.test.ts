@@ -104,3 +104,28 @@ test('directory-only assets are ignored while real images and HTML tables remain
   assert.equal(blocks[2].contentSourceBlockId, blocks[1].blockId);
   assert.equal(blocks[3].contentSourceBlockId, undefined);
 });
+
+test('an empty HTML table shell inherits the adjacent contentful table', () => {
+  const blocks = flattenMineruPages([[
+    { type: 'table', content: { html: '<table><tr><td>Data</td></tr></table>' } },
+    { type: 'table', content: { html: '<table><tr></tr></table>' } },
+  ]]);
+
+  assert.equal(blocks[1].contentSourceBlockId, blocks[0].blockId);
+});
+
+test('empty tables do not reuse a source after intervening content or a page gap', () => {
+  const blocks = flattenMineruPages([
+    [
+      { type: 'table', content: { html: '<table><td>First</td></table>' } },
+      { type: 'paragraph', content: { text: 'Separate discussion' } },
+      { type: 'table', content: {} },
+      { type: 'table', content: { html: '<table><td>Second</td></table>' } },
+    ],
+    [],
+    [{ type: 'table', content: {} }],
+  ]);
+
+  assert.equal(blocks[2].contentSourceBlockId, undefined);
+  assert.equal(blocks[4].contentSourceBlockId, undefined);
+});

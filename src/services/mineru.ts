@@ -1327,8 +1327,13 @@ export function flattenMineruPages(pages: MineruPage[]): PositionedMineruBlock[]
   );
   let lastTextParagraph: PositionedMineruBlock | null = null;
   let lastContentfulTable: PositionedMineruBlock | null = null;
+  let previousTableBlock: PositionedMineruBlock | null = null;
 
   return blocks.map((block) => {
+    if (block.type !== 'table') {
+      lastContentfulTable = null;
+      previousTableBlock = null;
+    }
     const blockText = extractTextFromMineruBlock(block).trim();
     const isEmptyParagraphContinuation =
       block.type === 'paragraph' &&
@@ -1348,10 +1353,17 @@ export function flattenMineruPages(pages: MineruPage[]): PositionedMineruBlock[]
     }
 
     if (block.type === 'table') {
+      if (previousTableBlock && block.pageIndex - previousTableBlock.pageIndex > 1) {
+        lastContentfulTable = null;
+      }
+      const isAdjacentTable = previousTableBlock !== null &&
+        block.pageIndex - previousTableBlock.pageIndex <= 1;
+      previousTableBlock = block;
+      const visibleTableText = readTableHtml(block)?.visible.text;
       const hasTableContent = Boolean(
-        blockText || extractTableHtmlFromMineruBlock(block) || extractMineruAssetPathFromBlock(block)
+        blockText || visibleTableText || extractMineruAssetPathFromBlock(block)
       );
-      if (!hasTableContent && lastContentfulTable) {
+      if (!hasTableContent && isAdjacentTable && lastContentfulTable) {
         return { ...block, contentSourceBlockId: lastContentfulTable.blockId };
       }
       if (hasTableContent) lastContentfulTable = block;
