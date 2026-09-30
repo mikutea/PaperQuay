@@ -49,6 +49,17 @@ test("English-library auto translation remains opt-in", async () => {
   );
 });
 
+test('selection auto translation is strictly opt-in, including legacy malformed settings', async () => {
+  const { DEFAULT_SETTINGS, normalizeReaderSettings } = await loadReaderShared();
+  assert.equal(DEFAULT_SETTINGS.autoTranslateSelection, false);
+  assert.equal(normalizeReaderSettings().autoTranslateSelection, false);
+  assert.equal(normalizeReaderSettings({ autoTranslateSelection: true }).autoTranslateSelection, true);
+  for (const value of [false, null, undefined, 'false', 'true', 1]) {
+    assert.equal(normalizeReaderSettings({ autoTranslateSelection: value as never }).autoTranslateSelection, false);
+  }
+  assert.equal(normalizeReaderSettings().enableSelectionTranslation, true, 'manual translation stays available');
+});
+
 test("summary concurrency is independent of the MinerU two-job limit", async () => {
   const { normalizeReaderSettings } = await loadReaderShared();
   assert.equal(normalizeReaderSettings({ libraryBatchConcurrency: 8 }).libraryBatchConcurrency, 8);

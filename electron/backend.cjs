@@ -53,8 +53,8 @@ function createRagStoreSafely(appPaths) {
   }
 }
 
-function createBackend({ app }) {
-  const appPaths = createAppPaths(app);
+function createBackend({ app, libraryLocation }) {
+  const appPaths = createAppPaths(app, libraryLocation?.status().dataDirectory);
   const store = createLibraryStore(appPaths);
   const noteStore = createNoteStore(appPaths);
   const ragStore = createRagStoreSafely(appPaths);
@@ -77,6 +77,7 @@ function createBackend({ app }) {
     approvedWritePaths: new Set(),
     ragStore,
     store,
+    prepareForUpdate: () => libraryLocation?.rememberActive({ makeDefault: true }),
   };
   const fileCommands = createFileCommands(context);
   context.fileCommands = fileCommands;
@@ -90,6 +91,11 @@ function createBackend({ app }) {
     ...createIntegrationCommands(context),
     ...createReviewCommands(context),
     ...createUpdateCommands(context),
+    ...(libraryLocation ? {
+      library_location_status: () => libraryLocation.status(),
+      library_location_select: () => libraryLocation.selectExisting(),
+      library_location_activate: (args) => libraryLocation.activateSelected(args),
+    } : {}),
   };
 
   return {

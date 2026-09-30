@@ -10,6 +10,8 @@ import {
   Sparkles,
 } from 'lucide-react';
 import clsx from 'clsx';
+import { useThemeStore } from '../../stores/useThemeStore';
+import LibraryLocationPanel from '../../components/LibraryLocationPanel';
 
 import { openExternalUrl } from '../../services/desktop';
 import { resolveSummaryOutputLanguage } from '../../services/summarySource';
@@ -263,6 +265,8 @@ export function ReaderPreferencesContent({
   batchTranslationProgress,
   batchSummaryProgress,
 }: ReaderPreferencesContentProps) {
+  const themeMode = useThemeStore((state) => state.mode);
+  const setThemeMode = useThemeStore((state) => state.setMode);
   const languageOptions = buildLanguageOptions(settings.uiLanguage);
   const summaryLanguageOptions = buildSummaryLanguageOptions(settings.uiLanguage);
   const summarySourceOptions = buildSummarySourceOptions(settings.uiLanguage);
@@ -287,6 +291,21 @@ export function ReaderPreferencesContent({
   return (
     <div className="mx-auto max-w-3xl space-y-4">
       {activeSection === 'general' ? (
+        <>
+        <SettingsField
+          label={l('外观', 'Appearance')}
+          description={l('标题栏按钮直接切换深浅色；在这里选择跟随系统。', 'The title-bar button toggles light and dark. Choose system following here.')}
+        >
+          <SettingsSelect
+            aria-label={l('外观', 'Appearance')}
+            value={themeMode}
+            onChange={(event) => setThemeMode(event.target.value as 'light' | 'dark' | 'system')}
+          >
+            <option value="system">{l('跟随系统', 'System')}</option>
+            <option value="light">{l('浅色', 'Light')}</option>
+            <option value="dark">{l('深色', 'Dark')}</option>
+          </SettingsSelect>
+        </SettingsField>
         <SettingsField
           label={l('软件语言', 'Software Language')}
           description={l(
@@ -304,10 +323,12 @@ export function ReaderPreferencesContent({
             <option value="en-US">English</option>
           </SettingsSelect>
         </SettingsField>
+        </>
       ) : null}
 
       {activeSection === 'library' ? (
         <>
+          <LibraryLocationPanel />
           <SettingsField
             label={l('默认文献存储文件夹', 'Default paper storage folder')}
             description={l(
@@ -1084,8 +1105,8 @@ export function ReaderPreferencesContent({
             <ToggleRow
               title={l('自动翻译划词', 'Auto Translate Selection')}
               description={l(
-                '划词翻译浮层开启时，选中文本后自动请求翻译，无需手动点击翻译按钮。',
-                'When the selection translation popover is enabled, automatically translate selected text without requiring a manual click.',
+                '默认关闭。关闭时选中文字不会请求模型；需要翻译时点击“立即翻译”。开启后才会自动发送选中文字。',
+                'Off by default. Selecting text does not call the model while disabled; click Translate Now when needed. Enable only to send selections automatically.',
               )}
               checked={settings.autoTranslateSelection}
               onChange={(checked) => onSettingChange('autoTranslateSelection', checked)}

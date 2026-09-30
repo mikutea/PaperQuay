@@ -1,6 +1,7 @@
 const path = require('node:path');
-const { app, BrowserWindow, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
 const { createBackend } = require('./backend.cjs');
+const { createLibraryLocationManager } = require('./libraryLocation.cjs');
 const {
   registerLocalPdfProtocol,
   registerLocalPdfProtocolScheme,
@@ -8,12 +9,13 @@ const {
 
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
 let backend = null;
+let libraryLocation = null;
 
 registerLocalPdfProtocolScheme();
 
 function getBackend() {
   if (!backend) {
-    backend = createBackend({ app });
+    backend = createBackend({ app, libraryLocation });
   }
 
   return backend;
@@ -139,12 +141,25 @@ ipcMain.handle('paperquay:window-control', (event, action) => {
   }
 });
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   if (process.platform === 'win32') {
     app.setAppUserModelId('dev.paperquay.app');
   }
 
+  libraryLocation = createLibraryLocationManager({
+    app, dialog,
+    restart: () => {
+      setImmediate(() => { app.relaunch(); app.quit(); });
+    },
+  });
+  try {
+    libraryLocation.resolve();
+  } catch (error) {
+    if (!await libraryLocation.recover(error)) { app.quit(); return; }
+    libraryLocation.resolve();
+  }
   getBackend();
+  libraryLocation.rememberActive();
   registerLocalPdfProtocol();
   createWindow();
 
@@ -153,6 +168,9 @@ app.whenReady().then(() => {
       createWindow();
     }
   });
+}).catch((error) => {
+  dialog.showErrorBox('PaperQuay 启动失败 / Startup Failed', error instanceof Error ? error.message : String(error));
+  app.quit();
 });
 
 app.on('window-all-closed', () => {

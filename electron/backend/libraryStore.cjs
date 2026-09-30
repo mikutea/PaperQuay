@@ -9,8 +9,8 @@ const SYSTEM_CATEGORIES = [
   ['system-favorites', 'Favorites', 'favorites', 3],
 ];
 
-function createAppPaths(app) {
-  const dataDir = path.join(app.getPath('userData'), 'PaperQuay');
+function createAppPaths(app, dataDirectory) {
+  const dataDir = dataDirectory || path.join(app.getPath('userData'), 'PaperQuay');
 
   return {
     dataDir,
