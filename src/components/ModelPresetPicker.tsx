@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import { createPortal } from 'react-dom';
 import { Bot, Check, ChevronDown, Sparkles } from 'lucide-react';
 import type { QaModelPreset } from '../types/reader';
+import { placeAnchoredMenu } from '../utils/anchoredMenu';
 import { cn } from '../utils/cn';
 
 interface ModelPresetPickerProps {
@@ -30,6 +31,7 @@ export function ModelPresetPicker({
   const menuRef = useRef<HTMLDivElement | null>(null);
   const [open, setOpen] = useState(false);
   const [menuStyle, setMenuStyle] = useState<CSSProperties>({});
+  const [menuPlacement, setMenuPlacement] = useState<'above' | 'below'>('below');
   const selectedPreset = useMemo(
     () => presets.find((preset) => preset.id === selectedPresetId) ?? presets[0] ?? null,
     [presets, selectedPresetId],
@@ -42,18 +44,25 @@ export function ModelPresetPicker({
     }
 
     const rect = button.getBoundingClientRect();
-    const viewportPadding = 12;
-    const availableWidth = window.innerWidth - viewportPadding * 2;
-    const width = Math.min(availableWidth, Math.max(Math.round(rect.width), compact ? 200 : 220));
-    const left = Math.max(12, Math.min(rect.left, window.innerWidth - width - 12));
-    const top = rect.bottom + 6;
-    const maxHeight = Math.max(180, window.innerHeight - top - 12);
+    const placement = placeAnchoredMenu({
+      anchor: {
+        left: rect.left,
+        top: rect.top,
+        bottom: rect.bottom,
+        width: rect.width,
+      },
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      preferredWidth: compact ? 200 : 220,
+    });
 
+    setMenuPlacement(placement.placement);
     setMenuStyle({
-      top,
-      left,
-      width,
-      maxHeight,
+      top: placement.top,
+      bottom: placement.bottom,
+      left: placement.left,
+      width: placement.width,
+      maxHeight: placement.maxHeight,
     });
   }, [compact]);
 
@@ -91,7 +100,10 @@ export function ModelPresetPicker({
   const menu = open ? (
     <div
       ref={menuRef}
-      className="pq-card pq-model-menu fixed z-[9999] flex origin-top flex-col overflow-hidden p-0 shadow-[0_18px_48px_rgba(15,23,42,0.18)]"
+      className={cn(
+        'pq-card pq-model-menu fixed z-[9999] flex flex-col overflow-hidden p-0 shadow-[0_18px_48px_rgba(15,23,42,0.18)]',
+        menuPlacement === 'above' ? 'pq-model-menu-above origin-bottom' : 'origin-top',
+      )}
       style={menuStyle}
     >
       <div className="shrink-0 border-b border-[var(--pq-border-subtle)] px-3 py-2.5">
@@ -157,7 +169,10 @@ export function ModelPresetPicker({
       <button
         ref={buttonRef}
         type="button"
-        onClick={() => setOpen((current) => !current)}
+        onClick={() => {
+          if (!open) updateMenuPosition();
+          setOpen((current) => !current);
+        }}
         title={title}
         aria-label={title}
         aria-expanded={open}
