@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.1.26-mikutea.10",
   "description": "AI-assisted desktop literature reader and library manager.",
+  "homepage": "https://github.com/mikutea/PaperQuay",
   "author": {
     "name": "PaperQuay Developers",
     "email": "WangQrkkk@users.noreply.github.com"
@@ -62,14 +63,14 @@
     "@vitejs/plugin-react": "^6.0.2",
     "autoprefixer": "^10.4.20",
     "clsx": "^2.1.1",
-    "electron": "^42.2.0",
-    "electron-builder": "^26.0.12",
+    "electron": "^42.9.2",
+    "electron-builder": "^26.15.3",
     "esbuild": "^0.27.0",
     "katex": "^0.16.11",
     "lucide-react": "^1.8.0",
     "parse5": "^7.3.0",
     "pdfjs-dist": "4.8.69",
-    "postcss": "^8.4.49",
+    "postcss": "^8.5.23",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^9.0.1",
@@ -80,7 +81,7 @@
     "tailwind-merge": "^3.5.0",
     "tailwindcss": "^3.4.15",
     "typescript": "^5.6.3",
-    "vite": "^8.0.14",
+    "vite": "^8.0.16",
     "zustand": "^5.0.12"
   },
   "build": {
