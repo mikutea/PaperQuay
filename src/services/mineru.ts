@@ -962,12 +962,20 @@ export function parseMineruPages(payload: string | unknown): MineruPage[] {
   const parsed = typeof payload === 'string' ? JSON.parse(payload) : payload;
 
   if (Array.isArray(parsed)) {
-    if (parsed.every(Array.isArray)) {
-      return parsed.map((page, pageIndex) => {
-        if (!Array.isArray(page)) {
-          throw new Error(`第 ${pageIndex + 1} 页不是有效的块数组`);
-        }
+    const pageArrays = parsed.map((candidate) => {
+      if (Array.isArray(candidate)) return candidate;
+      const dictionary = getRecord(candidate);
+      if (!dictionary || 'type' in dictionary) return null;
+      const keys = Object.keys(dictionary);
+      if (keys.length === 0 || !keys.every((key) =>
+        /^\d+$/.test(key) && typeof getRecord(dictionary[key])?.type === 'string')) {
+        return null;
+      }
+      return keys.sort((left, right) => Number(left) - Number(right)).map((key) => dictionary[key]);
+    });
 
+    if (pageArrays.every((page): page is unknown[] => Array.isArray(page))) {
+      return pageArrays.map((page, pageIndex) => {
         return page.map((block, blockIndex) => {
           return normalizeMineruBlock(block, pageIndex, blockIndex, 'normalized-1000');
         });
