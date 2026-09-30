@@ -38,6 +38,7 @@ test('compareVersions orders semantic versions and prereleases', () => {
   assert.equal(compareVersions('0.1.19', '0.1.19'), 0);
   assert.equal(compareVersions('0.1.19-beta.1', '0.1.19'), -1);
   assert.equal(compareVersions('0.1.26-mikutea.10', '0.1.26-mikutea.9'), 1);
+  assert.equal(compareVersions('0.1.26-mikutea.11', '0.1.26-mikutea.10'), 1);
 });
 
 test('getAutoUpdateSupport disables automatic install in development', () => {
