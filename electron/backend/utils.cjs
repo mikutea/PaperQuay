@@ -844,12 +844,12 @@ function pickStreamThinkingDelta(data, apiMode) {
 
     if (
       eventType === 'response.reasoning_summary_text.delta' ||
-      eventType === 'response.reasoning_summary.delta' ||
-      eventType.includes('reasoning_summary')
+      eventType === 'response.reasoning_summary.delta'
     ) {
       return rawText(data?.delta) || rawText(data?.text) || rawText(data?.summary?.text);
     }
 
+    // Summary done/part events carry snapshots, not appendable deltas.
     return '';
   }
 

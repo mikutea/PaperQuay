@@ -55,3 +55,16 @@ test('QA rejects malformed and provider-error streams instead of silently finish
   await assert.rejects(stream(['data: {"error":{"message":"fixture failure"}}\n\n']), /fixture failure/);
   await assert.rejects(stream(['data: [DONE]\n\n']), /empty SSE/);
 });
+
+test('QA does not append Responses reasoning snapshots after summary deltas', async () => {
+  const events = await stream([
+    'data: {"type":"response.reasoning_summary_text.delta","delta":"Summary"}\n\n',
+    'data: {"type":"response.reasoning_summary_text.delta","delta":" complete"}\n\n',
+    'data: {"type":"response.reasoning_summary_text.done","text":"Summary complete"}\n\n',
+    'data: {"type":"response.reasoning_summary_part.done","part":{"type":"summary_text","text":"Summary complete"}}\n\n',
+    'data: {"type":"response.reasoning_summary.done","summary":{"text":"Summary complete"}}\n\n',
+    'data: {"type":"response.output_text.delta","delta":"Answer"}\n\n',
+    'data: [DONE]\n\n',
+  ], 'responses');
+  assert.deepEqual(events.filter((event) => event.kind === 'thinking').map((event) => event.text), ['Summary', ' complete']);
+});
