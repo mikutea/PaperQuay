@@ -45,7 +45,9 @@ export function loadStoredBoolean(key: string, fallback = false): boolean {
 
 export function loadStoredNumber(key: string, fallback: number): number {
   try {
-    const rawValue = Number(localStorage.getItem(key));
+    const storedValue = localStorage.getItem(key);
+    if (storedValue === null || !storedValue.trim()) return fallback;
+    const rawValue = Number(storedValue);
 
     return Number.isFinite(rawValue) ? rawValue : fallback;
   } catch {

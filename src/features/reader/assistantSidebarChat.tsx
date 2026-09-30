@@ -47,6 +47,37 @@ import {
   getQaContextBadgeTone,
 } from './readerQaContext';
 
+function QaResponseProgress({ message, running }: { message: DocumentChatMessage; running: boolean }) {
+  const l = useLocaleText();
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    if (!running) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [running]);
+  const thinking = message.thinking?.trim();
+  if (!running && !thinking) return null;
+  return (
+    <div className="mb-3 rounded-xl border border-[var(--pq-border)] bg-[var(--pq-surface-2)] px-3 py-2 text-sm text-[var(--pq-text-muted)]">
+      {running ? (
+        <div role="status" className="flex items-center gap-2">
+          <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+          <span>{message.content.trim() ? l('正在生成回答', 'Generating answer') : thinking ? l('正在思考', 'Thinking') : l('正在准备上下文 / 等待模型响应', 'Preparing context / waiting for model')}</span>
+          <span className="ml-auto shrink-0 tabular-nums">{Math.max(0, Math.floor((now - message.createdAt) / 1000))}s</span>
+        </div>
+      ) : null}
+      {thinking ? (
+        <details className="mt-1" open={running && !message.content.trim()}>
+          <summary className="cursor-pointer py-1">{l('模型返回的思考内容', 'Model-provided reasoning')}</summary>
+          <div className="max-h-60 overflow-auto whitespace-pre-wrap break-words py-2 text-xs leading-6">{thinking}</div>
+        </details>
+      ) : running && !message.content.trim() ? (
+        <p className="mt-1 text-xs leading-5">{l('有些模型不返回思考内容；收到回答后会立即显示。', 'Some models do not return reasoning; the answer will appear as it arrives.')}</p>
+      ) : null}
+    </div>
+  );
+}
+
 function formatChatSessionTime(timestamp: number, locale: 'zh-CN' | 'en-US') {
   const date = new Date(timestamp);
   const now = new Date();
@@ -1156,8 +1187,9 @@ export function ChatWorkspacePanel({
             </div>
           ) : (
             <div className="mx-auto max-w-3xl space-y-6">
-              {messages.map((message) => {
+              {messages.map((message, messageIndex) => {
                 const assistantMessage = message.role === 'assistant';
+                const messageRunning = assistantMessage && selectedSessionRunning && messageIndex === messages.length - 1;
                 const rawMessageContent = (
                   assistantMessage ? cleanQaAssistantOutput(message.content) : message.content
                 ).trim();
@@ -1182,20 +1214,12 @@ export function ChatWorkspacePanel({
                   >
                     {assistantMessage ? (
                       <div className="w-full min-w-0">
+                        <QaResponseProgress message={message} running={messageRunning} />
                         {renderHtmlPreview ? (
-                          rawMessageContent ? (
-                            <HtmlAnswerPreview content={rawMessageContent} />
-                          ) : (
-                            <div className="text-[15px] leading-7 text-[var(--pq-text-faint)]">
-                              {loading ? l('正在思考...', 'Thinking...') : ''}
-                            </div>
-                          )
+                          <HtmlAnswerPreview content={rawMessageContent} />
                         ) : (
                           <MarkdownPreview
-                            content={
-                              renderedMessageContent ||
-                              (assistantMessage && loading ? l('正在思考...', 'Thinking...') : '')
-                            }
+                            content={renderedMessageContent}
                             components={{
                               a: ({ href, children, ...props }) => {
                                 const citation =

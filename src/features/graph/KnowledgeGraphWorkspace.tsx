@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import cytoscape, { type Core, type ElementDefinition, type StylesheetJson } from 'cytoscape';
 import { graphContainerHasSize } from './graphLayoutVisibility.ts';
+import { graphNodeTextColor } from './graphTheme.ts';
 import {
   Brain,
   ChevronDown,
@@ -262,10 +263,6 @@ const graphStyles = (textColor: string) => [
     },
   },
 ] as unknown as StylesheetJson;
-
-function graphNodeTextColor(container: HTMLElement): string {
-  return getComputedStyle(container).getPropertyValue('--pq-text').trim() || '#1c1917';
-}
 
 function compactNumber(value: number) {
   return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value);
@@ -1587,7 +1584,7 @@ export default function KnowledgeGraphWorkspace() {
       </aside>
 
       <section className="relative min-w-0 flex-1 bg-[radial-gradient(circle_at_1px_1px,var(--pq-border)_1px,transparent_0)] [background-size:22px_22px]">
-        <div ref={containerRef} className="h-full w-full" />
+        <div ref={containerRef} className="h-full w-full text-[var(--pq-text)]" />
 
         {quickRelationSourceNode ? (
           <div className="absolute left-4 top-4 flex items-center gap-2 rounded-[var(--pq-radius-sm)] border border-[var(--pq-accent-border)] bg-[var(--pq-surface)] px-3 py-2 text-xs text-[var(--pq-text)] shadow-[var(--pq-shadow-md)]">

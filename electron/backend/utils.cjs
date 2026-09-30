@@ -927,6 +927,8 @@ async function readOpenAiStreamResponse(response, options = {}, handlers = {}) {
       parser.feed(tail);
     }
 
+    // Flush compatible providers that omit the final blank event separator.
+    parser.feed('\n\n');
     parser.reset({ consume: true });
   } catch (error) {
     throw new Error(`OpenAI-compatible stream returned invalid SSE JSON: ${toError(error)}`);

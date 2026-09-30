@@ -9,13 +9,14 @@ const QA_STREAM_EVENT = 'paperquay://qa-stream';
 
 interface QaStreamEventPayload {
   requestId: string;
-  kind: 'delta' | 'done' | 'error';
+  kind: 'delta' | 'thinking' | 'done' | 'error';
   text?: string | null;
   error?: string | null;
 }
 
 interface QaStreamHandlers {
   onDelta?: (text: string, fullText: string) => void;
+  onThinking?: (text: string, fullText: string) => void;
   onDone?: (fullText: string) => void;
   onError?: (message: string) => void;
 }
@@ -48,11 +49,19 @@ export async function askDocumentOpenAICompatibleStream(
 ): Promise<string> {
   const requestId = crypto.randomUUID();
   let answer = '';
+  let thinking = '';
   let streamError = '';
   const unlisten = await listen<QaStreamEventPayload>(QA_STREAM_EVENT, (event) => {
     const payload = event.payload;
 
     if (!payload || payload.requestId !== requestId) {
+      return;
+    }
+
+    if (payload.kind === 'thinking') {
+      const delta = payload.text ?? '';
+      thinking += delta;
+      if (delta) handlers.onThinking?.(delta, thinking);
       return;
     }
 
@@ -85,6 +94,10 @@ export async function askDocumentOpenAICompatibleStream(
 
     if (streamError) {
       throw new Error(streamError);
+    }
+
+    if (!cleanQaAssistantOutput(answer).trim()) {
+      throw new Error('模型未返回回答正文，请重试或检查模型配置。');
     }
 
     return cleanQaAssistantOutput(answer);

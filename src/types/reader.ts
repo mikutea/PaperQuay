@@ -387,6 +387,7 @@ export interface DocumentChatMessage {
   modelId?: string;
   modelLabel?: string;
   renderMode?: DocumentChatRenderMode;
+  thinking?: string;
   qaContext?: DocumentChatQaContext;
   citations?: DocumentChatCitation[];
   attachments?: DocumentChatAttachment[];

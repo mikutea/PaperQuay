@@ -206,6 +206,8 @@ function MarkdownPreview({
           '[&_a]:font-medium [&_a]:text-[var(--pq-accent)] [&_a]:underline [&_a]:underline-offset-2',
           '[&_table]:my-3 [&_table]:w-full [&_table]:border-collapse [&_table]:overflow-hidden [&_table]:rounded-xl [&_th]:border [&_th]:border-slate-200 [&_th]:bg-slate-50 [&_th]:px-3 [&_th]:py-2 [&_th]:text-left [&_th]:font-semibold [&_td]:border [&_td]:border-slate-200 [&_td]:px-3 [&_td]:py-2',
           '[&_hr]:my-5 [&_hr]:border-slate-200 [&_.katex]:text-slate-900 [&_.katex-display]:my-4 [&_.katex-display]:overflow-x-auto [&_.katex-display]:overflow-y-hidden [&_.katex-display]:py-2',
+          'dark:text-[var(--pq-text)] dark:[&_h1]:text-[var(--pq-text)] dark:[&_h2]:text-[var(--pq-text)] dark:[&_h3]:text-[var(--pq-text)] dark:[&_h4]:text-[var(--pq-text)] dark:[&_strong]:text-[var(--pq-text)] dark:[&_em]:text-[var(--pq-text)] dark:[&_.katex]:text-[var(--pq-text)]',
+          'dark:[&_blockquote]:text-[var(--pq-text-muted)] dark:[&_code]:bg-[var(--pq-surface-3)] dark:[&_pre_code]:bg-transparent dark:[&_th]:bg-[var(--pq-surface-2)] dark:[&_th]:border-[var(--pq-border)] dark:[&_td]:border-[var(--pq-border)] dark:[&_h1]:border-[var(--pq-border)] dark:[&_hr]:border-[var(--pq-border)]',
           className,
         )}
         remarkPlugins={[remarkGfm, remarkMath]}
