@@ -3,6 +3,8 @@ import {
   buildMineruCachePathCandidates,
   buildMineruSummaryCachePathCandidates,
   getMineruJsonPathCandidates,
+  guessSiblingJsonPaths,
+  guessSiblingMarkdownPath,
 } from '../../utils/mineruCache.ts';
 import { isMineruCacheManifest } from './documentReaderManifest.ts';
 type Localize = (zh: string, en: string) => string;
@@ -15,6 +17,47 @@ type SummaryCacheEnvelope = {
   sourceKey: string;
   summary: PaperSummary;
 };
+
+// Cached text still references assets next to the original local parse output.
+// This changes only the resolution base; resolveMineruAssetPath keeps enforcing
+// the source-directory boundary for every asset.
+export async function resolveCachedMineruSourcePath({
+  item, cachedPath, cachedText, manifestPath, readText,
+}: {
+  item: WorkspaceItem;
+  cachedPath: string;
+  cachedText: string;
+  manifestPath: string;
+  readText: ReadLocalTextFileIfExists;
+}): Promise<string> {
+  try {
+    const raw = await readText(manifestPath);
+    if (!raw) return cachedPath;
+    const manifest = JSON.parse(raw);
+    if (!isMineruCacheManifest(manifest) || manifest.documentKey !== item.itemKey ||
+        !['manual-json', 'sibling-json'].includes(manifest.sourceKind)) return cachedPath;
+
+    const sourcePath = manifest.sourcePath;
+    if (typeof sourcePath === 'string' &&
+        /^(?:[a-zA-Z]:[\\/]|\/|\\\\)/.test(sourcePath) &&
+        !sourcePath.split(/[\\/]/).includes('..') &&
+        /\.(?:json|md)$/i.test(sourcePath)) return sourcePath;
+
+    // Older sibling caches did not record provenance. Recover it only when
+    // the original sibling output is still an exact match for the cached text.
+    if (manifest.sourceKind === 'sibling-json' && item.localPdfPath) {
+      const candidates = cachedPath.toLowerCase().endsWith('.md')
+        ? [guessSiblingMarkdownPath(item.localPdfPath)]
+        : guessSiblingJsonPaths(item.localPdfPath);
+      for (const path of candidates) {
+        if (await readText(path) === cachedText) return path;
+      }
+    }
+  } catch {
+    // Missing or malformed provenance must not discard a usable text cache.
+  }
+  return cachedPath;
+}
 
 export interface SavedMineruPagesResult {
   pages: MineruPage[];
@@ -104,7 +147,10 @@ export async function loadSavedMineruPages({
 
         return {
           pages: parsePages(jsonText),
-          path: candidatePath,
+          path: await resolveCachedMineruSourcePath({
+            item, cachedPath: candidatePath, cachedText: jsonText,
+            manifestPath: cachePaths.manifestPath, readText,
+          }),
           message: l(
             `已从本地缓存恢复《${item.title}》的解析结果`,
             `Restored the parsing result for "${item.title}" from the local cache`,
@@ -130,7 +176,10 @@ export async function loadSavedMineruPages({
 
         return {
           pages,
-          path: cachePaths.markdownPath,
+          path: await resolveCachedMineruSourcePath({
+            item, cachedPath: cachePaths.markdownPath, cachedText: markdownText,
+            manifestPath: cachePaths.manifestPath, readText,
+          }),
           message: l(
             `已从本地 MinerU Markdown 恢复《${item.title}》的结构块`,
             `Restored structured blocks for "${item.title}" from local MinerU Markdown`,

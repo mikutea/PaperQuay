@@ -1,5 +1,15 @@
 import type { DocumentChatSession, QaModelPreset } from '../../types/reader';
 
+export function isQaRequestSessionSelected(
+  readyWorkspaceId: string,
+  requestWorkspaceId: string,
+  selectedSessionId: string,
+  requestSessionId: string,
+): boolean {
+  return Boolean(readyWorkspaceId && selectedSessionId &&
+    readyWorkspaceId === requestWorkspaceId && selectedSessionId === requestSessionId);
+}
+
 export function resolveActiveQaSession(
   sessions: DocumentChatSession[],
   selectedSessionId: string,

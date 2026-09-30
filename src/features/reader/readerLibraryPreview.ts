@@ -42,6 +42,7 @@ import {
 import { buildMineruFallbackSummarySourceKey } from './readerBatchResults';
 import { mineruSummarySourceVersion } from './documentReaderSummarySource';
 import { writeTranslationCache } from './readerTranslationCache';
+import { resolveCachedMineruSourcePath } from './documentReaderCache';
 
 type LocaleTextFn = (zh: string, en: string) => string;
 
@@ -161,6 +162,7 @@ export async function writeMineruParseCache({
   item,
   pdfPath,
   sourceKind,
+  sourcePath,
   contentJsonText,
   middleJsonText,
   markdownText,
@@ -173,6 +175,7 @@ export async function writeMineruParseCache({
   item: WorkspaceItem;
   pdfPath: string;
   sourceKind: MineruCacheManifest['sourceKind'];
+  sourcePath?: string;
   contentJsonText?: string | null;
   middleJsonText?: string | null;
   markdownText?: string | null;
@@ -208,6 +211,7 @@ export async function writeMineruParseCache({
     pdfPath,
     savedAt: new Date().toISOString(),
     sourceKind,
+    sourcePath,
     batchId,
     dataId,
     fileName,
@@ -253,7 +257,10 @@ export async function loadReaderLibraryPreviewBlocks({
             blocks,
             currentPdfName: pdfName,
             currentJsonName: getFileNameFromPath(candidatePath),
-            mineruSourcePath: candidatePath,
+            mineruSourcePath: await resolveCachedMineruSourcePath({
+              item, cachedPath: candidatePath, cachedText: jsonText,
+              manifestPath: cachePaths.manifestPath, readText: readLocalTextFileIfExists,
+            }),
             statusMessage: l(
               `已从缓存加载 ${blocks.length} 个结构块`,
               `Loaded ${blocks.length} structured blocks from cache`,
@@ -303,11 +310,16 @@ export async function loadReaderLibraryPreviewBlocks({
         continue;
       }
 
+      const cachePaths = buildMineruCachePathCandidates(settings.mineruCacheDir.trim(), item)
+        .find((paths) => paths.markdownPath === markdownPath);
       return {
         blocks,
         currentPdfName: pdfName,
         currentJsonName: getFileNameFromPath(markdownPath),
-        mineruSourcePath: markdownPath,
+        mineruSourcePath: cachePaths ? await resolveCachedMineruSourcePath({
+          item, cachedPath: markdownPath, cachedText: markdownText,
+          manifestPath: cachePaths.manifestPath, readText: readLocalTextFileIfExists,
+        }) : markdownPath,
         statusMessage: l(
           `已从 MinerU Markdown 加载 ${blocks.length} 个结构块`,
           `Loaded ${blocks.length} structured blocks from MinerU Markdown`,

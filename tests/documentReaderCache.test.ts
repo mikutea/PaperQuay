@@ -6,6 +6,7 @@ import {
   loadSavedMineruPages,
   loadSavedSummaryCache,
   resolveSavedPdfPath,
+  resolveCachedMineruSourcePath,
 } from '../src/features/reader/documentReaderCache.ts';
 import { parseMineruMarkdownPages } from '../src/services/mineru.ts';
 import type { PaperSummary, PdfSource, WorkspaceItem } from '../src/types/reader.ts';
@@ -93,7 +94,54 @@ test('loadSavedMineruPages restores the first readable MinerU JSON cache', async
   assert.equal(loaded?.pages.length, 1);
   assert.equal(loaded?.pages[0]?.[0]?.type, 'paragraph');
   assert.match(loaded?.message ?? '', /本地缓存/);
-  assert.equal(reads.length, 1);
+  assert.equal(reads.length, 2);
+});
+
+test('local MinerU cache provenance keeps image resolution next to the original output', async () => {
+  for (const sourcePath of ['D:/papers/output/content_list.json', '/papers/full.md', '\\\\server\\share\\output\\middle.json']) {
+    const result = await resolveCachedMineruSourcePath({
+      item: item(), cachedPath: 'D:/cache/document-1/content_list_v2.json', cachedText: '[]',
+      manifestPath: 'manifest.json',
+      readText: async () => JSON.stringify({
+        documentKey: 'item-1', pdfPath: 'D:/papers/paper.pdf', sourceKind: 'manual-json', sourcePath,
+      }),
+    });
+    assert.equal(result, sourcePath);
+  }
+});
+
+test('cache provenance ignores foreign, cloud, malformed and non-local sources', async () => {
+  const cachedPath = 'D:/cache/document-1/content_list_v2.json';
+  for (const overrides of [
+    { documentKey: 'other' }, { sourceKind: 'cloud' }, { sourceKind: 'unknown' },
+    { sourcePath: 'https://example.test/content_list.json' }, { sourcePath: 'relative/content_list.json' },
+    { sourcePath: 'D:/papers/../secret.json' }, { sourcePath: 42 },
+  ]) {
+    assert.equal(await resolveCachedMineruSourcePath({
+      item: item(), cachedPath, cachedText: '[]', manifestPath: 'manifest.json',
+      readText: async () => JSON.stringify({
+        documentKey: 'item-1', pdfPath: 'D:/papers/paper.pdf', sourceKind: 'manual-json',
+        sourcePath: 'D:/papers/content_list.json', ...overrides,
+      }),
+    }), cachedPath);
+  }
+  assert.equal(await resolveCachedMineruSourcePath({
+    item: item(), cachedPath, cachedText: '[]', manifestPath: 'manifest.json', readText: async () => '{',
+  }), cachedPath);
+});
+
+test('legacy sibling provenance is recovered only from matching local content', async () => {
+  const cachedPath = 'D:/cache/document-1/content_list_v2.json';
+  for (const matches of [true, false]) {
+    const result = await resolveCachedMineruSourcePath({
+      item: item({ localPdfPath: 'D:/papers/paper.pdf' }), cachedPath, cachedText: '[{"type":"image"}]',
+      manifestPath: 'manifest.json',
+      readText: async (path) => path === 'manifest.json' ? JSON.stringify({
+        documentKey: 'item-1', pdfPath: 'D:/papers/paper.pdf', sourceKind: 'sibling-json',
+      }) : path === 'D:/papers/content_list.json' && matches ? '[{"type":"image"}]' : null,
+    });
+    assert.equal(result, matches ? 'D:/papers/content_list.json' : cachedPath);
+  }
 });
 
 test('loadSavedMineruPages checks content_list JSON inside document cache folders only', async () => {

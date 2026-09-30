@@ -6,7 +6,16 @@ import {
   resolveActiveQaSession,
   resolveQaModelPreset,
   resolveQaSessionSelection,
+  isQaRequestSessionSelected,
 } from '../src/features/reader/documentReaderQaSessions.ts';
+
+test('late QA failures may update the composer only for the selected request session', () => {
+  assert.equal(isQaRequestSessionSelected('doc', 'doc', 'A', 'A'), true);
+  assert.equal(isQaRequestSessionSelected('doc', 'doc', 'B', 'A'), false);
+  assert.equal(isQaRequestSessionSelected('other-doc', 'doc', 'A', 'A'), false);
+  assert.equal(isQaRequestSessionSelected('', 'doc', 'A', 'A'), false);
+  assert.equal(isQaRequestSessionSelected('doc', 'doc', '', 'A'), false);
+});
 import type { DocumentChatSession, QaModelPreset } from '../src/types/reader.ts';
 
 function session(id: string): DocumentChatSession {
