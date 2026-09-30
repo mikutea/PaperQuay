@@ -13,6 +13,13 @@ Windows x64 artifacts:
 
 The binaries are not code-signed. Windows SmartScreen may show an unrecognized-app warning; verify the published SHA-256 before running them.
 
+## Changes since app-v0.1.26-mikutea.9
+
+- Structured Reading now displays MinerU superscripts/subscripts and keeps inline math inside its Markdown table cells ([#10](https://github.com/mikutea/PaperQuay/pull/10), [#11](https://github.com/mikutea/PaperQuay/pull/11)).
+- MinerU visual captions, notes, and assets remain attached to their source blocks; numeric-keyed page dictionaries and empty cross-page table fragments retain their content sources ([#12](https://github.com/mikutea/PaperQuay/pull/12), [#17](https://github.com/mikutea/PaperQuay/pull/17), [#18](https://github.com/mikutea/PaperQuay/pull/18)).
+- Hidden graph workspaces defer layout until visible, and RAG embedding requests repair malformed UTF-16 input ([#13](https://github.com/mikutea/PaperQuay/pull/13), [#14](https://github.com/mikutea/PaperQuay/pull/14)).
+- The library deduplicates case-insensitive tags, and the model picker stays inside the viewport near the bottom edge ([#15](https://github.com/mikutea/PaperQuay/pull/15), [#16](https://github.com/mikutea/PaperQuay/pull/16)).
+
 ## Integrated fixes
 
 - Restores readable MinerU structured-reading content in dark mode by removing the light radial background image and applying explicit dark text colors to lists and table captions.
@@ -58,6 +65,13 @@ Windows x64 构建：
 - `SHA256SUMS.txt`：上述三个包的 SHA-256 校验值
 
 这些二进制文件未做代码签名，Windows SmartScreen 可能提示“无法识别的应用”；运行前请核对发布页中的 SHA-256。
+
+## 相比 app-v0.1.26-mikutea.9 的更新
+
+- 结构化阅读正确显示 MinerU 上下标，并避免 Markdown 表格中的行内公式跨单元格解析（[#10](https://github.com/mikutea/PaperQuay/pull/10)、[#11](https://github.com/mikutea/PaperQuay/pull/11)）。
+- 保留 MinerU 图表的标题、注释和资源关联；兼容以数字页码为键的页面字典，并让跨页空表格片段引用原始内容（[#12](https://github.com/mikutea/PaperQuay/pull/12)、[#17](https://github.com/mikutea/PaperQuay/pull/17)、[#18](https://github.com/mikutea/PaperQuay/pull/18)）。
+- 知识图谱在工作区可见后才布局，RAG 嵌入请求会修复格式错误的 UTF-16 输入（[#13](https://github.com/mikutea/PaperQuay/pull/13)、[#14](https://github.com/mikutea/PaperQuay/pull/14)）。
+- 文库按大小写不敏感规则去重标签，底部的模型选择菜单不再被视口裁切（[#15](https://github.com/mikutea/PaperQuay/pull/15)、[#16](https://github.com/mikutea/PaperQuay/pull/16)）。
 
 ## 集成修复
 
