@@ -45,6 +45,40 @@ test('library_list_all_papers does not truncate a full-library task at 1000 pape
   }
 });
 
+test('library_update_paper reuses tag casing and removes case-insensitive duplicates', async () => {
+  const appPaths = createAppPaths();
+  const library = {
+    papers: [
+      { id: 'existing', tags: [{ id: 'tag-review', name: 'Review' }] },
+      { id: 'target', tags: [] },
+    ],
+  };
+  let saved = false;
+  const commands = createLibraryCommands({
+    appPaths,
+    store: {
+      load: () => library,
+      save: async () => { saved = true; },
+    },
+  });
+
+  try {
+    const paper = await commands.library_update_paper({
+      request: {
+        paperId: 'target',
+        tags: ['review', ' REVIEW ', 'Follow-up', 'follow-up'],
+      },
+    });
+
+    assert.equal(saved, true);
+    assert.deepEqual(paper.tags.map((tag) => tag.name), ['Review', 'Follow-up']);
+    assert.equal(new Set(paper.tags.map((tag) => tag.id)).size, paper.tags.length);
+    assert.equal(library.papers[0].tags[0].name, 'Review');
+  } finally {
+    rmSync(appPaths.dataDir, { recursive: true, force: true });
+  }
+});
+
 test('library_update_settings migrates stored PDFs into the new storage directory', async () => {
   const appPaths = createAppPaths();
   let store = null;
