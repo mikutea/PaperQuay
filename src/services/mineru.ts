@@ -540,8 +540,15 @@ export function extractMineruAssetPathFromBlock(
   const candidate = [
     imageSource?.path, content?.img_path, content?.path, content?.image_path,
     ...(Array.isArray(content?.asset_paths) ? content.asset_paths : []),
-  ].find((path) => typeof path === 'string' && path.trim() &&
-    (!mineruPath || resolveMineruAssetPath(mineruPath, path.trim())));
+  ].find((path) => {
+    if (typeof path !== 'string') return false;
+    const trimmed = path.trim();
+    const segments = trimmed.split(/[\\/]/);
+    const fileName = segments[segments.length - 1];
+    // Merged cross-page tables can retain only a directory such as "images/".
+    if (!trimmed || /[\\/]$/.test(trimmed) || fileName === '.' || fileName === '..') return false;
+    return !mineruPath || Boolean(resolveMineruAssetPath(mineruPath, trimmed));
+  });
 
   return typeof candidate === 'string' && candidate.trim() ? candidate.trim() : undefined;
 }
@@ -1319,8 +1326,14 @@ export function flattenMineruPages(pages: MineruPage[]): PositionedMineruBlock[]
     })),
   );
   let lastTextParagraph: PositionedMineruBlock | null = null;
+  let lastContentfulTable: PositionedMineruBlock | null = null;
+  let previousTableBlock: PositionedMineruBlock | null = null;
 
   return blocks.map((block) => {
+    if (block.type !== 'table') {
+      lastContentfulTable = null;
+      previousTableBlock = null;
+    }
     const blockText = extractTextFromMineruBlock(block).trim();
     const isEmptyParagraphContinuation =
       block.type === 'paragraph' &&
@@ -1337,6 +1350,23 @@ export function flattenMineruPages(pages: MineruPage[]): PositionedMineruBlock[]
 
     if (block.type === 'paragraph' && blockText) {
       lastTextParagraph = block;
+    }
+
+    if (block.type === 'table') {
+      if (previousTableBlock && block.pageIndex - previousTableBlock.pageIndex > 1) {
+        lastContentfulTable = null;
+      }
+      const isAdjacentTable = previousTableBlock !== null &&
+        block.pageIndex - previousTableBlock.pageIndex <= 1;
+      previousTableBlock = block;
+      const visibleTableText = readTableHtml(block)?.visible.text;
+      const hasTableContent = Boolean(
+        blockText || visibleTableText || extractMineruAssetPathFromBlock(block)
+      );
+      if (!hasTableContent && isAdjacentTable && lastContentfulTable) {
+        return { ...block, contentSourceBlockId: lastContentfulTable.blockId };
+      }
+      if (hasTableContent) lastContentfulTable = block;
     }
 
     return block;
