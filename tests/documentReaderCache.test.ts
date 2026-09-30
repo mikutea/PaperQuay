@@ -102,11 +102,26 @@ test('local MinerU cache provenance keeps image resolution next to the original 
     const result = await resolveCachedMineruSourcePath({
       item: item(), cachedPath: 'D:/cache/document-1/content_list_v2.json', cachedText: '[]',
       manifestPath: 'manifest.json',
-      readText: async () => JSON.stringify({
+      readText: async (path) => path === sourcePath ? '[]' : JSON.stringify({
         documentKey: 'item-1', pdfPath: 'D:/papers/paper.pdf', sourceKind: 'manual-json', sourcePath,
       }),
     });
     assert.equal(result, sourcePath);
+  }
+});
+
+test('cache provenance cannot redirect an older artifact to a newer source directory', async () => {
+  const cachedText = '[[{"type":"image","content":{"img_path":"old.png"}}]]';
+  const cachedPath = 'D:/cache/document-1/content_list_v2.json';
+  for (const sourceText of ['new Markdown', '[[{"type":"paragraph","content":"new"}]]', null]) {
+    const result = await resolveCachedMineruSourcePath({
+      item: item(), cachedPath, cachedText, manifestPath: 'manifest.json',
+      readText: async (path) => path === 'manifest.json' ? JSON.stringify({
+        documentKey: 'item-1', pdfPath: 'D:/papers/paper.pdf', sourceKind: 'manual-json',
+        sourcePath: 'D:/new-output/full.md',
+      }) : sourceText,
+    });
+    assert.equal(result, cachedPath);
   }
 });
 

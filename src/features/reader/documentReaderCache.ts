@@ -41,7 +41,10 @@ export async function resolveCachedMineruSourcePath({
     if (typeof sourcePath === 'string' &&
         /^(?:[a-zA-Z]:[\\/]|\/|\\\\)/.test(sourcePath) &&
         !sourcePath.split(/[\\/]/).includes('..') &&
-        /\.(?:json|md)$/i.test(sourcePath)) return sourcePath;
+        /\.(?:json|md)$/i.test(sourcePath) &&
+        // A shared manifest can be newer than this particular cached artifact.
+        // Never borrow another representation's resource directory.
+        await readText(sourcePath) === cachedText) return sourcePath;
 
     // Older sibling caches did not record provenance. Recover it only when
     // the original sibling output is still an exact match for the cached text.
