@@ -1001,6 +1001,30 @@ async function embedTexts(texts, embedding) {
     .map((item) => item.embedding);
 }
 
+// MinerU writes entries itself, so adm-zip's extractAllTo symlink guard does not run here.
+async function assertMineruZipOutputPathSafe(extractDir, outputPath, entryName) {
+  const root = path.resolve(extractDir);
+  const relative = path.relative(root, path.resolve(outputPath));
+  if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error(`Illegal MinerU zip entry path: ${entryName}`);
+  }
+
+  let current = root;
+  for (const segment of relative.split(path.sep)) {
+    current = path.join(current, segment);
+    let stat;
+    try {
+      stat = await fsp.lstat(current);
+    } catch (error) {
+      if (error.code === 'ENOENT') break;
+      throw error;
+    }
+    if (stat.isSymbolicLink()) {
+      throw new Error(`Illegal MinerU zip entry path: ${entryName}`);
+    }
+  }
+}
+
 async function readZipWithAdm(zipBytes, extractDir) {
   const AdmZip = require('adm-zip');
   const zip = new AdmZip(Buffer.from(zipBytes));
@@ -1022,8 +1046,11 @@ async function readZipWithAdm(zipBytes, extractDir) {
     }
 
     const outputPath = path.join(extractDir, normalized);
+    await assertMineruZipOutputPathSafe(extractDir, outputPath, normalized);
     await fsp.mkdir(path.dirname(outputPath), { recursive: true });
     const data = entry.getData();
+    // Recheck after decompression, immediately before the destination is opened.
+    await assertMineruZipOutputPathSafe(extractDir, outputPath, normalized);
     await fsp.writeFile(outputPath, data);
 
     const lower = normalized.toLowerCase();
