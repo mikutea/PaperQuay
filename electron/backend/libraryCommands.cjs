@@ -720,7 +720,26 @@ function createLibraryCommands(context) {
       }
       if (request.keywords) paper.keywords = request.keywords.map(cleanString).filter(Boolean);
       if (request.authors) paper.authors = request.authors.map(cleanString).filter(Boolean).map(normalizeAuthor);
-      if (request.tags) paper.tags = request.tags.map(cleanString).filter(Boolean).map(normalizeTag);
+      if (request.tags) {
+        const existingNames = new Map();
+        for (const item of library.papers) {
+          for (const tag of item.tags) {
+            const name = cleanString(tag.name);
+            if (name && !existingNames.has(name.toLowerCase())) {
+              existingNames.set(name.toLowerCase(), name);
+            }
+          }
+        }
+        const uniqueNames = new Map();
+        for (const rawName of request.tags) {
+          const name = cleanString(rawName);
+          const key = name.toLowerCase();
+          if (key && !uniqueNames.has(key)) {
+            uniqueNames.set(key, existingNames.get(key) ?? name);
+          }
+        }
+        paper.tags = [...uniqueNames.values()].map(normalizeTag);
+      }
       if (request.isFavorite != null) paper.isFavorite = Boolean(request.isFavorite);
       paper.updatedAt = now();
 
