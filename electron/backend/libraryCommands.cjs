@@ -608,7 +608,8 @@ function createLibraryCommands(context) {
 
     async library_import_pdfs({ request }) {
       const library = store.load();
-      context.validateLibraryFileOperation?.(library);
+      context.validateLibraryFileOperation?.(library, library.papers.flatMap((paper) => paper.attachments));
+      const previous = structuredClone(library);
       const results = [];
       const storageDir = library.settings.storageDir || path.join(appPaths.dataDir, 'paperquay-data');
       await fsp.mkdir(storageDir, { recursive: true });
@@ -688,7 +689,10 @@ function createLibraryCommands(context) {
         }
       }
 
-      await store.save(library);
+      const approval = await context.approveImportedAttachments?.(previous,
+        results.filter((result) => result.status === 'imported').flatMap((result) => result.paper.attachments));
+      if (approval) approval.commit(() => store.saveSync(library));
+      else await store.save(library);
       for (const result of results) {
         const paper = result.status === 'imported' ? result.paper : null;
         if (!paper?.id || !paper.doi) {

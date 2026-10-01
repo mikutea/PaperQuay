@@ -21,6 +21,7 @@ function createMineruCommands(context) {
       const apiBaseUrl = cleanString(options.apiBaseUrl).replace(/\/+$/, '') || MINERU_API_BASE;
 
       const pdfPath = options.pdfPath;
+      await context.authorizeCloudParsePath?.(context.store.load(), pdfPath);
       await ensureFile(pdfPath);
 
       const fileName = fileNameFromPath(pdfPath);
@@ -47,6 +48,7 @@ function createMineruCommands(context) {
       const uploadUrl = uploadEnvelope.data?.file_urls?.[0];
       if (!batchId || !uploadUrl) throw new Error('MinerU did not return an upload URL');
 
+      await context.authorizeCloudParsePath?.(context.store.load(), pdfPath);
       const putResponse = await fetch(uploadUrl, { method: 'PUT', body: await fsp.readFile(pdfPath) });
       if (!putResponse.ok) throw new Error(`MinerU PDF upload failed: HTTP ${putResponse.status}`);
 

@@ -29,6 +29,20 @@ function fileAccessPolicy(details) {
   };
 }
 
+function effectiveRelativePath(storageDirectory, relativePath) {
+  if (relativePath == null || relativePath === '') return null;
+  if (typeof relativePath !== 'string') throw new Error('Unsafe attachment relative path.');
+  relativePath = relativePath.trim();
+  if (!relativePath) return null;
+  if (/^[\\/]|^[a-z]:/i.test(relativePath) || relativePath.split(/[\\/]/).includes('..')) {
+    throw new Error('Unsafe attachment relative path.');
+  }
+  const target = canonicalPath(path.join(storageDirectory, relativePath));
+  const relative = path.relative(comparable(canonicalPath(storageDirectory)), comparable(target));
+  if (path.isAbsolute(relative) || relative === '..' || relative.startsWith('..' + path.sep)) throw new Error('Attachment relative path escapes storage root.');
+  return target;
+}
+
 function assertApprovedFileAccess(details, approved) {
   if (!approved) return;
   const trustedRoots = [...approved.attachmentRoots, approved.storageRoot];
@@ -95,12 +109,14 @@ function inspectLibraryDirectory(directory, { allowProfileDirectory = false, ver
     const attachmentRoots = [];
     if (inspectAttachmentRoots) {
       const roots = new Set();
-      for (const row of db.prepare('SELECT DISTINCT stored_path FROM attachments').all()) {
+      for (const row of db.prepare(`SELECT DISTINCT stored_path${attachments.includes('relative_path') ? ', relative_path' : ''} FROM attachments`).all()) {
         if (typeof row.stored_path !== 'string' || !path.isAbsolute(row.stored_path)) {
           throw new Error('附件路径无效，不会打开此文库。 / Invalid attachment path; library was not adopted.');
         }
         const target = canonicalPath(row.stored_path);
         roots.add(path.dirname(target));
+        const effective = effectiveRelativePath(storageDirectory, row.relative_path);
+        if (effective) roots.add(path.dirname(effective));
       }
       attachmentRoots.push(...[...roots].sort());
     }
@@ -161,6 +177,7 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
   let active = null;
   let pending = null;
   let recoveryProfile = initialProfile;
+  const approvedCloudFiles = new Set();
 
   function resolve() {
     const registry = readRegistry(registryPath);
@@ -282,8 +299,12 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
       noLink: true,
     });
     if (answer.response !== 1) return false;
+    return confirmAttachmentRoots(details.attachmentRoots);
+  }
+
+  async function confirmAttachmentRoots(attachmentRoots) {
     const pages = [];
-    for (const root of details.attachmentRoots) {
+    for (const root of attachmentRoots) {
       const text = JSON.stringify(root);
       if (text.length > 1500) throw new Error('附件目录过长，无法安全显示。 / Attachment root is too long to safely display.');
       const last = pages.at(-1);
@@ -332,18 +353,50 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
 
   function validateFileOperation(library, attachments = []) {
     if (!active?.approvedFileAccess) return;
+    const onDisk = inspectLibraryDirectory(active.dataDirectory, { verifyIntegrity: false });
+    if (comparable(onDisk.dataDirectory) !== comparable(active.dataDirectory)) throw new Error('Library directory changed.');
+    assertApprovedFileAccess(onDisk, active.approvedFileAccess);
     const storageDirectory = library.settings.storageDir || path.join(active.dataDirectory, 'paperquay-data');
     assertApprovedFileAccess({
       storageDirectory,
       storageRoot: canonicalPath(storageDirectory),
       importMode: library.settings.importMode || 'copy',
-      attachmentRoots: attachments.map((attachment) => {
+      attachmentRoots: attachments.flatMap((attachment) => {
         if (typeof attachment.storedPath !== 'string' || !path.isAbsolute(attachment.storedPath)) {
           throw new Error('Invalid attachment path. No files were changed.');
         }
-        return path.dirname(canonicalPath(attachment.storedPath));
+        const effective = effectiveRelativePath(storageDirectory, attachment.relativePath);
+        return [path.dirname(canonicalPath(attachment.storedPath)), ...(effective ? [path.dirname(effective)] : [])];
       }),
     }, active.approvedFileAccess);
+  }
+
+  async function authorizeCloudParsePath(library, pdfPath) {
+    if (!active?.approvedFileAccess) return;
+    validateFileOperation(library, library.papers.flatMap((paper) => paper.attachments));
+    if (typeof pdfPath !== 'string' || !path.isAbsolute(pdfPath)) throw new Error('Invalid cloud parsing PDF path.');
+    const actual = canonicalPath(pdfPath);
+    try { validateFileOperation(library, [{ storedPath: actual }]); return; }
+    catch (error) {
+      if (approvedCloudFiles.has(comparable(actual))) return;
+      const answer = await dialog.showMessageBox({
+        type: 'warning', title: '确认上传外部 PDF / Approve External PDF Upload',
+        message: '将此文件上传到云端解析服务？ / Upload this file to the cloud parsing service?',
+        detail: `${JSON.stringify(actual)}\n\n此文件不在已批准的文库范围内。 / This file is outside the approved library roots.`,
+        buttons: ['取消 / Cancel', '上传此文件 / Upload This File'], defaultId: 0, cancelId: 0, noLink: true,
+      });
+      if (answer.response !== 1) throw error;
+    }
+    validateFileOperation(library, library.papers.flatMap((paper) => paper.attachments));
+    if (comparable(canonicalPath(pdfPath)) !== comparable(actual)) throw new Error('Cloud parsing file changed during approval.');
+    approvedCloudFiles.add(comparable(actual));
+  }
+
+  function validateRestoreTarget(kind, target) {
+    if (!active?.approvedFileAccess) return;
+    const root = kind === 'pdf' ? active.approvedFileAccess.storageRoot : path.join(active.dataDirectory, '.mineru-cache');
+    const relative = path.relative(comparable(root), comparable(canonicalPath(target)));
+    if (path.isAbsolute(relative) || relative === '..' || relative.startsWith('..' + path.sep)) throw new Error('Restore target escapes approved root.');
   }
 
   async function approveSettingsChange(previous, next) {
@@ -385,7 +438,38 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
     };
   }
 
-  return { resolve, rememberActive, status, selectExisting, activateSelected, recover, validateFileOperation, approveSettingsChange };
+  async function approveImportedAttachments(previous, attachments) {
+    if (!active?.approvedFileAccess || !attachments.length) return null;
+    validateFileOperation(previous, previous.papers.flatMap((paper) => paper.attachments));
+    const oldPolicy = active.approvedFileAccess;
+    const roots = new Set();
+    for (const attachment of attachments) {
+      try { validateFileOperation(previous, [attachment]); }
+      catch {
+        if (typeof attachment.storedPath !== 'string' || !path.isAbsolute(attachment.storedPath)) throw new Error('Invalid imported attachment path.');
+        roots.add(path.dirname(canonicalPath(attachment.storedPath)));
+      }
+    }
+    if (!roots.size) return null;
+    const expected = inspectLibraryDirectory(active.dataDirectory, { verifyIntegrity: false, inspectAttachmentRoots: true });
+    if (!await confirmAttachmentRoots([...roots].sort())) throw new Error('Keep-path import canceled.');
+    validateUnchangedSettings(expected);
+    const policy = { ...oldPolicy, attachmentRoots: [...new Set([...oldPolicy.attachmentRoots, ...roots])].sort() };
+    // Re-resolve the selected files after the modal so links cannot silently
+    // change the approved roots while the user is reviewing the prompt.
+    assertApprovedFileAccess({ ...expected, attachmentRoots: attachments.map((item) => path.dirname(canonicalPath(item.storedPath))) }, policy);
+    return { commit(save) {
+      persistLocation(active.profileDirectory, active.dataDirectory, false, false, policy);
+      try { save(); }
+      catch (error) {
+        persistLocation(active.profileDirectory, active.dataDirectory, false, false, oldPolicy);
+        throw error;
+      }
+      active = { ...active, approvedFileAccess: policy };
+    } };
+  }
+
+  return { resolve, rememberActive, status, selectExisting, activateSelected, recover, validateFileOperation, validateRestoreTarget, approveSettingsChange, approveImportedAttachments, authorizeCloudParsePath };
 }
 
 module.exports = { REGISTRY_NAME, inspectLibraryDirectory, readRegistry, createLibraryLocationManager };

@@ -82,6 +82,9 @@ function createBackend({ app, libraryLocation }) {
     prepareForUpdate: () => libraryLocation?.rememberActive({ makeDefault: true }),
     validateLibraryFileOperation: (library, attachments) => libraryLocation?.validateFileOperation(library, attachments),
     approveLibrarySettingsChange: (previous, next) => libraryLocation?.approveSettingsChange(previous, next),
+    approveImportedAttachments: (previous, attachments) => libraryLocation?.approveImportedAttachments(previous, attachments),
+    validateLibraryRestoreTarget: (kind, target) => libraryLocation?.validateRestoreTarget(kind, target),
+    authorizeCloudParsePath: (library, pdfPath) => libraryLocation?.authorizeCloudParsePath(library, pdfPath),
   };
   const fileCommands = createFileCommands(context);
   context.fileCommands = fileCommands;

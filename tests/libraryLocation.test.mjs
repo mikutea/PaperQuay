@@ -8,7 +8,8 @@ const require = createRequire(import.meta.url);
 const { DatabaseSync } = require('../electron/backend/nodeSqlite.cjs');
 const { createAppPaths, createLibraryStore } = require('../electron/backend/libraryStore.cjs');
 const { createLibraryCommands } = require('../electron/backend/libraryCommands.cjs');
-const { runBackup } = require('../electron/backend/webdavBackup.cjs');
+const { runBackup, runRestore } = require('../electron/backend/webdavBackup.cjs');
+const { createMineruCommands } = require('../electron/backend/mineruCommands.cjs');
 const { REGISTRY_NAME, createLibraryLocationManager, inspectLibraryDirectory, readRegistry } = require('../electron/libraryLocation.cjs');
 
 function fixture(t) {
@@ -386,6 +387,11 @@ test('approved file access is bound across launches and guards actual import/del
     assert.throws(() => reopened.rememberActive({ makeDefault: true }), /file access settings changed/);
     await assert.rejects(commands.library_import_pdfs({ request: { paths: [victim] } }), /file access settings changed/);
     await assert.rejects(commands.library_update_settings({ settings: { openAlexEnabled: false } }), /file access settings changed/);
+    let downloaded = 0;
+    await assert.rejects(runRestore({ appPaths: paths, store,
+      validateLibraryFileOperation: (library, attachments) => reopened.validateFileOperation(library, attachments) },
+      { getText: async () => { downloaded++; return null; }, getBytes: async () => { downloaded++; return Buffer.from('fixture'); } }), /file access settings changed/);
+    assert.equal(downloaded, 0, 'restore must stop before any remote objects are retrieved');
     assert.equal(readdirSync(f.root).includes('attacker-readable'), false);
     db.prepare('UPDATE library_settings SET value_json = ? WHERE key = ?').run(JSON.stringify(candidate.storageDirectory), 'storageDir');
     db.prepare('UPDATE library_settings SET value_json = ? WHERE key = ?').run(JSON.stringify('copy'), 'importMode');
@@ -411,4 +417,93 @@ test('approved file access is bound across launches and guards actual import/del
   assert.equal(readdirSync(candidate.storageDirectory).includes(path.basename(storedPath)), false);
   assert.equal(readFileSync(victim, 'utf8'), '%PDF-1.4\nprivate fixture\n%%EOF');
   } finally { store.close(); }
+});
+
+test('keep-path import commits approved selected roots and canceled imports leave no records', async (t) => {
+  const f = fixture(t);
+  f.makeLibrary(path.join(f.normalProfile, 'PaperQuay'));
+  const supplied = f.makeLibrary(path.join(f.root, 'supplied'));
+  const manager = f.create(); manager.resolve(); manager.rememberActive();
+  f.decisions.directory = supplied; f.decisions.confirm = 1;
+  await manager.activateSelected({ token: (await manager.selectExisting()).token });
+  const active = f.create(); active.resolve();
+  const paths = createAppPaths(f.fakeApp(), supplied);
+  const store = createLibraryStore(paths);
+  try {
+    const commands = createLibraryCommands({ appPaths: paths, store,
+      validateLibraryFileOperation: (library, attachments) => active.validateFileOperation(library, attachments),
+      approveImportedAttachments: (previous, attachments) => active.approveImportedAttachments(previous, attachments) });
+    const source = path.join(f.root, 'selected-pdfs', 'keep.pdf');
+    mkdirSync(path.dirname(source)); writeFileSync(source, '%PDF-1.4\nkeep fixture\n%%EOF');
+    const before = store.load().papers.length;
+    f.decisions.confirm = 0;
+    await assert.rejects(commands.library_import_pdfs({ request: { paths: [source], importMode: 'keep' } }), /Keep-path import canceled/);
+    assert.equal(store.load().papers.length, before);
+    f.decisions.confirm = 1;
+    const saveSync = store.saveSync;
+    store.saveSync = () => { throw new Error('keep import save failure'); };
+    await assert.rejects(commands.library_import_pdfs({ request: { paths: [source], importMode: 'keep' } }), /keep import save failure/);
+    store.saveSync = saveSync;
+    assert.equal(store.load().papers.length, before);
+    assert.equal(readRegistry(path.join(f.appData, REGISTRY_NAME)).libraries[0].approvedFileAccess.attachmentRoots.includes(path.dirname(source)), false);
+    const [result] = await commands.library_import_pdfs({ request: { paths: [source], importMode: 'keep' } });
+    assert.equal(result.status, 'imported');
+    const reopened = f.create(); reopened.resolve();
+    reopened.validateFileOperation(store.load(), store.load().papers.flatMap((paper) => paper.attachments));
+    await commands.library_update_settings({ settings: { openAlexEnabled: false } });
+    assert.ok(readRegistry(path.join(f.appData, REGISTRY_NAME)).libraries[0].approvedFileAccess.attachmentRoots.includes(path.dirname(source)));
+    await commands.library_delete_paper({ request: { paperId: result.paper.id, deleteFiles: true } });
+    assert.equal(readdirSync(path.dirname(source)).includes('keep.pdf'), false);
+    const outside = path.join(f.root, 'outside'); mkdirSync(outside);
+    mkdirSync(path.join(supplied, '.mineru-cache'), { recursive: true });
+    symlinkSync(outside, path.join(supplied, '.mineru-cache', 'redirect'), process.platform === 'win32' ? 'junction' : 'dir');
+    assert.throws(() => reopened.validateRestoreTarget('summary', path.join(supplied, '.mineru-cache', 'redirect', 'victim.json')), /escapes approved root/);
+  } finally { store.close(); }
+});
+
+test('escaping effective attachment paths cannot be adopted or uploaded for cloud parsing', async (t) => {
+  const f = fixture(t);
+  f.makeLibrary(path.join(f.normalProfile, 'PaperQuay'));
+  const supplied = f.makeLibrary(path.join(f.root, 'supplied'));
+  const manager = f.create(); manager.resolve(); manager.rememberActive();
+  f.decisions.directory = supplied; f.decisions.confirm = 1;
+  await manager.activateSelected({ token: (await manager.selectExisting()).token });
+  const active = f.create(); active.resolve();
+  const paths = createAppPaths(f.fakeApp(), supplied);
+  const store = createLibraryStore(paths);
+  const outside = path.join(f.root, 'private.pdf'); writeFileSync(outside, '%PDF-1.4\nprivate fixture\n%%EOF');
+  const safe = path.join(store.load().settings.storageDir, 'safe.pdf');
+  mkdirSync(path.dirname(safe), { recursive: true }); writeFileSync(safe, '%PDF-1.4\nsafe fixture\n%%EOF');
+  replaceAttachments(supplied, [safe]);
+  const db = new DatabaseSync(paths.libraryDatabasePath);
+  db.prepare('UPDATE attachments SET relative_path=?').run('../../private.pdf'); db.close();
+  let requests = 0;
+  const fetch = globalThis.fetch; globalThis.fetch = async () => { requests++; throw new Error('unexpected network'); };
+  try {
+    assert.throws(() => inspectLibraryDirectory(supplied), /Unsafe attachment relative path/);
+    const commands = createMineruCommands({ appPaths: paths, store,
+      authorizeCloudParsePath: (library, pdfPath) => active.authorizeCloudParsePath(library, pdfPath) });
+    await assert.rejects(commands.run_mineru_cloud_parse({ options: { pdfPath: outside, apiToken: 'fixture-token' } }), /Unsafe attachment relative path/);
+    assert.equal(requests, 0);
+    replaceAttachments(supplied, [safe]);
+    await active.authorizeCloudParsePath(store.load(), safe);
+    f.decisions.confirm = 0;
+    await assert.rejects(active.authorizeCloudParsePath(store.load(), outside), /file access settings changed/);
+    assert.equal(requests, 0);
+    f.decisions.confirm = 1;
+    await active.authorizeCloudParsePath(store.load(), outside);
+    assert.ok(f.decisions.messages.at(-1).detail.includes(JSON.stringify(outside)));
+    const prompts = f.decisions.messages.length;
+    await active.authorizeCloudParsePath(store.load(), outside);
+    assert.equal(f.decisions.messages.length, prompts, 'the approved exact file can be revalidated at the upload sink');
+    globalThis.fetch = async () => {
+      requests++;
+      assert.equal(requests, 1, 'the PUT must not run after the library changes');
+      const changed = new DatabaseSync(paths.libraryDatabasePath);
+      changed.prepare('UPDATE attachments SET relative_path=?').run('../../private.pdf'); changed.close();
+      return new Response(JSON.stringify({ code: 0, data: { batch_id: 'fixture', file_urls: ['https://upload.invalid/fixture'] } }), { headers: { 'Content-Type': 'application/json' } });
+    };
+    await assert.rejects(commands.run_mineru_cloud_parse({ options: { pdfPath: safe, apiToken: 'fixture-token' } }), /Unsafe attachment relative path/);
+    assert.equal(requests, 1);
+  } finally { globalThis.fetch = fetch; store.close(); }
 });

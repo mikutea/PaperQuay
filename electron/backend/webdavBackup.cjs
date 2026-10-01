@@ -508,6 +508,7 @@ async function restoreLibraryDatabaseObject(context, webdav, manifest, objects, 
       const current = store.load();
 
       tables.push(...mergeLibrary(current, incoming));
+      context.validateLibraryFileOperation?.(current, current.papers.flatMap((paper) => paper.attachments ?? []));
       await store.save(current);
       objects.push({
         kind: 'database',
@@ -543,6 +544,7 @@ async function restoreLibraryDatabaseObject(context, webdav, manifest, objects, 
       const incoming = JSON.parse(bytes.toString('utf8'));
       const current = store.load();
       tables.push(...mergeLibrary(current, incoming));
+      context.validateLibraryFileOperation?.(current, current.papers.flatMap((paper) => paper.attachments ?? []));
       await store.save(current);
       objects.push({
         kind: 'database',
@@ -670,7 +672,7 @@ function restorePdfTarget(library, object, appPaths) {
   const preferred = attachment?.storedPath || source?.originalPath || '';
 
   if (preferred && isSubPath(storageDir, preferred)) return preferred;
-  return path.join(storageDir, `${source?.paperId || 'restored'}-${fileName}`);
+  return path.join(storageDir, `${safeFileName(source?.paperId || 'restored')}-${fileName}`);
 }
 
 async function restorePdfObject(webdav, library, object, appPaths) {
@@ -724,6 +726,8 @@ async function restoreDerivedObject(webdav, object, appPaths) {
 
 async function runRestore(context, webdav) {
   const { appPaths, store } = context;
+  const initial = store.load();
+  context.validateLibraryFileOperation?.(initial, initial.papers.flatMap((paper) => paper.attachments ?? []));
   const manifest = await loadLatestManifest(webdav);
   if (!manifest) {
     return {
@@ -751,11 +755,17 @@ async function runRestore(context, webdav) {
   await restoreRagDatabaseObject(context, webdav, manifest, objects);
 
   const library = store.load();
+  context.validateLibraryFileOperation?.(library, library.papers.flatMap((paper) => paper.attachments ?? []));
   for (const object of manifest.objects ?? []) {
     if (object.status === 'failed' || !object.remotePath || object.kind === 'database') continue;
     if (!['pdf', 'mineru', 'translation', 'summary'].includes(object.kind)) continue;
 
     try {
+      if (object.kind === 'pdf') {
+        context.validateLibraryFileOperation?.(library, [{ storedPath: restorePdfTarget(library, object, appPaths) }]);
+      }
+      context.validateLibraryRestoreTarget?.(object.kind, object.kind === 'pdf'
+        ? restorePdfTarget(library, object, appPaths) : derivedRestorePath(object, appPaths));
       const result = object.kind === 'pdf'
         ? await restorePdfObject(webdav, library, object, appPaths)
         : await restoreDerivedObject(webdav, object, appPaths);
