@@ -555,7 +555,7 @@ test('approved file access is bound across launches and guards actual import/del
   const [imported] = await commands.library_import_pdfs({ request: { paths: [victim] } });
   assert.equal(imported.status, 'imported');
   const storedPath = imported.paper.attachments[0].storedPath;
-  assert.ok(storedPath.startsWith(candidate.storageDirectory + path.sep));
+  assert.ok(storedPath.startsWith(candidate.storageRoot + path.sep));
   assert.equal(readFileSync(storedPath, 'utf8'), readFileSync(victim, 'utf8'));
   await commands.library_delete_paper({ request: { paperId: imported.paper.id, deleteFiles: true } });
   assert.equal(readdirSync(candidate.storageDirectory).includes(path.basename(storedPath)), false);
