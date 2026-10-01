@@ -85,6 +85,7 @@ function createBackend({ app, libraryLocation }) {
     approveImportedAttachments: (previous, attachments) => libraryLocation?.approveImportedAttachments(previous, attachments),
     validateLibraryRestoreTarget: (kind, target) => libraryLocation?.validateRestoreTarget(kind, target),
     authorizeCloudParsePath: (library, pdfPath) => libraryLocation?.authorizeCloudParsePath(library, pdfPath),
+    authorizeLocalRead: (filePath) => libraryLocation?.authorizeLocalRead(store.load(), filePath),
   };
   const fileCommands = createFileCommands(context);
   context.fileCommands = fileCommands;
@@ -106,6 +107,7 @@ function createBackend({ app, libraryLocation }) {
   };
 
   return {
+    authorizeLocalRead: context.authorizeLocalRead,
     close() {
       noteStore.close();
       ragStore.close();

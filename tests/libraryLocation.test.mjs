@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, 
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import vm from 'node:vm';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { DatabaseSync } = require('../electron/backend/nodeSqlite.cjs');
@@ -10,6 +11,8 @@ const { createAppPaths, createLibraryStore } = require('../electron/backend/libr
 const { createLibraryCommands } = require('../electron/backend/libraryCommands.cjs');
 const { runBackup, runRestore } = require('../electron/backend/webdavBackup.cjs');
 const { createMineruCommands } = require('../electron/backend/mineruCommands.cjs');
+const { createAiCommands } = require('../electron/backend/aiCommands.cjs');
+const { createRagStore } = require('../electron/backend/ragStore.cjs');
 const { REGISTRY_NAME, createLibraryLocationManager, inspectLibraryDirectory, readRegistry } = require('../electron/libraryLocation.cjs');
 
 function fixture(t) {
@@ -506,4 +509,90 @@ test('escaping effective attachment paths cannot be adopted or uploaded for clou
     await assert.rejects(commands.run_mineru_cloud_parse({ options: { pdfPath: safe, apiToken: 'fixture-token' } }), /Unsafe attachment relative path/);
     assert.equal(requests, 1);
   } finally { globalThis.fetch = fetch; store.close(); }
+});
+
+test('relocating a PDF rebinds its approved root and clears the obsolete relative path', async (t) => {
+  const f = fixture(t);
+  f.makeLibrary(path.join(f.normalProfile, 'PaperQuay'));
+  const supplied = f.makeLibrary(path.join(f.root, 'supplied'));
+  const oldPath = path.join(supplied, 'paperquay-data', 'missing.pdf');
+  replaceAttachments(supplied, [oldPath]);
+  const db = new DatabaseSync(path.join(supplied, 'paperquay-library.sqlite'));
+  db.prepare('UPDATE attachments SET relative_path=?,missing=1').run('missing.pdf'); db.close();
+  const manager = f.create(); manager.resolve(); manager.rememberActive();
+  f.decisions.directory = supplied; f.decisions.confirm = 1;
+  await manager.activateSelected({ token: (await manager.selectExisting()).token });
+  const active = f.create(); active.resolve();
+  const paths = createAppPaths(f.fakeApp(), supplied);
+  const store = createLibraryStore(paths);
+  try {
+    const commands = createLibraryCommands({ appPaths: paths, store,
+      validateLibraryFileOperation: (library, attachments) => active.validateFileOperation(library, attachments),
+      approveImportedAttachments: (previous, attachments) => active.approveImportedAttachments(previous, attachments) });
+    const newPath = path.join(f.root, 'relocated', 'found.pdf'); mkdirSync(path.dirname(newPath)); writeFileSync(newPath, '%PDF-1.4\nrelocated fixture\n%%EOF');
+    f.decisions.confirm = 0;
+    await assert.rejects(commands.library_relocate_attachment({ request: { attachmentId: 'attachment-0', newPath } }), /canceled/);
+    assert.equal(store.load().papers[0].attachments[0].storedPath, oldPath);
+    f.decisions.confirm = 1;
+    const relocated = await commands.library_relocate_attachment({ request: { attachmentId: 'attachment-0', newPath } });
+    assert.equal(relocated.storedPath, newPath);
+    assert.equal(relocated.relativePath, null);
+    const reopened = f.create(); reopened.resolve();
+    reopened.validateFileOperation(store.load(), store.load().papers[0].attachments);
+    await commands.library_update_settings({ settings: { openAlexEnabled: false } });
+    await commands.library_delete_paper({ request: { paperId: 'fixture-0', deleteFiles: true } });
+    assert.equal(readdirSync(path.dirname(newPath)).includes('found.pdf'), false);
+  } finally { store.close(); }
+});
+
+test('PDF protocol, binary reads and RAG indexing reject post-adoption attachment drift', async (t) => {
+  const f = fixture(t);
+  f.makeLibrary(path.join(f.normalProfile, 'PaperQuay'));
+  const supplied = f.makeLibrary(path.join(f.root, 'supplied'));
+  const safe = path.join(supplied, 'paperquay-data', 'safe.pdf');
+  mkdirSync(path.dirname(safe), { recursive: true }); writeFileSync(safe, '%PDF-1.4\nsafe document\n%%EOF');
+  replaceAttachments(supplied, [safe]);
+  const manager = f.create(); manager.resolve(); manager.rememberActive();
+  f.decisions.directory = supplied; f.decisions.confirm = 1;
+  await manager.activateSelected({ token: (await manager.selectExisting()).token });
+  const paths = createAppPaths(f.fakeApp(), supplied);
+  const store = createLibraryStore(paths);
+  const ragStore = createRagStore(paths);
+  const privateFile = path.join(f.root, 'private.pdf');
+  writeFileSync(privateFile, '%PDF-1.4\nprivate plaintext must not leak\n%%EOF');
+  replaceAttachments(supplied, [privateFile]);
+  const active = f.create(); active.resolve();
+  const context = { appPaths: paths, store, ragStore, approvedWritePaths: new Set(),
+    validateLibraryFileOperation: (library, attachments) => active.validateFileOperation(library, attachments),
+    authorizeLocalRead: (filePath) => active.authorizeLocalRead(store.load(), filePath) };
+  function loadWithElectron(relative, electron) {
+    const url = new URL(relative, import.meta.url);
+    const localRequire = createRequire(url);
+    const module = { exports: {} };
+    vm.runInNewContext(readFileSync(url, 'utf8'), { require: (name) => name === 'electron' ? electron : localRequire(name),
+      module, __dirname: path.dirname(url.pathname.replace(/^\/(?=[A-Za-z]:)/, '')), process, Buffer, URL, Response, Headers });
+    return module.exports;
+  }
+  const fileCommands = loadWithElectron('../electron/backend/fileCommands.cjs', {}).createFileCommands(context);
+  const handlers = new Map();
+  const pdfProtocol = loadWithElectron('../electron/localPdfProtocol.cjs', { protocol: { handle: (scheme, handler) => handlers.set(scheme, handler) } });
+  pdfProtocol.registerLocalPdfProtocol(context.authorizeLocalRead);
+  const pdfResponse = (filePath) => handlers.get('paperquay-pdf')({ url: 'paperquay-pdf://local/?path=' + encodeURIComponent(filePath), method: 'GET', headers: new Headers() });
+  const ai = createAiCommands(context);
+  const request = { documentKey: 'fixture-0', title: 'Fixture', sourceType: 'pdf-text', sourceSignature: 'fixture', embeddingModelKey: 'fixture', totalChunkCount: 1,
+    chunks: [{ chunkId: 'fixture-chunk', chunkIndex: 0, pageIndex: 0, text: 'private plaintext must not leak', embedding: [1, 0, 0, 0] }] };
+  try {
+    const denied = await pdfResponse(privateFile);
+    assert.equal(denied.status, 403); assert.equal((await denied.text()).includes('private plaintext'), false);
+    await assert.rejects(fileCommands.read_binary_file_base64({ path: privateFile }), /file access settings changed/);
+    await assert.rejects(ai.rag_index_document({ request }), /file access settings changed/);
+    const inspect = new DatabaseSync(paths.ragDatabasePath, { readOnly: true });
+    try { assert.equal(inspect.prepare('SELECT count(*) AS n FROM rag_chunks').get().n, 0); } finally { inspect.close(); }
+    replaceAttachments(supplied, [safe]);
+    const allowed = await pdfResponse(safe);
+    assert.equal(allowed.status, 200); assert.match(await allowed.text(), /safe document/);
+    assert.match(Buffer.from(await fileCommands.read_binary_file_base64({ path: safe }), 'base64').toString(), /safe document/);
+    await ai.rag_index_document({ request: { ...request, chunks: [{ ...request.chunks[0], text: 'safe document' }] } });
+    assert.equal(ragStore.getDocumentIndexStatus({ documentKey: 'fixture-0', sourceType: 'pdf-text' }).indexedChunkCount, 1);
+  } finally { ragStore.close(); store.close(); }
 });

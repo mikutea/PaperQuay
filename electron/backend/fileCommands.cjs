@@ -368,11 +368,13 @@ function createFileCommands(context) {
     },
 
     async read_text_file({ path: filePath }) {
+      if (path.extname(filePath).toLowerCase() === '.pdf') await context.authorizeLocalRead?.(filePath);
       await ensureFile(filePath);
       return fsp.readFile(filePath, 'utf8');
     },
 
     async read_text_file_if_exists({ path: filePath }) {
+      if (path.extname(filePath).toLowerCase() === '.pdf') await context.authorizeLocalRead?.(filePath);
       try {
         const stat = await fsp.stat(filePath);
         if (!stat.isFile()) return null;
@@ -389,6 +391,7 @@ function createFileCommands(context) {
     },
 
     async read_binary_file_base64({ path: filePath }) {
+      await context.authorizeLocalRead?.(filePath);
       await ensureFile(filePath);
       return (await fsp.readFile(filePath)).toString('base64');
     },

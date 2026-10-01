@@ -178,6 +178,7 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
   let pending = null;
   let recoveryProfile = initialProfile;
   const approvedCloudFiles = new Set();
+  const approvedReadFiles = new Set();
 
   function resolve() {
     const registry = readRegistry(registryPath);
@@ -371,25 +372,30 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
     }, active.approvedFileAccess);
   }
 
-  async function authorizeCloudParsePath(library, pdfPath) {
+  async function authorizeCloudParsePath(library, pdfPath, cloud = true) {
     if (!active?.approvedFileAccess) return;
     validateFileOperation(library, library.papers.flatMap((paper) => paper.attachments));
     if (typeof pdfPath !== 'string' || !path.isAbsolute(pdfPath)) throw new Error('Invalid cloud parsing PDF path.');
     const actual = canonicalPath(pdfPath);
+    if (!cloud) {
+      const relative = path.relative(comparable(active.dataDirectory), comparable(actual));
+      if (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith('..' + path.sep)) return;
+    }
+    const approvedFiles = cloud ? approvedCloudFiles : approvedReadFiles;
     try { validateFileOperation(library, [{ storedPath: actual }]); return; }
     catch (error) {
-      if (approvedCloudFiles.has(comparable(actual))) return;
+      if (approvedFiles.has(comparable(actual))) return;
       const answer = await dialog.showMessageBox({
-        type: 'warning', title: '确认上传外部 PDF / Approve External PDF Upload',
-        message: '将此文件上传到云端解析服务？ / Upload this file to the cloud parsing service?',
-        detail: `${JSON.stringify(actual)}\n\n此文件不在已批准的文库范围内。 / This file is outside the approved library roots.`,
-        buttons: ['取消 / Cancel', '上传此文件 / Upload This File'], defaultId: 0, cancelId: 0, noLink: true,
+        type: 'warning', title: cloud ? '确认上传外部 PDF / Approve External PDF Upload' : '确认读取外部文件 / Approve External File Read',
+        message: cloud ? '将此文件上传到云端解析服务？ / Upload this file to the cloud parsing service?' : '打开此文件？ / Open this file?',
+        detail: `${JSON.stringify(actual)}\n\n此文件不在已批准的文库范围内。后续解析、笔记或 RAG 索引可能把正文写入当前文库及其共享位置。 / This file is outside the approved library roots. Subsequent parsing, notes or RAG indexing may save its contents in this library and its shared location.`,
+        buttons: ['取消 / Cancel', cloud ? '上传此文件 / Upload This File' : '读取此文件 / Read This File'], defaultId: 0, cancelId: 0, noLink: true,
       });
       if (answer.response !== 1) throw error;
     }
     validateFileOperation(library, library.papers.flatMap((paper) => paper.attachments));
     if (comparable(canonicalPath(pdfPath)) !== comparable(actual)) throw new Error('Cloud parsing file changed during approval.');
-    approvedCloudFiles.add(comparable(actual));
+    approvedFiles.add(comparable(actual));
   }
 
   function validateRestoreTarget(kind, target) {
@@ -469,7 +475,8 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
     } };
   }
 
-  return { resolve, rememberActive, status, selectExisting, activateSelected, recover, validateFileOperation, validateRestoreTarget, approveSettingsChange, approveImportedAttachments, authorizeCloudParsePath };
+  return { resolve, rememberActive, status, selectExisting, activateSelected, recover, validateFileOperation, validateRestoreTarget, approveSettingsChange, approveImportedAttachments, authorizeCloudParsePath,
+    authorizeLocalRead: (library, filePath) => authorizeCloudParsePath(library, filePath, false) };
 }
 
 module.exports = { REGISTRY_NAME, inspectLibraryDirectory, readRegistry, createLibraryLocationManager };

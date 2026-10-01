@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -59,4 +59,31 @@ test('adopted libraries keep WebDAV/OpenAlex secrets and endpoints out of the DB
     assert.equal(store.load().webdav.endpointUrl, 'https://user-fixture.invalid/dav');
     assert.equal(store.loadFromSnapshot(snapshot).webdav.password, 'private-webdav-fixture-token');
   } finally { store.close(); }
+});
+
+test('a default profile library reached through a directory link retains existing service settings', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'paperquay-profile-alias-'));
+  try {
+    const profile = path.join(root, 'profile'); mkdirSync(profile);
+    const actual = path.join(root, 'actual-library'); mkdirSync(actual);
+    symlinkSync(actual, path.join(profile, 'PaperQuay'), process.platform === 'win32' ? 'junction' : 'dir');
+    const app = { getPath: () => profile };
+    let paths = createAppPaths(app);
+    let store = createLibraryStore(paths);
+    try {
+      const library = store.load();
+      library.webdav.password = 'default-profile-fixture-token';
+      library.settings.openAlexApiKey = 'default-openalex-fixture-token';
+      store.saveSync(library);
+    } finally { store.close(); }
+    paths = createAppPaths(app, actual);
+    assert.equal(paths.privateLibrarySettingsPath, null);
+    store = createLibraryStore(paths);
+    try {
+      assert.equal(store.load().webdav.password, 'default-profile-fixture-token');
+      assert.equal(store.load().settings.openAlexApiKey, 'default-openalex-fixture-token');
+      store.saveSync(store.load());
+      assert.equal(store.load().webdav.password, 'default-profile-fixture-token');
+    } finally { store.close(); }
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

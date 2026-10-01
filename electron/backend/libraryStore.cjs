@@ -14,7 +14,15 @@ const SYSTEM_CATEGORIES = [
 function createAppPaths(app, dataDirectory) {
   const dataDir = dataDirectory || path.join(app.getPath('userData'), 'PaperQuay');
   const profileLibrary = path.join(app.getPath('userData'), 'PaperQuay');
-  const normalizedPath = (value) => process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value);
+  const normalizedPath = (value) => {
+    let ancestor = path.resolve(value);
+    const missing = [];
+    while (!fs.existsSync(ancestor) && path.dirname(ancestor) !== ancestor) {
+      missing.unshift(path.basename(ancestor)); ancestor = path.dirname(ancestor);
+    }
+    const canonical = path.join(fs.realpathSync(ancestor), ...missing);
+    return process.platform === 'win32' ? canonical.toLowerCase() : canonical;
+  };
   const external = normalizedPath(dataDir) !== normalizedPath(profileLibrary);
 
   return {

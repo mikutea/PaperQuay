@@ -116,7 +116,7 @@ function createPdfStreamResponse(filePath, stat, request) {
   });
 }
 
-async function handleLocalPdfRequest(request) {
+async function handleLocalPdfRequest(request, authorizeLocalRead) {
   let requestUrl;
 
   try {
@@ -136,6 +136,9 @@ async function handleLocalPdfRequest(request) {
   }
 
   let stat;
+
+  try { await authorizeLocalRead?.(filePath); }
+  catch { return createPlainResponse('PDF access was not approved.', 403); }
 
   try {
     stat = await fsp.stat(filePath);
@@ -202,8 +205,8 @@ async function handlePdfJsAssetRequest(request) {
   }
 }
 
-function registerLocalPdfProtocol() {
-  protocol.handle(LOCAL_PDF_PROTOCOL, handleLocalPdfRequest);
+function registerLocalPdfProtocol(authorizeLocalRead) {
+  protocol.handle(LOCAL_PDF_PROTOCOL, (request) => handleLocalPdfRequest(request, authorizeLocalRead));
   protocol.handle(PDFJS_ASSET_PROTOCOL, handlePdfJsAssetRequest);
 }
 

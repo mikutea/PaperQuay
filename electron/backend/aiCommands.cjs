@@ -814,6 +814,12 @@ function buildHtmlVisualQaPrompt(options) {
 function createAiCommands(context) {
   const { ragStore } = context;
 
+  function validateRagFileAccess() {
+    if (!context.validateLibraryFileOperation) return;
+    const library = context.store.load();
+    context.validateLibraryFileOperation(library, library.papers.flatMap((paper) => paper.attachments));
+  }
+
   function documentContext(options) {
     return options.documentText || (options.blocks ?? []).map((block) => block.text).join('\n\n');
   }
@@ -943,6 +949,7 @@ function createAiCommands(context) {
     },
 
     async rag_embed_text({ request }) {
+      validateRagFileAccess();
       const input = formatEmbeddingInput(
         request.text,
         request.embedding?.inputFormat,
@@ -953,6 +960,7 @@ function createAiCommands(context) {
     },
 
     async rag_embed_chunks({ request }) {
+      validateRagFileAccess();
       const chunks = request.chunks ?? [];
       const inputs = chunks.map((chunk) =>
         formatEmbeddingInput(chunk.text, request.embedding?.inputFormat, 'passage'),
@@ -962,6 +970,7 @@ function createAiCommands(context) {
     },
 
     async rag_index_document({ request }) {
+      validateRagFileAccess();
       ragStore.indexDocument(request);
     },
 

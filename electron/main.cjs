@@ -178,7 +178,7 @@ app.whenReady().then(async () => {
     app.quit();
     return;
   }
-  registerLocalPdfProtocol();
+  registerLocalPdfProtocol((filePath) => getBackend().authorizeLocalRead(filePath));
   createWindow();
 
   app.on('activate', () => {

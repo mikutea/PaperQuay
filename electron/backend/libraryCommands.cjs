@@ -776,6 +776,8 @@ function createLibraryCommands(context) {
 
     async library_relocate_attachment({ request }) {
       const library = store.load();
+      context.validateLibraryFileOperation?.(library, library.papers.flatMap((paper) => paper.attachments));
+      const previous = structuredClone(library);
       const paper = library.papers.find((item) => item.attachments.some((attachment) => attachment.id === request.attachmentId));
       if (!paper) throw new Error('Attachment does not exist');
 
@@ -783,13 +785,18 @@ function createLibraryCommands(context) {
       await ensureFile(request.newPath);
       const stat = await fsp.stat(request.newPath);
       attachment.storedPath = request.newPath;
+      const storageDir = library.settings.storageDir || path.join(appPaths.dataDir, 'paperquay-data');
+      attachment.relativePath = isSubPath(storageDir, request.newPath)
+        ? path.relative(storageDir, request.newPath) : null;
       attachment.fileName = fileNameFromPath(request.newPath);
       attachment.fileSize = stat.size;
       attachment.contentHash = await hashFile(request.newPath);
       attachment.missing = false;
       paper.updatedAt = now();
 
-      await store.save(library);
+      const approval = await context.approveImportedAttachments?.(previous, [attachment]);
+      if (approval) approval.commit(() => store.saveSync(library));
+      else await store.save(library);
       return attachment;
     },
 
