@@ -142,7 +142,13 @@ function inspectLibraryDirectory(directory, { allowProfileDirectory = false, ver
 }
 
 function readRegistry(registryPath) {
-  if (!fs.existsSync(registryPath)) return { version: 1, defaultProfileDirectory: '', libraries: [] };
+  if (!fs.existsSync(registryPath)) {
+    const directory = path.dirname(registryPath);
+    if (fs.existsSync(directory) && fs.readdirSync(directory).some((name) => name.startsWith(path.basename(registryPath) + '.') && name.endsWith('.backup'))) {
+      throw new Error('文库位置记录已丢失，但仍有备份。请选择已有文库恢复。 / Library location record is missing; recover an existing library using its backup.');
+    }
+    return { version: 1, defaultProfileDirectory: '', libraries: [] };
+  }
   const value = JSON.parse(fs.readFileSync(registryPath, 'utf8'));
   if (value?.version !== 1 || !Array.isArray(value.libraries) || value.libraries.length > 100 ||
       typeof value.defaultProfileDirectory !== 'string' ||

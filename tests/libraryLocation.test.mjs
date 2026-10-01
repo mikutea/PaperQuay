@@ -172,6 +172,21 @@ test('explicit corrupt-registry recovery restores the newest valid backup and un
   assert.ok(readdirSync(f.appData).filter((name) => name.endsWith('.backup')).some((name) => readFileSync(path.join(f.appData, name), 'utf8') === '{broken current'));
 });
 
+test('a missing registry with surviving backups cannot silently start a fallback library', async (t) => {
+  const f = fixture(t);
+  const original = f.makeLibrary(path.join(f.customProfile, 'PaperQuay'), 2);
+  const file = path.join(f.appData, REGISTRY_NAME);
+  writeFileSync(file + '.fixture.backup', JSON.stringify({ version: 1, defaultProfileDirectory: f.customProfile,
+    libraries: [{ profileDirectory: f.customProfile, dataDirectory: original }] }));
+  const manager = f.create();
+  assert.throws(() => manager.resolve(), /record is missing/);
+  assert.equal(existsSync(path.join(f.normalProfile, 'PaperQuay', 'paperquay-library.sqlite')), false);
+  f.decisions.directory = original; f.decisions.confirm = 1;
+  assert.equal(await manager.recover(new Error('missing registry')), true);
+  assert.equal(f.create().resolve().dataDirectory, original);
+  assert.equal(readRegistry(file).defaultProfileDirectory, f.customProfile);
+});
+
 test('registry writers in separate processes wait for the shared lock and preserve every profile', async (t) => {
   const f = fixture(t);
   f.makeLibrary(path.join(f.normalProfile, 'PaperQuay'));
