@@ -136,6 +136,9 @@ function createFileCommands(context) {
   function assertWriteAllowed(filePath) {
     const absolute = path.resolve(filePath);
     const comparableAbsolute = comparablePath(absolute);
+    // This exact path comes from the local profile, never imported library
+    // settings. Do not grant writes to its parent or neighbouring files.
+    if (comparableAbsolute === comparablePath(appPaths.configPath)) return;
     const library = store.load();
     const roots = [
       path.resolve(appPaths.dataDir),
