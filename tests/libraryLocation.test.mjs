@@ -413,7 +413,7 @@ test('attachment roots are explicitly disclosed and confirmation-time path chang
   f.decisions.confirm = 1;
   f.decisions.onConfirm = () => { if (f.decisions.messages.at(-1).type === 'warning') f.decisions.confirm = 0; };
   await manager.activateSelected({ token: candidate.token });
-  assert.ok(f.decisions.messages.at(-1).detail.includes(JSON.stringify(path.dirname(victim))));
+  assert.ok(f.decisions.messages.at(-1).detail.includes(JSON.stringify(path.dirname(realpathSync.native(victim)))));
   assert.match(f.decisions.messages.at(-1).detail, /REMOVE original attachments/);
   assert.equal(f.create().resolve().dataDirectory, original);
   f.decisions.confirm = 1;
@@ -608,7 +608,7 @@ test('escaping effective attachment paths cannot be adopted or uploaded for clou
     assert.equal(requests, 0);
     f.decisions.confirm = 1;
     await active.authorizeCloudParsePath(store.load(), outside);
-    assert.ok(f.decisions.messages.at(-1).detail.includes(JSON.stringify(outside)));
+    assert.ok(f.decisions.messages.at(-1).detail.includes(JSON.stringify(realpathSync.native(outside))));
     const prompts = f.decisions.messages.length;
     await active.authorizeCloudParsePath(store.load(), outside);
     assert.equal(f.decisions.messages.length, prompts, 'the approved exact file can be revalidated at the upload sink');
