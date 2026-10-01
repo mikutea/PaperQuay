@@ -1,16 +1,15 @@
 import {
   getAppDefaultPaths,
-  readLocalTextFileIfExists,
+  readAppConfig,
   writeLocalTextFile,
   type AppDefaultPaths,
 } from './desktop';
 import type { ReaderConfigFile } from '../types/reader';
 
 export async function readReaderConfigFile(
-  defaultPaths?: AppDefaultPaths | null,
+  _defaultPaths?: AppDefaultPaths | null,
 ): Promise<Partial<ReaderConfigFile> | null> {
-  const paths = defaultPaths ?? await getAppDefaultPaths();
-  const configText = await readLocalTextFileIfExists(paths.configPath);
+  const configText = await readAppConfig();
 
   if (!configText) {
     return null;

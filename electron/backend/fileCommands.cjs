@@ -133,6 +133,12 @@ function createFileCommands(context) {
     }
   }
 
+  async function authorizedReadPath(filePath) {
+    const actual = await fsp.realpath(filePath);
+    await context.authorizeLocalRead?.(actual);
+    return actual;
+  }
+
   function assertWriteAllowed(filePath) {
     const absolute = path.resolve(filePath);
     const comparableAbsolute = comparablePath(absolute);
@@ -168,6 +174,12 @@ function createFileCommands(context) {
   }
 
   return {
+    async read_app_config() {
+      // No caller-supplied path: derived-text loaders must use guarded reads.
+      try { return await fsp.readFile(appPaths.configPath, 'utf8'); }
+      catch (error) { if (error?.code === 'ENOENT') return null; throw error; }
+    },
+
     async get_app_default_paths() {
       await fsp.mkdir(appPaths.mineruCacheDir, { recursive: true });
       await fsp.mkdir(appPaths.remotePdfDownloadDir, { recursive: true });
@@ -368,17 +380,17 @@ function createFileCommands(context) {
     },
 
     async read_text_file({ path: filePath }) {
-      if (path.extname(filePath).toLowerCase() === '.pdf') await context.authorizeLocalRead?.(filePath);
-      await ensureFile(filePath);
-      return fsp.readFile(filePath, 'utf8');
+      const actual = await authorizedReadPath(filePath);
+      await ensureFile(actual);
+      return fsp.readFile(actual, 'utf8');
     },
 
     async read_text_file_if_exists({ path: filePath }) {
-      if (path.extname(filePath).toLowerCase() === '.pdf') await context.authorizeLocalRead?.(filePath);
       try {
-        const stat = await fsp.stat(filePath);
+        const actual = await authorizedReadPath(filePath);
+        const stat = await fsp.stat(actual);
         if (!stat.isFile()) return null;
-        return fsp.readFile(filePath, 'utf8');
+        return fsp.readFile(actual, 'utf8');
       } catch (error) {
         if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return null;
         throw error;
@@ -391,9 +403,9 @@ function createFileCommands(context) {
     },
 
     async read_binary_file_base64({ path: filePath }) {
-      await context.authorizeLocalRead?.(filePath);
-      await ensureFile(filePath);
-      return (await fsp.readFile(filePath)).toString('base64');
+      const actual = await authorizedReadPath(filePath);
+      await ensureFile(actual);
+      return (await fsp.readFile(actual)).toString('base64');
     },
 
     async write_binary_file_base64({ path: filePath, contentBase64 }) {

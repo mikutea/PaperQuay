@@ -21,13 +21,15 @@ test('an external library can save the exact trusted profile config but not adja
   vm.runInNewContext(readFileSync(sourceUrl, 'utf8'), {
     require: (name) => name === 'electron' ? {} : require(name), module, process, Buffer,
   });
-  const context = { appPaths, approvedWritePaths: new Set(), store: { load: () => ({ settings: { storageDir: path.join(external, 'pdfs') } }) } };
+  const context = { appPaths, approvedWritePaths: new Set(), store: { load: () => ({ settings: { storageDir: path.join(external, 'pdfs') } }) },
+    authorizeLocalRead: async () => { throw new Error('unapproved generic read'); } };
   const commands = module.exports.createFileCommands(context);
   const content = JSON.stringify({ settings: { autoTranslateSelection: false }, qaModelPresets: [{ id: 'fixture', model: 'fixture-only' }] });
   await commands.write_text_file({ path: appPaths.configPath, content });
   assert.equal(readFileSync(appPaths.configPath, 'utf8'), content);
   const reopened = module.exports.createFileCommands(context);
-  assert.equal(await reopened.read_text_file_if_exists({ path: appPaths.configPath }), content);
+  assert.equal(await reopened.read_app_config(), content);
+  await assert.rejects(reopened.read_text_file_if_exists({ path: appPaths.configPath }), /unapproved generic read/);
   await assert.rejects(commands.write_text_file({ path: path.join(path.dirname(appPaths.configPath), 'other.json'), content }), /not allowed/);
   await assert.rejects(commands.write_text_file({ path: path.join(profile, 'private.txt'), content }), /not allowed/);
 });

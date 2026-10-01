@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
-const { DatabaseSync } = require('./backend/nodeSqlite.cjs');
+const { DatabaseSync, withTransaction } = require('./backend/nodeSqlite.cjs');
 
 const REGISTRY_NAME = 'paperquay-library-locations.json';
 const LIBRARY_FILE = 'paperquay-library.sqlite';
@@ -18,6 +18,11 @@ function canonicalPath(filePath) {
     suffix.unshift(path.basename(parent)); parent = path.dirname(parent);
   }
   return path.join(fs.realpathSync(parent), ...suffix);
+}
+
+function profileKey(directory) {
+  try { return comparable(canonicalPath(directory)); }
+  catch { return comparable(directory); } // Offline volumes still retain their registered identity.
 }
 
 function fileAccessPolicy(details) {
@@ -170,6 +175,29 @@ function writeRegistry(registryPath, value) {
   }
 }
 
+function readRegistryBackup(registryPath) {
+  const directory = path.dirname(registryPath);
+  if (!fs.existsSync(directory)) return null;
+  const prefix = path.basename(registryPath) + '.';
+  const candidates = fs.readdirSync(directory)
+    .filter((name) => name.startsWith(prefix) && name.endsWith('.backup'))
+    .map((name) => ({ file: path.join(directory, name), modified: fs.statSync(path.join(directory, name)).mtimeMs }))
+    .sort((a, b) => b.modified - a.modified);
+  for (const candidate of candidates) {
+    try { return readRegistry(candidate.file); } catch { /* Try the next intact recovery record. */ }
+  }
+  return null;
+}
+
+function mutateRegistry(registryPath, callback) {
+  fs.mkdirSync(path.dirname(registryPath), { recursive: true });
+  // SQLite supplies an OS-backed interprocess lock, including automatic release
+  // after a process crash. Hold it across the entire JSON read-modify-replace.
+  const lock = new DatabaseSync(registryPath + '.lock.sqlite', { timeout: 5000 });
+  try { return withTransaction(lock, callback); }
+  finally { lock.close(); }
+}
+
 function createLibraryLocationManager({ app, dialog, argv = process.argv, restart }) {
   const registryPath = path.join(app.getPath('appData'), app.isPackaged ? REGISTRY_NAME : 'paperquay-development-library-locations.json');
   const initialProfile = app.getPath('userData');
@@ -181,11 +209,23 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
   const approvedReadFiles = new Set();
 
   function resolve() {
-    const registry = readRegistry(registryPath);
-    const profileDirectory = !explicitProfile && registry.defaultProfileDirectory
+    let registry;
+    try { registry = readRegistry(registryPath); }
+    catch (error) {
+      const backup = readRegistryBackup(registryPath);
+      const wanted = !explicitProfile && backup?.defaultProfileDirectory ? backup.defaultProfileDirectory : initialProfile;
+      const entry = backup?.libraries.find((item) => profileKey(item.profileDirectory) === profileKey(wanted));
+      if (entry && fs.existsSync(entry.profileDirectory)) {
+        recoveryProfile = entry.profileDirectory;
+        app.setPath('userData', recoveryProfile);
+      }
+      throw error; // Recovery remains explicit; do not silently overwrite corruption.
+    }
+    let profileDirectory = !explicitProfile && registry.defaultProfileDirectory
       ? registry.defaultProfileDirectory : initialProfile;
-    const entry = registry.libraries.find((item) => comparable(item.profileDirectory) === comparable(profileDirectory));
+    const entry = registry.libraries.find((item) => profileKey(item.profileDirectory) === profileKey(profileDirectory));
     if (entry) {
+      profileDirectory = entry.profileDirectory;
       if (!fs.existsSync(profileDirectory)) {
         throw new Error(`原用户配置目录无法访问：${profileDirectory}\nProfile is unavailable. No empty replacement was created.`);
       }
@@ -207,28 +247,31 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
   }
 
   function persistLocation(profileDirectory, dataDirectory, makeDefault, allowRecovery = false, approvedFileAccess = null) {
-    let registry;
-    try { registry = readRegistry(registryPath); }
-    catch (error) {
-      if (!allowRecovery) throw error;
-      registry = { version: 1, defaultProfileDirectory: '', libraries: [] };
-    }
-    const key = comparable(profileDirectory);
-    const previous = registry.libraries.find((entry) => comparable(entry.profileDirectory) === key);
-    if (!previous && registry.libraries.length >= 100) {
-      throw new Error('已达到文库配置数量上限，原记录未更改。 / Library profile limit reached. Existing records were preserved.');
-    }
-    if (previous && comparable(previous.dataDirectory) === comparable(dataDirectory) &&
-        (!approvedFileAccess || JSON.stringify(previous.approvedFileAccess) === JSON.stringify(approvedFileAccess)) &&
-        (!makeDefault || comparable(registry.defaultProfileDirectory || profileDirectory) === key) && registry.defaultProfileDirectory) return;
-    registry.libraries = registry.libraries.filter((entry) => comparable(entry.profileDirectory) !== key);
-    const sameLibrary = previous && comparable(previous.dataDirectory) === comparable(dataDirectory);
-    registry.libraries.push({ profileDirectory, dataDirectory,
-      ...((approvedFileAccess || (sameLibrary && previous.approvedFileAccess)) ?
-        { approvedFileAccess: approvedFileAccess || previous.approvedFileAccess } : {}),
+    return mutateRegistry(registryPath, () => {
+      let registry;
+      try { registry = readRegistry(registryPath); }
+      catch (error) {
+        if (!allowRecovery) throw error;
+        registry = readRegistryBackup(registryPath) || { version: 1, defaultProfileDirectory: '', libraries: [] };
+      }
+      const key = profileKey(profileDirectory);
+      const previous = registry.libraries.find((entry) => profileKey(entry.profileDirectory) === key);
+      if (previous) profileDirectory = previous.profileDirectory;
+      if (!previous && registry.libraries.length >= 100) {
+        throw new Error('已达到文库配置数量上限，原记录未更改。 / Library profile limit reached. Existing records were preserved.');
+      }
+      if (previous && comparable(previous.dataDirectory) === comparable(dataDirectory) &&
+          (!approvedFileAccess || JSON.stringify(previous.approvedFileAccess) === JSON.stringify(approvedFileAccess)) &&
+          (!makeDefault || profileKey(registry.defaultProfileDirectory || profileDirectory) === key) && registry.defaultProfileDirectory && !allowRecovery) return;
+      registry.libraries = registry.libraries.filter((entry) => profileKey(entry.profileDirectory) !== key);
+      const sameLibrary = previous && comparable(previous.dataDirectory) === comparable(dataDirectory);
+      registry.libraries.push({ profileDirectory, dataDirectory,
+        ...((approvedFileAccess || (sameLibrary && previous.approvedFileAccess)) ?
+          { approvedFileAccess: approvedFileAccess || previous.approvedFileAccess } : {}),
+      });
+      if (makeDefault || !registry.defaultProfileDirectory) registry.defaultProfileDirectory = profileDirectory;
+      writeRegistry(registryPath, registry);
     });
-    if (makeDefault || !registry.defaultProfileDirectory) registry.defaultProfileDirectory = profileDirectory;
-    writeRegistry(registryPath, registry);
   }
 
   function rememberActive({ makeDefault = false } = {}) {

@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, symlinkSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, symlinkSync, existsSync, utimesSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { setTimeout as delay } from 'node:timers/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -88,6 +91,104 @@ test('a registered custom profile survives a normal installer launch without com
   assert.equal(resolved.dataDirectory, original);
   assert.equal(resolved.paperCount, 2);
   assert.equal(readFileSync(path.join(resolved.profileDirectory, 'theme-fixture.txt'), 'utf8'), 'dark');
+});
+
+test('a profile junction reuses its registered external library and original profile spelling', async (t) => {
+  const f = fixture(t);
+  f.makeLibrary(path.join(f.customProfile, 'PaperQuay'));
+  const external = f.makeLibrary(path.join(f.root, 'external'), 3);
+  const manager = f.create(f.customProfile, ['--user-data-dir=' + f.customProfile]);
+  manager.resolve(); manager.rememberActive();
+  f.decisions.directory = external; f.decisions.confirm = 1;
+  const selected = await manager.selectExisting();
+  await manager.activateSelected(selected);
+  const alias = path.join(f.root, 'profile-alias');
+  symlinkSync(f.customProfile, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  const viaAlias = f.create(alias, ['--user-data-dir=' + alias]);
+  const resolved = viaAlias.resolve();
+  assert.equal(resolved.profileDirectory, f.customProfile);
+  assert.equal(resolved.dataDirectory, external);
+  assert.equal(resolved.paperCount, 3);
+  viaAlias.rememberActive();
+  assert.equal(readRegistry(path.join(f.appData, REGISTRY_NAME)).libraries.length, 1);
+});
+
+test('explicit corrupt-registry recovery restores the newest valid backup and unrelated profiles', async (t) => {
+  const f = fixture(t);
+  const original = f.makeLibrary(path.join(f.customProfile, 'PaperQuay'));
+  const unrelated = f.makeLibrary(path.join(f.normalProfile, 'PaperQuay'), 2);
+  const replacement = f.makeLibrary(path.join(f.root, 'replacement'), 3);
+  const file = path.join(f.appData, REGISTRY_NAME);
+  const registry = { version: 1, defaultProfileDirectory: f.customProfile, libraries: [
+    { profileDirectory: f.customProfile, dataDirectory: original },
+    { profileDirectory: f.normalProfile, dataDirectory: unrelated },
+  ] };
+  writeFileSync(file + '.old.backup', JSON.stringify({ ...registry, libraries: [registry.libraries[0]] }));
+  writeFileSync(file + '.valid.backup', JSON.stringify(registry));
+  writeFileSync(file + '.bad.backup', '{broken backup');
+  for (const [index, suffix] of ['old', 'valid', 'bad'].entries()) utimesSync(file + '.' + suffix + '.backup', index + 1, index + 1);
+  writeFileSync(file, '{broken current');
+  const app = f.fakeApp();
+  const manager = createLibraryLocationManager({ app, dialog: {
+    async showOpenDialog() { return { canceled: false, filePaths: [replacement] }; },
+    async showMessageBox() { return { response: 1 }; },
+  }, argv: [], restart() {} });
+  assert.throws(() => manager.resolve());
+  assert.equal(app.getPath('userData'), f.customProfile);
+  assert.equal(await manager.recover(new Error('corrupt registry')), true);
+  const restored = readRegistry(file);
+  assert.equal(restored.defaultProfileDirectory, f.customProfile);
+  assert.equal(restored.libraries.length, 2);
+  assert.deepEqual(restored.libraries.find((entry) => entry.profileDirectory === f.normalProfile), registry.libraries[1]);
+  assert.equal(f.create().resolve().dataDirectory, replacement);
+  assert.ok(readdirSync(f.appData).filter((name) => name.endsWith('.backup')).some((name) => readFileSync(path.join(f.appData, name), 'utf8') === '{broken current'));
+});
+
+test('registry writers in separate processes wait for the shared lock and preserve every profile', async (t) => {
+  const f = fixture(t);
+  f.makeLibrary(path.join(f.normalProfile, 'PaperQuay'));
+  const original = f.create(); original.resolve(); original.rememberActive();
+  const profiles = [f.customProfile, path.join(f.root, 'third-profile')];
+  for (const profile of profiles) f.makeLibrary(path.join(profile, 'PaperQuay'));
+  const file = path.join(f.appData, REGISTRY_NAME);
+  const lock = new DatabaseSync(file + '.lock.sqlite');
+  lock.exec('BEGIN IMMEDIATE');
+  let released = false;
+  t.after(() => { if (!released) { lock.exec('ROLLBACK'); lock.close(); } });
+  const code = `
+    const { createLibraryLocationManager } = require(process.argv[1]);
+    const appData = process.argv[2]; let profile = process.argv[3];
+    const manager = createLibraryLocationManager({
+      app: { isPackaged: true, getPath: name => name === 'appData' ? appData : profile, setPath: (_, value) => { profile = value; } },
+      dialog: {}, argv: ['--user-data-dir=' + profile], restart() {}
+    });
+    manager.resolve();
+    process.once('message', () => { process.send('attempt'); manager.rememberActive(); process.send('done'); process.disconnect(); });
+    process.send('ready');
+  `;
+  let completed = 0;
+  const children = profiles.map((profile) => {
+    const child = spawn(process.execPath, ['-e', code, require.resolve('../electron/libraryLocation.cjs'), f.appData, profile], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'], windowsHide: true });
+    t.after(() => { if (child.exitCode === null) child.kill(); });
+    let stderr = '';
+    child.stderr.on('data', (data) => { stderr += data; });
+    const ready = once(child, 'message');
+    const attempted = new Promise((resolve) => child.on('message', (message) => { if (message === 'attempt') resolve(); if (message === 'done') completed++; }));
+    const exited = once(child, 'exit').then(([exitCode]) => assert.equal(exitCode, 0, stderr));
+    return { child, ready, attempted, exited };
+  });
+  await Promise.all(children.map(({ ready }) => ready));
+  for (const { child } of children) child.send('go');
+  await Promise.all(children.map(({ attempted }) => attempted));
+  await delay(150);
+  assert.equal(completed, 0, 'no process may mutate the registry while another process owns its lock');
+  assert.equal(readRegistry(file).libraries.length, 1);
+  lock.exec('ROLLBACK'); lock.close(); released = true;
+  await Promise.all(children.map(({ exited }) => exited));
+  const registry = readRegistry(file);
+  assert.equal(completed, 2);
+  assert.equal(registry.defaultProfileDirectory, f.normalProfile);
+  assert.deepEqual(registry.libraries.map((entry) => entry.profileDirectory).sort(), [f.normalProfile, ...profiles].sort());
 });
 
 test('an explicit alternate profile remains isolated and becomes default only on explicit update preparation', (t) => {
@@ -557,7 +658,7 @@ test('relocating a PDF rebinds its approved root and clears the obsolete relativ
   } finally { store.close(); }
 });
 
-test('PDF protocol, binary reads and RAG indexing reject post-adoption attachment drift', async (t) => {
+test('PDF, derived text, binary reads and RAG indexing reject unapproved paths after adoption', async (t) => {
   const f = fixture(t);
   f.makeLibrary(path.join(f.normalProfile, 'PaperQuay'));
   const supplied = f.makeLibrary(path.join(f.root, 'supplied'));
@@ -601,6 +702,22 @@ test('PDF protocol, binary reads and RAG indexing reject post-adoption attachmen
     const inspect = new DatabaseSync(paths.ragDatabasePath, { readOnly: true });
     try { assert.equal(inspect.prepare('SELECT count(*) AS n FROM rag_chunks').get().n, 0); } finally { inspect.close(); }
     replaceAttachments(supplied, [safe]);
+    const privateDerived = path.join(f.root, 'private-derived');
+    mkdirSync(privateDerived);
+    mkdirSync(paths.mineruCacheDir, { recursive: true });
+    const link = path.join(paths.mineruCacheDir, 'document-linked');
+    symlinkSync(privateDerived, link, process.platform === 'win32' ? 'junction' : 'dir');
+    f.decisions.confirm = 0;
+    for (const name of ['full.md', 'content_list.json']) {
+      writeFileSync(path.join(privateDerived, name), 'private derived plaintext must not leak');
+      await assert.rejects(fileCommands.read_text_file({ path: path.join(link, name) }), /file access settings changed/);
+      await assert.rejects(fileCommands.read_text_file_if_exists({ path: path.join(link, name) }), /file access settings changed/);
+    }
+    writeFileSync(path.join(paths.mineruCacheDir, 'full.md'), 'safe derived text');
+    assert.equal(await fileCommands.read_text_file({ path: path.join(paths.mineruCacheDir, 'full.md') }), 'safe derived text');
+    assert.equal(await fileCommands.read_text_file_if_exists({ path: path.join(paths.mineruCacheDir, 'missing.json') }), null);
+    const noLeak = new DatabaseSync(paths.ragDatabasePath, { readOnly: true });
+    try { assert.equal(noLeak.prepare('SELECT count(*) AS n FROM rag_chunks').get().n, 0); } finally { noLeak.close(); }
     const allowed = await pdfResponse(safe);
     assert.equal(allowed.status, 200); assert.match(await allowed.text(), /safe document/);
     assert.match(Buffer.from(await fileCommands.read_binary_file_base64({ path: safe }), 'base64').toString(), /safe document/);
