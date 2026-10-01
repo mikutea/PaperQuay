@@ -9,7 +9,21 @@ const {
 
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
 let backend = null;
-let libraryLocation = null;
+const libraryLocation = createLibraryLocationManager({
+  app, dialog,
+  restart: () => {
+    setImmediate(() => { app.relaunch(); app.quit(); });
+  },
+});
+let libraryLocationError = null;
+
+// Chromium's default session must see the restored profile before readiness.
+// Restoring only the backend location after ready is too late for session data.
+try {
+  libraryLocation.resolve();
+} catch (error) {
+  libraryLocationError = error;
+}
 
 registerLocalPdfProtocolScheme();
 
@@ -146,17 +160,13 @@ app.whenReady().then(async () => {
     app.setAppUserModelId('dev.paperquay.app');
   }
 
-  libraryLocation = createLibraryLocationManager({
-    app, dialog,
-    restart: () => {
-      setImmediate(() => { app.relaunch(); app.quit(); });
-    },
-  });
-  try {
-    libraryLocation.resolve();
-  } catch (error) {
-    if (!await libraryLocation.recover(error)) { app.quit(); return; }
-    libraryLocation.resolve();
+  if (libraryLocationError) {
+    // Native dialogs require ready. Persist the selected recovery location and
+    // start a fresh process so it too resolves the profile before ready; never
+    // open a backend/window against a late-switched Chromium session.
+    if (await libraryLocation.recover(libraryLocationError)) app.relaunch();
+    app.quit();
+    return;
   }
   getBackend();
   libraryLocation.rememberActive();
