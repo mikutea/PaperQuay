@@ -608,10 +608,10 @@ function createLibraryCommands(context) {
 
     async library_import_pdfs({ request }) {
       const library = store.load();
-      context.validateLibraryFileOperation?.(library, library.papers.flatMap((paper) => paper.attachments));
+      const approved = context.validateLibraryFileOperation?.(library, library.papers.flatMap((paper) => paper.attachments));
       const previous = structuredClone(library);
       const results = [];
-      const storageDir = library.settings.storageDir || path.join(appPaths.dataDir, 'paperquay-data');
+      const storageDir = approved?.storageRoot || library.settings.storageDir || path.join(appPaths.dataDir, 'paperquay-data');
       await fsp.mkdir(storageDir, { recursive: true });
 
       for (const sourcePath of request.paths ?? []) {

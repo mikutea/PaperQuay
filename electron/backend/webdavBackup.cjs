@@ -1,5 +1,8 @@
 const fsp = require('node:fs/promises');
+const fs = require('node:fs');
 const path = require('node:path');
+const { pipeline } = require('node:stream/promises');
+const { randomUUID } = require('node:crypto');
 const {
   cleanString,
   hashBytes,
@@ -22,7 +25,20 @@ function isoTimestamp() {
 }
 
 function createBackupId() {
-  return isoTimestamp().replace(/[:.]/g, '-');
+  return isoTimestamp().replace(/[:.]/g, '-') + '-' + randomUUID();
+}
+
+function backupSnapshotDirectory(appPaths, backupId) {
+  return path.join(appPaths.backupSnapshotDir || path.join(appPaths.dataDir, '.backup-snapshots'), backupId);
+}
+
+async function snapshotFile(sourcePath, snapshotPath) {
+  const source = await fsp.open(sourcePath, 'r');
+  try {
+    await fsp.mkdir(path.dirname(snapshotPath), { recursive: true });
+    await pipeline(source.createReadStream({ autoClose: false }), fs.createWriteStream(snapshotPath, { flags: 'wx', mode: 0o600 }));
+  } finally { await source.close(); }
+  return snapshotPath;
 }
 
 function remoteSegment(value, fallback = 'item') {
@@ -165,11 +181,12 @@ function configuredMineruRoots(appPaths) {
 async function collectBackupSources(context, backupId) {
   const { appPaths, noteStore, ragStore, store } = context;
   const library = store.load();
-  context.validateLibraryFileOperation?.(library, library.webdav.includePdfs !== false
-    ? library.papers.flatMap((paper) => paper.attachments ?? []) : []);
+  const attachments = library.webdav.includePdfs !== false ? library.papers.flatMap((paper) => paper.attachments ?? []) : [];
+  const approved = context.validateLibraryFileOperation?.(library, attachments);
+  const approvedPaths = new Map(attachments.map((attachment, index) => [attachment, approved?.attachmentPaths?.[index]]));
   await store.save(library);
 
-  const snapshotDir = path.join(appPaths.dataDir, '.backup-snapshots', backupId);
+  const snapshotDir = backupSnapshotDirectory(appPaths, backupId);
   const librarySnapshotPath = path.join(snapshotDir, 'paperquay-library.sqlite');
   const notesSnapshotPath = path.join(snapshotDir, 'paperquay-notes.sqlite');
   const ragSnapshotPath = path.join(snapshotDir, 'paperquay-rag.sqlite');
@@ -199,7 +216,8 @@ async function collectBackupSources(context, backupId) {
       for (const attachment of paper.attachments ?? []) {
         if (attachment.kind !== 'pdf' || !attachment.storedPath) continue;
 
-        const exists = await pathExists(attachment.storedPath);
+        const approvedPath = approvedPaths.get(attachment) || attachment.storedPath;
+        const exists = await pathExists(approvedPath);
         const fileName = safeFileName(attachment.fileName || path.basename(attachment.storedPath));
         const remotePath = remoteJoin(
           'latest/pdfs',
@@ -219,9 +237,13 @@ async function collectBackupSources(context, backupId) {
           continue;
         }
 
+        const actualPath = await fsp.realpath(approvedPath);
+        const validated = context.validateLibraryFileOperation?.(library, [{ storedPath: actualPath }]);
         sources.push({
           kind: 'pdf',
-          localPath: attachment.storedPath,
+          // Hashing and uploading both use a private snapshot, never a mutable
+          // supplier pathname. snapshotFile binds its read to one descriptor.
+          localPath: await snapshotFile(validated?.attachmentPaths?.[0] || actualPath, path.join(snapshotDir, 'pdfs', hashBytes(Buffer.from(remotePath)))),
           remotePath,
           source: `paper:${paper.id}:attachment:${attachment.id}:${attachment.storedPath}`,
         });
@@ -242,7 +264,8 @@ async function collectBackupSources(context, backupId) {
 
         sources.push({
           kind,
-          localPath: filePath,
+          localPath: await snapshotFile(await context.authorizeLocalRead?.(filePath) || await fsp.realpath(filePath),
+            path.join(snapshotDir, 'derived', hashBytes(Buffer.from(filePath)))),
           remotePath: remoteJoin(DERIVED_REMOTE_ROOT, rootLabel, relative),
           source: filePath,
         });
@@ -336,7 +359,7 @@ async function uploadSource(webdav, backupId, source, previous) {
 async function runBackup(context, webdav, options = {}) {
   const backupId = createBackupId();
   const createdAt = isoTimestamp();
-  const snapshotDir = path.join(context.appPaths.dataDir, '.backup-snapshots', backupId);
+  const snapshotDir = backupSnapshotDirectory(context.appPaths, backupId);
   const objects = [];
   const onProgress = typeof options.onProgress === 'function'
     ? options.onProgress

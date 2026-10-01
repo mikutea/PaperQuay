@@ -16,6 +16,7 @@ const { runBackup, runRestore } = require('../electron/backend/webdavBackup.cjs'
 const { createMineruCommands } = require('../electron/backend/mineruCommands.cjs');
 const { createAiCommands } = require('../electron/backend/aiCommands.cjs');
 const { createRagStore } = require('../electron/backend/ragStore.cjs');
+const { createNoteStore } = require('../electron/backend/noteStore.cjs');
 const { REGISTRY_NAME, createLibraryLocationManager, inspectLibraryDirectory, readRegistry } = require('../electron/libraryLocation.cjs');
 
 function fixture(t) {
@@ -84,13 +85,40 @@ test('a registered custom profile survives a normal installer launch without com
   const original = f.makeLibrary(path.join(f.customProfile, 'PaperQuay'), 2);
   writeFileSync(path.join(f.customProfile, 'theme-fixture.txt'), 'dark');
   const custom = f.create(f.customProfile, ['--user-data-dir=' + f.customProfile]);
-  custom.resolve(); custom.rememberActive();
+  custom.resolve(); custom.rememberActive({ makeDefault: true });
   const normalLaunch = f.create();
   const resolved = normalLaunch.resolve();
   assert.equal(resolved.profileDirectory, f.customProfile);
   assert.equal(resolved.dataDirectory, original);
   assert.equal(resolved.paperCount, 2);
   assert.equal(readFileSync(path.join(resolved.profileDirectory, 'theme-fixture.txt'), 'utf8'), 'dark');
+});
+
+test('an isolated first launch cannot take the default profile slot', (t) => {
+  const f = fixture(t);
+  f.makeLibrary(path.join(f.customProfile, 'PaperQuay'), 2);
+  const isolated = f.create(f.customProfile, ['--user-data-dir=' + f.customProfile]);
+  isolated.resolve(); isolated.rememberActive();
+  assert.equal(readRegistry(path.join(f.appData, REGISTRY_NAME)).defaultProfileDirectory, '');
+  f.makeLibrary(path.join(f.normalProfile, 'PaperQuay'), 3);
+  const normal = f.create();
+  assert.equal(normal.resolve().profileDirectory, f.normalProfile);
+  normal.rememberActive();
+  assert.equal(readRegistry(path.join(f.appData, REGISTRY_NAME)).defaultProfileDirectory, f.normalProfile);
+});
+
+test('a corrupt generated registry lock is preserved and regenerated without losing mappings', (t) => {
+  const f = fixture(t);
+  f.makeLibrary(path.join(f.normalProfile, 'PaperQuay'));
+  const manager = f.create(); manager.resolve(); manager.rememberActive();
+  const file = path.join(f.appData, REGISTRY_NAME);
+  const before = readFileSync(file, 'utf8');
+  writeFileSync(file + '.lock.sqlite', 'broken lock fixture');
+  manager.rememberActive();
+  assert.equal(readFileSync(file, 'utf8'), before);
+  assert.ok(readdirSync(f.appData).filter((name) => name.endsWith('.corrupt')).some((name) => readFileSync(path.join(f.appData, name), 'utf8') === 'broken lock fixture'));
+  assert.equal(existsSync(file + '.lock.sqlite.repair'), false);
+  const next = f.create(); next.resolve(); next.rememberActive();
 });
 
 test('a profile junction reuses its registered external library and original profile spelling', async (t) => {
@@ -314,7 +342,7 @@ test('a missing custom profile can recover explicitly into the normal launch pro
   const f = fixture(t);
   f.makeLibrary(path.join(f.customProfile, 'PaperQuay'));
   const custom = f.create(f.customProfile, ['--user-data-dir=' + f.customProfile]);
-  custom.resolve(); custom.rememberActive();
+  custom.resolve(); custom.rememberActive({ makeDefault: true });
   renameSync(f.customProfile, f.customProfile + '-offline');
   const other = f.makeLibrary(path.join(f.root, 'replacement-library'));
   f.decisions.directory = other; f.decisions.confirm = 1;
@@ -656,6 +684,77 @@ test('relocating a PDF rebinds its approved root and clears the obsolete relativ
     await commands.library_delete_paper({ request: { paperId: 'fixture-0', deleteFiles: true } });
     assert.equal(readdirSync(path.dirname(newPath)).includes('found.pdf'), false);
   } finally { store.close(); }
+});
+
+test('PDF imports use the approved destination after a storage junction is retargeted', async (t) => {
+  const f = fixture(t);
+  f.makeLibrary(path.join(f.normalProfile, 'PaperQuay'));
+  const supplied = f.makeLibrary(path.join(f.root, 'supplied'));
+  const safeRoot = path.join(f.root, 'approved-storage'); mkdirSync(safeRoot);
+  const outsideRoot = path.join(f.root, 'unapproved-storage'); mkdirSync(outsideRoot);
+  const link = path.join(supplied, 'storage-link'); symlinkSync(safeRoot, link, process.platform === 'win32' ? 'junction' : 'dir');
+  const paths = createAppPaths(f.fakeApp(), supplied);
+  const store = createLibraryStore(paths);
+  const library = store.load(); library.settings.storageDir = link; store.saveSync(library);
+  const manager = f.create(); manager.resolve(); manager.rememberActive();
+  f.decisions.directory = supplied; f.decisions.confirm = 1;
+  await manager.activateSelected({ token: (await manager.selectExisting()).token });
+  const active = f.create(); active.resolve();
+  const source = path.join(f.root, 'selected.pdf'); writeFileSync(source, '%PDF-1.4\nprivate import fixture\n%%EOF');
+  const commands = createLibraryCommands({ appPaths: paths, store, approvedWritePaths: new Set(),
+    validateLibraryFileOperation(library, attachments) {
+      const approved = active.validateFileOperation(library, attachments);
+      unlinkSync(link); symlinkSync(outsideRoot, link, process.platform === 'win32' ? 'junction' : 'dir');
+      return approved;
+    },
+  });
+  try {
+    const [result] = await commands.library_import_pdfs({ request: { paths: [source], importMode: 'copy' } });
+    assert.equal(result.status, 'imported');
+    assert.equal(path.dirname(result.paper.attachments[0].storedPath), realpathSync.native(safeRoot));
+    assert.equal(readdirSync(outsideRoot).length, 0);
+    assert.equal(existsSync(source), true);
+  } finally { store.close(); }
+});
+
+test('WebDAV uploads private snapshots of validated PDFs instead of retargeted source links', async (t) => {
+  const f = fixture(t);
+  f.makeLibrary(path.join(f.normalProfile, 'PaperQuay'));
+  const supplied = f.makeLibrary(path.join(f.root, 'supplied'));
+  const safeRoot = path.join(supplied, 'paperquay-data'); mkdirSync(safeRoot, { recursive: true });
+  const privateRoot = path.join(f.root, 'private'); mkdirSync(privateRoot);
+  const safeFile = path.join(safeRoot, 'fixture.pdf'); writeFileSync(safeFile, 'approved backup fixture');
+  writeFileSync(path.join(privateRoot, 'fixture.pdf'), 'private backup fixture must not leak');
+  const link = path.join(supplied, 'pdf-link'); symlinkSync(safeRoot, link, process.platform === 'win32' ? 'junction' : 'dir');
+  replaceAttachments(supplied, [path.join(link, 'fixture.pdf')]);
+  const manager = f.create(); manager.resolve(); manager.rememberActive();
+  f.decisions.directory = supplied; f.decisions.confirm = 1;
+  await manager.activateSelected({ token: (await manager.selectExisting()).token });
+  const active = f.create(); active.resolve();
+  const appPaths = createAppPaths(f.fakeApp(), supplied);
+  const store = createLibraryStore(appPaths), noteStore = createNoteStore(appPaths), ragStore = createRagStore(appPaths);
+  const library = store.load(); library.webdav.includePdfs = true; library.webdav.includeDerived = false; store.saveSync(library);
+  let replaced = false;
+  const context = { appPaths, store, noteStore, ragStore,
+    validateLibraryFileOperation(library, attachments) {
+      const result = active.validateFileOperation(library, attachments);
+      if (!replaced) { unlinkSync(link); symlinkSync(privateRoot, link, process.platform === 'win32' ? 'junction' : 'dir'); replaced = true; }
+      return result;
+    },
+  };
+  const objects = new Map();
+  try {
+    const result = await runBackup(context, { getText: async () => null,
+      atomicUploadFile: async (remote, _id, file) => { assert.ok(file.startsWith(appPaths.backupSnapshotDir + path.sep)); objects.set(remote, readFileSync(file)); },
+      atomicUploadBytes: async (remote, _id, bytes) => objects.set(remote, Buffer.from(bytes)) }, {
+      onProgress(event) { if (event.phase === 'uploading' && event.completed === 0) writeFileSync(safeFile, 'source changed after snapshot'); },
+    });
+    assert.equal(result.ok, true);
+    assert.equal([...objects].find(([remote]) => remote.startsWith('latest/pdfs/'))[1].toString(), 'approved backup fixture');
+    assert.equal(readFileSync(path.join(link, 'fixture.pdf'), 'utf8'), 'private backup fixture must not leak');
+    assert.equal(appPaths.backupSnapshotDir.startsWith(supplied), false);
+    assert.deepEqual(readdirSync(appPaths.backupSnapshotDir), []);
+  } finally { noteStore.close(); ragStore.close(); store.close(); }
 });
 
 test('cloud PDF upload reads the approved canonical target even if the original link is retargeted', async (t) => {

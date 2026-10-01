@@ -31,6 +31,7 @@ function createAppPaths(app, dataDirectory) {
     // profile, never to a supplied/shared library selected by the user.
     configPath: path.join(app.getPath('userData'), 'PaperQuay', '.settings', 'paperquay.config.json'),
     legacyConfigPath: path.join(profileLibrary, 'paperquay-data', 'paperquay.config.json'),
+    backupSnapshotDir: path.join(profileLibrary, '.backup-snapshots'),
     privateLibrarySettingsPath: external ? path.join(profileLibrary, '.settings', 'libraries',
       hashBytes(Buffer.from(normalizedPath(dataDir))) + '.json') : null,
     mineruCacheDir: path.join(dataDir, '.mineru-cache'),

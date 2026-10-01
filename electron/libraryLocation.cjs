@@ -194,9 +194,45 @@ function mutateRegistry(registryPath, callback) {
   fs.mkdirSync(path.dirname(registryPath), { recursive: true });
   // SQLite supplies an OS-backed interprocess lock, including automatic release
   // after a process crash. Hold it across the entire JSON read-modify-replace.
-  const lock = new DatabaseSync(registryPath + '.lock.sqlite', { timeout: 5000 });
-  try { return withTransaction(lock, callback); }
-  finally { lock.close(); }
+  const lockPath = registryPath + '.lock.sqlite';
+  const run = () => {
+    let lock;
+    try { lock = new DatabaseSync(lockPath, { timeout: 5000 }); return withTransaction(lock, callback); }
+    finally { lock?.close(); }
+  };
+  const corrupt = (error) => [11, 26].includes(error?.errcode); // SQLITE_CORRUPT / SQLITE_NOTADB, never SQLITE_BUSY.
+  try { return run(); }
+  catch (error) { if (!corrupt(error)) throw error; }
+  const repairPath = lockPath + '.repair';
+  const deadline = Date.now() + 5000;
+  let repair;
+  while (repair == null) {
+    try {
+      repair = fs.openSync(repairPath, 'wx', 0o600);
+      fs.writeFileSync(repair, String(process.pid));
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      try {
+        const owner = Number(fs.readFileSync(repairPath, 'utf8'));
+        if (Number.isInteger(owner) && owner > 0) {
+          try { process.kill(owner, 0); }
+          catch (failure) { if (failure.code === 'ESRCH') { fs.unlinkSync(repairPath); continue; } }
+        } else if (Date.now() - fs.statSync(repairPath).mtimeMs > 5000) {
+          fs.unlinkSync(repairPath); continue;
+        }
+      } catch (failure) { if (failure.code === 'ENOENT') continue; throw failure; }
+      if (Date.now() >= deadline) throw new Error('Library registry lock recovery is busy. Please retry.');
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    }
+  }
+  try {
+    // Another recovering process may already have fixed it. Recheck under the
+    // repair guard, preserving only genuinely corrupt synchronization state.
+    try { return run(); }
+    catch (error) { if (!corrupt(error)) throw error; }
+    fs.renameSync(lockPath, `${lockPath}.${randomUUID()}.corrupt`);
+    return run();
+  } finally { fs.closeSync(repair); fs.unlinkSync(repairPath); }
 }
 
 function createLibraryLocationManager({ app, dialog, argv = process.argv, restart }) {
@@ -263,14 +299,14 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
       }
       if (previous && comparable(previous.dataDirectory) === comparable(dataDirectory) &&
           (!approvedFileAccess || JSON.stringify(previous.approvedFileAccess) === JSON.stringify(approvedFileAccess)) &&
-          (!makeDefault || profileKey(registry.defaultProfileDirectory || profileDirectory) === key) && registry.defaultProfileDirectory && !allowRecovery) return;
+          (!makeDefault || (registry.defaultProfileDirectory && profileKey(registry.defaultProfileDirectory) === key)) && (registry.defaultProfileDirectory || explicitProfile) && !allowRecovery) return;
       registry.libraries = registry.libraries.filter((entry) => profileKey(entry.profileDirectory) !== key);
       const sameLibrary = previous && comparable(previous.dataDirectory) === comparable(dataDirectory);
       registry.libraries.push({ profileDirectory, dataDirectory,
         ...((approvedFileAccess || (sameLibrary && previous.approvedFileAccess)) ?
           { approvedFileAccess: approvedFileAccess || previous.approvedFileAccess } : {}),
       });
-      if (makeDefault || !registry.defaultProfileDirectory) registry.defaultProfileDirectory = profileDirectory;
+      if (makeDefault || (!explicitProfile && !registry.defaultProfileDirectory)) registry.defaultProfileDirectory = profileDirectory;
       writeRegistry(registryPath, registry);
     });
   }
@@ -403,18 +439,21 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
     if (comparable(onDisk.dataDirectory) !== comparable(active.dataDirectory)) throw new Error('Library directory changed.');
     assertApprovedFileAccess(onDisk, active.approvedFileAccess);
     const storageDirectory = library.settings.storageDir || path.join(active.dataDirectory, 'paperquay-data');
-    assertApprovedFileAccess({
+    const attachmentPaths = attachments.map((attachment) => {
+      if (typeof attachment.storedPath !== 'string' || !path.isAbsolute(attachment.storedPath)) throw new Error('Invalid attachment path. No files were changed.');
+      return canonicalPath(attachment.storedPath);
+    });
+    const details = {
       storageDirectory,
       storageRoot: canonicalPath(storageDirectory),
       importMode: library.settings.importMode || 'copy',
-      attachmentRoots: attachments.flatMap((attachment) => {
-        if (typeof attachment.storedPath !== 'string' || !path.isAbsolute(attachment.storedPath)) {
-          throw new Error('Invalid attachment path. No files were changed.');
-        }
+      attachmentRoots: attachments.flatMap((attachment, index) => {
         const effective = effectiveRelativePath(storageDirectory, attachment.relativePath);
-        return [path.dirname(canonicalPath(attachment.storedPath)), ...(effective ? [path.dirname(effective)] : [])];
+        return [path.dirname(attachmentPaths[index]), ...(effective ? [path.dirname(effective)] : [])];
       }),
-    }, active.approvedFileAccess);
+    };
+    assertApprovedFileAccess(details, active.approvedFileAccess);
+    return { storageRoot: details.storageRoot, attachmentPaths };
   }
 
   async function authorizeCloudParsePath(library, pdfPath, cloud = true) {
