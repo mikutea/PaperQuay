@@ -6,7 +6,7 @@ import test from 'node:test';
 
 const source = readFileSync(new URL('../electron/main.cjs', import.meta.url), 'utf8');
 
-async function startup({ unavailable = false, recover = false } = {}) {
+async function startup({ unavailable = false, recover = false, backendFailure = false } = {}) {
   const events = [];
   let ready = false;
   const app = {
@@ -31,7 +31,7 @@ async function startup({ unavailable = false, recover = false } = {}) {
     electron: { app, BrowserWindow, ipcMain: { handle() {} }, shell: {}, dialog: {
       showErrorBox(_title, message) { events.push('error: ' + message); },
     } },
-    './backend.cjs': { createBackend() { events.push('backend'); return {}; } },
+    './backend.cjs': { createBackend() { events.push('backend'); if (backendFailure) throw new Error('backend database unavailable'); return {}; } },
     './libraryLocation.cjs': { createLibraryLocationManager() { return {
       resolve() {
         events.push('resolve');
@@ -40,7 +40,7 @@ async function startup({ unavailable = false, recover = false } = {}) {
       },
       async recover(error) {
         assert.equal(ready, true, 'native recovery dialog must wait for ready');
-        assert.match(error.message, /missing registered profile/);
+        assert.match(error.message, /missing registered profile|backend database unavailable/);
         events.push('recover');
         return recover;
       },
@@ -66,4 +66,9 @@ test('recovery relaunches without opening a backend or a late-switched session',
 
 test('canceled startup recovery quits without creating an empty library', async () => {
   assert.deepEqual(await startup({ unavailable: true }), ['resolve', 'whenReady', 'recover', 'quit']);
+});
+
+test('backend initialization failures offer recovery instead of trapping every launch', async () => {
+  assert.deepEqual(await startup({ backendFailure: true, recover: true }), ['resolve', 'whenReady', 'backend', 'recover', 'relaunch', 'quit']);
+  assert.deepEqual(await startup({ backendFailure: true }), ['resolve', 'whenReady', 'backend', 'recover', 'quit']);
 });

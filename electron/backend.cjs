@@ -56,7 +56,9 @@ function createRagStoreSafely(appPaths) {
 function createBackend({ app, libraryLocation }) {
   const appPaths = createAppPaths(app, libraryLocation?.status().dataDirectory);
   const store = createLibraryStore(appPaths);
-  const noteStore = createNoteStore(appPaths);
+  let noteStore;
+  try { noteStore = createNoteStore(appPaths); }
+  catch (error) { store.close(); throw error; }
   const ragStore = createRagStoreSafely(appPaths);
   const legacyRagIndexes = store.loadLegacyRagIndexes();
 
@@ -79,6 +81,7 @@ function createBackend({ app, libraryLocation }) {
     store,
     prepareForUpdate: () => libraryLocation?.rememberActive({ makeDefault: true }),
     validateLibraryFileOperation: (library, attachments) => libraryLocation?.validateFileOperation(library, attachments),
+    approveLibrarySettingsChange: (previous, next) => libraryLocation?.approveSettingsChange(previous, next),
   };
   const fileCommands = createFileCommands(context);
   context.fileCommands = fileCommands;

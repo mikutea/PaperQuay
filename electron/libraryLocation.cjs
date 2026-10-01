@@ -53,6 +53,26 @@ function inspectLibraryDirectory(directory, { allowProfileDirectory = false, ver
       : '没有找到 paperquay-library.sqlite。不会新建或覆盖文库。 / Library database not found. No library will be created or overwritten.');
   }
   const dataDirectory = fs.realpathSync(candidates[0]);
+  for (const name of [LIBRARY_FILE, 'paperquay-notes.sqlite', 'paperquay-rag.sqlite', '.backup-snapshots', '.mineru-cache', '.downloads', '.screenshots']) {
+    for (const suffix of (name.endsWith('.sqlite') ? ['', '-wal', '-shm', '-journal'] : [''])) {
+      const candidate = path.join(dataDirectory, name + suffix);
+      let link = false;
+      try { link = fs.lstatSync(candidate).isSymbolicLink(); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      if (link || (fs.existsSync(candidate) && comparable(canonicalPath(candidate)) !== comparable(candidate))) {
+        throw new Error('文库附属路径包含链接，未切换文库。 / Linked library companion paths are not supported.');
+      }
+    }
+  }
+  if (verifyIntegrity) {
+    for (const name of ['paperquay-notes.sqlite', 'paperquay-rag.sqlite']) {
+      const candidate = path.join(dataDirectory, name);
+      if (!fs.existsSync(candidate)) continue;
+      const companion = new DatabaseSync(candidate, { readOnly: true, timeout: 1000 });
+      try {
+        if (Object.values(companion.prepare('PRAGMA quick_check(1)').get())[0] !== 'ok') throw new Error('Companion database integrity check failed: ' + name);
+      } finally { companion.close(); }
+    }
+  }
   const databasePath = path.join(dataDirectory, LIBRARY_FILE);
   const db = new DatabaseSync(databasePath, { readOnly: true, timeout: 1000 });
   try {
@@ -326,7 +346,46 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
     }, active.approvedFileAccess);
   }
 
-  return { resolve, rememberActive, status, selectExisting, activateSelected, recover, validateFileOperation };
+  async function approveSettingsChange(previous, next) {
+    if (!active?.approvedFileAccess) return null;
+    validateFileOperation(previous, previous.papers.flatMap((paper) => paper.attachments));
+    const storageDirectory = next.settings.storageDir;
+    if (typeof storageDirectory !== 'string' || !path.isAbsolute(storageDirectory) || !['copy', 'move', 'keep'].includes(next.settings.importMode)) {
+      throw new Error('Invalid PDF storage directory or import mode.');
+    }
+    if (storageDirectory === previous.settings.storageDir && next.settings.importMode === previous.settings.importMode) return null;
+    const expected = inspectLibraryDirectory(active.dataDirectory, { verifyIntegrity: false, inspectAttachmentRoots: true });
+    const approved = active.approvedFileAccess;
+    const policy = { ...approved, storageDirectory, storageRoot: canonicalPath(storageDirectory), importMode: next.settings.importMode };
+    const result = await dialog.showMessageBox({
+      type: 'warning', title: '确认修改文库设置 / Approve Library Settings Change',
+      message: '应用新的 PDF 存储设置？ / Apply new PDF storage settings?',
+      detail: `Destination: ${JSON.stringify(storageDirectory)}\nMode: ${policy.importMode}\n\n更改目录将复制现有受管文件。MOVE 导入将删除原文件；共享目录可能泄露文件。 / Changing directory copies existing managed files. MOVE imports remove originals; shared folders may expose files.`,
+      buttons: ['取消 / Cancel', '应用 / Apply'], defaultId: 0, cancelId: 0, noLink: true,
+    });
+    if (result.response !== 1) throw new Error('Library settings change canceled.');
+    validateUnchangedSettings(expected);
+    if (canonicalPath(storageDirectory) !== policy.storageRoot) throw new Error('Storage destination changed during confirmation.');
+    return {
+      validateDestination(target) {
+        const relative = path.relative(comparable(policy.storageRoot), comparable(canonicalPath(target)));
+        if (path.isAbsolute(relative) || relative === '..' || relative.startsWith('..' + path.sep)) throw new Error('Migration destination escapes approved storage root.');
+      },
+      commit(save) {
+        // Both writes are synchronous; failures restore the previous policy.
+        // A process/power failure between writes fails closed into recovery.
+        persistLocation(active.profileDirectory, active.dataDirectory, false, false, policy);
+        try { save(); }
+        catch (error) {
+          persistLocation(active.profileDirectory, active.dataDirectory, false, false, approved);
+          throw error;
+        }
+        active = { ...active, approvedFileAccess: policy };
+      },
+    };
+  }
+
+  return { resolve, rememberActive, status, selectExisting, activateSelected, recover, validateFileOperation, approveSettingsChange };
 }
 
 module.exports = { REGISTRY_NAME, inspectLibraryDirectory, readRegistry, createLibraryLocationManager };

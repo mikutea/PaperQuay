@@ -165,6 +165,8 @@ function configuredMineruRoots(appPaths) {
 async function collectBackupSources(context, backupId) {
   const { appPaths, noteStore, ragStore, store } = context;
   const library = store.load();
+  context.validateLibraryFileOperation?.(library, library.webdav.includePdfs !== false
+    ? library.papers.flatMap((paper) => paper.attachments ?? []) : []);
   await store.save(library);
 
   const snapshotDir = path.join(appPaths.dataDir, '.backup-snapshots', backupId);

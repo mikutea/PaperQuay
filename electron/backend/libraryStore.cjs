@@ -14,7 +14,9 @@ function createAppPaths(app, dataDirectory) {
 
   return {
     dataDir,
-    configPath: path.join(dataDir, '.settings', 'paperquay.config.json'),
+    // Model endpoints, credentials and automation belong to the trusted local
+    // profile, never to a supplied/shared library selected by the user.
+    configPath: path.join(app.getPath('userData'), 'PaperQuay', '.settings', 'paperquay.config.json'),
     mineruCacheDir: path.join(dataDir, '.mineru-cache'),
     remotePdfDownloadDir: path.join(dataDir, '.downloads', 'pdfs'),
     libraryPath: path.join(dataDir, 'paperquay-library.json'),

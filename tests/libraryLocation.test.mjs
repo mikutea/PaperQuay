@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -8,6 +8,7 @@ const require = createRequire(import.meta.url);
 const { DatabaseSync } = require('../electron/backend/nodeSqlite.cjs');
 const { createAppPaths, createLibraryStore } = require('../electron/backend/libraryStore.cjs');
 const { createLibraryCommands } = require('../electron/backend/libraryCommands.cjs');
+const { runBackup } = require('../electron/backend/webdavBackup.cjs');
 const { REGISTRY_NAME, createLibraryLocationManager, inspectLibraryDirectory, readRegistry } = require('../electron/libraryLocation.cjs');
 
 function fixture(t) {
@@ -305,6 +306,60 @@ test('attachment roots are explicitly disclosed and confirmation-time path chang
   assert.equal(readFileSync(victim, 'utf8'), 'private fixture bytes');
 });
 
+test('user-approved storage changes persist policy; cancel and save failure preserve the prior approval', async (t) => {
+  const f = fixture(t);
+  f.makeLibrary(path.join(f.normalProfile, 'PaperQuay'));
+  const supplied = f.makeLibrary(path.join(f.root, 'supplied'));
+  const manager = f.create(); manager.resolve(); manager.rememberActive();
+  f.decisions.directory = supplied; f.decisions.confirm = 1;
+  await manager.activateSelected({ token: (await manager.selectExisting()).token });
+  const active = f.create(); active.resolve();
+  const paths = createAppPaths(f.fakeApp(), supplied);
+  const store = createLibraryStore(paths);
+  try {
+    const commands = createLibraryCommands({ appPaths: paths, store,
+      validateLibraryFileOperation: (library, attachments) => active.validateFileOperation(library, attachments),
+      approveLibrarySettingsChange: (before, after) => active.approveSettingsChange(before, after) });
+    const original = store.load().settings.storageDir;
+    const destination = path.join(f.root, 'new-storage');
+    f.decisions.confirm = 0;
+    await assert.rejects(commands.library_update_settings({ settings: { storageDir: destination } }), /canceled/);
+    assert.equal(store.load().settings.storageDir, original);
+    assert.equal(readdirSync(f.root).includes('new-storage'), false);
+    f.decisions.confirm = 1;
+    await commands.library_update_settings({ settings: { storageDir: destination, importMode: 'keep' } });
+    assert.equal(f.create().resolve().storageDirectory, destination);
+    assert.equal(f.create().resolve().importMode, 'keep');
+    active.validateFileOperation(store.load());
+    await commands.library_update_settings({ settings: { openAlexEnabled: false } });
+    const saveSync = store.saveSync;
+    store.saveSync = () => { throw new Error('fixture save failure'); };
+    await assert.rejects(commands.library_update_settings({ settings: { importMode: 'copy' } }), /fixture save failure/);
+    store.saveSync = saveSync;
+    assert.equal(f.create().resolve().importMode, 'keep');
+    active.validateFileOperation(store.load());
+  } finally { store.close(); }
+});
+
+test('adoption rejects corrupt and linked companion databases and retains local model config', async (t) => {
+  const f = fixture(t);
+  const original = f.makeLibrary(path.join(f.normalProfile, 'PaperQuay'));
+  const supplied = f.makeLibrary(path.join(f.root, 'supplied'));
+  const manager = f.create(); manager.resolve(); manager.rememberActive();
+  f.decisions.directory = supplied;
+  const notes = path.join(supplied, 'paperquay-notes.sqlite');
+  writeFileSync(notes, 'not a database');
+  await assert.rejects(manager.selectExisting(), /database/);
+  assert.equal(f.create().resolve().dataDirectory, original);
+  rmSync(notes);
+  const outside = path.join(f.root, 'outside'); mkdirSync(outside);
+  symlinkSync(outside, path.join(supplied, '.screenshots'), process.platform === 'win32' ? 'junction' : 'dir');
+  await assert.rejects(manager.selectExisting(), /Linked library companion/);
+  const paths = createAppPaths(f.fakeApp(), supplied);
+  assert.equal(paths.configPath, path.join(original, '.settings', 'paperquay.config.json'));
+  assert.notEqual(paths.configPath, path.join(supplied, '.settings', 'paperquay.config.json'));
+});
+
 test('approved file access is bound across launches and guards actual import/delete operations', async (t) => {
   const f = fixture(t);
   f.makeLibrary(path.join(f.normalProfile, 'PaperQuay'));
@@ -337,6 +392,11 @@ test('approved file access is bound across launches and guards actual import/del
   } finally { db.close(); }
   replaceAttachments(supplied, [victim]);
   const nextLaunch = f.create(); nextLaunch.resolve();
+  let uploads = 0;
+  await assert.rejects(runBackup({ appPaths: paths, store,
+    validateLibraryFileOperation: (library, attachments) => reopened.validateFileOperation(library, attachments) },
+    { getText: async () => null, atomicUploadFile: async () => uploads++, atomicUploadBytes: async () => uploads++ }), /file access settings changed/);
+  assert.equal(uploads, 0, 'unapproved attachments must never reach backup upload');
   assert.throws(() => nextLaunch.validateFileOperation(store.load(), store.load().papers[0].attachments), /file access settings changed/);
   await assert.rejects(commands.library_delete_paper({ request: { paperId: 'fixture-0', deleteFiles: true } }), /file access settings changed/);
   assert.equal(store.load().papers.length, 1);

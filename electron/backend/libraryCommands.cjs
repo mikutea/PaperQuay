@@ -53,7 +53,7 @@ async function copyFileIfNeeded(sourcePath, targetPath) {
   return true;
 }
 
-async function migrateLibraryStorageDirectory(library, previousStorageDir, nextStorageDir) {
+async function migrateLibraryStorageDirectory(library, previousStorageDir, nextStorageDir, approval = null) {
   const previousDir = cleanString(previousStorageDir);
   const targetDir = cleanString(nextStorageDir);
 
@@ -69,7 +69,7 @@ async function migrateLibraryStorageDirectory(library, previousStorageDir, nextS
     !isSubPath(previousDir, targetDir) &&
     !isSubPath(targetDir, previousDir);
 
-  if (canCopyWholeDirectory && await pathExists(previousDir)) {
+  if (!approval && canCopyWholeDirectory && await pathExists(previousDir)) {
     await fsp.cp(previousDir, targetDir, {
       recursive: true,
       force: false,
@@ -92,6 +92,8 @@ async function migrateLibraryStorageDirectory(library, previousStorageDir, nextS
       }
 
       const nextPath = path.join(targetDir, relativePath);
+      if (!isSubPath(targetDir, nextPath)) throw new Error('Attachment relative path escapes storage directory.');
+      approval?.validateDestination(nextPath);
 
       if (!isSamePath(storedPath, nextPath)) {
         if (await pathExists(storedPath)) {
@@ -486,21 +488,25 @@ function createLibraryCommands(context) {
     async library_update_settings({ settings }) {
       const library = store.load();
       context.validateLibraryFileOperation?.(library, library.papers.flatMap((paper) => paper.attachments));
+      const previous = structuredClone(library);
       const previousStorageDir = library.settings.storageDir;
       library.settings = {
         ...library.settings,
         ...settings,
         importMode: settings.importMode || library.settings.importMode,
       };
+      const approval = await context.approveLibrarySettingsChange?.(previous, library);
       if (library.settings.storageDir) {
         await migrateLibraryStorageDirectory(
           library,
           previousStorageDir,
           library.settings.storageDir,
+          approval,
         );
         await fsp.mkdir(library.settings.storageDir, { recursive: true });
       }
-      await store.save(library);
+      if (approval) approval.commit(() => store.saveSync(library));
+      else await store.save(library);
       return library.settings;
     },
 

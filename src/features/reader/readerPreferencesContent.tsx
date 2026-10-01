@@ -10,8 +10,21 @@ import {
   Sparkles,
 } from 'lucide-react';
 import clsx from 'clsx';
+import { useEffect, useState } from 'react';
 import { useThemeStore } from '../../stores/useThemeStore';
 import LibraryLocationPanel from '../../components/LibraryLocationPanel';
+
+function StorageDirectoryInput({ value, disabled, onApply, placeholder, applyLabel }: {
+  value: string; disabled: boolean; onApply: (value: string) => void; placeholder: string; applyLabel: string;
+}) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => { setDraft(value); }, [value]);
+  return <div className="flex gap-2">
+    <SettingsInput value={draft} disabled={disabled} onChange={(event) => setDraft(event.target.value)} placeholder={placeholder} />
+    <button type="button" className="pq-button shrink-0 px-3" disabled={disabled || !draft.trim() || draft === value}
+      onClick={() => onApply(draft.trim())}>{applyLabel}</button>
+  </div>;
+}
 
 import { openExternalUrl } from '../../services/desktop';
 import { resolveSummaryOutputLanguage } from '../../services/summarySource';
@@ -336,9 +349,11 @@ export function ReaderPreferencesContent({
               'When import mode is copy or move, PDFs are placed here. Keep-path mode does not copy files.',
             )}
           >
-            <SettingsInput
+            <StorageDirectoryInput
               value={activeLibrarySettings.storageDir}
-              onChange={(event) => updateLibrarySetting('storageDir', event.target.value)}
+              disabled={libraryLoading}
+              onApply={(value) => updateLibrarySetting('storageDir', value)}
+              applyLabel={l('应用目录', 'Apply Folder')}
               placeholder={l('选择一个用于集中管理 PDF 的本地文件夹', 'Choose a local folder for managed PDFs')}
             />
             <div className="flex flex-wrap gap-2">

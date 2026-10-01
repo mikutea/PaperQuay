@@ -168,8 +168,16 @@ app.whenReady().then(async () => {
     app.quit();
     return;
   }
-  getBackend();
-  libraryLocation.rememberActive();
+  try {
+    getBackend();
+    libraryLocation.rememberActive();
+  } catch (error) {
+    backend?.close();
+    backend = null;
+    if (await libraryLocation.recover(error)) app.relaunch();
+    app.quit();
+    return;
+  }
   registerLocalPdfProtocol();
   createWindow();
 
