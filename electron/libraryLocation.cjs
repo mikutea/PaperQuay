@@ -11,7 +11,7 @@ function comparable(directory) {
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
-function inspectLibraryDirectory(directory, { allowProfileDirectory = false } = {}) {
+function inspectLibraryDirectory(directory, { allowProfileDirectory = false, verifyIntegrity = true } = {}) {
   if (typeof directory !== 'string' || !path.isAbsolute(directory)) {
     throw new Error('请选择包含 PaperQuay 文库数据库的完整目录。 / Select an existing PaperQuay library directory.');
   }
@@ -26,8 +26,10 @@ function inspectLibraryDirectory(directory, { allowProfileDirectory = false } = 
   const databasePath = path.join(dataDirectory, LIBRARY_FILE);
   const db = new DatabaseSync(databasePath, { readOnly: true, timeout: 1000 });
   try {
-    const result = db.prepare('PRAGMA quick_check(1)').get();
-    if (Object.values(result)[0] !== 'ok') throw new Error('文库完整性检查失败。 / Library integrity check failed.');
+    if (verifyIntegrity) {
+      const result = db.prepare('PRAGMA quick_check(1)').get();
+      if (Object.values(result)[0] !== 'ok') throw new Error('文库完整性检查失败。 / Library integrity check failed.');
+    }
     const papers = db.prepare('PRAGMA table_info(papers)').all().map((row) => row.name);
     const attachments = db.prepare('PRAGMA table_info(attachments)').all().map((row) => row.name);
     if (!['id', 'title', 'imported_at'].every((column) => papers.includes(column)) || !attachments.includes('stored_path')) {
@@ -78,6 +80,7 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
   const explicitProfile = argv.some((arg) => arg === '--user-data-dir' || arg.startsWith('--user-data-dir='));
   let active = null;
   let pending = null;
+  let recoveryProfile = initialProfile;
 
   function resolve() {
     const registry = readRegistry(registryPath);
@@ -88,13 +91,18 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
       if (!fs.existsSync(profileDirectory)) {
         throw new Error(`原用户配置目录无法访问：${profileDirectory}\nProfile is unavailable. No empty replacement was created.`);
       }
-      const details = inspectLibraryDirectory(entry.dataDirectory);
+      // Preserve Chromium settings even if only the external library is lost.
+      // This runs before ready, including when validation below throws.
+      recoveryProfile = profileDirectory;
+      app.setPath('userData', profileDirectory);
+      const details = inspectLibraryDirectory(entry.dataDirectory, { verifyIntegrity: false });
       active = { profileDirectory, ...details, registered: true };
     } else {
       if (!explicitProfile && registry.defaultProfileDirectory) throw new Error('默认文库记录不完整。 / The default library record is incomplete.');
+      recoveryProfile = profileDirectory;
+      app.setPath('userData', profileDirectory);
       active = { profileDirectory, dataDirectory: path.join(profileDirectory, 'PaperQuay'), registered: false };
     }
-    app.setPath('userData', profileDirectory);
     return { ...active };
   }
 
@@ -120,7 +128,9 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
 
   function rememberActive({ makeDefault = false } = {}) {
     if (!active) throw new Error('No active library location.');
-    const details = inspectLibraryDirectory(active.dataDirectory);
+    // Ordinary launches only remember a pointer. Full integrity scans belong
+    // to the explicit existing-library selection/recovery flow, not startup.
+    const details = inspectLibraryDirectory(active.dataDirectory, { verifyIntegrity: false });
     persistLocation(active.profileDirectory, details.dataDirectory, makeDefault);
     active = { ...active, ...details, registered: true };
     return status();
@@ -185,10 +195,10 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
     if (answer.response !== 1) return false;
     const selected = await selectExisting();
     if (!selected) return false;
-    // When recovering a missing profile, explicitly selected data is opened
-    // using the normal launch profile. The inaccessible original is untouched.
-    fs.mkdirSync(initialProfile, { recursive: true });
-    persistLocation(initialProfile, selected.dataDirectory, true, true);
+    // Keep the remembered profile when only its library is unavailable. Fall
+    // back to the launch profile only when the remembered profile was missing.
+    fs.mkdirSync(recoveryProfile, { recursive: true });
+    persistLocation(recoveryProfile, selected.dataDirectory, true, true);
     pending = null;
     return true;
   }

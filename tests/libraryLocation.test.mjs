@@ -165,3 +165,65 @@ test('profile registration cannot write a registry that the next launch rejects'
   assert.throws(() => manager.rememberActive(), /limit reached/);
   assert.deepEqual(readRegistry(file), registry);
 });
+
+test('recovering an unavailable library retains the existing custom Chromium profile', async (t) => {
+  const f = fixture(t);
+  const original = f.makeLibrary(path.join(f.root, 'external-library'));
+  mkdirSync(f.customProfile);
+  writeFileSync(path.join(f.customProfile, 'theme-fixture.txt'), 'dark');
+  writeFileSync(path.join(f.appData, REGISTRY_NAME), JSON.stringify({ version: 1, defaultProfileDirectory: f.customProfile,
+    libraries: [{ profileDirectory: f.customProfile, dataDirectory: original }] }));
+  renameSync(original, original + '-offline');
+  const other = f.makeLibrary(path.join(f.root, 'replacement-library'), 3);
+  const app = f.fakeApp();
+  const manager = createLibraryLocationManager({ app, argv: [], restart() {}, dialog: {
+    async showMessageBox() { return { response: 1 }; },
+    async showOpenDialog() { return { canceled: false, filePaths: [other] }; },
+  } });
+  let failure;
+  try { manager.resolve(); } catch (error) { failure = error; }
+  assert.ok(failure);
+  assert.equal(app.getPath('userData'), f.customProfile, 'restore Chromium profile before validation can fail');
+  assert.equal(await manager.recover(failure), true);
+  const restored = f.create().resolve();
+  assert.equal(restored.profileDirectory, f.customProfile);
+  assert.equal(restored.dataDirectory, other);
+  assert.equal(readFileSync(path.join(f.customProfile, 'theme-fixture.txt'), 'utf8'), 'dark');
+});
+
+test('a missing custom profile can recover explicitly into the normal launch profile', async (t) => {
+  const f = fixture(t);
+  f.makeLibrary(path.join(f.customProfile, 'PaperQuay'));
+  const custom = f.create(f.customProfile, ['--user-data-dir=' + f.customProfile]);
+  custom.resolve(); custom.rememberActive();
+  renameSync(f.customProfile, f.customProfile + '-offline');
+  const other = f.makeLibrary(path.join(f.root, 'replacement-library'));
+  f.decisions.directory = other; f.decisions.confirm = 1;
+  const normal = f.create();
+  assert.throws(() => normal.resolve(), /Profile is unavailable/);
+  assert.equal(await normal.recover(new Error('missing profile')), true);
+  assert.equal(f.create().resolve().profileDirectory, f.normalProfile);
+  assert.equal(f.create().resolve().dataDirectory, other);
+  assert.equal(readdirSync(f.root).includes(path.basename(f.customProfile)), false);
+});
+
+test('ordinary startup avoids full integrity scans while explicit selection still verifies integrity', async (t) => {
+  const f = fixture(t);
+  const directory = f.makeLibrary(path.join(f.normalProfile, 'PaperQuay'));
+  const initial = f.create(); initial.resolve(); initial.rememberActive();
+  const prepare = DatabaseSync.prototype.prepare;
+  let fullScans = 0;
+  DatabaseSync.prototype.prepare = function (sql, ...args) {
+    if (/PRAGMA quick_check/i.test(sql)) fullScans++;
+    return prepare.call(this, sql, ...args);
+  };
+  try {
+    const reopened = f.create(); reopened.resolve(); reopened.rememberActive();
+    assert.equal(fullScans, 0);
+    f.decisions.directory = directory;
+    await reopened.selectExisting();
+    assert.equal(fullScans, 1);
+  } finally {
+    DatabaseSync.prototype.prepare = prepare;
+  }
+});
