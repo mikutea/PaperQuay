@@ -11,7 +11,37 @@ function comparable(directory) {
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
-function inspectLibraryDirectory(directory, { allowProfileDirectory = false, verifyIntegrity = true } = {}) {
+function canonicalPath(filePath) {
+  let parent = filePath;
+  const suffix = [];
+  while (!fs.existsSync(parent) && path.dirname(parent) !== parent) {
+    suffix.unshift(path.basename(parent)); parent = path.dirname(parent);
+  }
+  return path.join(fs.realpathSync(parent), ...suffix);
+}
+
+function fileAccessPolicy(details) {
+  return {
+    storageDirectory: details.storageDirectory,
+    storageRoot: details.storageRoot,
+    importMode: details.importMode,
+    attachmentRoots: details.attachmentRoots,
+  };
+}
+
+function assertApprovedFileAccess(details, approved) {
+  if (!approved) return;
+  const trustedRoots = [...approved.attachmentRoots, approved.storageRoot];
+  const allowed = comparable(details.storageDirectory) === comparable(approved.storageDirectory) &&
+    comparable(details.storageRoot) === comparable(approved.storageRoot) && details.importMode === approved.importMode &&
+    details.attachmentRoots.every((directory) => trustedRoots.some((root) => {
+      const relative = path.relative(comparable(root), comparable(directory));
+      return !path.isAbsolute(relative) && relative !== '..' && !relative.startsWith('..' + path.sep);
+    }));
+  if (!allowed) throw new Error('文库文件访问设置已更改。请通过“打开已有文库”重新确认。 / Library file access settings changed. Use Open Existing Library to approve them again.');
+}
+
+function inspectLibraryDirectory(directory, { allowProfileDirectory = false, verifyIntegrity = true, inspectAttachmentRoots = verifyIntegrity } = {}) {
   if (typeof directory !== 'string' || !path.isAbsolute(directory)) {
     throw new Error('请选择包含 PaperQuay 文库数据库的完整目录。 / Select an existing PaperQuay library directory.');
   }
@@ -42,11 +72,25 @@ function inspectLibraryDirectory(directory, { allowProfileDirectory = false, ver
     if (typeof storageDirectory !== 'string' || !path.isAbsolute(storageDirectory) || !['copy', 'move', 'keep'].includes(importMode)) {
       throw new Error('文库包含无效的 PDF 导入设置。 / Invalid PDF import settings in this library.');
     }
+    const attachmentRoots = [];
+    if (inspectAttachmentRoots) {
+      const roots = new Set();
+      for (const row of db.prepare('SELECT DISTINCT stored_path FROM attachments').all()) {
+        if (typeof row.stored_path !== 'string' || !path.isAbsolute(row.stored_path)) {
+          throw new Error('附件路径无效，不会打开此文库。 / Invalid attachment path; library was not adopted.');
+        }
+        const target = canonicalPath(row.stored_path);
+        roots.add(path.dirname(target));
+      }
+      attachmentRoots.push(...[...roots].sort());
+    }
     return {
       dataDirectory,
       databasePath,
       storageDirectory,
+      storageRoot: canonicalPath(storageDirectory),
       importMode,
+      attachmentRoots,
       paperCount: Number(db.prepare('SELECT count(*) AS count FROM papers').get().count),
       attachmentCount: Number(db.prepare('SELECT count(*) AS count FROM attachments').get().count),
     };
@@ -62,7 +106,14 @@ function readRegistry(registryPath) {
       typeof value.defaultProfileDirectory !== 'string' ||
       (value.defaultProfileDirectory && !path.isAbsolute(value.defaultProfileDirectory)) ||
       value.libraries.some((entry) => typeof entry?.profileDirectory !== 'string' || !path.isAbsolute(entry.profileDirectory) ||
-        typeof entry?.dataDirectory !== 'string' || !path.isAbsolute(entry.dataDirectory))) {
+        typeof entry?.dataDirectory !== 'string' || !path.isAbsolute(entry.dataDirectory) ||
+        (entry.approvedFileAccess != null && (
+          typeof entry.approvedFileAccess.storageDirectory !== 'string' || !path.isAbsolute(entry.approvedFileAccess.storageDirectory) ||
+          typeof entry.approvedFileAccess.storageRoot !== 'string' || !path.isAbsolute(entry.approvedFileAccess.storageRoot) ||
+          !['copy', 'move', 'keep'].includes(entry.approvedFileAccess.importMode) ||
+          !Array.isArray(entry.approvedFileAccess.attachmentRoots) ||
+          entry.approvedFileAccess.attachmentRoots.some((root) => typeof root !== 'string' || !path.isAbsolute(root))
+        )))) {
     throw new Error('文库位置记录无效。请选择已有文库，不会自动创建空库。 / Invalid library location record. Choose an existing library.');
   }
   return value;
@@ -105,7 +156,8 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
       recoveryProfile = profileDirectory;
       app.setPath('userData', profileDirectory);
       const details = inspectLibraryDirectory(entry.dataDirectory, { verifyIntegrity: false });
-      active = { profileDirectory, ...details, registered: true };
+      assertApprovedFileAccess(details, entry.approvedFileAccess);
+      active = { profileDirectory, ...details, approvedFileAccess: entry.approvedFileAccess, registered: true };
     } else {
       if (!explicitProfile && registry.defaultProfileDirectory) throw new Error('默认文库记录不完整。 / The default library record is incomplete.');
       recoveryProfile = profileDirectory;
@@ -115,7 +167,7 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
     return { ...active };
   }
 
-  function persistLocation(profileDirectory, dataDirectory, makeDefault, allowRecovery = false) {
+  function persistLocation(profileDirectory, dataDirectory, makeDefault, allowRecovery = false, approvedFileAccess = null) {
     let registry;
     try { registry = readRegistry(registryPath); }
     catch (error) {
@@ -128,9 +180,14 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
       throw new Error('已达到文库配置数量上限，原记录未更改。 / Library profile limit reached. Existing records were preserved.');
     }
     if (previous && comparable(previous.dataDirectory) === comparable(dataDirectory) &&
+        (!approvedFileAccess || JSON.stringify(previous.approvedFileAccess) === JSON.stringify(approvedFileAccess)) &&
         (!makeDefault || comparable(registry.defaultProfileDirectory || profileDirectory) === key) && registry.defaultProfileDirectory) return;
     registry.libraries = registry.libraries.filter((entry) => comparable(entry.profileDirectory) !== key);
-    registry.libraries.push({ profileDirectory, dataDirectory });
+    const sameLibrary = previous && comparable(previous.dataDirectory) === comparable(dataDirectory);
+    registry.libraries.push({ profileDirectory, dataDirectory,
+      ...((approvedFileAccess || (sameLibrary && previous.approvedFileAccess)) ?
+        { approvedFileAccess: approvedFileAccess || previous.approvedFileAccess } : {}),
+    });
     if (makeDefault || !registry.defaultProfileDirectory) registry.defaultProfileDirectory = profileDirectory;
     writeRegistry(registryPath, registry);
   }
@@ -140,6 +197,7 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
     // Ordinary launches only remember a pointer. Full integrity scans belong
     // to the explicit existing-library selection/recovery flow, not startup.
     const details = inspectLibraryDirectory(active.dataDirectory, { verifyIntegrity: false });
+    assertApprovedFileAccess(details, active.approvedFileAccess);
     persistLocation(active.profileDirectory, details.dataDirectory, makeDefault);
     active = { ...active, ...details, registered: true };
     return status();
@@ -172,13 +230,15 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
     const selected = pending;
     const current = status();
     const details = inspectLibraryDirectory(selected.dataDirectory);
-    if (comparable(details.dataDirectory) === comparable(fs.realpathSync(current.dataDirectory))) {
+    let approved = true;
+    try { assertApprovedFileAccess(details, active.approvedFileAccess); } catch { approved = false; }
+    if (approved && comparable(details.dataDirectory) === comparable(fs.realpathSync(current.dataDirectory))) {
       pending = null;
       return { unchanged: true, ...current };
     }
     if (!await confirmImportSettings(details)) return { canceled: true };
     validateUnchangedSettings(details);
-    persistLocation(current.profileDirectory, details.dataDirectory, true);
+    persistLocation(current.profileDirectory, details.dataDirectory, true, false, fileAccessPolicy(details));
     pending = null;
     restart();
     return { restarting: true };
@@ -190,20 +250,42 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
       move: '移动：将删除原位置的文件 / Move: REMOVE the original file from its location',
       keep: '保留原路径：不复制或移动 / Keep original path: no copy or move',
     }[details.importMode];
+    const attachmentScope = details.attachmentRoots.length
+      ? `${details.attachmentRoots.length} 个目录，下一步逐页确认 / ${details.attachmentRoots.length} roots; approve each page next`
+      : '无现有附件 / No existing attachments';
     const answer = await dialog.showMessageBox({
       type: 'question',
       title: '切换文库并重启 / Switch Library and Restart',
       message: `打开已有文库（${details.paperCount} 篇）？ / Open existing library (${details.paperCount} papers)?`,
-      detail: `${details.dataDirectory}\n\n此文库自带的后续 PDF 导入设置 / This library's settings for FUTURE PDF imports:\n存储目录 / Destination: ${details.storageDirectory}\n导入方式 / Mode: ${modeDescription}\n\n仅在信任该目录和导入方式时继续；复制或移动到共享目录可能向他人暴露文件。 / Continue only if you trust this destination and mode. Copying or moving files into shared locations may expose them to others.\n\n请先保存编辑内容并关闭使用此文库的其他实例。本次切换不会复制、合并或覆盖任一文库。 / Save edits and close other instances. This switch does not copy, merge or overwrite either library.`,
-      buttons: ['取消 / Cancel', '信任这些导入设置并重启 / Trust Import Settings and Restart'], defaultId: 0, cancelId: 0,
+      detail: `${details.dataDirectory}\n\n此文库自带的后续 PDF 导入设置 / This library's settings for FUTURE PDF imports:\n存储目录 / Destination: ${JSON.stringify(details.storageDirectory)}\n导入方式 / Mode: ${modeDescription}\n\n现有附件 / Existing attachments: ${attachmentScope}\n\n仅在信任该目录和导入方式时继续；共享目录可能向他人暴露文件。 / Continue only if you trust this destination and import mode. Shared locations may expose files to others.\n\n请先保存编辑内容并关闭使用此文库的其他实例。本次切换不会复制、合并或覆盖任一文库。 / Save edits and close other instances. This switch does not copy, merge or overwrite either library.`,
+      buttons: ['取消 / Cancel', '信任导入设置并继续 / Trust Import Settings and Continue'], defaultId: 0, cancelId: 0,
       noLink: true,
     });
-    return answer.response === 1;
+    if (answer.response !== 1) return false;
+    const pages = [];
+    for (const root of details.attachmentRoots) {
+      const text = JSON.stringify(root);
+      if (text.length > 1500) throw new Error('附件目录过长，无法安全显示。 / Attachment root is too long to safely display.');
+      const last = pages.at(-1);
+      if (!last || last.length >= 8 || last.join('\n').length + text.length > 1500) pages.push([text]);
+      else last.push(text);
+    }
+    for (const [index, roots] of pages.entries()) {
+      const result = await dialog.showMessageBox({
+        type: 'warning', title: '确认附件访问范围 / Approve Attachment Access',
+        message: `附件目录 ${index + 1}/${pages.length} / Attachment roots ${index + 1}/${pages.length}`,
+        detail: `${roots.join('\n')}\n\n删除文献并选择删除文件时，会删除这些目录及其子目录内的附件原文件，包括文库外文件。 / Deleting papers with Delete Files can REMOVE original attachments in these directories and subdirectories, including files outside the library.\n仅在信任这一页的全部目录时继续。 / Continue only if you trust EVERY root on this page.`,
+        buttons: ['取消 / Cancel', '信任本页目录 / Trust These Roots'], defaultId: 0, cancelId: 0, noLink: true,
+      });
+      if (result.response !== 1) return false;
+    }
+    return true;
   }
 
   function validateUnchangedSettings(approved) {
     const current = inspectLibraryDirectory(approved.dataDirectory);
-    if (current.storageDirectory !== approved.storageDirectory || current.importMode !== approved.importMode) {
+    if (current.storageDirectory !== approved.storageDirectory || current.storageRoot !== approved.storageRoot || current.importMode !== approved.importMode ||
+        JSON.stringify(current.attachmentRoots) !== JSON.stringify(approved.attachmentRoots)) {
       throw new Error('文库的导入设置已更改，请重新选择并确认。 / Library import settings changed. Select and approve them again.');
     }
   }
@@ -223,12 +305,28 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
     // Keep the remembered profile when only its library is unavailable. Fall
     // back to the launch profile only when the remembered profile was missing.
     fs.mkdirSync(recoveryProfile, { recursive: true });
-    persistLocation(recoveryProfile, selected.dataDirectory, true, true);
+    persistLocation(recoveryProfile, selected.dataDirectory, true, true, fileAccessPolicy(selected));
     pending = null;
     return true;
   }
 
-  return { resolve, rememberActive, status, selectExisting, activateSelected, recover };
+  function validateFileOperation(library, attachments = []) {
+    if (!active?.approvedFileAccess) return;
+    const storageDirectory = library.settings.storageDir || path.join(active.dataDirectory, 'paperquay-data');
+    assertApprovedFileAccess({
+      storageDirectory,
+      storageRoot: canonicalPath(storageDirectory),
+      importMode: library.settings.importMode || 'copy',
+      attachmentRoots: attachments.map((attachment) => {
+        if (typeof attachment.storedPath !== 'string' || !path.isAbsolute(attachment.storedPath)) {
+          throw new Error('Invalid attachment path. No files were changed.');
+        }
+        return path.dirname(canonicalPath(attachment.storedPath));
+      }),
+    }, active.approvedFileAccess);
+  }
+
+  return { resolve, rememberActive, status, selectExisting, activateSelected, recover, validateFileOperation };
 }
 
 module.exports = { REGISTRY_NAME, inspectLibraryDirectory, readRegistry, createLibraryLocationManager };

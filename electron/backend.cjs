@@ -78,6 +78,7 @@ function createBackend({ app, libraryLocation }) {
     ragStore,
     store,
     prepareForUpdate: () => libraryLocation?.rememberActive({ makeDefault: true }),
+    validateLibraryFileOperation: (library, attachments) => libraryLocation?.validateFileOperation(library, attachments),
   };
   const fileCommands = createFileCommands(context);
   context.fileCommands = fileCommands;

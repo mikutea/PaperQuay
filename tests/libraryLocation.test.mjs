@@ -7,6 +7,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { DatabaseSync } = require('../electron/backend/nodeSqlite.cjs');
 const { createAppPaths, createLibraryStore } = require('../electron/backend/libraryStore.cjs');
+const { createLibraryCommands } = require('../electron/backend/libraryCommands.cjs');
 const { REGISTRY_NAME, createLibraryLocationManager, inspectLibraryDirectory, readRegistry } = require('../electron/libraryLocation.cjs');
 
 function fixture(t) {
@@ -243,7 +244,7 @@ test('external-library import destinations and destructive modes require explici
   assert.equal(candidate.importMode, 'move');
   assert.equal(candidate.storageDirectory, destination);
   assert.deepEqual(await manager.activateSelected({ token: candidate.token }), { canceled: true });
-  assert.ok(f.decisions.messages.at(-1).detail.includes(destination));
+  assert.ok(f.decisions.messages.at(-1).detail.includes(JSON.stringify(destination)));
   assert.match(f.decisions.messages.at(-1).detail, /REMOVE the original file/);
   assert.equal(f.create().resolve().dataDirectory, original);
   assert.equal(f.decisions.restarts, 0);
@@ -269,4 +270,85 @@ test('recovery can decline imported write settings without changing the location
   assert.equal(await manager.recover(new Error('unavailable')), false);
   assert.match(f.decisions.messages.at(-1).detail, /FUTURE PDF imports/);
   assert.equal(readFileSync(path.join(f.appData, REGISTRY_NAME), 'utf8'), before);
+});
+
+function replaceAttachments(directory, targets) {
+  const db = new DatabaseSync(path.join(directory, 'paperquay-library.sqlite'));
+  try {
+    db.exec('DELETE FROM attachments');
+    const insert = db.prepare("INSERT INTO attachments (id,paper_id,kind,stored_path,file_name,mime_type,file_size,created_at,missing) VALUES (?,'fixture-0','pdf',?,?,'application/pdf',1,1,0)");
+    for (const [index, target] of targets.entries()) insert.run('attachment-' + index, target, path.basename(target));
+  } finally { db.close(); }
+}
+
+test('attachment roots are explicitly disclosed and confirmation-time path changes abort adoption', async (t) => {
+  const f = fixture(t);
+  const original = f.makeLibrary(path.join(f.normalProfile, 'PaperQuay'));
+  const supplied = f.makeLibrary(path.join(f.root, 'supplied'));
+  const victim = path.join(f.root, 'private', 'unrelated.pdf');
+  mkdirSync(path.dirname(victim)); writeFileSync(victim, 'private fixture bytes');
+  replaceAttachments(supplied, [victim]);
+  const manager = f.create(); manager.resolve(); manager.rememberActive();
+  f.decisions.directory = supplied;
+  const candidate = await manager.selectExisting();
+  assert.deepEqual(candidate.attachmentRoots, [path.dirname(victim)]);
+  f.decisions.confirm = 1;
+  f.decisions.onConfirm = () => { if (f.decisions.messages.at(-1).type === 'warning') f.decisions.confirm = 0; };
+  await manager.activateSelected({ token: candidate.token });
+  assert.ok(f.decisions.messages.at(-1).detail.includes(JSON.stringify(path.dirname(victim))));
+  assert.match(f.decisions.messages.at(-1).detail, /REMOVE original attachments/);
+  assert.equal(f.create().resolve().dataDirectory, original);
+  f.decisions.confirm = 1;
+  f.decisions.onConfirm = () => replaceAttachments(supplied, [path.join(f.root, 'different-root', 'other.pdf')]);
+  await assert.rejects(manager.activateSelected({ token: candidate.token }), /settings changed/);
+  assert.equal(f.create().resolve().dataDirectory, original);
+  assert.equal(readFileSync(victim, 'utf8'), 'private fixture bytes');
+});
+
+test('approved file access is bound across launches and guards actual import/delete operations', async (t) => {
+  const f = fixture(t);
+  f.makeLibrary(path.join(f.normalProfile, 'PaperQuay'));
+  const supplied = f.makeLibrary(path.join(f.root, 'supplied'));
+  const manager = f.create(); manager.resolve(); manager.rememberActive();
+  f.decisions.directory = supplied; f.decisions.confirm = 1;
+  const candidate = await manager.selectExisting();
+  await manager.activateSelected({ token: candidate.token });
+  const reopened = f.create(); reopened.resolve(); reopened.rememberActive();
+  assert.equal(readRegistry(path.join(f.appData, REGISTRY_NAME)).libraries[0].approvedFileAccess.importMode, 'copy');
+  const paths = createAppPaths(f.fakeApp(), supplied);
+  const store = createLibraryStore(paths);
+  try {
+  const commands = createLibraryCommands({ appPaths: paths, store,
+    validateLibraryFileOperation: (library, attachments) => reopened.validateFileOperation(library, attachments) });
+  const victim = path.join(f.root, 'private', 'private.pdf');
+  mkdirSync(path.dirname(victim)); writeFileSync(victim, '%PDF-1.4\nprivate fixture\n%%EOF');
+  const attackerDestination = path.join(f.root, 'attacker-readable');
+  const db = new DatabaseSync(paths.libraryDatabasePath);
+  try {
+    db.prepare('UPDATE library_settings SET value_json = ? WHERE key = ?').run(JSON.stringify(attackerDestination), 'storageDir');
+    db.prepare('UPDATE library_settings SET value_json = ? WHERE key = ?').run(JSON.stringify('move'), 'importMode');
+    assert.throws(() => f.create().resolve(), /file access settings changed/);
+    assert.throws(() => reopened.rememberActive({ makeDefault: true }), /file access settings changed/);
+    await assert.rejects(commands.library_import_pdfs({ request: { paths: [victim] } }), /file access settings changed/);
+    await assert.rejects(commands.library_update_settings({ settings: { openAlexEnabled: false } }), /file access settings changed/);
+    assert.equal(readdirSync(f.root).includes('attacker-readable'), false);
+    db.prepare('UPDATE library_settings SET value_json = ? WHERE key = ?').run(JSON.stringify(candidate.storageDirectory), 'storageDir');
+    db.prepare('UPDATE library_settings SET value_json = ? WHERE key = ?').run(JSON.stringify('copy'), 'importMode');
+  } finally { db.close(); }
+  replaceAttachments(supplied, [victim]);
+  const nextLaunch = f.create(); nextLaunch.resolve();
+  assert.throws(() => nextLaunch.validateFileOperation(store.load(), store.load().papers[0].attachments), /file access settings changed/);
+  await assert.rejects(commands.library_delete_paper({ request: { paperId: 'fixture-0', deleteFiles: true } }), /file access settings changed/);
+  assert.equal(store.load().papers.length, 1);
+  assert.equal(readFileSync(victim, 'utf8'), '%PDF-1.4\nprivate fixture\n%%EOF');
+  replaceAttachments(supplied, []);
+  const [imported] = await commands.library_import_pdfs({ request: { paths: [victim] } });
+  assert.equal(imported.status, 'imported');
+  const storedPath = imported.paper.attachments[0].storedPath;
+  assert.ok(storedPath.startsWith(candidate.storageDirectory + path.sep));
+  assert.equal(readFileSync(storedPath, 'utf8'), readFileSync(victim, 'utf8'));
+  await commands.library_delete_paper({ request: { paperId: imported.paper.id, deleteFiles: true } });
+  assert.equal(readdirSync(candidate.storageDirectory).includes(path.basename(storedPath)), false);
+  assert.equal(readFileSync(victim, 'utf8'), '%PDF-1.4\nprivate fixture\n%%EOF');
+  } finally { store.close(); }
 });

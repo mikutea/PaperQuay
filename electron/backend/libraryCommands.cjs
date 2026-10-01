@@ -485,6 +485,7 @@ function createLibraryCommands(context) {
 
     async library_update_settings({ settings }) {
       const library = store.load();
+      context.validateLibraryFileOperation?.(library, library.papers.flatMap((paper) => paper.attachments));
       const previousStorageDir = library.settings.storageDir;
       library.settings = {
         ...library.settings,
@@ -601,6 +602,7 @@ function createLibraryCommands(context) {
 
     async library_import_pdfs({ request }) {
       const library = store.load();
+      context.validateLibraryFileOperation?.(library);
       const results = [];
       const storageDir = library.settings.storageDir || path.join(appPaths.dataDir, 'paperquay-data');
       await fsp.mkdir(storageDir, { recursive: true });
@@ -750,6 +752,7 @@ function createLibraryCommands(context) {
     async library_delete_paper({ request }) {
       const library = store.load();
       const paper = library.papers.find((item) => item.id === request.paperId);
+      if (request.deleteFiles && paper) context.validateLibraryFileOperation?.(library, paper.attachments);
       library.papers = library.papers.filter((item) => item.id !== request.paperId);
 
       if (request.deleteFiles && paper) {
