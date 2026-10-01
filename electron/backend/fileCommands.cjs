@@ -175,9 +175,13 @@ function createFileCommands(context) {
 
   return {
     async read_app_config() {
+      // Both locations come from the trusted profile, not the active library.
       // No caller-supplied path: derived-text loaders must use guarded reads.
-      try { return await fsp.readFile(appPaths.configPath, 'utf8'); }
-      catch (error) { if (error?.code === 'ENOENT') return null; throw error; }
+      for (const filePath of [appPaths.configPath, appPaths.legacyConfigPath].filter(Boolean)) {
+        try { return await fsp.readFile(filePath, 'utf8'); }
+        catch (error) { if (error?.code !== 'ENOENT') throw error; }
+      }
+      return null;
     },
 
     async get_app_default_paths() {

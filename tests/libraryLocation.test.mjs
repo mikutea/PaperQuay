@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, symlinkSync, existsSync, utimesSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, symlinkSync, existsSync, utimesSync, realpathSync, unlinkSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -409,7 +409,7 @@ test('attachment roots are explicitly disclosed and confirmation-time path chang
   const manager = f.create(); manager.resolve(); manager.rememberActive();
   f.decisions.directory = supplied;
   const candidate = await manager.selectExisting();
-  assert.deepEqual(candidate.attachmentRoots, [path.dirname(victim)]);
+  assert.deepEqual(candidate.attachmentRoots, [path.dirname(realpathSync.native(victim))]);
   f.decisions.confirm = 1;
   f.decisions.onConfirm = () => { if (f.decisions.messages.at(-1).type === 'warning') f.decisions.confirm = 0; };
   await manager.activateSelected({ token: candidate.token });
@@ -561,13 +561,13 @@ test('keep-path import commits approved selected roots and canceled imports leav
     await assert.rejects(commands.library_import_pdfs({ request: { paths: [source], importMode: 'keep' } }), /keep import save failure/);
     store.saveSync = saveSync;
     assert.equal(store.load().papers.length, before);
-    assert.equal(readRegistry(path.join(f.appData, REGISTRY_NAME)).libraries[0].approvedFileAccess.attachmentRoots.includes(path.dirname(source)), false);
+    assert.equal(readRegistry(path.join(f.appData, REGISTRY_NAME)).libraries[0].approvedFileAccess.attachmentRoots.includes(path.dirname(realpathSync.native(source))), false);
     const [result] = await commands.library_import_pdfs({ request: { paths: [source], importMode: 'keep' } });
     assert.equal(result.status, 'imported');
     const reopened = f.create(); reopened.resolve();
     reopened.validateFileOperation(store.load(), store.load().papers.flatMap((paper) => paper.attachments));
     await commands.library_update_settings({ settings: { openAlexEnabled: false } });
-    assert.ok(readRegistry(path.join(f.appData, REGISTRY_NAME)).libraries[0].approvedFileAccess.attachmentRoots.includes(path.dirname(source)));
+    assert.ok(readRegistry(path.join(f.appData, REGISTRY_NAME)).libraries[0].approvedFileAccess.attachmentRoots.includes(path.dirname(realpathSync.native(source))));
     await commands.library_delete_paper({ request: { paperId: result.paper.id, deleteFiles: true } });
     assert.equal(readdirSync(path.dirname(source)).includes('keep.pdf'), false);
     const outside = path.join(f.root, 'outside'); mkdirSync(outside);
@@ -658,6 +658,48 @@ test('relocating a PDF rebinds its approved root and clears the obsolete relativ
   } finally { store.close(); }
 });
 
+test('cloud PDF upload reads the approved canonical target even if the original link is retargeted', async (t) => {
+  const f = fixture(t);
+  f.makeLibrary(path.join(f.normalProfile, 'PaperQuay'));
+  const supplied = f.makeLibrary(path.join(f.root, 'supplied'));
+  const manager = f.create(); manager.resolve(); manager.rememberActive();
+  f.decisions.directory = supplied; f.decisions.confirm = 1;
+  await manager.activateSelected({ token: (await manager.selectExisting()).token });
+  const active = f.create(); active.resolve();
+  const paths = createAppPaths(f.fakeApp(), supplied);
+  const store = createLibraryStore(paths);
+  const safeRoot = store.load().settings.storageDir;
+  const privateRoot = path.join(f.root, 'private');
+  mkdirSync(safeRoot, { recursive: true }); mkdirSync(privateRoot);
+  writeFileSync(path.join(safeRoot, 'fixture.pdf'), 'safe upload fixture');
+  writeFileSync(path.join(privateRoot, 'fixture.pdf'), 'private upload fixture');
+  const link = path.join(supplied, 'linked-pdf');
+  symlinkSync(safeRoot, link, process.platform === 'win32' ? 'junction' : 'dir');
+  let authorizations = 0;
+  const commands = createMineruCommands({ appPaths: paths, store,
+    async authorizeCloudParsePath(library, pdfPath) {
+      const actual = await active.authorizeCloudParsePath(library, pdfPath);
+      if (++authorizations === 1) {
+        unlinkSync(link); symlinkSync(privateRoot, link, process.platform === 'win32' ? 'junction' : 'dir');
+      }
+      return actual;
+    },
+  });
+  const originalFetch = globalThis.fetch;
+  let uploaded = '';
+  globalThis.fetch = async (_url, options) => {
+    if (options.method === 'POST') return new Response(JSON.stringify({ code: 0, data: { batch_id: 'fixture', file_urls: ['https://upload.invalid/fixture'] } }));
+    uploaded = Buffer.from(options.body).toString();
+    throw new Error('fixture upload captured');
+  };
+  try {
+    await assert.rejects(commands.run_mineru_cloud_parse({ options: { pdfPath: path.join(link, 'fixture.pdf'), apiToken: 'fixture' } }), /fixture upload captured/);
+    assert.equal(authorizations, 2);
+    assert.equal(uploaded, 'safe upload fixture');
+    assert.equal(readFileSync(path.join(link, 'fixture.pdf'), 'utf8'), 'private upload fixture');
+  } finally { globalThis.fetch = originalFetch; store.close(); }
+});
+
 test('PDF, derived text, binary reads and RAG indexing reject unapproved paths after adoption', async (t) => {
   const f = fixture(t);
   f.makeLibrary(path.join(f.normalProfile, 'PaperQuay'));
@@ -721,6 +763,18 @@ test('PDF, derived text, binary reads and RAG indexing reject unapproved paths a
     const allowed = await pdfResponse(safe);
     assert.equal(allowed.status, 200); assert.match(await allowed.text(), /safe document/);
     assert.match(Buffer.from(await fileCommands.read_binary_file_base64({ path: safe }), 'base64').toString(), /safe document/);
+    const safeAlias = path.join(supplied, 'pdf-alias');
+    const redirected = path.join(f.root, 'redirected-pdf'); mkdirSync(redirected);
+    writeFileSync(path.join(redirected, 'safe.pdf'), 'private retargeted fixture');
+    symlinkSync(path.dirname(safe), safeAlias, process.platform === 'win32' ? 'junction' : 'dir');
+    pdfProtocol.registerLocalPdfProtocol(async (filePath) => {
+      const actual = await context.authorizeLocalRead(filePath);
+      unlinkSync(safeAlias); symlinkSync(redirected, safeAlias, process.platform === 'win32' ? 'junction' : 'dir');
+      return actual;
+    });
+    const stable = await pdfResponse(path.join(safeAlias, 'safe.pdf'));
+    assert.equal(stable.status, 200);
+    assert.match(await stable.text(), /safe document/);
     await ai.rag_index_document({ request: { ...request, chunks: [{ ...request.chunks[0], text: 'safe document' }] } });
     assert.equal(ragStore.getDocumentIndexStatus({ documentKey: 'fixture-0', sourceType: 'pdf-text' }).indexedChunkCount, 1);
   } finally { ragStore.close(); store.close(); }

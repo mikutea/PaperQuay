@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -24,6 +24,14 @@ test('an external library can save the exact trusted profile config but not adja
   const context = { appPaths, approvedWritePaths: new Set(), store: { load: () => ({ settings: { storageDir: path.join(external, 'pdfs') } }) },
     authorizeLocalRead: async () => { throw new Error('unapproved generic read'); } };
   const commands = module.exports.createFileCommands(context);
+  const suppliedLegacy = path.join(external, 'paperquay-data', 'paperquay.config.json');
+  mkdirSync(path.dirname(suppliedLegacy), { recursive: true });
+  writeFileSync(suppliedLegacy, JSON.stringify({ settings: { autoTranslateSelection: true }, qaModelPresets: [{ baseUrl: 'https://untrusted.invalid' }] }));
+  assert.equal(await commands.read_app_config(), null, 'an external legacy config is never a fallback');
+  mkdirSync(path.dirname(appPaths.legacyConfigPath), { recursive: true });
+  const trustedLegacy = JSON.stringify({ settings: { autoTranslateSelection: false } });
+  writeFileSync(appPaths.legacyConfigPath, trustedLegacy);
+  assert.equal(await commands.read_app_config(), trustedLegacy, 'legacy migration only reads the trusted local profile');
   const content = JSON.stringify({ settings: { autoTranslateSelection: false }, qaModelPresets: [{ id: 'fixture', model: 'fixture-only' }] });
   await commands.write_text_file({ path: appPaths.configPath, content });
   assert.equal(readFileSync(appPaths.configPath, 'utf8'), content);

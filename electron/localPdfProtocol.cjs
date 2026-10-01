@@ -129,7 +129,7 @@ async function handleLocalPdfRequest(request, authorizeLocalRead) {
     return createPlainResponse('Unknown PDF source.', 404);
   }
 
-  const filePath = requestUrl.searchParams.get('path') || '';
+  let filePath = requestUrl.searchParams.get('path') || '';
 
   if (!filePath || path.extname(filePath).toLowerCase() !== '.pdf') {
     return createPlainResponse('Only PDF files can be served by this protocol.');
@@ -137,7 +137,7 @@ async function handleLocalPdfRequest(request, authorizeLocalRead) {
 
   let stat;
 
-  try { await authorizeLocalRead?.(filePath); }
+  try { filePath = await authorizeLocalRead?.(filePath) || await fsp.realpath(filePath); }
   catch { return createPlainResponse('PDF access was not approved.', 403); }
 
   try {

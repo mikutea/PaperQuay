@@ -17,7 +17,8 @@ function canonicalPath(filePath) {
   while (!fs.existsSync(parent) && path.dirname(parent) !== parent) {
     suffix.unshift(path.basename(parent)); parent = path.dirname(parent);
   }
-  return path.join(fs.realpathSync(parent), ...suffix);
+  // Match fs.promises.realpath, including expansion of Windows 8.3 names.
+  return path.join(fs.realpathSync.native(parent), ...suffix);
 }
 
 function profileKey(directory) {
@@ -77,7 +78,7 @@ function inspectLibraryDirectory(directory, { allowProfileDirectory = false, ver
       const candidate = path.join(dataDirectory, name + suffix);
       let link = false;
       try { link = fs.lstatSync(candidate).isSymbolicLink(); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-      if (link || (fs.existsSync(candidate) && comparable(canonicalPath(candidate)) !== comparable(candidate))) {
+      if (link || (fs.existsSync(candidate) && comparable(canonicalPath(candidate)) !== comparable(path.join(canonicalPath(dataDirectory), name + suffix)))) {
         throw new Error('文库附属路径包含链接，未切换文库。 / Linked library companion paths are not supported.');
       }
     }
@@ -417,18 +418,18 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
   }
 
   async function authorizeCloudParsePath(library, pdfPath, cloud = true) {
-    if (!active?.approvedFileAccess) return;
+    if (!active?.approvedFileAccess) return canonicalPath(pdfPath);
     validateFileOperation(library, library.papers.flatMap((paper) => paper.attachments));
     if (typeof pdfPath !== 'string' || !path.isAbsolute(pdfPath)) throw new Error('Invalid cloud parsing PDF path.');
     const actual = canonicalPath(pdfPath);
     if (!cloud) {
-      const relative = path.relative(comparable(active.dataDirectory), comparable(actual));
-      if (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith('..' + path.sep)) return;
+      const relative = path.relative(comparable(canonicalPath(active.dataDirectory)), comparable(actual));
+      if (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith('..' + path.sep)) return actual;
     }
     const approvedFiles = cloud ? approvedCloudFiles : approvedReadFiles;
-    try { validateFileOperation(library, [{ storedPath: actual }]); return; }
+    try { validateFileOperation(library, [{ storedPath: actual }]); return actual; }
     catch (error) {
-      if (approvedFiles.has(comparable(actual))) return;
+      if (approvedFiles.has(comparable(actual))) return actual;
       const answer = await dialog.showMessageBox({
         type: 'warning', title: cloud ? '确认上传外部 PDF / Approve External PDF Upload' : '确认读取外部文件 / Approve External File Read',
         message: cloud ? '将此文件上传到云端解析服务？ / Upload this file to the cloud parsing service?' : '打开此文件？ / Open this file?',
@@ -440,11 +441,12 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
     validateFileOperation(library, library.papers.flatMap((paper) => paper.attachments));
     if (comparable(canonicalPath(pdfPath)) !== comparable(actual)) throw new Error('Cloud parsing file changed during approval.');
     approvedFiles.add(comparable(actual));
+    return actual;
   }
 
   function validateRestoreTarget(kind, target) {
     if (!active?.approvedFileAccess) return;
-    const root = kind === 'pdf' ? active.approvedFileAccess.storageRoot : path.join(active.dataDirectory, '.mineru-cache');
+    const root = kind === 'pdf' ? active.approvedFileAccess.storageRoot : path.join(canonicalPath(active.dataDirectory), '.mineru-cache');
     const relative = path.relative(comparable(root), comparable(canonicalPath(target)));
     if (path.isAbsolute(relative) || relative === '..' || relative.startsWith('..' + path.sep)) throw new Error('Restore target escapes approved root.');
   }

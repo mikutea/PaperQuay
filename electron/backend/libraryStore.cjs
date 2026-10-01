@@ -20,7 +20,7 @@ function createAppPaths(app, dataDirectory) {
     while (!fs.existsSync(ancestor) && path.dirname(ancestor) !== ancestor) {
       missing.unshift(path.basename(ancestor)); ancestor = path.dirname(ancestor);
     }
-    const canonical = path.join(fs.realpathSync(ancestor), ...missing);
+    const canonical = path.join(fs.realpathSync.native(ancestor), ...missing);
     return process.platform === 'win32' ? canonical.toLowerCase() : canonical;
   };
   const external = normalizedPath(dataDir) !== normalizedPath(profileLibrary);
@@ -30,6 +30,7 @@ function createAppPaths(app, dataDirectory) {
     // Model endpoints, credentials and automation belong to the trusted local
     // profile, never to a supplied/shared library selected by the user.
     configPath: path.join(app.getPath('userData'), 'PaperQuay', '.settings', 'paperquay.config.json'),
+    legacyConfigPath: path.join(profileLibrary, 'paperquay-data', 'paperquay.config.json'),
     privateLibrarySettingsPath: external ? path.join(profileLibrary, '.settings', 'libraries',
       hashBytes(Buffer.from(normalizedPath(dataDir))) + '.json') : null,
     mineruCacheDir: path.join(dataDir, '.mineru-cache'),
