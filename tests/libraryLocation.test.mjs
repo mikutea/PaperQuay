@@ -34,10 +34,10 @@ function fixture(t) {
     store.close();
     return directory;
   }
-  const decisions = { directory: '', confirm: 0, restarts: 0 };
+  const decisions = { directory: '', confirm: 0, restarts: 0, messages: [], onConfirm: null };
   const dialog = {
     async showOpenDialog() { return { canceled: !decisions.directory, filePaths: decisions.directory ? [decisions.directory] : [] }; },
-    async showMessageBox() { return { response: decisions.confirm }; },
+    async showMessageBox(options) { decisions.messages.push(options); decisions.onConfirm?.(); return { response: decisions.confirm }; },
   };
   const create = (profile, argv = []) => createLibraryLocationManager({ app: fakeApp(profile), dialog, argv, restart: () => { decisions.restarts++; } });
   return { root, appData, normalProfile, customProfile, fakeApp, makeLibrary, decisions, create };
@@ -226,4 +226,47 @@ test('ordinary startup avoids full integrity scans while explicit selection stil
   } finally {
     DatabaseSync.prototype.prepare = prepare;
   }
+});
+
+test('external-library import destinations and destructive modes require explicit approval', async (t) => {
+  const f = fixture(t);
+  const original = f.makeLibrary(path.join(f.normalProfile, 'PaperQuay'));
+  const supplied = f.makeLibrary(path.join(f.root, 'supplied-library'));
+  const destination = path.join(f.root, 'shared-destination');
+  const db = new DatabaseSync(path.join(supplied, 'paperquay-library.sqlite'));
+  db.prepare('UPDATE library_settings SET value_json = ? WHERE key = ?').run(JSON.stringify(destination), 'storageDir');
+  db.prepare('UPDATE library_settings SET value_json = ? WHERE key = ?').run(JSON.stringify('move'), 'importMode');
+  db.close();
+  const manager = f.create(); manager.resolve(); manager.rememberActive();
+  f.decisions.directory = supplied;
+  const candidate = await manager.selectExisting();
+  assert.equal(candidate.importMode, 'move');
+  assert.equal(candidate.storageDirectory, destination);
+  assert.deepEqual(await manager.activateSelected({ token: candidate.token }), { canceled: true });
+  assert.ok(f.decisions.messages.at(-1).detail.includes(destination));
+  assert.match(f.decisions.messages.at(-1).detail, /REMOVE the original file/);
+  assert.equal(f.create().resolve().dataDirectory, original);
+  assert.equal(f.decisions.restarts, 0);
+  f.decisions.confirm = 1;
+  f.decisions.onConfirm = () => {
+    const changed = new DatabaseSync(path.join(supplied, 'paperquay-library.sqlite'));
+    changed.prepare('UPDATE library_settings SET value_json = ? WHERE key = ?').run(JSON.stringify(destination + '-changed'), 'storageDir');
+    changed.close();
+  };
+  await assert.rejects(manager.activateSelected({ token: candidate.token }), /settings changed/);
+  assert.equal(f.create().resolve().dataDirectory, original);
+  assert.equal(f.decisions.restarts, 0);
+});
+
+test('recovery can decline imported write settings without changing the location record', async (t) => {
+  const f = fixture(t);
+  f.makeLibrary(path.join(f.normalProfile, 'PaperQuay'));
+  const manager = f.create(); manager.resolve(); manager.rememberActive();
+  const before = readFileSync(path.join(f.appData, REGISTRY_NAME), 'utf8');
+  f.decisions.directory = f.makeLibrary(path.join(f.root, 'supplied-library'));
+  f.decisions.confirm = 1;
+  f.decisions.onConfirm = () => { if (f.decisions.messages.length === 2) f.decisions.confirm = 0; };
+  assert.equal(await manager.recover(new Error('unavailable')), false);
+  assert.match(f.decisions.messages.at(-1).detail, /FUTURE PDF imports/);
+  assert.equal(readFileSync(path.join(f.appData, REGISTRY_NAME), 'utf8'), before);
 });

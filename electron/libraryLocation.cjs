@@ -35,9 +35,18 @@ function inspectLibraryDirectory(directory, { allowProfileDirectory = false, ver
     if (!['id', 'title', 'imported_at'].every((column) => papers.includes(column)) || !attachments.includes('stored_path')) {
       throw new Error('此数据库不是支持的 PaperQuay 文库。 / Not a supported PaperQuay library.');
     }
+    const settings = Object.fromEntries(db.prepare("SELECT key, value_json FROM library_settings WHERE key IN ('storageDir', 'importMode')")
+      .all().map((row) => [row.key, JSON.parse(row.value_json)]));
+    const storageDirectory = settings.storageDir || path.join(dataDirectory, 'paperquay-data');
+    const importMode = settings.importMode || 'copy';
+    if (typeof storageDirectory !== 'string' || !path.isAbsolute(storageDirectory) || !['copy', 'move', 'keep'].includes(importMode)) {
+      throw new Error('文库包含无效的 PDF 导入设置。 / Invalid PDF import settings in this library.');
+    }
     return {
       dataDirectory,
       databasePath,
+      storageDirectory,
+      importMode,
       paperCount: Number(db.prepare('SELECT count(*) AS count FROM papers').get().count),
       attachmentCount: Number(db.prepare('SELECT count(*) AS count FROM attachments').get().count),
     };
@@ -167,22 +176,36 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
       pending = null;
       return { unchanged: true, ...current };
     }
-    const answer = await dialog.showMessageBox({
-      type: 'question',
-      title: '切换文库并重启 / Switch Library and Restart',
-      message: `打开已有文库（${details.paperCount} 篇）？ / Open existing library (${details.paperCount} papers)?`,
-      detail: `${details.dataDirectory}\n\n请先保存编辑内容并关闭使用此文库的其他 PaperQuay 实例。当前文库会保留，不复制、不合并、不覆盖。重启后使用所选目录，并记住此位置用于后续更新。\nSave edits and close other instances using this library. Neither library is copied, merged or overwritten.`,
-      buttons: ['取消 / Cancel', '切换并重启 / Switch and Restart'], defaultId: 0, cancelId: 0,
-      noLink: true,
-    });
-    if (answer.response !== 1) return { canceled: true };
-    // Recheck immediately before saving a pointer; never turn a vanished path
-    // into a newly created empty library on restart.
-    inspectLibraryDirectory(details.dataDirectory);
+    if (!await confirmImportSettings(details)) return { canceled: true };
+    validateUnchangedSettings(details);
     persistLocation(current.profileDirectory, details.dataDirectory, true);
     pending = null;
     restart();
     return { restarting: true };
+  }
+
+  async function confirmImportSettings(details) {
+    const modeDescription = {
+      copy: '复制：保留原文件 / Copy: keep the original file',
+      move: '移动：将删除原位置的文件 / Move: REMOVE the original file from its location',
+      keep: '保留原路径：不复制或移动 / Keep original path: no copy or move',
+    }[details.importMode];
+    const answer = await dialog.showMessageBox({
+      type: 'question',
+      title: '切换文库并重启 / Switch Library and Restart',
+      message: `打开已有文库（${details.paperCount} 篇）？ / Open existing library (${details.paperCount} papers)?`,
+      detail: `${details.dataDirectory}\n\n此文库自带的后续 PDF 导入设置 / This library's settings for FUTURE PDF imports:\n存储目录 / Destination: ${details.storageDirectory}\n导入方式 / Mode: ${modeDescription}\n\n仅在信任该目录和导入方式时继续；复制或移动到共享目录可能向他人暴露文件。 / Continue only if you trust this destination and mode. Copying or moving files into shared locations may expose them to others.\n\n请先保存编辑内容并关闭使用此文库的其他实例。本次切换不会复制、合并或覆盖任一文库。 / Save edits and close other instances. This switch does not copy, merge or overwrite either library.`,
+      buttons: ['取消 / Cancel', '信任这些导入设置并重启 / Trust Import Settings and Restart'], defaultId: 0, cancelId: 0,
+      noLink: true,
+    });
+    return answer.response === 1;
+  }
+
+  function validateUnchangedSettings(approved) {
+    const current = inspectLibraryDirectory(approved.dataDirectory);
+    if (current.storageDirectory !== approved.storageDirectory || current.importMode !== approved.importMode) {
+      throw new Error('文库的导入设置已更改，请重新选择并确认。 / Library import settings changed. Select and approve them again.');
+    }
   }
 
   async function recover(error) {
@@ -195,6 +218,8 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
     if (answer.response !== 1) return false;
     const selected = await selectExisting();
     if (!selected) return false;
+    if (!await confirmImportSettings(selected)) return false;
+    validateUnchangedSettings(selected);
     // Keep the remembered profile when only its library is unavailable. Fall
     // back to the launch profile only when the remembered profile was missing.
     fs.mkdirSync(recoveryProfile, { recursive: true });
