@@ -251,6 +251,37 @@ test('WebDAV backup uploads and restores library, notes, and RAG SQLite database
   }
 });
 
+test('rejected SQLite and legacy JSON merges report zero committed row counts', async () => {
+  const source = createContext('paperquay-webdav-rejected-source-');
+  try {
+    seedLibrary(source);
+    for (const legacy of [false, true]) {
+      const target = createContext('paperquay-webdav-rejected-target-');
+      const webdav = new MemoryWebdav();
+      try {
+        await runBackup(source, webdav);
+        const manifest = JSON.parse((await webdav.getText(LATEST_MANIFEST_REMOTE_PATH))!);
+        if (legacy) {
+          const remotePath = 'latest/database/paperquay-library.json';
+          webdav.objects.set(remotePath, Buffer.from(JSON.stringify(source.store.load())));
+          manifest.objects = [{ kind: 'database', remotePath, status: 'uploaded' }];
+        } else {
+          manifest.objects = manifest.objects.filter((object: { remotePath: string }) => object.remotePath === LIBRARY_DATABASE_REMOTE_PATH);
+        }
+        webdav.objects.set(LATEST_MANIFEST_REMOTE_PATH, Buffer.from(JSON.stringify(manifest)));
+        const result = await runRestore({ ...target, validateLibraryFileOperation(library: { papers: unknown[] }) {
+          if (library.papers.length) throw new Error('Unapproved restored attachment');
+        } }, webdav);
+        assert.equal(result.ok, false);
+        assert.equal(result.mergedRowCount, 0);
+        assert.equal(result.updatedRowCount, 0);
+        assert.deepEqual(result.tables, []);
+        assert.equal(target.store.load().papers.length, 0);
+      } finally { target.close(); }
+    }
+  } finally { source.close(); }
+});
+
 test('WebDAV backup propagates latest manifest errors and does not leave snapshot directories', async () => {
   const context = createContext('paperquay-webdav-manifest-error-');
   const webdav = {

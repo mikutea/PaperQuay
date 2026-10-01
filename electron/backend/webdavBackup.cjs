@@ -507,9 +507,10 @@ async function restoreLibraryDatabaseObject(context, webdav, manifest, objects, 
       const incoming = store.loadFromSnapshot(temp.filePath);
       const current = store.load();
 
-      tables.push(...mergeLibrary(current, incoming));
+      const mergedTables = mergeLibrary(current, incoming);
       context.validateLibraryFileOperation?.(current, current.papers.flatMap((paper) => paper.attachments ?? []));
       await store.save(current);
+      tables.push(...mergedTables);
       objects.push({
         kind: 'database',
         remotePath: LIBRARY_DATABASE_REMOTE_PATH,
@@ -543,9 +544,10 @@ async function restoreLibraryDatabaseObject(context, webdav, manifest, objects, 
 
       const incoming = JSON.parse(bytes.toString('utf8'));
       const current = store.load();
-      tables.push(...mergeLibrary(current, incoming));
+      const mergedTables = mergeLibrary(current, incoming);
       context.validateLibraryFileOperation?.(current, current.papers.flatMap((paper) => paper.attachments ?? []));
       await store.save(current);
+      tables.push(...mergedTables);
       objects.push({
         kind: 'database',
         remotePath: LEGACY_LIBRARY_JSON_REMOTE_PATH,

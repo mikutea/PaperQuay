@@ -114,9 +114,23 @@ function createLibraryStore(appPaths) {
   if (!privatePath) return store;
 
   const defaults = createDefaultLibrary(appPaths);
+  const privateDefaults = () => ({ webdav: { ...defaults.webdav }, openAlexApiKey: '', openAlexMailto: '' });
   function readPrivate() {
-    if (!fs.existsSync(privatePath)) return { webdav: defaults.webdav, openAlexApiKey: '', openAlexMailto: '' };
-    return JSON.parse(fs.readFileSync(privatePath, 'utf8'));
+    if (!fs.existsSync(privatePath)) return privateDefaults();
+    const text = fs.readFileSync(privatePath, 'utf8');
+    let value;
+    try { value = JSON.parse(text); } catch (error) { if (!(error instanceof SyntaxError)) throw error; }
+    const valid = value && typeof value === 'object' && !Array.isArray(value) &&
+      value.webdav && typeof value.webdav === 'object' && !Array.isArray(value.webdav) &&
+      ['endpointUrl', 'remoteRoot', 'username', 'password'].every((key) => value.webdav[key] == null || typeof value.webdav[key] === 'string') &&
+      ['openAlexApiKey', 'openAlexMailto'].every((key) => value[key] == null || typeof value[key] === 'string');
+    if (valid) return value;
+    // Preserve the original bytes for recovery. Never restore a remote endpoint
+    // or credential from the supplied library when local settings are damaged.
+    fs.renameSync(privatePath, privatePath + '.' + randomUUID() + '.corrupt');
+    const replacement = privateDefaults();
+    writePrivate(replacement);
+    return replacement;
   }
   function writePrivate(value) {
     const text = JSON.stringify(value);

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, symlinkSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -48,6 +48,18 @@ function fixture(t) {
   const create = (profile, argv = []) => createLibraryLocationManager({ app: fakeApp(profile), dialog, argv, restart: () => { decisions.restarts++; } });
   return { root, appData, normalProfile, customProfile, fakeApp, makeLibrary, decisions, create };
 }
+
+test('an unregistered fresh profile is created before Electron setPath', (t) => {
+  const f = fixture(t);
+  assert.equal(existsSync(f.normalProfile), false);
+  const app = f.fakeApp();
+  const setPath = app.setPath;
+  app.setPath = (name, value) => { assert.equal(existsSync(value), true); setPath(name, value); };
+  const manager = createLibraryLocationManager({ app, dialog: {}, argv: [], restart() {} });
+  assert.equal(manager.resolve().registered, false);
+  assert.equal(existsSync(f.normalProfile), true);
+  assert.equal(existsSync(path.join(f.normalProfile, 'PaperQuay', 'paperquay-library.sqlite')), false);
+});
 
 test('ordinary upgrades reuse the same library without changing any records', (t) => {
   const f = fixture(t);

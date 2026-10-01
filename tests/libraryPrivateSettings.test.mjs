@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -86,4 +86,24 @@ test('a default profile library reached through a directory link retains existin
       assert.equal(store.load().webdav.password, 'default-profile-fixture-token');
     } finally { store.close(); }
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('damaged private settings are preserved and replaced with safe disconnected defaults', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'paperquay-damaged-private-'));
+  const appPaths = createAppPaths({ getPath: () => path.join(root, 'profile') }, path.join(root, 'library'));
+  const store = createLibraryStore(appPaths);
+  try {
+    store.saveSync(store.load());
+    for (const broken of ['{"webdav":', 'null']) {
+      writeFileSync(appPaths.privateLibrarySettingsPath, broken);
+      assert.equal(store.load().webdav.endpointUrl, '');
+      assert.equal(store.load().webdav.password, '');
+      assert.equal(store.load().settings.openAlexApiKey, '');
+      const directory = path.dirname(appPaths.privateLibrarySettingsPath);
+      const preserved = readdirSync(directory).filter((name) => name.endsWith('.corrupt'));
+      assert.ok(preserved.some((name) => readFileSync(path.join(directory, name), 'utf8') === broken));
+      assert.equal(JSON.parse(readFileSync(appPaths.privateLibrarySettingsPath, 'utf8')).webdav.endpointUrl, '');
+    }
+    store.saveSync(store.load());
+  } finally { store.close(); rmSync(root, { recursive: true, force: true }); }
 });

@@ -83,6 +83,7 @@ import {
   extractPaperRefs,
   extractWikiTitles,
   noteContentToTiptap,
+  isLocalNoteImageSource,
   titleFromNoteContent,
 } from './notesTiptap';
 import { NoteBlockControls } from './NoteBlockControls';
@@ -126,6 +127,15 @@ import {
 import 'katex/dist/katex.min.css';
 
 const lowlight = createLowlight(all);
+
+const LocalNoteImage = Image.extend({
+  renderHTML({ HTMLAttributes }) {
+    if (!isLocalNoteImageSource(HTMLAttributes.src)) {
+      return ['span', { 'data-blocked-note-image': 'true', role: 'img', 'aria-label': 'Remote image blocked', class: 'text-sm text-[var(--pq-text-muted)]' }, '远程图片已阻止 / Remote image blocked'];
+    }
+    return ['img', mergeAttributes(this.options.HTMLAttributes, HTMLAttributes)];
+  },
+});
 
 const EditableTable = Table.extend({
   selectable: false,
@@ -715,7 +725,7 @@ export function NoteEditor({
     }),
     Highlight.configure({ multicolor: true }),
     Link.configure({ openOnClick: false, autolink: true, linkOnPaste: true }),
-    Image.configure({ allowBase64: true }),
+    LocalNoteImage.configure({ allowBase64: true }),
     EditableTable.configure({ resizable: true, allowTableNodeSelection: false }),
     TableRow,
     TableCell,

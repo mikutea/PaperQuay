@@ -199,6 +199,7 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
     } else {
       if (!explicitProfile && registry.defaultProfileDirectory) throw new Error('默认文库记录不完整。 / The default library record is incomplete.');
       recoveryProfile = profileDirectory;
+      fs.mkdirSync(profileDirectory, { recursive: true });
       app.setPath('userData', profileDirectory);
       active = { profileDirectory, dataDirectory: path.join(profileDirectory, 'PaperQuay'), registered: false };
     }
