@@ -41,6 +41,33 @@ async function writeBoundFile(target, bytes, options) {
   await fsp.writeFile(target, bytes, options);
 }
 
+async function openAuthorizedReadFile(filePath, authorize) {
+  const actual = canonicalPath(filePath);
+  const expected = fs.lstatSync(actual, { bigint: true });
+  if (!expected.isFile()) throw Object.assign(new Error('Read path is not a file.'), { code: 'EISDIR' });
+  await authorize?.(actual);
+  const handle = await fsp.open(actual, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+  try {
+    const opened = await handle.stat({ bigint: true });
+    assertBoundPath(actual);
+    const current = fs.lstatSync(actual, { bigint: true });
+    if (!opened.isFile() || !current.isFile() || opened.dev !== expected.dev || opened.ino !== expected.ino ||
+        opened.dev !== current.dev || opened.ino !== current.ino) {
+      throw new Error('Approved read file changed before use.');
+    }
+    return { handle, actual, stat: await handle.stat() };
+  } catch (error) {
+    await handle.close();
+    throw error;
+  }
+}
+
+async function readAuthorizedFile(filePath, authorize, options) {
+  const { handle } = await openAuthorizedReadFile(filePath, authorize);
+  try { return await handle.readFile(options); }
+  finally { await handle.close(); }
+}
+
 function createWriteAuthorizer(context) {
   const { appPaths } = context;
   const dataRoot = canonicalPath(appPaths.dataDir);
@@ -64,4 +91,4 @@ function createWriteAuthorizer(context) {
   };
 }
 
-module.exports = { canonicalPath, isWithin, assertBoundPath, writeBoundFile, createWriteAuthorizer };
+module.exports = { canonicalPath, isWithin, assertBoundPath, writeBoundFile, createWriteAuthorizer, openAuthorizedReadFile, readAuthorizedFile };

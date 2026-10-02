@@ -1,6 +1,6 @@
 const fsp = require('node:fs/promises');
 const path = require('node:path');
-const { createWriteAuthorizer } = require('./pathAccess.cjs');
+const { createWriteAuthorizer, readAuthorizedFile } = require('./pathAccess.cjs');
 const {
   MINERU_API_BASE,
   cleanString,
@@ -49,8 +49,9 @@ function createMineruCommands(context) {
       const uploadUrl = uploadEnvelope.data?.file_urls?.[0];
       if (!batchId || !uploadUrl) throw new Error('MinerU did not return an upload URL');
 
-      const uploadPath = await context.authorizeCloudParsePath?.(context.store.load(), pdfPath) || await fsp.realpath(pdfPath);
-      const putResponse = await fetch(uploadUrl, { method: 'PUT', body: await fsp.readFile(uploadPath) });
+      const uploadBytes = await readAuthorizedFile(pdfPath,
+        (actual) => context.authorizeCloudParsePath?.(context.store.load(), actual));
+      const putResponse = await fetch(uploadUrl, { method: 'PUT', body: uploadBytes });
       if (!putResponse.ok) throw new Error(`MinerU PDF upload failed: HTTP ${putResponse.status}`);
 
       const timeoutAt = Date.now() + (options.timeoutSecs ?? 900) * 1000;

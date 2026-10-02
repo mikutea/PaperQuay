@@ -40,7 +40,7 @@ function createAppPaths(app, dataDirectory) {
     libraryDatabasePath: path.join(dataDir, 'paperquay-library.sqlite'),
     notesDatabasePath: path.join(dataDir, 'paperquay-notes.sqlite'),
     ragDatabasePath: path.join(dataDir, 'paperquay-rag.sqlite'),
-    screenshotDir: path.join(dataDir, '.screenshots'),
+    screenshotDir: path.join(profileLibrary, '.screenshots'),
   };
 }
 

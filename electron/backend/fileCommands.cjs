@@ -1,11 +1,11 @@
 const fsp = require('node:fs/promises');
 const path = require('node:path');
+const { randomUUID } = require('node:crypto');
 const { spawn } = require('node:child_process');
 const { BrowserWindow, clipboard, dialog, shell } = require('electron');
-const { canonicalPath, isWithin, assertBoundPath, writeBoundFile, createWriteAuthorizer } = require('./pathAccess.cjs');
+const { canonicalPath, isWithin, assertBoundPath, writeBoundFile, createWriteAuthorizer, readAuthorizedFile } = require('./pathAccess.cjs');
 const {
   cleanString,
-  ensureFile,
   pathExists,
   readJson,
   safeFileName,
@@ -113,6 +113,8 @@ async function hasLooseMineruOutputFiles(directory) {
 
 function createFileCommands(context) {
   const { appPaths, approvedWritePaths } = context;
+  const capturedScreenshots = new Set();
+  const screenshotRoot = path.join(canonicalPath(path.dirname(path.dirname(appPaths.configPath))), '.screenshots');
   const authorizeWrite = context.authorizeLocalWrite ||= createWriteAuthorizer(context);
   const configuredMineruCacheDir = cleanString(
     readJson(appPaths.configPath, null)?.settings?.mineruCacheDir,
@@ -141,12 +143,6 @@ function createFileCommands(context) {
       await fsp.rm(temporaryPath, { force: true }).catch(() => undefined);
       throw error;
     }
-  }
-
-  async function authorizedReadPath(filePath) {
-    const actual = await fsp.realpath(filePath);
-    await context.authorizeLocalRead?.(actual);
-    return actual;
   }
 
   async function selectFiles(properties, filters, event) {
@@ -197,11 +193,12 @@ function createFileCommands(context) {
     },
 
     async capture_system_screenshot() {
-      const outputPath = authorizeWrite(path.join(appPaths.screenshotDir, `system-screenshot-${now()}.png`));
-
       if (process.platform !== 'win32') {
         return null;
       }
+      // Never grant the shared library write/read authority over captures.
+      assertBoundPath(screenshotRoot);
+      const outputPath = path.join(screenshotRoot, `system-screenshot-${randomUUID()}.png`);
 
       const previousImage = clipboard.readImage().toPNG();
       spawn('cmd', ['/C', 'start', '', 'ms-screenclip:'], { windowsHide: true, detached: true });
@@ -214,13 +211,13 @@ function createFileCommands(context) {
         if (!image.isEmpty()) {
           const bytes = image.toPNG();
           if (!Buffer.from(bytes).equals(Buffer.from(previousImage))) {
-            await writeBoundFile(outputPath, bytes);
-            const stat = await fsp.stat(outputPath);
+            await writeBoundFile(outputPath, bytes, { flag: 'wx', mode: 0o600 });
+            capturedScreenshots.add(outputPath);
             return {
               path: outputPath,
               name: path.basename(outputPath),
               mimeType: 'image/png',
-              size: stat.size,
+              size: bytes.length,
             };
           }
         }
@@ -374,19 +371,14 @@ function createFileCommands(context) {
     },
 
     async read_text_file({ path: filePath }) {
-      const actual = await authorizedReadPath(filePath);
-      await ensureFile(actual);
-      return fsp.readFile(actual, 'utf8');
+      return readAuthorizedFile(filePath, context.authorizeLocalRead, 'utf8');
     },
 
     async read_text_file_if_exists({ path: filePath }) {
       try {
-        const actual = await authorizedReadPath(filePath);
-        const stat = await fsp.stat(actual);
-        if (!stat.isFile()) return null;
-        return fsp.readFile(actual, 'utf8');
+        return await readAuthorizedFile(filePath, context.authorizeLocalRead, 'utf8');
       } catch (error) {
-        if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return null;
+        if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR' || error?.code === 'EISDIR') return null;
         throw error;
       }
     },
@@ -396,9 +388,17 @@ function createFileCommands(context) {
     },
 
     async read_binary_file_base64({ path: filePath }) {
-      const actual = await authorizedReadPath(filePath);
-      await ensureFile(actual);
-      return (await fsp.readFile(actual)).toString('base64');
+      if (capturedScreenshots.delete(filePath)) {
+        try {
+          assertBoundPath(filePath);
+          return (await readAuthorizedFile(filePath)).toString('base64');
+        }
+        finally {
+          assertBoundPath(filePath);
+          await fsp.rm(filePath, { force: true });
+        }
+      }
+      return (await readAuthorizedFile(filePath, context.authorizeLocalRead)).toString('base64');
     },
 
     async write_binary_file_base64({ path: filePath, contentBase64 }) {

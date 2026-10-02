@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { pipeline } = require('node:stream/promises');
 const { randomUUID } = require('node:crypto');
-const { canonicalPath, writeBoundFile } = require('./pathAccess.cjs');
+const { canonicalPath, writeBoundFile, openAuthorizedReadFile } = require('./pathAccess.cjs');
 const {
   cleanString,
   hashBytes,
@@ -33,8 +33,8 @@ function backupSnapshotDirectory(appPaths, backupId) {
   return path.join(appPaths.backupSnapshotDir || path.join(appPaths.dataDir, '.backup-snapshots'), backupId);
 }
 
-async function snapshotFile(sourcePath, snapshotPath) {
-  const source = await fsp.open(sourcePath, 'r');
+async function snapshotFile(sourcePath, snapshotPath, authorize) {
+  const { handle: source } = await openAuthorizedReadFile(sourcePath, authorize);
   try {
     await fsp.mkdir(path.dirname(snapshotPath), { recursive: true });
     await pipeline(source.createReadStream({ autoClose: false }), fs.createWriteStream(snapshotPath, { flags: 'wx', mode: 0o600 }));
@@ -244,7 +244,9 @@ async function collectBackupSources(context, backupId) {
           kind: 'pdf',
           // Hashing and uploading both use a private snapshot, never a mutable
           // supplier pathname. snapshotFile binds its read to one descriptor.
-          localPath: await snapshotFile(validated?.attachmentPaths?.[0] || actualPath, path.join(snapshotDir, 'pdfs', hashBytes(Buffer.from(remotePath)))),
+          localPath: await snapshotFile(validated?.attachmentPaths?.[0] || actualPath,
+            path.join(snapshotDir, 'pdfs', hashBytes(Buffer.from(remotePath))),
+            (target) => context.validateLibraryFileOperation?.(library, [{ storedPath: target }])),
           remotePath,
           source: `paper:${paper.id}:attachment:${attachment.id}:${attachment.storedPath}`,
         });
@@ -265,8 +267,8 @@ async function collectBackupSources(context, backupId) {
 
         sources.push({
           kind,
-          localPath: await snapshotFile(await context.authorizeLocalRead?.(filePath) || await fsp.realpath(filePath),
-            path.join(snapshotDir, 'derived', hashBytes(Buffer.from(filePath)))),
+          localPath: await snapshotFile(filePath,
+            path.join(snapshotDir, 'derived', hashBytes(Buffer.from(filePath))), context.authorizeLocalRead),
           remotePath: remoteJoin(DERIVED_REMOTE_ROOT, rootLabel, relative),
           source: filePath,
         });
