@@ -25,17 +25,20 @@ export function ToggleRow({
   return (
     <button
       type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={title}
       onClick={() => onChange(!checked)}
-      className="flex w-full items-center justify-between gap-4 rounded-2xl border border-slate-200/80 bg-white/90 px-4 py-3 text-left shadow-[0_10px_24px_rgba(15,23,42,0.04)] transition-all duration-200 hover:border-slate-300 hover:bg-white"
+      className="flex w-full items-center justify-between gap-4 rounded-2xl border border-[var(--pq-border)] bg-[var(--pq-surface-1)] px-4 py-3 text-left transition-colors hover:bg-[var(--pq-hover)]"
     >
       <span className="min-w-0">
-        <span className="block text-sm font-medium text-slate-900">{title}</span>
-        <span className="mt-1 block text-xs leading-5 text-slate-500">{description}</span>
+        <span className="block text-sm font-medium text-[var(--pq-text)]">{title}</span>
+        <span className="mt-1 block text-xs leading-5 text-[var(--pq-text-muted)]">{description}</span>
       </span>
       <span
         className={clsx(
           'relative h-6 w-11 shrink-0 rounded-full transition',
-          checked ? 'bg-indigo-500' : 'bg-slate-300',
+          checked ? 'bg-[var(--pq-accent)]' : 'bg-[var(--pq-border-strong)]',
         )}
       >
         <span

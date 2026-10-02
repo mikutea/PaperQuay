@@ -784,6 +784,7 @@ export function normalizeReaderSettings(value?: Partial<ReaderSettings> | null):
     showLibraryReadingHeatmap: merged.showLibraryReadingHeatmap !== false,
     enablePdfReadingHeatmap: merged.enablePdfReadingHeatmap !== false,
     enableSelectionTranslation: merged.enableSelectionTranslation !== false,
+    autoTranslateSelection: merged.autoTranslateSelection === true,
     highlightSelectionTranslation: merged.highlightSelectionTranslation !== false,
     enablePdfParagraphTranslationPopover: merged.enablePdfParagraphTranslationPopover !== false,
     mineruApiBaseUrl: merged.mineruApiBaseUrl?.trim() ?? '',

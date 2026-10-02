@@ -10,10 +10,15 @@ const GLOBAL_NOTES_PAPER_ID = 'global-notes';
 function openDatabase(databasePath) {
   fs.mkdirSync(path.dirname(databasePath), { recursive: true });
   const db = new DatabaseSync(databasePath, { timeout: 5000 });
-  db.exec('PRAGMA journal_mode = WAL;');
-  db.exec('PRAGMA foreign_keys = ON;');
-  createSchema(db);
-  return db;
+  try {
+    db.exec('PRAGMA journal_mode = WAL;');
+    db.exec('PRAGMA foreign_keys = ON;');
+    createSchema(db);
+    return db;
+  } catch (error) {
+    if (db.isOpen) db.close();
+    throw error;
+  }
 }
 
 function getTableColumns(db, tableName) {

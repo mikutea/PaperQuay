@@ -1,5 +1,6 @@
 const fsp = require('node:fs/promises');
 const path = require('node:path');
+const { assertBoundPath } = require('./pathAccess.cjs');
 const {
   attachCategoryCounts,
   normalizeAuthor,
@@ -42,20 +43,23 @@ function pathExists(filePath) {
   return fsp.access(filePath).then(() => true).catch(() => false);
 }
 
-async function copyFileIfNeeded(sourcePath, targetPath) {
+async function copyFileIfNeeded(sourcePath, targetPath, bound = false) {
+  if (bound) { assertBoundPath(sourcePath); assertBoundPath(targetPath); }
   await fsp.mkdir(path.dirname(targetPath), { recursive: true });
 
   if (await pathExists(targetPath)) {
     return false;
   }
 
+  if (bound) { assertBoundPath(sourcePath); assertBoundPath(targetPath); }
   await fsp.copyFile(sourcePath, targetPath);
   return true;
 }
 
-async function migrateLibraryStorageDirectory(library, previousStorageDir, nextStorageDir) {
+async function migrateLibraryStorageDirectory(library, previousStorageDir, nextStorageDir, approval = null) {
   const previousDir = cleanString(previousStorageDir);
-  const targetDir = cleanString(nextStorageDir);
+  const selectedDir = cleanString(nextStorageDir);
+  const targetDir = selectedDir && (approval?.validateDestination(selectedDir) || selectedDir);
 
   if (!previousDir || !targetDir || isSamePath(previousDir, targetDir)) {
     return { copiedFiles: 0, updatedAttachments: 0 };
@@ -69,7 +73,7 @@ async function migrateLibraryStorageDirectory(library, previousStorageDir, nextS
     !isSubPath(previousDir, targetDir) &&
     !isSubPath(targetDir, previousDir);
 
-  if (canCopyWholeDirectory && await pathExists(previousDir)) {
+  if (!approval && canCopyWholeDirectory && await pathExists(previousDir)) {
     await fsp.cp(previousDir, targetDir, {
       recursive: true,
       force: false,
@@ -91,11 +95,14 @@ async function migrateLibraryStorageDirectory(library, previousStorageDir, nextS
         continue;
       }
 
-      const nextPath = path.join(targetDir, relativePath);
+      let nextPath = path.join(targetDir, relativePath);
+      if (!isSubPath(targetDir, nextPath)) throw new Error('Attachment relative path escapes storage directory.');
+      nextPath = approval?.validateDestination(nextPath) || nextPath;
 
       if (!isSamePath(storedPath, nextPath)) {
-        if (await pathExists(storedPath)) {
-          copiedFiles += await copyFileIfNeeded(storedPath, nextPath) ? 1 : 0;
+        const sourcePath = approval?.sourcePaths?.get(storedPath) || storedPath;
+        if (await pathExists(sourcePath)) {
+          copiedFiles += await copyFileIfNeeded(sourcePath, nextPath, Boolean(approval)) ? 1 : 0;
         }
 
         attachment.storedPath = nextPath;
@@ -485,21 +492,26 @@ function createLibraryCommands(context) {
 
     async library_update_settings({ settings }) {
       const library = store.load();
+      context.validateLibraryFileOperation?.(library, library.papers.flatMap((paper) => paper.attachments));
+      const previous = structuredClone(library);
       const previousStorageDir = library.settings.storageDir;
       library.settings = {
         ...library.settings,
         ...settings,
         importMode: settings.importMode || library.settings.importMode,
       };
+      const approval = await context.approveLibrarySettingsChange?.(previous, library);
       if (library.settings.storageDir) {
         await migrateLibraryStorageDirectory(
           library,
           previousStorageDir,
           library.settings.storageDir,
+          approval,
         );
-        await fsp.mkdir(library.settings.storageDir, { recursive: true });
+        await fsp.mkdir(approval?.storageRoot || library.settings.storageDir, { recursive: true });
       }
-      await store.save(library);
+      if (approval) approval.commit(() => store.saveSync(library));
+      else await store.save(library);
       return library.settings;
     },
 
@@ -601,8 +613,10 @@ function createLibraryCommands(context) {
 
     async library_import_pdfs({ request }) {
       const library = store.load();
+      const approved = context.validateLibraryFileOperation?.(library, library.papers.flatMap((paper) => paper.attachments));
+      const previous = structuredClone(library);
       const results = [];
-      const storageDir = library.settings.storageDir || path.join(appPaths.dataDir, 'paperquay-data');
+      const storageDir = approved?.storageRoot || library.settings.storageDir || path.join(appPaths.dataDir, 'paperquay-data');
       await fsp.mkdir(storageDir, { recursive: true });
 
       for (const sourcePath of request.paths ?? []) {
@@ -680,7 +694,10 @@ function createLibraryCommands(context) {
         }
       }
 
-      await store.save(library);
+      const approval = await context.approveImportedAttachments?.(previous,
+        results.filter((result) => result.status === 'imported').flatMap((result) => result.paper.attachments));
+      if (approval) approval.commit(() => store.saveSync(library));
+      else await store.save(library);
       for (const result of results) {
         const paper = result.status === 'imported' ? result.paper : null;
         if (!paper?.id || !paper.doi) {
@@ -750,11 +767,15 @@ function createLibraryCommands(context) {
     async library_delete_paper({ request }) {
       const library = store.load();
       const paper = library.papers.find((item) => item.id === request.paperId);
+      const approved = request.deleteFiles && paper
+        ? context.validateLibraryFileOperation?.(library, paper.attachments) : null;
       library.papers = library.papers.filter((item) => item.id !== request.paperId);
 
       if (request.deleteFiles && paper) {
-        for (const attachment of paper.attachments) {
-          await fsp.rm(attachment.storedPath, { force: true }).catch(() => {});
+        for (const [index, attachment] of paper.attachments.entries()) {
+          const target = approved?.attachmentPaths[index] || attachment.storedPath;
+          if (approved) assertBoundPath(target);
+          await fsp.rm(target, { force: true }).catch(() => {});
         }
       }
 
@@ -763,6 +784,8 @@ function createLibraryCommands(context) {
 
     async library_relocate_attachment({ request }) {
       const library = store.load();
+      context.validateLibraryFileOperation?.(library, library.papers.flatMap((paper) => paper.attachments));
+      const previous = structuredClone(library);
       const paper = library.papers.find((item) => item.attachments.some((attachment) => attachment.id === request.attachmentId));
       if (!paper) throw new Error('Attachment does not exist');
 
@@ -770,13 +793,18 @@ function createLibraryCommands(context) {
       await ensureFile(request.newPath);
       const stat = await fsp.stat(request.newPath);
       attachment.storedPath = request.newPath;
+      const storageDir = library.settings.storageDir || path.join(appPaths.dataDir, 'paperquay-data');
+      attachment.relativePath = isSubPath(storageDir, request.newPath)
+        ? path.relative(storageDir, request.newPath) : null;
       attachment.fileName = fileNameFromPath(request.newPath);
       attachment.fileSize = stat.size;
       attachment.contentHash = await hashFile(request.newPath);
       attachment.missing = false;
       paper.updatedAt = now();
 
-      await store.save(library);
+      const approval = await context.approveImportedAttachments?.(previous, [attachment]);
+      if (approval) approval.commit(() => store.saveSync(library));
+      else await store.save(library);
       return attachment;
     },
 

@@ -20,6 +20,7 @@ import NotesWorkspace from '../features/notes/NotesWorkspace';
 import ReviewWritingWorkspace from '../features/review/ReviewWritingWorkspace';
 import KnowledgeGraphWorkspace from '../features/graph/KnowledgeGraphWorkspace';
 import TabBar from '../components/tabs/TabBar';
+import StartupUpdateNotice from '../components/StartupUpdateNotice';
 import {
   emitOpenPreferences,
   emitOpenStandalonePdf,
@@ -146,7 +147,8 @@ function App() {
   const openReviewTab = useTabsStore((state) => state.openReviewTab);
   const openGraphTab = useTabsStore((state) => state.openGraphTab);
   const [uiLanguage, setUiLanguage] = useState<UiLanguage>(loadUiLanguage);
-  const { mode: themeMode, setMode: setThemeMode } = useThemeStore();
+  const resolvedTheme = useThemeStore((state) => state.resolved);
+  const toggleTheme = useThemeStore((state) => state.toggle);
   const isEnglish = uiLanguage === 'en-US';
   const activeTab = useMemo(
     () => tabs.find((tab) => tab.id === activeTabId) ?? tabs[0],
@@ -237,11 +239,6 @@ function App() {
     emitOpenPreferences();
   };
 
-  const handleCycleThemeMode = () => {
-    const nextMode = themeMode === 'light' ? 'dark' : themeMode === 'dark' ? 'system' : 'light';
-    setThemeMode(nextMode);
-  };
-
   const handleWindowMinimize = () => {
     void appWindow.minimize().catch(console.error);
   };
@@ -254,18 +251,9 @@ function App() {
     void appWindow.close().catch(console.error);
   };
 
-  const themeTitle =
-    themeMode === 'light'
-      ? isEnglish
-        ? 'Light mode'
-        : '\u6d45\u8272\u6a21\u5f0f'
-      : themeMode === 'dark'
-        ? isEnglish
-          ? 'Dark mode'
-          : '\u6df1\u8272\u6a21\u5f0f'
-        : isEnglish
-          ? 'System theme'
-          : '\u8ddf\u968f\u7cfb\u7edf';
+  const themeTitle = resolvedTheme === 'dark'
+    ? (isEnglish ? 'Switch to light mode' : '切换到浅色模式')
+    : (isEnglish ? 'Switch to dark mode' : '切换到深色模式');
   const openPdfLabel = isEnglish ? 'Open PDF' : '\u6253\u5f00 PDF';
   const settingsLabel = isEnglish ? 'Settings' : '\u8bbe\u7f6e';
   const minimizeWindowLabel = isEnglish ? 'Minimize window' : '\u6700\u5c0f\u5316\u7a97\u53e3';
@@ -332,12 +320,12 @@ function App() {
             </button>
             <button
               type="button"
-              onClick={handleCycleThemeMode}
+              onClick={toggleTheme}
               className="pq-icon-button h-8 w-8 cursor-default"
               title={themeTitle}
               aria-label={themeTitle}
             >
-              {themeMode === 'dark' ? (
+              {resolvedTheme === 'dark' ? (
                 <Moon className="h-4 w-4" strokeWidth={1.8} />
               ) : (
                 <Sun className="h-4 w-4" strokeWidth={1.8} />
@@ -471,6 +459,7 @@ function App() {
           </main>
         </div>
       </div>
+      <StartupUpdateNotice />
     </AppLocaleProvider>
   );
 }

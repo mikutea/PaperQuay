@@ -1,3 +1,4 @@
+import LibraryLocationPanel from '../../components/LibraryLocationPanel';
 import {
   useCallback,
   useEffect,
@@ -1996,7 +1997,9 @@ export default function LiteratureLibraryView({
         />
       </div>
 
-      <div data-tour="paper-list" className="h-full min-h-0 overflow-hidden">
+      <div data-tour="paper-list" className="flex h-full min-h-0 flex-col overflow-hidden">
+        {!demoMode && !loading && categories.find((category) => category.systemKey === 'all')?.paperCount === 0 ? <LibraryLocationPanel compact /> : null}
+        <div className="min-h-0 flex-1">
         <LiteraturePaperList
           loading={loading}
           working={working}
@@ -2024,6 +2027,7 @@ export default function LiteratureLibraryView({
         onPaperPointerDragOverCategory={setPaperDragOverCategoryId}
         onPaperContextMenu={handlePaperContextMenu}
       />
+        </div>
       </div>
 
       <div

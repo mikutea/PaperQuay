@@ -7,9 +7,10 @@ import {
   getAppUpdateStatus,
   installAppUpdate,
   openAppUpdateReleasePage,
+  setAppUpdatePreferences,
   type AppUpdateStatus,
 } from '../../services/appUpdate';
-import { SettingsField } from './readerPreferencesPrimitives';
+import { SettingsField, ToggleRow } from './readerPreferencesPrimitives';
 import type { ReaderPreferencesLocalizer } from './readerPreferencesTypes';
 
 function formatDate(value: string): string {
@@ -100,11 +101,13 @@ function updateHeadline(status: AppUpdateStatus | null, l: ReaderPreferencesLoca
 export function ReaderPreferencesUpdateSection({
   active,
   l,
+  initialStatus = null,
 }: {
   active: boolean;
   l: ReaderPreferencesLocalizer;
+  initialStatus?: AppUpdateStatus | null;
 }) {
-  const [status, setStatus] = useState<AppUpdateStatus | null>(null);
+  const [status, setStatus] = useState<AppUpdateStatus | null>(initialStatus);
   const [working, setWorking] = useState<'checking' | 'downloading' | 'installing' | ''>('');
   const [message, setMessage] = useState('');
 
@@ -123,6 +126,13 @@ export function ReaderPreferencesUpdateSection({
 
     void refreshStatus();
   }, [active, refreshStatus]);
+
+  const downloadInProgress = status?.downloading === true || working === 'downloading';
+  useEffect(() => {
+    if (!active || !downloadInProgress) return;
+    const pollId = window.setInterval(() => { void refreshStatus(); }, 900);
+    return () => window.clearInterval(pollId);
+  }, [active, downloadInProgress, refreshStatus]);
 
   const visibleAssets = useMemo(
     () => (status?.assets ?? []).filter((asset) =>
@@ -148,7 +158,7 @@ export function ReaderPreferencesUpdateSection({
       const nextStatus = await checkForAppUpdate();
       setStatus(nextStatus);
       setMessage(
-        nextStatus.hasUpdate
+        nextStatus.error ? nextStatus.error : nextStatus.hasUpdate
           ? l(`发现新版本 ${nextStatus.latestVersion}`, `Version ${nextStatus.latestVersion} is available`)
           : l('当前已经是最新版本。', 'PaperQuay is already up to date.'),
       );
@@ -164,24 +174,22 @@ export function ReaderPreferencesUpdateSection({
     setMessage(l('正在下载更新...', 'Downloading update...'));
     setStatus((current) => current ? { ...current, downloading: true } : current);
 
-    const pollId = window.setInterval(() => {
-      void getAppUpdateStatus().then(setStatus).catch(() => undefined);
-    }, 900);
-
     try {
       const nextStatus = await downloadAppUpdate();
       setStatus(nextStatus);
-      setMessage(l('更新已下载，重启后安装。', 'Update downloaded. Restart to install it.'));
+      setMessage(nextStatus.downloaded
+        ? l('更新已下载，点击“重启安装”后才会安装。', 'Update downloaded. It will install only when you choose Restart and Install.')
+        : nextStatus.error || l('更新尚未下载完成。', 'The update has not finished downloading.'));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
       await refreshStatus();
     } finally {
-      window.clearInterval(pollId);
       setWorking('');
     }
   };
 
   const handleInstall = async () => {
+    if (!window.confirm(l('请先保存正在编辑的内容。现在关闭 PaperQuay 并安装已下载的更新吗？文库位置会保留。', 'Save any current edits first. Close PaperQuay and install the downloaded update now? Your library location will be retained.'))) return;
     setWorking('installing');
     setMessage(l('正在重启并安装更新...', 'Restarting to install the update...'));
 
@@ -205,11 +213,19 @@ export function ReaderPreferencesUpdateSection({
     <SettingsField
       label={l('软件更新', 'Software Updates')}
       description={l(
-        'Windows NSIS 安装版和 Linux AppImage 可自动下载并安装；免安装版与 macOS 可检查并手动下载。',
-        'Windows NSIS installers and Linux AppImage can download and install automatically. Portable builds and macOS check updates for manual download.',
+        'Windows NSIS 安装版和 Linux AppImage 可在应用内下载，经你确认后重启安装；其他包类型提供检查和下载页。',
+        'Windows NSIS and Linux AppImage support in-app downloads and restart installation after your confirmation. Other package types offer update checks and a download page.',
       )}
     >
       <div className="space-y-4">
+        {status ? <ToggleRow
+          title={l('启动时检查更新', 'Check for Updates on Startup')}
+          description={l('每次启动仅检查一次。有新版才提示版本和更新说明；不会自动下载、安装或关闭软件。', 'Check once per launch. Show the version and release notes only when newer; never download, install, or close the app automatically.')}
+          checked={status.autoCheckOnStartup}
+          onChange={(enabled) => {
+            void setAppUpdatePreferences(enabled).then(setStatus).catch((error) => setMessage(String(error)));
+          }}
+        /> : null}
         <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 dark:border-white/10 dark:bg-[var(--pq-surface-2)]">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
@@ -254,6 +270,15 @@ export function ReaderPreferencesUpdateSection({
             </div>
           </div>
         </div>
+
+        {status?.latestVersion ? (
+          <section className="rounded-2xl border border-[var(--pq-border)] bg-[var(--pq-surface-2)] p-4" aria-label={l('更新说明', 'Release Notes')}>
+            <h3 className="mb-2 text-sm font-semibold text-[var(--pq-text)]">{l('更新说明', 'Release Notes')}</h3>
+            <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words font-sans text-sm leading-6 text-[var(--pq-text-muted)]">
+              {status.releaseNotes || l('此版本未提供更新说明。', 'No release notes were provided for this version.')}
+            </pre>
+          </section>
+        ) : null}
 
         {downloading ? (
           <div className="rounded-2xl border border-indigo-100 bg-indigo-50/70 px-4 py-3 dark:border-white/10 dark:bg-[var(--pq-surface-2)]">

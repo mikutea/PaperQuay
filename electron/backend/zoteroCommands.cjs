@@ -24,7 +24,7 @@ function createZoteroCommands(context) {
     },
 
     zotero_download_attachment_pdf({ options }) {
-      return downloadZoteroAttachmentPdf(options ?? {}, appPaths);
+      return downloadZoteroAttachmentPdf(options ?? {}, appPaths, context.authorizeLocalWrite);
     },
 
     zotero_detect_local_data_dir() {

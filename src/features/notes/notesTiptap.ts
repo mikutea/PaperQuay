@@ -1,6 +1,12 @@
 import type { JSONContent } from '@tiptap/core';
 import type { Note } from '../../types/notes';
 
+const LOCAL_NOTE_IMAGE = /^(?:data:image\/[a-z0-9.+-]+[;,]|blob:)/i;
+
+export function isLocalNoteImageSource(value: unknown): value is string {
+  return typeof value === 'string' && LOCAL_NOTE_IMAGE.test(value.trim());
+}
+
 export const EMPTY_TIPTAP_DOCUMENT: JSONContent = {
   type: 'doc',
   content: [{ type: 'paragraph' }],

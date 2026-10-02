@@ -34,6 +34,7 @@ function resolveAttachmentPdfPath(
   const relativePath = cleanPath(attachment.relativePath);
 
   if (storageDir && relativePath) {
+    if (/^[\\/]|^[a-z]:/i.test(relativePath) || relativePath.split(/[\\/]/).includes('..')) return '';
     return joinStorageRelativePath(storageDir, relativePath);
   }
 

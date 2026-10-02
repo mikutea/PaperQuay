@@ -1,6 +1,7 @@
 const path = require('node:path');
-const { app, BrowserWindow, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
 const { createBackend } = require('./backend.cjs');
+const { createLibraryLocationManager } = require('./libraryLocation.cjs');
 const {
   registerLocalPdfProtocol,
   registerLocalPdfProtocolScheme,
@@ -8,12 +9,27 @@ const {
 
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
 let backend = null;
+const libraryLocation = createLibraryLocationManager({
+  app, dialog,
+  restart: () => {
+    setImmediate(() => { app.relaunch(); app.quit(); });
+  },
+});
+let libraryLocationError = null;
+
+// Chromium's default session must see the restored profile before readiness.
+// Restoring only the backend location after ready is too late for session data.
+try {
+  libraryLocation.resolve();
+} catch (error) {
+  libraryLocationError = error;
+}
 
 registerLocalPdfProtocolScheme();
 
 function getBackend() {
   if (!backend) {
-    backend = createBackend({ app });
+    backend = createBackend({ app, libraryLocation });
   }
 
   return backend;
@@ -139,13 +155,30 @@ ipcMain.handle('paperquay:window-control', (event, action) => {
   }
 });
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   if (process.platform === 'win32') {
     app.setAppUserModelId('dev.paperquay.app');
   }
 
-  getBackend();
-  registerLocalPdfProtocol();
+  if (libraryLocationError) {
+    // Native dialogs require ready. Persist the selected recovery location and
+    // start a fresh process so it too resolves the profile before ready; never
+    // open a backend/window against a late-switched Chromium session.
+    if (await libraryLocation.recover(libraryLocationError)) app.relaunch();
+    app.quit();
+    return;
+  }
+  try {
+    getBackend();
+    libraryLocation.rememberActive();
+  } catch (error) {
+    backend?.close();
+    backend = null;
+    if (await libraryLocation.recover(error)) app.relaunch();
+    app.quit();
+    return;
+  }
+  registerLocalPdfProtocol((filePath) => getBackend().authorizeLocalRead(filePath));
   createWindow();
 
   app.on('activate', () => {
@@ -153,6 +186,9 @@ app.whenReady().then(() => {
       createWindow();
     }
   });
+}).catch((error) => {
+  dialog.showErrorBox('PaperQuay 启动失败 / Startup Failed', error instanceof Error ? error.message : String(error));
+  app.quit();
 });
 
 app.on('window-all-closed', () => {

@@ -3,6 +3,7 @@ const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { Readable } = require('node:stream');
 const { protocol } = require('electron');
+const { openAuthorizedReadFile } = require('./backend/pathAccess.cjs');
 
 const LOCAL_PDF_PROTOCOL = 'paperquay-pdf';
 const PDFJS_ASSET_PROTOCOL = 'paperquay-pdf-assets';
@@ -44,7 +45,7 @@ function createPlainResponse(message, status = 400) {
   });
 }
 
-function createPdfStreamResponse(filePath, stat, request) {
+async function createPdfStreamResponse(handle, stat, request) {
   const fileSize = stat.size;
   const headers = new Headers({
     'accept-ranges': 'bytes',
@@ -56,13 +57,14 @@ function createPdfStreamResponse(filePath, stat, request) {
   if (!rangeHeader) {
     headers.set('content-length', String(fileSize));
     if (request.method === 'HEAD') {
+      await handle.close();
       return new Response(null, {
         status: 200,
         headers,
       });
     }
 
-    return new Response(Readable.toWeb(fs.createReadStream(filePath)), {
+    return new Response(Readable.toWeb(handle.createReadStream({ autoClose: true })), {
       status: 200,
       headers,
     });
@@ -71,6 +73,7 @@ function createPdfStreamResponse(filePath, stat, request) {
   const rangeMatch = /^bytes=(\d*)-(\d*)$/i.exec(rangeHeader.trim());
 
   if (!rangeMatch) {
+    await handle.close();
     headers.set('content-range', `bytes */${fileSize}`);
     return new Response(null, {
       status: 416,
@@ -93,6 +96,7 @@ function createPdfStreamResponse(filePath, stat, request) {
   end = Math.max(start, Math.min(fileSize - 1, Math.trunc(end)));
 
   if (fileSize <= 0 || start >= fileSize) {
+    await handle.close();
     headers.set('content-range', `bytes */${fileSize}`);
     return new Response(null, {
       status: 416,
@@ -104,19 +108,20 @@ function createPdfStreamResponse(filePath, stat, request) {
   headers.set('content-range', `bytes ${start}-${end}/${fileSize}`);
 
   if (request.method === 'HEAD') {
+    await handle.close();
     return new Response(null, {
       status: 206,
       headers,
     });
   }
 
-  return new Response(Readable.toWeb(fs.createReadStream(filePath, { start, end })), {
+  return new Response(Readable.toWeb(handle.createReadStream({ start, end, autoClose: true })), {
     status: 206,
     headers,
   });
 }
 
-async function handleLocalPdfRequest(request) {
+async function handleLocalPdfRequest(request, authorizeLocalRead) {
   let requestUrl;
 
   try {
@@ -129,24 +134,21 @@ async function handleLocalPdfRequest(request) {
     return createPlainResponse('Unknown PDF source.', 404);
   }
 
-  const filePath = requestUrl.searchParams.get('path') || '';
+  let filePath = requestUrl.searchParams.get('path') || '';
 
   if (!filePath || path.extname(filePath).toLowerCase() !== '.pdf') {
     return createPlainResponse('Only PDF files can be served by this protocol.');
   }
 
-  let stat;
-
   try {
-    stat = await fsp.stat(filePath);
-    if (!stat.isFile()) {
-      return createPlainResponse('PDF path is not a file.', 404);
-    }
-  } catch {
-    return createPlainResponse('PDF file does not exist.', 404);
+    const { handle, stat } = await openAuthorizedReadFile(filePath, authorizeLocalRead);
+    try { return await createPdfStreamResponse(handle, stat, request); }
+    catch (error) { await handle.close(); throw error; }
+  } catch (error) {
+    return ['ENOENT', 'ENOTDIR', 'EISDIR'].includes(error.code)
+      ? createPlainResponse('PDF file does not exist.', 404)
+      : createPlainResponse('PDF access was not approved.', 403);
   }
-
-  return createPdfStreamResponse(filePath, stat, request);
 }
 
 function createAssetResponse(filePath, stat) {
@@ -202,8 +204,8 @@ async function handlePdfJsAssetRequest(request) {
   }
 }
 
-function registerLocalPdfProtocol() {
-  protocol.handle(LOCAL_PDF_PROTOCOL, handleLocalPdfRequest);
+function registerLocalPdfProtocol(authorizeLocalRead) {
+  protocol.handle(LOCAL_PDF_PROTOCOL, (request) => handleLocalPdfRequest(request, authorizeLocalRead));
   protocol.handle(PDFJS_ASSET_PROTOCOL, handlePdfJsAssetRequest);
 }
 

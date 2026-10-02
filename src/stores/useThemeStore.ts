@@ -49,6 +49,7 @@ interface ThemeState {
   mode: ThemeMode;
   resolved: ResolvedTheme;
   setMode: (mode: ThemeMode) => void;
+  toggle: () => void;
 }
 
 export const useThemeStore = create<ThemeState>()((set, get) => {
@@ -87,6 +88,13 @@ export const useThemeStore = create<ThemeState>()((set, get) => {
       const resolved = resolveTheme(mode);
       applyHtmlClass(resolved);
       set({ mode, resolved });
+    },
+    // The title-bar button switches the visible appearance, not a hidden
+    // three-state cycle. Read the live store so rapid clicks cannot use a
+    // previous render's mode. System following is still available in Settings.
+    toggle: () => {
+      const current = get();
+      current.setMode(current.resolved === 'dark' ? 'light' : 'dark');
     },
   };
 });

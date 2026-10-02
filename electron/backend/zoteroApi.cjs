@@ -1,6 +1,6 @@
-const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { cleanString, readRequestJson, safeFileName } = require('./utils.cjs');
+const { canonicalPath, isWithin, writeBoundFile } = require('./pathAccess.cjs');
 
 const ZOTERO_API_BASE = 'https://api.zotero.org';
 
@@ -99,7 +99,7 @@ async function listZoteroLibraryItems(options) {
   return output;
 }
 
-async function downloadZoteroAttachmentPdf(options, appPaths) {
+async function downloadZoteroAttachmentPdf(options, appPaths, authorizeWrite) {
   const apiKey = cleanString(options.apiKey);
   const userId = cleanString(options.userId);
   const attachmentKey = cleanString(options.attachmentKey);
@@ -108,9 +108,10 @@ async function downloadZoteroAttachmentPdf(options, appPaths) {
   if (!userId) throw new Error('Zotero user id cannot be empty');
   if (!attachmentKey) throw new Error('Zotero attachment key cannot be empty');
 
-  await fsp.mkdir(appPaths.remotePdfDownloadDir, { recursive: true });
   const filename = safePdfFilename(options.filename, attachmentKey);
-  const outputPath = path.join(appPaths.remotePdfDownloadDir, `${Buffer.from(attachmentKey).toString('base64url')}-${filename}`);
+  const candidate = path.join(appPaths.remotePdfDownloadDir, `${Buffer.from(attachmentKey).toString('base64url')}-${filename}`);
+  const outputPath = authorizeWrite ? authorizeWrite(candidate) : canonicalPath(candidate);
+  if (!authorizeWrite && !isWithin(canonicalPath(appPaths.dataDir), outputPath)) throw new Error('Download destination escapes library root.');
   const response = await fetch(
     `${ZOTERO_API_BASE}/users/${encodeURIComponent(userId)}/items/${encodeURIComponent(attachmentKey)}/file`,
     { headers: zoteroHeaders(apiKey) },
@@ -121,7 +122,7 @@ async function downloadZoteroAttachmentPdf(options, appPaths) {
     throw new Error(`Zotero download failed: HTTP ${response.status} ${text}`);
   }
 
-  await fsp.writeFile(outputPath, Buffer.from(await response.arrayBuffer()));
+  await writeBoundFile(outputPath, Buffer.from(await response.arrayBuffer()));
   return { path: outputPath, filename };
 }
 

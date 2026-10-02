@@ -9,7 +9,6 @@ import {
 import {
   approveWritePath,
   getAppDefaultPaths,
-  readLocalTextFileIfExists,
 } from '../../services/desktop';
 import type { AppDefaultPaths } from '../../services/desktop';
 import {
@@ -36,7 +35,6 @@ import {
   emitUiLanguageChanged,
 } from '../../app/appEvents';
 import {
-  buildLegacyConfigPath,
   buildLegacyModelPresets,
   CONFIG_WRITE_DEBOUNCE_MS,
   createQaPreset,
@@ -316,21 +314,6 @@ export function useReaderSettings({
               legacySecrets,
               defaultPaths,
             );
-          } else {
-            const legacyConfigText = await readLocalTextFileIfExists(
-              buildLegacyConfigPath(defaultPaths.executableDir),
-            );
-
-            if (legacyConfigText) {
-              const parsedLegacyConfig = JSON.parse(legacyConfigText) as Partial<ReaderConfigFile>;
-
-              nextConfig = mergeReaderConfigWithDefaults(
-                parsedLegacyConfig,
-                loadSettings(),
-                legacySecrets,
-                defaultPaths,
-              );
-            }
           }
         } catch {
         }
