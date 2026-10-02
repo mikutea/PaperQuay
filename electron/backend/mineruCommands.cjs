@@ -1,5 +1,6 @@
 const fsp = require('node:fs/promises');
 const path = require('node:path');
+const { createWriteAuthorizer } = require('./pathAccess.cjs');
 const {
   MINERU_API_BASE,
   cleanString,
@@ -13,6 +14,7 @@ const {
 
 function createMineruCommands(context) {
   const { appPaths } = context;
+  const authorizeWrite = context.authorizeLocalWrite ||= createWriteAuthorizer(context);
 
   return {
     async run_mineru_cloud_parse({ options }) {
@@ -88,11 +90,11 @@ function createMineruCommands(context) {
       const zipResponse = await fetch(finalResult.full_zip_url);
       if (!zipResponse.ok) throw new Error(`MinerU zip download failed: HTTP ${zipResponse.status}`);
 
-      const extractDir = options.extractDir || path.join(
+      const extractDir = authorizeWrite(options.extractDir || path.join(
         appPaths.mineruCacheDir,
         `${path.basename(fileName, '.pdf')}-${hashBytes(Buffer.from(dataId)).slice(0, 8)}`,
-      );
-      const extracted = await readZipWithAdm(Buffer.from(await zipResponse.arrayBuffer()), extractDir);
+      ));
+      const extracted = await readZipWithAdm(Buffer.from(await zipResponse.arrayBuffer()), extractDir, authorizeWrite);
 
       return {
         batchId,

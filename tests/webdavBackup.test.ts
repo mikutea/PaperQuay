@@ -251,6 +251,30 @@ test('WebDAV backup uploads and restores library, notes, and RAG SQLite database
   }
 });
 
+test('remote backup IDs cannot choose or remove the database restore staging directory', async () => {
+  const source = createContext('paperquay-webdav-staging-source-');
+  const target = createContext('paperquay-webdav-staging-target-');
+  const webdav = new MemoryWebdav();
+  try {
+    seedLibrary(source);
+    assert.equal((await runBackup(source, webdav)).ok, true);
+    const canary = path.join(target.appPaths.dataDir, 'unrelated');
+    mkdirSync(canary); writeFileSync(path.join(canary, 'keep.txt'), 'preserve');
+    const manifest = JSON.parse((await webdav.getText(LATEST_MANIFEST_REMOTE_PATH))!);
+    manifest.backupId = '../unrelated';
+    webdav.objects.set(LATEST_MANIFEST_REMOTE_PATH, Buffer.from(JSON.stringify(manifest)));
+    const load = target.store.loadFromSnapshot;
+    target.store.loadFromSnapshot = (file: string) => {
+      assert.ok(file.startsWith(path.join(target.appPaths.dataDir, '.backup-snapshots', 'restore-')));
+      return load(file);
+    };
+    const restored = await runRestore(target, webdav);
+    assert.equal(restored.ok, true, JSON.stringify(restored.objects));
+    assert.equal(readFileSync(path.join(canary, 'keep.txt'), 'utf8'), 'preserve');
+    assert.deepEqual(readdirSync(path.join(target.appPaths.dataDir, '.backup-snapshots')), []);
+  } finally { source.close(); target.close(); }
+});
+
 test('rejected SQLite and legacy JSON merges report zero committed row counts', async () => {
   const source = createContext('paperquay-webdav-rejected-source-');
   try {

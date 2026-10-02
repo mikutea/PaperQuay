@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { DatabaseSync, withTransaction } = require('./backend/nodeSqlite.cjs');
+const { canonicalPath } = require('./backend/pathAccess.cjs');
 
 const REGISTRY_NAME = 'paperquay-library-locations.json';
 const LIBRARY_FILE = 'paperquay-library.sqlite';
@@ -9,16 +10,6 @@ const LIBRARY_FILE = 'paperquay-library.sqlite';
 function comparable(directory) {
   const resolved = path.resolve(directory);
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
-}
-
-function canonicalPath(filePath) {
-  let parent = filePath;
-  const suffix = [];
-  while (!fs.existsSync(parent) && path.dirname(parent) !== parent) {
-    suffix.unshift(path.basename(parent)); parent = path.dirname(parent);
-  }
-  // Match fs.promises.realpath, including expansion of Windows 8.3 names.
-  return path.join(fs.realpathSync.native(parent), ...suffix);
 }
 
 function profileKey(directory) {
@@ -490,15 +481,18 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
   }
 
   function validateRestoreTarget(kind, target) {
-    if (!active?.approvedFileAccess) return;
+    const actual = canonicalPath(target);
+    if (!active?.approvedFileAccess) return actual;
     const root = kind === 'pdf' ? active.approvedFileAccess.storageRoot : path.join(canonicalPath(active.dataDirectory), '.mineru-cache');
-    const relative = path.relative(comparable(root), comparable(canonicalPath(target)));
+    const relative = path.relative(comparable(root), comparable(actual));
     if (path.isAbsolute(relative) || relative === '..' || relative.startsWith('..' + path.sep)) throw new Error('Restore target escapes approved root.');
+    return actual;
   }
 
   async function approveSettingsChange(previous, next) {
     if (!active?.approvedFileAccess) return null;
-    validateFileOperation(previous, previous.papers.flatMap((paper) => paper.attachments));
+    const attachments = previous.papers.flatMap((paper) => paper.attachments);
+    const sources = validateFileOperation(previous, attachments);
     const storageDirectory = next.settings.storageDir;
     if (typeof storageDirectory !== 'string' || !path.isAbsolute(storageDirectory) || !['copy', 'move', 'keep'].includes(next.settings.importMode)) {
       throw new Error('Invalid PDF storage directory or import mode.');
@@ -517,9 +511,13 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
     validateUnchangedSettings(expected);
     if (canonicalPath(storageDirectory) !== policy.storageRoot) throw new Error('Storage destination changed during confirmation.');
     return {
+      storageRoot: policy.storageRoot,
+      sourcePaths: new Map(attachments.map((attachment, index) => [attachment.storedPath, sources.attachmentPaths[index]])),
       validateDestination(target) {
-        const relative = path.relative(comparable(policy.storageRoot), comparable(canonicalPath(target)));
+        const actual = canonicalPath(target);
+        const relative = path.relative(comparable(policy.storageRoot), comparable(actual));
         if (path.isAbsolute(relative) || relative === '..' || relative.startsWith('..' + path.sep)) throw new Error('Migration destination escapes approved storage root.');
+        return actual;
       },
       commit(save) {
         // Both writes are synchronous; failures restore the previous policy.

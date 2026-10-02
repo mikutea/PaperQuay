@@ -21,7 +21,8 @@ const { REGISTRY_NAME, createLibraryLocationManager, inspectLibraryDirectory, re
 
 function fixture(t) {
   const root = mkdtempSync(path.join(tmpdir(), 'paperquay-location-'));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const resources = [];
+  t.after(() => { for (const close of resources) close(); rmSync(root, { recursive: true, force: true }); });
   const appData = path.join(root, 'Roaming');
   mkdirSync(appData);
   const normalProfile = path.join(appData, 'paperquay');
@@ -50,7 +51,7 @@ function fixture(t) {
     async showMessageBox(options) { decisions.messages.push(options); decisions.onConfirm?.(); return { response: decisions.confirm }; },
   };
   const create = (profile, argv = []) => createLibraryLocationManager({ app: fakeApp(profile), dialog, argv, restart: () => { decisions.restarts++; } });
-  return { root, appData, normalProfile, customProfile, fakeApp, makeLibrary, decisions, create };
+  return { root, appData, normalProfile, customProfile, fakeApp, makeLibrary, decisions, create, closeAfter: (close) => resources.push(close) };
 }
 
 test('an unregistered fresh profile is created before Electron setPath', (t) => {
@@ -700,6 +701,116 @@ test('relocating a PDF rebinds its approved root and clears the obsolete relativ
     assert.equal(readdirSync(path.dirname(newPath)).includes('found.pdf'), false);
   } finally { store.close(); }
 });
+
+test('storage migrations bind copies and metadata to the approved destination', async (t) => {
+  const f = fixture(t);
+  f.makeLibrary(path.join(f.normalProfile, 'PaperQuay'));
+  const supplied = f.makeLibrary(path.join(f.root, 'supplied'));
+  const paths = createAppPaths(f.fakeApp(), supplied);
+  const store = createLibraryStore(paths);
+  f.closeAfter(() => store.close());
+  const source = path.join(store.load().settings.storageDir, 'category', 'fixture.pdf');
+  mkdirSync(path.dirname(source), { recursive: true }); writeFileSync(source, 'approved migration fixture');
+  replaceAttachments(supplied, [source]);
+  const manager = f.create(); manager.resolve(); manager.rememberActive();
+  f.decisions.directory = supplied; f.decisions.confirm = 1;
+  await manager.activateSelected({ token: (await manager.selectExisting()).token });
+  const active = f.create(); active.resolve();
+  const safe = path.join(f.root, 'approved-new-storage'); mkdirSync(safe);
+  const outside = path.join(f.root, 'unapproved-storage'); mkdirSync(outside);
+  const alias = path.join(f.root, 'selected-storage');
+  symlinkSync(safe, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  let replaced = false;
+  const commands = createLibraryCommands({ appPaths: paths, store,
+    validateLibraryFileOperation: (library, attachments) => active.validateFileOperation(library, attachments),
+    async approveLibrarySettingsChange(previous, next) {
+      const approval = await active.approveSettingsChange(previous, next);
+      const validate = approval.validateDestination;
+      approval.validateDestination = (target) => {
+        const actual = validate(target);
+        if (!replaced) {
+          unlinkSync(alias); symlinkSync(outside, alias, process.platform === 'win32' ? 'junction' : 'dir'); replaced = true;
+        }
+        return actual;
+      };
+      return approval;
+    },
+  });
+  await commands.library_update_settings({ settings: { storageDir: alias } });
+  const attachment = store.load().papers[0].attachments[0];
+  assert.equal(attachment.storedPath, path.join(realpathSync.native(safe), 'category', 'fixture.pdf'));
+  assert.equal(readFileSync(attachment.storedPath, 'utf8'), 'approved migration fixture');
+  assert.equal(readFileSync(source, 'utf8'), 'approved migration fixture');
+  assert.deepEqual(readdirSync(outside), []);
+  assert.throws(() => f.create().resolve(), /file access settings changed/, 'a retargeted setting is not implicitly reapproved on relaunch');
+});
+
+test('attachment deletion consumes validated canonical paths after an alias is retargeted', async (t) => {
+  const f = fixture(t);
+  f.makeLibrary(path.join(f.normalProfile, 'PaperQuay'));
+  const supplied = f.makeLibrary(path.join(f.root, 'supplied'));
+  const safe = path.join(supplied, 'paperquay-data'); mkdirSync(safe, { recursive: true });
+  const outside = path.join(f.root, 'unrelated'); mkdirSync(outside);
+  writeFileSync(path.join(safe, 'same.pdf'), 'approved original');
+  writeFileSync(path.join(outside, 'same.pdf'), 'unrelated original');
+  const alias = path.join(supplied, 'pdf-alias'); symlinkSync(safe, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  replaceAttachments(supplied, [path.join(alias, 'same.pdf')]);
+  const manager = f.create(); manager.resolve(); manager.rememberActive();
+  f.decisions.directory = supplied; f.decisions.confirm = 1;
+  await manager.activateSelected({ token: (await manager.selectExisting()).token });
+  const active = f.create(); active.resolve();
+  const paths = createAppPaths(f.fakeApp(), supplied), store = createLibraryStore(paths);
+  f.closeAfter(() => store.close());
+  const commands = createLibraryCommands({ appPaths: paths, store,
+    validateLibraryFileOperation(library, attachments) {
+      const approved = active.validateFileOperation(library, attachments);
+      unlinkSync(alias); symlinkSync(outside, alias, process.platform === 'win32' ? 'junction' : 'dir');
+      return approved;
+    },
+  });
+  await commands.library_delete_paper({ request: { paperId: 'fixture-0', deleteFiles: true } });
+  assert.equal(existsSync(path.join(safe, 'same.pdf')), false);
+  assert.equal(readFileSync(path.join(outside, 'same.pdf'), 'utf8'), 'unrelated original');
+  assert.equal(store.load().papers.length, 0);
+});
+
+for (const kind of ['pdf', 'mineru', 'translation', 'summary']) {
+  test(`WebDAV ${kind} restore retains the validated destination when download retargets its alias`, async (t) => {
+    const f = fixture(t);
+    f.makeLibrary(path.join(f.normalProfile, 'PaperQuay'));
+    const supplied = f.makeLibrary(path.join(f.root, 'supplied'));
+    const paths = createAppPaths(f.fakeApp(), supplied), store = createLibraryStore(paths);
+    f.closeAfter(() => store.close());
+    const parent = kind === 'pdf' ? path.join(supplied, 'paperquay-data') : paths.mineruCacheDir;
+    mkdirSync(parent, { recursive: true });
+    const safe = path.join(parent, 'safe'); mkdirSync(safe);
+    const outside = path.join(f.root, 'unrelated'); mkdirSync(outside);
+    const alias = path.join(parent, 'document-alias'); symlinkSync(safe, alias, process.platform === 'win32' ? 'junction' : 'dir');
+    const name = kind === 'pdf' ? 'fixture.pdf' : 'fixture.json';
+    writeFileSync(path.join(outside, name), 'unrelated fixture');
+    if (kind === 'pdf') replaceAttachments(supplied, [path.join(alias, name)]);
+    const manager = f.create(); manager.resolve(); manager.rememberActive();
+    f.decisions.directory = supplied; f.decisions.confirm = 1;
+    await manager.activateSelected({ token: (await manager.selectExisting()).token });
+    const active = f.create(); active.resolve();
+    const object = { kind, remotePath: kind === 'pdf' ? `latest/pdfs/${name}` : `latest/derived/document-alias/${name}`,
+      source: `paper:fixture-0:attachment:attachment-0:${path.join(alias, name)}`, status: 'uploaded', byteSize: 100 };
+    const result = await runRestore({ appPaths: paths, store,
+      validateLibraryFileOperation: (library, attachments) => active.validateFileOperation(library, attachments),
+      validateLibraryRestoreTarget: (type, target) => active.validateRestoreTarget(type, target),
+    }, {
+      getText: async () => JSON.stringify({ version: 3, backupId: 'fixture', objects: [object] }),
+      getBytes: async () => {
+        unlinkSync(alias); symlinkSync(outside, alias, process.platform === 'win32' ? 'junction' : 'dir');
+        return Buffer.from('restored approved fixture');
+      },
+    });
+    assert.equal(result.ok, true, JSON.stringify(result.objects));
+    assert.equal(readFileSync(path.join(safe, name), 'utf8'), 'restored approved fixture');
+    assert.equal(readFileSync(path.join(outside, name), 'utf8'), 'unrelated fixture');
+    if (kind === 'pdf') assert.equal(store.load().papers[0].attachments[0].storedPath, path.join(realpathSync.native(safe), name));
+  });
+}
 
 test('PDF imports use the approved destination after a storage junction is retargeted', async (t) => {
   const f = fixture(t);

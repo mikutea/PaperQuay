@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { pipeline } = require('node:stream/promises');
 const { randomUUID } = require('node:crypto');
+const { canonicalPath, writeBoundFile } = require('./pathAccess.cjs');
 const {
   cleanString,
   hashBytes,
@@ -504,12 +505,16 @@ function objectForRemotePath(manifest, remotePath) {
   );
 }
 
-async function writeRestoreTempFile(appPaths, backupId, fileName, bytes) {
-  const restoreDir = path.join(appPaths.dataDir, '.backup-restores', cleanString(backupId) || String(Date.now()));
+async function writeRestoreTempFile(appPaths, fileName, bytes) {
+  // Remote backup IDs are metadata, never local path components. Keep incoming
+  // database bytes away from supplier-controlled companion directories.
+  const base = appPaths.backupSnapshotDir || path.join(appPaths.dataDir, '.backup-snapshots');
+  await fsp.mkdir(base, { recursive: true });
+  const restoreDir = await fsp.mkdtemp(path.join(base, 'restore-'));
   const filePath = path.join(restoreDir, safeFileName(fileName));
 
-  await fsp.mkdir(restoreDir, { recursive: true });
-  await fsp.writeFile(filePath, bytes);
+  try { await fsp.writeFile(filePath, bytes, { flag: 'wx', mode: 0o600 }); }
+  catch (error) { await removeDirectoryQuietly(restoreDir); throw error; }
 
   return { restoreDir, filePath };
 }
@@ -525,7 +530,7 @@ async function restoreLibraryDatabaseObject(context, webdav, manifest, objects, 
       const bytes = await webdav.getBytes(LIBRARY_DATABASE_REMOTE_PATH);
       if (!bytes) throw new Error('Remote library SQLite database is missing');
 
-      const temp = await writeRestoreTempFile(appPaths, manifest.backupId, 'paperquay-library.sqlite', bytes);
+      const temp = await writeRestoreTempFile(appPaths, 'paperquay-library.sqlite', bytes);
       restoreDir = temp.restoreDir;
       const incoming = store.loadFromSnapshot(temp.filePath);
       const current = store.load();
@@ -605,7 +610,7 @@ async function restoreRagDatabaseObject(context, webdav, manifest, objects) {
     const bytes = await webdav.getBytes(RAG_DATABASE_REMOTE_PATH);
     if (!bytes) throw new Error('Remote RAG SQLite database is missing');
 
-    const temp = await writeRestoreTempFile(appPaths, manifest.backupId, 'paperquay-rag.sqlite', bytes);
+    const temp = await writeRestoreTempFile(appPaths, 'paperquay-rag.sqlite', bytes);
     restoreDir = temp.restoreDir;
     await ragStore.replaceWithSnapshot(temp.filePath);
     objects.push({
@@ -643,7 +648,7 @@ async function restoreNotesDatabaseObject(context, webdav, manifest, objects) {
     const bytes = await webdav.getBytes(NOTES_DATABASE_REMOTE_PATH);
     if (!bytes) throw new Error('Remote notes SQLite database is missing');
 
-    const temp = await writeRestoreTempFile(appPaths, manifest.backupId, 'paperquay-notes.sqlite', bytes);
+    const temp = await writeRestoreTempFile(appPaths, 'paperquay-notes.sqlite', bytes);
     restoreDir = temp.restoreDir;
     await noteStore.replaceWithSnapshot(temp.filePath);
     objects.push({
@@ -700,8 +705,7 @@ function restorePdfTarget(library, object, appPaths) {
   return path.join(storageDir, `${safeFileName(source?.paperId || 'restored')}-${fileName}`);
 }
 
-async function restorePdfObject(webdav, library, object, appPaths) {
-  const target = restorePdfTarget(library, object, appPaths);
+async function restorePdfObject(webdav, library, object, target) {
   if (await localFileMatches(target, object)) {
     return { kind: 'pdf', remotePath: object.remotePath, localPath: target, byteSize: object.byteSize, checksum: object.checksum, status: 'skipped', message: 'local file already matches backup' };
   }
@@ -709,8 +713,7 @@ async function restorePdfObject(webdav, library, object, appPaths) {
   const bytes = await webdav.getBytes(object.remotePath);
   if (!bytes) throw new Error(`Remote PDF is missing: ${object.remotePath}`);
 
-  await fsp.mkdir(path.dirname(target), { recursive: true });
-  await fsp.writeFile(target, bytes);
+  await writeBoundFile(target, bytes);
 
   const source = parseAttachmentSource(object.source);
   const paper = source ? library.papers.find((item) => item.id === source.paperId) : null;
@@ -734,8 +737,7 @@ function derivedRestorePath(object, appPaths) {
   return safeLocalJoin(appPaths.mineruCacheDir, withoutCustomRoot);
 }
 
-async function restoreDerivedObject(webdav, object, appPaths) {
-  const target = derivedRestorePath(object, appPaths);
+async function restoreDerivedObject(webdav, object, target) {
   if (await localFileMatches(target, object)) {
     return { kind: object.kind, remotePath: object.remotePath, localPath: target, byteSize: object.byteSize, checksum: object.checksum, status: 'skipped', message: 'local file already matches backup' };
   }
@@ -743,8 +745,7 @@ async function restoreDerivedObject(webdav, object, appPaths) {
   const bytes = await webdav.getBytes(object.remotePath);
   if (!bytes) throw new Error(`Remote derived object is missing: ${object.remotePath}`);
 
-  await fsp.mkdir(path.dirname(target), { recursive: true });
-  await fsp.writeFile(target, bytes);
+  await writeBoundFile(target, bytes);
 
   return { kind: object.kind, remotePath: object.remotePath, localPath: target, byteSize: bytes.length, checksum: object.checksum || hashBytes(bytes), status: 'downloaded', message: null };
 }
@@ -786,14 +787,16 @@ async function runRestore(context, webdav) {
     if (!['pdf', 'mineru', 'translation', 'summary'].includes(object.kind)) continue;
 
     try {
+      let target = object.kind === 'pdf'
+        ? restorePdfTarget(library, object, appPaths) : derivedRestorePath(object, appPaths);
       if (object.kind === 'pdf') {
-        context.validateLibraryFileOperation?.(library, [{ storedPath: restorePdfTarget(library, object, appPaths) }]);
+        const approved = context.validateLibraryFileOperation?.(library, [{ storedPath: target }]);
+        target = approved?.attachmentPaths[0] || target;
       }
-      context.validateLibraryRestoreTarget?.(object.kind, object.kind === 'pdf'
-        ? restorePdfTarget(library, object, appPaths) : derivedRestorePath(object, appPaths));
+      target = context.validateLibraryRestoreTarget?.(object.kind, target) || canonicalPath(target);
       const result = object.kind === 'pdf'
-        ? await restorePdfObject(webdav, library, object, appPaths)
-        : await restoreDerivedObject(webdav, object, appPaths);
+        ? await restorePdfObject(webdav, library, object, target)
+        : await restoreDerivedObject(webdav, object, target);
       objects.push(result);
     } catch (error) {
       objects.push({

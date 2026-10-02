@@ -1,5 +1,6 @@
 const fsp = require('node:fs/promises');
 const path = require('node:path');
+const { assertBoundPath } = require('./pathAccess.cjs');
 const {
   attachCategoryCounts,
   normalizeAuthor,
@@ -42,20 +43,23 @@ function pathExists(filePath) {
   return fsp.access(filePath).then(() => true).catch(() => false);
 }
 
-async function copyFileIfNeeded(sourcePath, targetPath) {
+async function copyFileIfNeeded(sourcePath, targetPath, bound = false) {
+  if (bound) { assertBoundPath(sourcePath); assertBoundPath(targetPath); }
   await fsp.mkdir(path.dirname(targetPath), { recursive: true });
 
   if (await pathExists(targetPath)) {
     return false;
   }
 
+  if (bound) { assertBoundPath(sourcePath); assertBoundPath(targetPath); }
   await fsp.copyFile(sourcePath, targetPath);
   return true;
 }
 
 async function migrateLibraryStorageDirectory(library, previousStorageDir, nextStorageDir, approval = null) {
   const previousDir = cleanString(previousStorageDir);
-  const targetDir = cleanString(nextStorageDir);
+  const selectedDir = cleanString(nextStorageDir);
+  const targetDir = selectedDir && (approval?.validateDestination(selectedDir) || selectedDir);
 
   if (!previousDir || !targetDir || isSamePath(previousDir, targetDir)) {
     return { copiedFiles: 0, updatedAttachments: 0 };
@@ -91,13 +95,14 @@ async function migrateLibraryStorageDirectory(library, previousStorageDir, nextS
         continue;
       }
 
-      const nextPath = path.join(targetDir, relativePath);
+      let nextPath = path.join(targetDir, relativePath);
       if (!isSubPath(targetDir, nextPath)) throw new Error('Attachment relative path escapes storage directory.');
-      approval?.validateDestination(nextPath);
+      nextPath = approval?.validateDestination(nextPath) || nextPath;
 
       if (!isSamePath(storedPath, nextPath)) {
-        if (await pathExists(storedPath)) {
-          copiedFiles += await copyFileIfNeeded(storedPath, nextPath) ? 1 : 0;
+        const sourcePath = approval?.sourcePaths?.get(storedPath) || storedPath;
+        if (await pathExists(sourcePath)) {
+          copiedFiles += await copyFileIfNeeded(sourcePath, nextPath, Boolean(approval)) ? 1 : 0;
         }
 
         attachment.storedPath = nextPath;
@@ -503,7 +508,7 @@ function createLibraryCommands(context) {
           library.settings.storageDir,
           approval,
         );
-        await fsp.mkdir(library.settings.storageDir, { recursive: true });
+        await fsp.mkdir(approval?.storageRoot || library.settings.storageDir, { recursive: true });
       }
       if (approval) approval.commit(() => store.saveSync(library));
       else await store.save(library);
@@ -762,12 +767,15 @@ function createLibraryCommands(context) {
     async library_delete_paper({ request }) {
       const library = store.load();
       const paper = library.papers.find((item) => item.id === request.paperId);
-      if (request.deleteFiles && paper) context.validateLibraryFileOperation?.(library, paper.attachments);
+      const approved = request.deleteFiles && paper
+        ? context.validateLibraryFileOperation?.(library, paper.attachments) : null;
       library.papers = library.papers.filter((item) => item.id !== request.paperId);
 
       if (request.deleteFiles && paper) {
-        for (const attachment of paper.attachments) {
-          await fsp.rm(attachment.storedPath, { force: true }).catch(() => {});
+        for (const [index, attachment] of paper.attachments.entries()) {
+          const target = approved?.attachmentPaths[index] || attachment.storedPath;
+          if (approved) assertBoundPath(target);
+          await fsp.rm(target, { force: true }).catch(() => {});
         }
       }
 
