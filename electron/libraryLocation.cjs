@@ -505,16 +505,19 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
     return true;
   }
 
-  function validateFileOperation(library, attachments = []) {
+  function validateFileOperation(library, attachments = [], { metadataOnly = false } = {}) {
     if (!active?.approvedFileAccess) return;
     const onDisk = inspectLibraryDirectory(active.dataDirectory, {
-      verifyIntegrity: false, resolveFileAccess: true, approvedFileAccess: active.approvedFileAccess,
+      verifyIntegrity: false, resolveFileAccess: !metadataOnly, approvedFileAccess: active.approvedFileAccess,
     });
     if (comparable(onDisk.dataDirectory) !== comparable(active.dataDirectory)) throw new Error('Library directory changed.');
     assertApprovedFileAccess(onDisk, active.approvedFileAccess);
     const storageDirectory = library.settings.storageDir || path.join(active.dataDirectory, 'paperquay-data');
     assertFilesystemPath(storageDirectory);
     assertApprovedImportSettings({ storageDirectory, importMode: library.settings.importMode || 'copy' }, active.approvedFileAccess);
+    // Metadata saves must still reject changed import policy, but must not
+    // inspect attachment/PDF volumes or grant fresh canonical permissions.
+    if (metadataOnly) return { storageRoot: active.approvedFileAccess.storageRoot, attachmentPaths: [] };
     const attachmentPaths = attachments.map((attachment) => {
       if (typeof attachment.storedPath !== 'string' || !path.isAbsolute(attachment.storedPath)) throw new Error('Invalid attachment path. No files were changed.');
       assertFilesystemPath(attachment.storedPath);
@@ -571,13 +574,16 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
 
   async function approveSettingsChange(previous, next) {
     if (!active?.approvedFileAccess) return null;
-    const attachments = previous.papers.flatMap((paper) => paper.attachments);
-    const sources = validateFileOperation(previous, attachments);
     const storageDirectory = next.settings.storageDir;
     if (typeof storageDirectory !== 'string' || !path.isAbsolute(storageDirectory) || !['copy', 'move', 'keep'].includes(next.settings.importMode)) {
       throw new Error('Invalid PDF storage directory or import mode.');
     }
-    if (storageDirectory === previous.settings.storageDir && next.settings.importMode === previous.settings.importMode) return null;
+    if (storageDirectory === previous.settings.storageDir && next.settings.importMode === previous.settings.importMode) {
+      validateFileOperation(previous, [], { metadataOnly: true });
+      return null;
+    }
+    const attachments = previous.papers.flatMap((paper) => paper.attachments);
+    const sources = validateFileOperation(previous, attachments);
     const expected = inspectLibraryDirectory(active.dataDirectory, {
       verifyIntegrity: false, inspectAttachmentRoots: true, resolveFileAccess: true, approvedFileAccess: active.approvedFileAccess,
     });

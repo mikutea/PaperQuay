@@ -80,7 +80,7 @@ function createBackend({ app, libraryLocation }) {
     ragStore,
     store,
     prepareForUpdate: () => libraryLocation?.rememberActive({ makeDefault: true }),
-    validateLibraryFileOperation: (library, attachments) => libraryLocation?.validateFileOperation(library, attachments),
+    validateLibraryFileOperation: (library, attachments, options) => libraryLocation?.validateFileOperation(library, attachments, options),
     approveLibrarySettingsChange: (previous, next) => libraryLocation?.approveSettingsChange(previous, next),
     approveImportedAttachments: (previous, attachments) => libraryLocation?.approveImportedAttachments(previous, attachments),
     validateLibraryRestoreTarget: (kind, target) => libraryLocation?.validateRestoreTarget(kind, target),

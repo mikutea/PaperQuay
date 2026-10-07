@@ -502,6 +502,37 @@ test('an independent cache write does not ask the PDF-volume validator for permi
   assert.throws(() => authorize(path.join(f.root, 'outside', 'paper.pdf')), /offline PDF volume probed/);
 });
 
+test('metadata-only settings save offline without probing references or accepting policy drift', async (t) => {
+  const f = fixture(t);
+  f.makeLibrary(path.join(f.normalProfile, 'PaperQuay'));
+  const supplied = f.makeLibrary(path.join(f.root, 'supplied'));
+  const volume = path.join(f.root, 'pdf-volume'); mkdirSync(volume);
+  setStorageDirectory(supplied, volume);
+  const manager = f.create(); manager.resolve(); manager.rememberActive();
+  f.decisions.directory = supplied; f.decisions.confirm = 1;
+  await manager.activateSelected(await manager.selectExisting());
+  const active = f.create(); active.resolve();
+  const paths = createAppPaths(f.fakeApp(), supplied);
+  const store = createLibraryStore(paths); f.closeAfter(() => store.close());
+  const commands = createLibraryCommands({ appPaths: paths, store,
+    validateLibraryFileOperation: (...args) => active.validateFileOperation(...args),
+    approveLibrarySettingsChange: (...args) => active.approveSettingsChange(...args) });
+  const calls = trapReferenceIo(t, value => value === volume || value.startsWith(volume + path.sep));
+  const policy = structuredClone(active.status().approvedFileAccess);
+  await commands.library_update_settings({ settings: { openAlexEnabled: false, autoRenameOnImport: true } });
+  assert.equal(store.load().settings.openAlexEnabled, false);
+  assert.deepEqual(active.status().approvedFileAccess, policy);
+  assert.deepEqual(calls, []);
+  setStorageDirectory(supplied, path.join(f.root, 'unapproved-volume'));
+  await assert.rejects(commands.library_update_settings({ settings: { openAlexEnabled: true } }), /file access settings changed/);
+  assert.equal(store.load().settings.openAlexEnabled, false);
+  assert.deepEqual(calls, []);
+  setStorageDirectory(supplied, volume);
+  await assert.rejects(commands.library_update_settings({ settings: { importMode: 'move' } }), /Fixture blocked reference I\/O/);
+  assert.ok(calls.length > 0, 'file-affecting changes still validate the PDF volume');
+  assert.equal(store.load().settings.importMode, 'copy');
+});
+
 test('UNC and mapped-drive references are first inspected only after native consent', { skip: process.platform !== 'win32' }, async (t) => {
   const f = fixture(t);
   f.makeLibrary(path.join(f.normalProfile, 'PaperQuay'));

@@ -492,16 +492,18 @@ function createLibraryCommands(context) {
 
     async library_update_settings({ settings }) {
       const library = store.load();
-      context.validateLibraryFileOperation?.(library, library.papers.flatMap((paper) => paper.attachments));
-      const previous = structuredClone(library);
-      const previousStorageDir = library.settings.storageDir;
-      library.settings = {
+      const nextSettings = {
         ...library.settings,
         ...settings,
         importMode: settings.importMode || library.settings.importMode,
       };
+      const storageChanged = nextSettings.storageDir !== library.settings.storageDir || nextSettings.importMode !== library.settings.importMode;
+      context.validateLibraryFileOperation?.(library, storageChanged ? library.papers.flatMap((paper) => paper.attachments) : [], { metadataOnly: !storageChanged });
+      const previous = structuredClone(library);
+      const previousStorageDir = library.settings.storageDir;
+      library.settings = nextSettings;
       const approval = await context.approveLibrarySettingsChange?.(previous, library);
-      if (library.settings.storageDir) {
+      if (storageChanged && library.settings.storageDir) {
         await migrateLibraryStorageDirectory(
           library,
           previousStorageDir,
