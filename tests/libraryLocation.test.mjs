@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, symlinkSync, existsSync, utimesSync, realpathSync, unlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, symlinkSync, linkSync, existsSync, utimesSync, realpathSync, unlinkSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -10,6 +10,7 @@ import vm from 'node:vm';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const fs = require('node:fs');
+const nativeFs = require('../electron/backend/nativeFs.cjs');
 const { DatabaseSync } = require('../electron/backend/nodeSqlite.cjs');
 const { createAppPaths, createLibraryStore } = require('../electron/backend/libraryStore.cjs');
 const { createLibraryCommands } = require('../electron/backend/libraryCommands.cjs');
@@ -18,6 +19,7 @@ const { createMineruCommands } = require('../electron/backend/mineruCommands.cjs
 const { createAiCommands } = require('../electron/backend/aiCommands.cjs');
 const { createRagStore } = require('../electron/backend/ragStore.cjs');
 const { createNoteStore } = require('../electron/backend/noteStore.cjs');
+const { createKnowledgeGraphCommands } = require('../electron/backend/knowledgeGraphCommands.cjs');
 const { REGISTRY_NAME, createLibraryLocationManager, inspectLibraryDirectory, readRegistry } = require('../electron/libraryLocation.cjs');
 
 function fixture(t) {
@@ -412,7 +414,9 @@ function trapReferenceIo(t, matches) {
   };
   for (const [name, original] of Object.entries(originals)) fs[name] = wrap(name, original);
   fs.realpathSync.native = wrap('realpathSync.native', originals.realpathSync.native);
-  t.after(() => { Object.assign(fs, originals); });
+  const inspect = nativeFs.inspectSync;
+  nativeFs.inspectSync = wrap('native.inspectSync', inspect);
+  t.after(() => { Object.assign(fs, originals); nativeFs.inspectSync = inspect; });
   return calls;
 }
 
@@ -786,6 +790,97 @@ test('adoption rejects corrupt and linked companion databases and retains local 
   assert.notEqual(paths.configPath, path.join(supplied, '.settings', 'paperquay.config.json'));
 });
 
+test('external linked read/upload requires actual-target consent and rejection grants no later access', async (t) => {
+  const f = fixture(t);
+  f.makeLibrary(path.join(f.normalProfile, 'PaperQuay'));
+  const supplied = f.makeLibrary(path.join(f.root, 'supplied'));
+  const manager = f.create(); manager.resolve(); manager.rememberActive();
+  f.decisions.directory = supplied; f.decisions.confirm = 1;
+  await manager.activateSelected({ token: (await manager.selectExisting()).token });
+  const active = f.create(); active.resolve();
+  const store = createLibraryStore(createAppPaths(f.fakeApp(), supplied));
+  try {
+    const secret = path.join(f.root, 'private'); mkdirSync(secret);
+    const pdf = path.join(secret, 'file.pdf'); writeFileSync(pdf, 'private fixture');
+    const alias = path.join(f.root, 'friendly'); symlinkSync(secret, alias, process.platform === 'win32' ? 'junction' : 'dir');
+    const raw = path.join(alias, 'file.pdf');
+    for (const cloud of [false, true]) {
+      f.decisions.messages = []; f.decisions.confirm = 1;
+      f.decisions.onConfirm = () => { if (f.decisions.messages.at(-1).title.includes('Resolved File')) f.decisions.confirm = 0; };
+      await assert.rejects(active.authorizeCloudParsePath(store.load(), raw, cloud), /approval canceled/);
+      assert.equal(f.decisions.messages.length, 2);
+      assert.ok(f.decisions.messages[1].detail.includes(JSON.stringify(pdf)));
+      const calls = f.decisions.messages.length;
+      f.decisions.onConfirm = null; f.decisions.confirm = 0;
+      await assert.rejects(active.authorizeCloudParsePath(store.load(), raw, cloud), /file access settings changed/);
+      assert.equal(f.decisions.messages.length, calls + 1);
+      f.decisions.confirm = 1;
+      assert.equal(await active.authorizeCloudParsePath(store.load(), raw, cloud), pdf);
+    }
+  } finally { store.close(); }
+});
+
+test('Reader-style existence checks reject newly supplied UNC references before probing them', async (t) => {
+  const f = fixture(t);
+  f.makeLibrary(path.join(f.normalProfile, 'PaperQuay'));
+  const supplied = f.makeLibrary(path.join(f.root, 'supplied'));
+  const manager = f.create(); manager.resolve(); manager.rememberActive();
+  f.decisions.directory = supplied; f.decisions.confirm = 1;
+  await manager.activateSelected({ token: (await manager.selectExisting()).token });
+  const active = f.create(); active.resolve();
+  const sentinel = process.platform === 'win32' ? '\\\\paperquay-fixture.invalid\\share\\private.pdf' : '/paperquay-fixture.invalid/private.pdf';
+  replaceAttachments(supplied, [sentinel]);
+  const store = createLibraryStore(createAppPaths(f.fakeApp(), supplied));
+  const calls = trapReferenceIo(t, (value) => value.includes('paperquay-fixture.invalid'));
+  try {
+    assert.throws(() => active.authorizeKnownRead(store.load(), sentinel), /file access settings changed/);
+    await assert.rejects(active.authorizeLocalRead(store.load(), sentinel), /file access settings changed/);
+    assert.deepEqual(calls, []);
+  } finally { store.close(); }
+});
+
+for (const name of ['paperquay-knowledge-graph-relations.json', 'paperquay-library.json']) {
+  test(`adoption and runtime reject linked ${name} without reading or changing the outside file`, async (t) => {
+    const f = fixture(t);
+    f.makeLibrary(path.join(f.normalProfile, 'PaperQuay'));
+    const supplied = f.makeLibrary(path.join(f.root, 'supplied'));
+    const manager = f.create(); manager.resolve(); manager.rememberActive();
+    f.decisions.directory = supplied; f.decisions.confirm = 1;
+    const privateFile = path.join(f.root, 'private.json');
+    const secret = JSON.stringify({ relations: [{ id: 'secret' }], ragIndexes: { secret: { chunks: ['private'] } } });
+    writeFileSync(privateFile, secret);
+    const companion = path.join(supplied, name); linkSync(privateFile, companion);
+    await assert.rejects(manager.selectExisting(), /Linked library companion/);
+    unlinkSync(companion);
+    await manager.activateSelected({ token: (await manager.selectExisting()).token });
+    const paths = createAppPaths(f.fakeApp(), supplied), store = createLibraryStore(paths);
+    try {
+      const graph = createKnowledgeGraphCommands({ appPaths: paths, store });
+      if (name.endsWith('relations.json')) {
+        const relation = graph.knowledge_graph_create_relation({ request: { source: 'paper:fixture-0', target: 'paper:fixture-1', label: 'test' } });
+        assert.equal(graph.knowledge_graph_list_relations().length, 1);
+        assert.equal(graph.knowledge_graph_delete_relation({ relationId: relation.id }).deleted, true);
+        unlinkSync(companion);
+      } else {
+        writeFileSync(companion, JSON.stringify({ ragIndexes: { fixture: { chunks: [] } } }));
+        assert.ok(store.loadLegacyRagIndexes().fixture);
+        store.clearLegacyRagIndexesSync();
+        assert.deepEqual(store.loadLegacyRagIndexes(), {});
+        unlinkSync(companion);
+      }
+      linkSync(privateFile, companion);
+      if (name.endsWith('relations.json')) {
+        assert.throws(() => graph.knowledge_graph_list_relations(), /Linked companion/);
+        assert.throws(() => graph.knowledge_graph_delete_relation({ relationId: 'secret' }), /Linked companion/);
+      } else {
+        assert.throws(() => store.loadLegacyRagIndexes(), /Linked companion/);
+        assert.throws(() => store.clearLegacyRagIndexesSync(), /Linked companion/);
+      }
+      assert.equal(readFileSync(privateFile, 'utf8'), secret);
+    } finally { store.close(); }
+  });
+}
+
 test('approved file access is bound across launches and guards actual import/delete operations', async (t) => {
   const f = fixture(t);
   f.makeLibrary(path.join(f.normalProfile, 'PaperQuay'));
@@ -1009,8 +1104,10 @@ test('storage migrations bind copies and metadata to the approved destination', 
   assert.deepEqual(readdirSync(outside), []);
   const reopened = f.create(); reopened.resolve();
   assert.equal(reopened.status().approvedFileAccess.storageRoot, realpathSync.native(safe));
-  assert.throws(() => reopened.validateFileOperation(store.load(), [attachment]), /file access settings changed/,
-    'metadata can open without the PDF volume, but a retargeted setting is never implicitly reapproved for file operations');
+  const pinned = reopened.validateFileOperation(store.load(), [attachment]);
+  assert.equal(pinned.storageRoot, realpathSync.native(safe), 'a retargeted alias never changes its approved canonical destination');
+  assert.deepEqual(pinned.attachmentPaths, [attachment.storedPath]);
+  assert.deepEqual(readdirSync(outside), []);
 });
 
 test('attachment deletion consumes validated canonical paths after an alias is retargeted', async (t) => {
@@ -1187,7 +1284,7 @@ test('cloud PDF upload reads the approved canonical target even if the original 
   };
   try {
     await assert.rejects(commands.run_mineru_cloud_parse({ options: { pdfPath: path.join(link, 'fixture.pdf'), apiToken: 'fixture' } }), /fixture upload captured/);
-    assert.equal(authorizations, 2);
+    assert.equal(authorizations, 3); // Initial approval, bounded read, and pre-upload policy check.
     assert.equal(uploaded, 'safe upload fixture');
     assert.equal(readFileSync(path.join(link, 'fixture.pdf'), 'utf8'), 'private upload fixture');
   } finally { globalThis.fetch = originalFetch; store.close(); }

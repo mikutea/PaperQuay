@@ -212,7 +212,9 @@ function MarkdownPreview({
         )}
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[[rehypeKatex, { strict: 'ignore', throwOnError: false }]]}
-        components={components}
+        // Translation/summary caches can come from an adopted library. Match
+        // the Reader block renderer: retain labels, never fetch Markdown images.
+        components={{ ...components, img: ({ alt }) => <>{alt}</> }}
       >
         {normalized.content}
       </ReactMarkdown>

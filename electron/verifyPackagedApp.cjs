@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const asar = require('@electron/asar');
+const { spawnSync } = require('node:child_process');
 
 const archivePath = process.argv[2];
 
@@ -26,6 +27,11 @@ try {
 
   require(pakoEntry);
   require(path.join(pizzipDirectory, 'flate.js'));
+  const nativeCheck = spawnSync(process.execPath, [path.join(__dirname, 'native', 'smoke.cjs'), extractionRoot], {
+    stdio: 'inherit', windowsHide: true,
+  });
+  if (nativeCheck.error) throw nativeCheck.error;
+  if (nativeCheck.status !== 0) throw new Error('Packaged native filesystem module failed Electron verification.');
 
   const packageJson = JSON.parse(
     fs.readFileSync(path.join(extractionRoot, 'package.json'), 'utf8'),

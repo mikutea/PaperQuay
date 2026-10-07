@@ -35,3 +35,24 @@ jobs:
 
       - name: Run tests
         run: node --test "tests/*.test.ts" "tests/*.test.mjs"
+
+      - name: Verify native addon in Electron
+        run: node electron/native/smoke.cjs
+
+  native-platforms:
+    name: Native filesystem (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-15-intel, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run native:build
+      - run: node --test tests/nativeFs.test.mjs tests/sourceAccess.test.mjs
+      - run: node electron/native/smoke.cjs

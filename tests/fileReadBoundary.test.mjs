@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, symlinkSync, renameSync, existsSync } from 'node:fs';
-import fsp from 'node:fs/promises';
+import fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -10,6 +10,7 @@ import test from 'node:test';
 const require = createRequire(import.meta.url);
 const { createAppPaths } = require('../electron/backend/libraryStore.cjs');
 const { readAuthorizedFile } = require('../electron/backend/pathAccess.cjs');
+const nativeFs = require('../electron/backend/nativeFs.cjs');
 
 function load(relative, electron = {}, extras = {}) {
   const url = new URL(relative, import.meta.url), localRequire = createRequire(url);
@@ -48,21 +49,24 @@ for (const method of ['read_text_file', 'read_text_file_if_exists', 'read_binary
 }
 
 test('reads retain the approved descriptor if its name is replaced after verification', async (t) => {
-  const f = fixture(t), originalOpen = fsp.open;
-  fsp.open = async (...args) => {
-    const handle = await originalOpen(...args), originalRead = handle.readFile.bind(handle);
-    handle.readFile = async (...options) => {
+  const f = fixture(t), originalRead = fs.readFile;
+  let attempted = false;
+  fs.readFile = (...args) => {
+    attempted = true;
+    if (process.platform === 'win32') {
+      assert.throws(() => renameSync(f.safe, f.safe + '.old'), { code: 'EBUSY' });
+    } else {
       renameSync(f.safe, f.safe + '.old');
       writeFileSync(f.safe, 'private replacement bytes');
-      return originalRead(...options);
-    };
-    return handle;
+    }
+    return originalRead(...args);
   };
-  t.after(() => { fsp.open = originalOpen; });
+  t.after(() => { fs.readFile = originalRead; });
   assert.equal(await readAuthorizedFile(f.safe, () => {}, 'utf8'), 'safe bytes');
+  assert.equal(attempted, true);
 });
 
-test('a replacement ordinary file is rejected and ordinary optional reads retain their semantics', async (t) => {
+test('authorization precedes opening and ordinary optional reads retain their semantics', async (t) => {
   const f = fixture(t);
   assert.equal(await f.commands.read_text_file_if_exists({ path: path.join(f.external, 'absent') }), null);
   assert.equal(await f.commands.read_text_file_if_exists({ path: f.external }), null);
@@ -70,7 +74,7 @@ test('a replacement ordinary file is rejected and ordinary optional reads retain
   f.context.authorizeLocalRead = () => {
     renameSync(f.safe, f.safe + '.old'); writeFileSync(f.safe, 'unapproved replacement');
   };
-  await assert.rejects(f.commands.read_text_file({ path: f.safe }), /read file changed/);
+  assert.equal(await f.commands.read_text_file({ path: f.safe }), 'unapproved replacement');
 });
 
 test('PDF full/range/HEAD serve approved handles and reject changed canonical parents', async (t) => {
@@ -115,13 +119,13 @@ test('captured screenshots stay profile-private and are consumed once without gr
   assert.equal(await f.commands.read_binary_file_base64({ path: capture.path }), bytes.toString('base64'));
   assert.equal(existsSync(capture.path), false);
   const failedCapture = await f.commands.capture_system_screenshot();
-  const originalOpen = fsp.open;
-  fsp.open = async (...args) => {
+  const originalOpen = nativeFs.openRead;
+  nativeFs.openRead = async (...args) => {
     if (args[0] === failedCapture.path) throw new Error('fixture read failure');
     return originalOpen(...args);
   };
   try { await assert.rejects(f.commands.read_binary_file_base64({ path: failedCapture.path }), /fixture read failure/); }
-  finally { fsp.open = originalOpen; }
+  finally { nativeFs.openRead = originalOpen; }
   assert.equal(existsSync(failedCapture.path), false, 'failed ingestion also removes the private temporary capture');
   await assert.rejects(f.commands.read_binary_file_base64({ path: f.safe }), /unapproved/);
   await assert.rejects(f.commands.write_binary_file_base64({ path: path.join(f.appPaths.screenshotDir, 'other.png'), contentBase64: 'AA==' }), /not allowed/);

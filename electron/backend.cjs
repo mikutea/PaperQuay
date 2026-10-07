@@ -86,6 +86,7 @@ function createBackend({ app, libraryLocation }) {
     validateLibraryRestoreTarget: (kind, target) => libraryLocation?.validateRestoreTarget(kind, target),
     authorizeCloudParsePath: (library, pdfPath) => libraryLocation?.authorizeCloudParsePath(library, pdfPath),
     authorizeLocalRead: (filePath) => libraryLocation?.authorizeLocalRead(store.load(), filePath),
+    authorizeLocalProbe: (filePath) => libraryLocation?.authorizeKnownRead(store.load(), filePath),
   };
   const fileCommands = createFileCommands(context);
   context.fileCommands = fileCommands;

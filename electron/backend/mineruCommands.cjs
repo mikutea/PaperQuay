@@ -1,10 +1,8 @@
-const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { createWriteAuthorizer, readAuthorizedFile } = require('./pathAccess.cjs');
 const {
   MINERU_API_BASE,
   cleanString,
-  ensureFile,
   fileNameFromPath,
   hashBytes,
   now,
@@ -22,8 +20,9 @@ function createMineruCommands(context) {
       if (!token) throw new Error('MinerU API Token cannot be empty');
       const apiBaseUrl = cleanString(options.apiBaseUrl).replace(/\/+$/, '') || MINERU_API_BASE;
 
-      const pdfPath = await context.authorizeCloudParsePath?.(context.store.load(), options.pdfPath) || await fsp.realpath(options.pdfPath);
-      await ensureFile(pdfPath);
+      const pdfPath = await context.authorizeCloudParsePath?.(context.store.load(), options.pdfPath) || options.pdfPath;
+      const uploadBytes = await readAuthorizedFile(pdfPath,
+        (actual) => context.authorizeCloudParsePath?.(context.store.load(), actual));
 
       const fileName = fileNameFromPath(pdfPath);
       const dataId = `paper_reader_${now()}`;
@@ -49,8 +48,8 @@ function createMineruCommands(context) {
       const uploadUrl = uploadEnvelope.data?.file_urls?.[0];
       if (!batchId || !uploadUrl) throw new Error('MinerU did not return an upload URL');
 
-      const uploadBytes = await readAuthorizedFile(pdfPath,
-        (actual) => context.authorizeCloudParsePath?.(context.store.load(), actual));
+      // Keep the captured bytes, but recheck policy after the upload-URL request.
+      await context.authorizeCloudParsePath?.(context.store.load(), pdfPath);
       const putResponse = await fetch(uploadUrl, { method: 'PUT', body: uploadBytes });
       if (!putResponse.ok) throw new Error(`MinerU PDF upload failed: HTTP ${putResponse.status}`);
 

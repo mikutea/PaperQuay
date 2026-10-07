@@ -1262,10 +1262,15 @@ export default function LiteratureLibraryView({
         failedNames.length > 0
           ? l(` 失败：${failedNames.join('；')}`, ` Failed: ${failedNames.join('; ')}`)
           : '';
+      const retainedNames = results.filter((result) => result.originalRetained)
+        .map((result) => getFileNameFromPath(result.sourcePath)).join(', ');
+      const retainedSummary = retainedNames
+        ? l(` 已导入副本，但原文件未删除：${retainedNames}`, ` Copies imported; originals retained: ${retainedNames}`)
+        : '';
       setStatusMessage(
         l(
-          `导入完成：新增 ${importedCount}，重复 ${duplicateCount}，失败 ${failedCount}。${duplicateSummary}${failedSummary}`,
-          `Import finished: ${importedCount} imported, ${duplicateCount} duplicated, ${failedCount} failed.${duplicateSummary}${failedSummary}`,
+          `导入完成：新增 ${importedCount}，重复 ${duplicateCount}，失败 ${failedCount}。${duplicateSummary}${failedSummary}${retainedSummary}`,
+          `Import finished: ${importedCount} imported, ${duplicateCount} duplicated, ${failedCount} failed.${duplicateSummary}${failedSummary}${retainedSummary}`,
         ),
       );
     } catch (nextError) {

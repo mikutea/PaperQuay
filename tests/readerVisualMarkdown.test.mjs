@@ -6,6 +6,37 @@ import { createServer } from 'vite';
 import react from '@vitejs/plugin-react';
 import { parseFragment } from 'parse5';
 
+test('cached Reader Markdown never creates fetching images and preserves text, math and caller links', async () => {
+  const server = await createServer({
+    configFile: false, logLevel: 'silent', plugins: [react()],
+    server: { middlewareMode: true }, appType: 'custom',
+  });
+  try {
+    const { MarkdownPreview } = await server.ssrLoadModule('/src/features/reader/assistantSidebarPrimitives.tsx');
+    for (const content of [
+      'Translation ![image label](https://fixture.invalid/pixel)',
+      'Translation ![image label](//fixture.invalid/pixel)',
+      'Translation ![image label][tracking]\n\n[tracking]: https://fixture.invalid/pixel',
+      'Translation <img src="https://fixture.invalid/pixel">',
+    ]) {
+      const html = renderToStaticMarkup(createElement(MarkdownPreview, {
+        content,
+        components: { img: () => createElement('img', { src: 'https://fixture.invalid/override' }) },
+      }));
+      assert.doesNotMatch(html, /<img[\s>]|<source[\s>]/i);
+      assert.match(html, /Translation/);
+      if (content.includes('image label')) assert.match(html, /image label/);
+    }
+    const ordinary = renderToStaticMarkup(createElement(MarkdownPreview, {
+      content: '**Ordinary translation** $x^2$ [citation](https://fixture.invalid/paper)',
+      components: { a: ({ children }) => createElement('button', { type: 'button' }, children) },
+    }));
+    assert.match(ordinary, /<strong>Ordinary translation<\/strong>/);
+    assert.match(ordinary, /class="katex"/);
+    assert.match(ordinary, /<button type="button">citation<\/button>/);
+  } finally { await server.close(); }
+});
+
 test('Reader preserves inline image alt text without creating fetching image elements', async () => {
   const server = await createServer({
     configFile: false, logLevel: 'silent', plugins: [react()],

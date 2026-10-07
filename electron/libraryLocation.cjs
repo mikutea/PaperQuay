@@ -2,7 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID, createHash } = require('node:crypto');
 const { DatabaseSync, withTransaction } = require('./backend/nodeSqlite.cjs');
-const { canonicalPath } = require('./backend/pathAccess.cjs');
+const { canonicalPath, isWithin, resolveAuthorizedPath } = require('./backend/pathAccess.cjs');
 
 const REGISTRY_NAME = 'paperquay-library-locations.json';
 const LIBRARY_FILE = 'paperquay-library.sqlite';
@@ -24,6 +24,7 @@ function fileAccessPolicy(details) {
     storageRoot: details.storageRoot,
     importMode: details.importMode,
     attachmentRoots: details.attachmentRoots,
+    pathMappings: details.pathMappings,
   };
 }
 
@@ -101,11 +102,14 @@ function inspectLibraryDirectory(directory, {
       : '没有找到 paperquay-library.sqlite。不会新建或覆盖文库。 / Library database not found. No library will be created or overwritten.');
   }
   const dataDirectory = fs.realpathSync(candidates[0]);
-  for (const name of [LIBRARY_FILE, 'paperquay-notes.sqlite', 'paperquay-rag.sqlite', '.backup-snapshots', '.mineru-cache', '.downloads', '.screenshots']) {
+  for (const name of [LIBRARY_FILE, 'paperquay-notes.sqlite', 'paperquay-rag.sqlite', 'paperquay-knowledge-graph-relations.json', 'paperquay-library.json', '.backup-snapshots', '.mineru-cache', '.downloads', '.screenshots']) {
     for (const suffix of (name.endsWith('.sqlite') ? ['', '-wal', '-shm', '-journal'] : [''])) {
       const candidate = path.join(dataDirectory, name + suffix);
       let link = false;
-      try { link = fs.lstatSync(candidate).isSymbolicLink(); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      try {
+        const stat = fs.lstatSync(candidate);
+        link = stat.isSymbolicLink() || (stat.isFile() && stat.nlink > 1);
+      } catch (error) { if (error.code !== 'ENOENT') throw error; }
       if (link || (fs.existsSync(candidate) && comparable(canonicalPath(candidate)) !== comparable(path.join(canonicalPath(dataDirectory), name + suffix)))) {
         throw new Error('文库附属路径包含链接，未切换文库。 / Linked library companion paths are not supported.');
       }
@@ -158,11 +162,19 @@ function inspectLibraryDirectory(directory, {
     // be mapped, and a local-looking path can traverse a remote symlink.
     const resolveReference = resolveFileAccess ? canonicalPath : (value) => path.resolve(value);
     const attachmentRoots = [];
+    const pathMappings = [];
     if (inspectAttachmentRoots) {
       const roots = new Set();
       for (const row of declaredAttachments) {
         const target = resolveReference(row.stored_path);
         roots.add(path.dirname(target));
+        if (resolveFileAccess) {
+          const rawRoot = path.dirname(row.stored_path);
+          const canonicalRoot = canonicalPath(rawRoot);
+          pathMappings.push(comparable(canonicalRoot) === comparable(path.dirname(target))
+            ? { rawRoot, canonicalRoot, exact: false }
+            : { rawRoot: row.stored_path, canonicalRoot: target, exact: true });
+        }
         const effective = effectiveRelativePath(storageDirectory, row.relative_path, resolveReference);
         if (effective) roots.add(path.dirname(effective));
       }
@@ -177,6 +189,7 @@ function inspectLibraryDirectory(directory, {
       fileAccessSignature,
       importMode,
       attachmentRoots,
+      pathMappings,
       paperCount: Number(db.prepare('SELECT count(*) AS count FROM papers').get().count),
       attachmentCount: Number(db.prepare('SELECT count(*) AS count FROM attachments').get().count),
     };
@@ -204,7 +217,10 @@ function readRegistry(registryPath) {
           typeof entry.approvedFileAccess.storageRoot !== 'string' || !path.isAbsolute(entry.approvedFileAccess.storageRoot) ||
           !['copy', 'move', 'keep'].includes(entry.approvedFileAccess.importMode) ||
           !Array.isArray(entry.approvedFileAccess.attachmentRoots) ||
-          entry.approvedFileAccess.attachmentRoots.some((root) => typeof root !== 'string' || !path.isAbsolute(root))
+          entry.approvedFileAccess.attachmentRoots.some((root) => typeof root !== 'string' || !path.isAbsolute(root)) ||
+          (entry.approvedFileAccess.pathMappings != null && (!Array.isArray(entry.approvedFileAccess.pathMappings) ||
+            entry.approvedFileAccess.pathMappings.some((item) => typeof item?.rawRoot !== 'string' || !path.isAbsolute(item.rawRoot) ||
+              typeof item?.canonicalRoot !== 'string' || !path.isAbsolute(item.canonicalRoot) || typeof item.exact !== 'boolean')))
         )))) {
     throw new Error('文库位置记录无效。请选择已有文库，不会自动创建空库。 / Invalid library location record. Choose an existing library.');
   }
@@ -505,10 +521,30 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
     return true;
   }
 
+  function mapApprovedPath(filePath, includeData = false) {
+    assertFilesystemPath(filePath);
+    const policy = active.approvedFileAccess;
+    const mappings = [
+      ...(policy.pathMappings || []),
+      { rawRoot: policy.storageDirectory, canonicalRoot: policy.storageRoot },
+      ...[policy.storageRoot, ...policy.attachmentRoots, ...(includeData ? [active.dataDirectory] : [])]
+        .map((root) => ({ rawRoot: root, canonicalRoot: root })),
+    ].sort((a, b) => b.rawRoot.length - a.rawRoot.length || Number(Boolean(b.exact)) - Number(Boolean(a.exact)));
+    const mapping = mappings.find((item) => item.exact ? comparable(item.rawRoot) === comparable(filePath) : isWithin(item.rawRoot, filePath));
+    if (!mapping) throw new Error('Library file access settings changed. Use Open Existing Library to approve paths again.');
+    return mapping.exact ? mapping.canonicalRoot : path.join(mapping.canonicalRoot, path.relative(mapping.rawRoot, filePath));
+  }
+
+  function resolveApprovedPath(mapped, includeData = false) {
+    const policy = active.approvedFileAccess;
+    const roots = [policy.storageRoot, ...policy.attachmentRoots, ...(includeData ? [active.dataDirectory] : [])];
+    return resolveAuthorizedPath(mapped, (candidate) => roots.some((root) => isWithin(root, candidate)));
+  }
+
   function validateFileOperation(library, attachments = [], { metadataOnly = false } = {}) {
     if (!active?.approvedFileAccess) return;
     const onDisk = inspectLibraryDirectory(active.dataDirectory, {
-      verifyIntegrity: false, resolveFileAccess: !metadataOnly, approvedFileAccess: active.approvedFileAccess,
+      verifyIntegrity: false, approvedFileAccess: active.approvedFileAccess,
     });
     if (comparable(onDisk.dataDirectory) !== comparable(active.dataDirectory)) throw new Error('Library directory changed.');
     assertApprovedFileAccess(onDisk, active.approvedFileAccess);
@@ -518,17 +554,20 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
     // Metadata saves must still reject changed import policy, but must not
     // inspect attachment/PDF volumes or grant fresh canonical permissions.
     if (metadataOnly) return { storageRoot: active.approvedFileAccess.storageRoot, attachmentPaths: [] };
-    const attachmentPaths = attachments.map((attachment) => {
-      if (typeof attachment.storedPath !== 'string' || !path.isAbsolute(attachment.storedPath)) throw new Error('Invalid attachment path. No files were changed.');
-      assertFilesystemPath(attachment.storedPath);
-      return canonicalPath(attachment.storedPath);
+    // Check ALL raw paths first. No stat/realpath/native open may probe even the
+    // first reference if a later supplied path has drifted outside approval.
+    const mappedPaths = attachments.map((attachment) => mapApprovedPath(attachment.storedPath));
+    const mappedRelatives = attachments.map((attachment) => {
+      const raw = effectiveRelativePath(storageDirectory, attachment.relativePath, (value) => path.resolve(value));
+      return raw ? mapApprovedPath(raw) : null;
     });
+    const attachmentPaths = mappedPaths.map((target) => resolveApprovedPath(target));
     const details = {
       storageDirectory,
-      storageRoot: canonicalPath(storageDirectory),
+      storageRoot: resolveApprovedPath(active.approvedFileAccess.storageRoot),
       importMode: library.settings.importMode || 'copy',
       attachmentRoots: attachments.flatMap((attachment, index) => {
-        const effective = effectiveRelativePath(storageDirectory, attachment.relativePath);
+        const effective = mappedRelatives[index] && resolveApprovedPath(mappedRelatives[index]);
         return [path.dirname(attachmentPaths[index]), ...(effective ? [path.dirname(effective)] : [])];
       }),
     };
@@ -537,30 +576,44 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
   }
 
   async function authorizeCloudParsePath(library, pdfPath, cloud = true) {
-    if (!active?.approvedFileAccess) return canonicalPath(pdfPath);
+    assertFilesystemPath(pdfPath);
+    if (!active?.approvedFileAccess) return resolveAuthorizedPath(pdfPath, () => true);
     validateFileOperation(library, library.papers.flatMap((paper) => paper.attachments));
     if (typeof pdfPath !== 'string' || !path.isAbsolute(pdfPath)) throw new Error('Invalid cloud parsing PDF path.');
-    const actual = canonicalPath(pdfPath);
-    if (!cloud) {
-      const relative = path.relative(comparable(canonicalPath(active.dataDirectory)), comparable(actual));
-      if (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith('..' + path.sep)) return actual;
-    }
     const approvedFiles = cloud ? approvedCloudFiles : approvedReadFiles;
-    try { validateFileOperation(library, [{ storedPath: actual }]); return actual; }
+    try { return resolveApprovedPath(mapApprovedPath(pdfPath, !cloud), !cloud); }
     catch (error) {
-      if (approvedFiles.has(comparable(actual))) return actual;
+      if (approvedFiles.has(comparable(pdfPath))) return resolveAuthorizedPath(pdfPath,
+        (candidate) => approvedFiles.has(comparable(candidate)));
       const answer = await dialog.showMessageBox({
         type: 'warning', title: cloud ? '确认上传外部 PDF / Approve External PDF Upload' : '确认读取外部文件 / Approve External File Read',
         message: cloud ? '将此文件上传到云端解析服务？ / Upload this file to the cloud parsing service?' : '打开此文件？ / Open this file?',
-        detail: `${JSON.stringify(actual)}\n\n此文件不在已批准的文库范围内。后续解析、笔记或 RAG 索引可能把正文写入当前文库及其共享位置。 / This file is outside the approved library roots. Subsequent parsing, notes or RAG indexing may save its contents in this library and its shared location.`,
+        detail: `${JSON.stringify(pdfPath)}\n\n此文件不在已批准的文库范围内。继续后才会检查路径；网络、映射盘和链接可能连接远程服务器并发送身份验证信息。 / Only after consent will this path be inspected; network, mapped-drive and linked paths may contact remote servers and send authentication information.\n\n后续解析、笔记或 RAG 索引可能把正文写入当前共享文库。 / Subsequent parsing, notes or RAG indexing may save its contents in this shared library.`,
         buttons: ['取消 / Cancel', cloud ? '上传此文件 / Upload This File' : '读取此文件 / Read This File'], defaultId: 0, cancelId: 0, noLink: true,
       });
       if (answer.response !== 1) throw error;
     }
     validateFileOperation(library, library.papers.flatMap((paper) => paper.attachments));
-    if (comparable(canonicalPath(pdfPath)) !== comparable(actual)) throw new Error('Cloud parsing file changed during approval.');
+    const actual = resolveAuthorizedPath(pdfPath, () => true);
+    if (comparable(actual) !== comparable(pdfPath)) {
+      const answer = await dialog.showMessageBox({
+        type: 'warning', title: '确认实际文件 / Approve Resolved File',
+        message: cloud ? '上传这个实际文件？ / Upload this resolved file?' : '读取这个实际文件？ / Read this resolved file?',
+        detail: `${JSON.stringify(pdfPath)}\n→ ${JSON.stringify(actual)}\n\n路径通过链接解析到了另一处。正文可能被上传或保存到当前共享文库。 / This path resolves through a link to a different location. Its contents may be uploaded or saved in the current shared library.`,
+        buttons: ['取消 / Cancel', '批准实际文件 / Approve Resolved File'], defaultId: 0, cancelId: 0, noLink: true,
+      });
+      if (answer.response !== 1) throw new Error('Resolved file approval canceled.');
+    }
+    approvedFiles.add(comparable(pdfPath));
     approvedFiles.add(comparable(actual));
     return actual;
+  }
+
+  function authorizeKnownRead(library, filePath) {
+    assertFilesystemPath(filePath);
+    if (!active?.approvedFileAccess) return resolveAuthorizedPath(filePath, () => true);
+    validateFileOperation(library, library.papers.flatMap((paper) => paper.attachments), { metadataOnly: true });
+    return resolveApprovedPath(mapApprovedPath(filePath, true), true);
   }
 
   function validateRestoreTarget(kind, target) {
@@ -654,7 +707,7 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
     } };
   }
 
-  return { resolve, rememberActive, status, selectExisting, activateSelected, recover, validateFileOperation, validateRestoreTarget, approveSettingsChange, approveImportedAttachments, authorizeCloudParsePath,
+  return { resolve, rememberActive, status, selectExisting, activateSelected, recover, validateFileOperation, validateRestoreTarget, approveSettingsChange, approveImportedAttachments, authorizeCloudParsePath, authorizeKnownRead,
     authorizeLocalRead: (library, filePath) => authorizeCloudParsePath(library, filePath, false) };
 }
 

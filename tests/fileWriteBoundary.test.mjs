@@ -19,17 +19,33 @@ function fixture(t) {
   mkdirSync(external); mkdirSync(outside);
   const appPaths = createAppPaths({ getPath: () => path.join(root, 'profile') }, external);
   const module = { exports: {} };
+  const consent = { response: 1, prompts: [] };
   vm.runInNewContext(readFileSync(sourceUrl, 'utf8'), {
-    require: (name) => name === 'electron' ? {} : require(name), module, process, Buffer,
+    require: (name) => name === 'electron' ? { dialog: { showMessageBox: async (options) => { consent.prompts.push(options); return { response: consent.response }; } } } : require(name), module, process, Buffer,
     fetch: (...args) => globalThis.fetch(...args),
   });
   const context = { appPaths, approvedWritePaths: new Set(),
     store: { load: () => ({ settings: { storageDir: path.join(external, 'pdfs') } }) } };
   const commands = module.exports.createFileCommands(context);
   const link = (target, alias) => symlinkSync(target, alias, process.platform === 'win32' ? 'junction' : 'dir');
-  return { root, external, outside, appPaths, context, commands, link,
+  return { root, external, outside, appPaths, context, commands, link, consent,
     reopen: () => module.exports.createFileCommands(context) };
 }
+
+test('renderer write approval cannot grant an outside capability without native consent', async (t) => {
+  const f = fixture(t), target = path.join(f.outside, 'private.txt'); writeFileSync(target, 'private');
+  f.consent.response = 0;
+  await assert.rejects(f.commands.approve_write_path({ path: target }), /approval canceled/);
+  await assert.rejects(f.commands.write_text_file({ path: target, content: 'bad' }), /not allowed/);
+  assert.equal(readFileSync(target, 'utf8'), 'private'); assert.equal(f.consent.prompts.length, 1);
+  f.consent.response = 1;
+  const alias = path.join(f.root, 'friendly'); f.link(f.outside, alias);
+  await f.commands.approve_write_path({ path: path.join(alias, 'private.txt') });
+  assert.equal(f.consent.prompts.length, 3, 'link approval also discloses its actual target');
+  await f.commands.write_text_file({ path: path.join(alias, 'private.txt'), content: 'explicitly approved' });
+  assert.equal(readFileSync(target, 'utf8'), 'explicitly approved');
+  await assert.rejects(f.commands.write_text_file({ path: path.join(f.outside, 'adjacent.txt'), content: 'bad' }), /not allowed/);
+});
 
 test('an unavailable configured cache cannot prevent opening the library and local settings', async (t) => {
   const f = fixture(t);
@@ -39,7 +55,7 @@ test('an unavailable configured cache cannot prevent opening the library and loc
   const reopened = f.reopen();
   assert.ok(await reopened.read_app_config());
   assert.ok(await reopened.get_app_default_paths());
-  await assert.rejects(reopened.write_text_file({ path: path.join(unavailable, 'full.md'), content: 'no' }), /ENOENT/);
+  await assert.rejects(reopened.write_text_file({ path: path.join(unavailable, 'full.md'), content: 'no' }), /not allowed/);
   if (process.platform === 'win32' && !existsSync('Q:\\')) {
     await reopened.write_text_file({ path: f.appPaths.configPath, content: JSON.stringify({ settings: { mineruCacheDir: 'Q:\\PaperQuay\\MinerU' } }) });
     assert.doesNotThrow(() => f.reopen());
@@ -104,7 +120,7 @@ test('dangling links and aliases to the exact local config do not grant generic 
   const f = fixture(t);
   const missing = path.join(f.outside, 'missing');
   const dangling = path.join(f.external, 'dangling'); f.link(missing, dangling);
-  await assert.rejects(f.commands.write_text_file({ path: path.join(dangling, 'new.txt'), content: 'no' }), /ENOENT/);
+  await assert.rejects(f.commands.write_text_file({ path: path.join(dangling, 'new.txt'), content: 'no' }), /not allowed/);
   assert.equal(existsSync(missing), false);
   await f.commands.write_text_file({ path: f.appPaths.configPath, content: 'trusted config' });
   const alias = path.join(f.external, 'profile-alias'); f.link(path.dirname(f.appPaths.configPath), alias);
@@ -136,7 +152,9 @@ test('a selected custom cache directory stays pinned and ordinary cache migratio
   assert.equal(prepared.migratedCount, 1);
   assert.equal(readFileSync(path.join(custom, 'document-safe', 'full.md'), 'utf8'), '# migrated');
   unlinkSync(alias); f.link(f.outside, alias);
-  await assert.rejects(f.commands.write_text_file({ path: path.join(alias, 'summary.json'), content: 'no' }), /not allowed/);
+  await f.commands.write_text_file({ path: path.join(alias, 'summary.json'), content: 'pinned' });
+  assert.equal(readFileSync(path.join(custom, 'summary.json'), 'utf8'), 'pinned');
+  assert.equal(existsSync(path.join(f.outside, 'summary.json')), false);
   await f.commands.write_text_file({ path: path.join(prepared.directory, 'summary.json'), content: 'yes' });
   assert.equal(readFileSync(path.join(custom, 'summary.json'), 'utf8'), 'yes');
 });

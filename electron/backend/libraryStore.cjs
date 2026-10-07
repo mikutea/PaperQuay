@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const { randomUUID } = require('node:crypto');
 const { createLibraryDatabaseStore } = require('./libraryDatabaseStore.cjs');
 const { hashBytes, now } = require('./utils.cjs');
+const { canonicalPath } = require('./pathAccess.cjs');
 
 const SYSTEM_CATEGORIES = [
   ['system-all', 'All Papers', 'all', 0],
@@ -12,8 +13,9 @@ const SYSTEM_CATEGORIES = [
 ];
 
 function createAppPaths(app, dataDirectory) {
-  const dataDir = dataDirectory || path.join(app.getPath('userData'), 'PaperQuay');
-  const profileLibrary = path.join(app.getPath('userData'), 'PaperQuay');
+  // Pin explicitly selected/profile-owned roots before deriving companions.
+  const profileLibrary = canonicalPath(path.join(app.getPath('userData'), 'PaperQuay'));
+  const dataDir = canonicalPath(dataDirectory || profileLibrary);
   const normalizedPath = (value) => {
     let ancestor = path.resolve(value);
     const missing = [];
@@ -29,7 +31,7 @@ function createAppPaths(app, dataDirectory) {
     dataDir,
     // Model endpoints, credentials and automation belong to the trusted local
     // profile, never to a supplied/shared library selected by the user.
-    configPath: path.join(app.getPath('userData'), 'PaperQuay', '.settings', 'paperquay.config.json'),
+    configPath: path.join(profileLibrary, '.settings', 'paperquay.config.json'),
     legacyConfigPath: path.join(profileLibrary, 'paperquay-data', 'paperquay.config.json'),
     backupSnapshotDir: path.join(profileLibrary, '.backup-snapshots'),
     privateLibrarySettingsPath: external ? path.join(profileLibrary, '.settings', 'libraries',
@@ -116,7 +118,7 @@ function createLibraryStore(appPaths) {
   if (!privatePath) return store;
 
   const defaults = createDefaultLibrary(appPaths);
-  const privateDefaults = () => ({ webdav: { ...defaults.webdav }, openAlexApiKey: '', openAlexMailto: '' });
+  const privateDefaults = () => ({ webdav: { ...defaults.webdav }, openAlexApiKey: '', openAlexMailto: '', zoteroLocalDataDir: '' });
   function readPrivate() {
     if (!fs.existsSync(privatePath)) return privateDefaults();
     const text = fs.readFileSync(privatePath, 'utf8');
@@ -125,7 +127,7 @@ function createLibraryStore(appPaths) {
     const valid = value && typeof value === 'object' && !Array.isArray(value) &&
       value.webdav && typeof value.webdav === 'object' && !Array.isArray(value.webdav) &&
       ['endpointUrl', 'remoteRoot', 'username', 'password'].every((key) => value.webdav[key] == null || typeof value.webdav[key] === 'string') &&
-      ['openAlexApiKey', 'openAlexMailto'].every((key) => value[key] == null || typeof value[key] === 'string');
+      ['openAlexApiKey', 'openAlexMailto', 'zoteroLocalDataDir'].every((key) => value[key] == null || typeof value[key] === 'string');
     if (valid) return value;
     // Preserve the original bytes for recovery. Never restore a remote endpoint
     // or credential from the supplied library when local settings are damaged.
@@ -149,14 +151,16 @@ function createLibraryStore(appPaths) {
   function withPrivate(library) {
     const local = readPrivate();
     return { ...library, webdav: { ...defaults.webdav, ...local.webdav },
-      settings: { ...library.settings, openAlexApiKey: local.openAlexApiKey || '', openAlexMailto: local.openAlexMailto || '' } };
+      settings: { ...library.settings, openAlexApiKey: local.openAlexApiKey || '', openAlexMailto: local.openAlexMailto || '',
+        zoteroLocalDataDir: local.zoteroLocalDataDir || '' } };
   }
   function save(library) {
     const previous = readPrivate();
-    writePrivate({ webdav: library.webdav, openAlexApiKey: library.settings.openAlexApiKey || '', openAlexMailto: library.settings.openAlexMailto || '' });
+    writePrivate({ webdav: library.webdav, openAlexApiKey: library.settings.openAlexApiKey || '', openAlexMailto: library.settings.openAlexMailto || '',
+      zoteroLocalDataDir: library.settings.zoteroLocalDataDir || '' });
     try {
       store.saveSync({ ...library, webdav: defaults.webdav,
-        settings: { ...library.settings, openAlexApiKey: '', openAlexMailto: '' } });
+        settings: { ...library.settings, openAlexApiKey: '', openAlexMailto: '', zoteroLocalDataDir: '' } });
     } catch (error) {
       writePrivate(previous);
       throw error;

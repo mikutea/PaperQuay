@@ -12,6 +12,10 @@
   "main": "electron/main.cjs",
   "type": "module",
   "scripts": {
+    "native:build": "node electron/native/build.cjs",
+    "prebuild": "npm run native:build",
+    "predev": "npm run native:build",
+    "preelectron:dev": "npm run native:build",
     "web:dev": "vite --host 127.0.0.1 --port 1420",
     "dev": "node electron/dev.cjs",
     "electron:dev": "node electron/dev.cjs",
@@ -56,6 +60,7 @@
     "unified": "^11.0.5"
   },
   "devDependencies": {
+    "node-gyp": "12.4.0",
     "@electron/asar": "^3.4.1",
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.12",
@@ -101,6 +106,7 @@
     "npmRebuild": false,
     "asar": true,
     "asarUnpack": [
+      "electron/native/bin/**/*.node",
       "node_modules/sql.js/dist/sql-wasm.wasm",
       "node_modules/sqlite-vec-*/**/*"
     ],
@@ -118,6 +124,9 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
+      "!electron/native/build/**/*",
+      "!electron/native/*.cc",
+      "!electron/native/binding.gyp",
       "package.json",
       "node_modules/adm-zip/**/*",
       "node_modules/electron-updater/**/*",

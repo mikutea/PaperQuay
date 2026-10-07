@@ -13,6 +13,12 @@ const {
 
 function createZoteroCommands(context) {
   const { appPaths, fileCommands } = context;
+  async function localOptions(options = {}) {
+    const dataDir = options.dataDir || await detectLocalZoteroDataDir();
+    const approved = await context.approveZoteroSourceRoot?.(dataDir, { detected: !options.dataDir });
+    return { ...options, dataDir: approved || dataDir,
+      authorizeSources: context.approveImportSources };
+  }
 
   return {
     zotero_lookup_key({ apiKey }) {
@@ -31,24 +37,26 @@ function createZoteroCommands(context) {
       return detectLocalZoteroDataDir();
     },
 
-    zotero_select_local_data_dir(_args, event) {
-      return fileCommands.select_directory({ title: 'Select Zotero data directory' }, event);
+    async zotero_select_local_data_dir(_args, event) {
+      const selected = await fileCommands.select_directory({ title: 'Select Zotero data directory' }, event);
+      if (selected) context.rememberPickedZoteroSourceRoot?.(selected);
+      return selected;
     },
 
-    zotero_list_local_collections({ options } = {}) {
-      return listLocalCollections(options ?? {});
+    async zotero_list_local_collections({ options } = {}) {
+      return listLocalCollections(await localOptions(options));
     },
 
-    zotero_list_local_library_items({ options } = {}) {
-      return listLocalLibraryItems(options ?? {});
+    async zotero_list_local_library_items({ options } = {}) {
+      return listLocalLibraryItems(await localOptions(options));
     },
 
-    zotero_list_local_collection_items({ options } = {}) {
-      return listLocalCollectionItems(options ?? {});
+    async zotero_list_local_collection_items({ options } = {}) {
+      return listLocalCollectionItems(await localOptions(options));
     },
 
-    zotero_list_related_notes({ options } = {}) {
-      return listRelatedNotes(options ?? {});
+    async zotero_list_related_notes({ options } = {}) {
+      return listRelatedNotes(await localOptions(options));
     },
   };
 }

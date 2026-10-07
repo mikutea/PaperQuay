@@ -11,7 +11,7 @@ const { DatabaseSync } = require('../electron/backend/nodeSqlite.cjs');
 const { createWebdavCommands } = require('../electron/backend/webdavCommands.cjs');
 const { createLibraryCommands } = require('../electron/backend/libraryCommands.cjs');
 
-test('adopted libraries keep WebDAV/OpenAlex secrets and endpoints out of the DB and its snapshots', async (t) => {
+test('adopted libraries keep WebDAV/OpenAlex credentials and Zotero sources out of the DB and its snapshots', async (t) => {
   const root = mkdtempSync(path.join(tmpdir(), 'paperquay-private-settings-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const profile = path.join(root, 'local-profile');
@@ -21,15 +21,18 @@ test('adopted libraries keep WebDAV/OpenAlex secrets and endpoints out of the DB
     const db = new DatabaseSync(appPaths.libraryDatabasePath);
     db.prepare('INSERT OR REPLACE INTO webdav_settings (key,value_json) VALUES (?,?)').run('endpointUrl', JSON.stringify('https://supplier.invalid/dav'));
     db.prepare('INSERT OR REPLACE INTO webdav_settings (key,value_json) VALUES (?,?)').run('password', JSON.stringify('supplier-fixture-token'));
+    db.prepare('INSERT OR REPLACE INTO library_settings (key,value_json) VALUES (?,?)').run('zoteroLocalDataDir', JSON.stringify(path.join(root, 'supplier-zotero')));
     db.close();
     assert.equal(store.load().webdav.endpointUrl, '');
     assert.equal(store.load().webdav.password, '');
+    assert.equal(store.load().settings.zoteroLocalDataDir, '');
     const context = { store, appPaths };
     await createWebdavCommands(context).webdav_update_backup_settings({ settings: {
       endpointUrl: 'https://user-fixture.invalid/dav', username: 'fixture-user', password: 'private-webdav-fixture-token',
     } });
     await createLibraryCommands(context).library_update_settings({ settings: {
       openAlexApiKey: 'private-openalex-fixture-token', openAlexMailto: 'fixture@example.invalid',
+      zoteroLocalDataDir: path.join(root, 'private-zotero-fixture'),
     } });
     const snapshot = path.join(root, 'export.sqlite');
     store.snapshotTo(snapshot);
@@ -38,10 +41,12 @@ test('adopted libraries keep WebDAV/OpenAlex secrets and endpoints out of the DB
       assert.equal(bytes.includes(Buffer.from('private-webdav-fixture-token')), false);
       assert.equal(bytes.includes(Buffer.from('private-openalex-fixture-token')), false);
       assert.equal(bytes.includes(Buffer.from('user-fixture.invalid')), false);
+      assert.equal(bytes.includes(Buffer.from('private-zotero-fixture')), false);
       const inspection = new DatabaseSync(file, { readOnly: true });
       try {
         assert.equal(JSON.parse(inspection.prepare("SELECT value_json FROM webdav_settings WHERE key='password'").get().value_json), '');
         assert.equal(JSON.parse(inspection.prepare("SELECT value_json FROM library_settings WHERE key='openAlexApiKey'").get().value_json), '');
+        assert.equal(JSON.parse(inspection.prepare("SELECT value_json FROM library_settings WHERE key='zoteroLocalDataDir'").get().value_json), '');
       } finally { inspection.close(); }
     }
     const oldPrivate = readFileSync(appPaths.privateLibrarySettingsPath, 'utf8');
@@ -53,11 +58,15 @@ test('adopted libraries keep WebDAV/OpenAlex secrets and endpoints out of the DB
     store = createLibraryStore(appPaths);
     assert.equal(store.load().webdav.password, 'private-webdav-fixture-token');
     assert.equal(store.load().settings.openAlexApiKey, 'private-openalex-fixture-token');
+    assert.equal(store.load().settings.zoteroLocalDataDir, path.join(root, 'private-zotero-fixture'));
     const changed = new DatabaseSync(appPaths.libraryDatabasePath);
     changed.prepare('UPDATE webdav_settings SET value_json=? WHERE key=?').run(JSON.stringify('https://supplier.invalid/changed'), 'endpointUrl');
+    changed.prepare('UPDATE library_settings SET value_json=? WHERE key=?').run(JSON.stringify(path.join(root, 'changed-supplier-zotero')), 'zoteroLocalDataDir');
     changed.close();
     assert.equal(store.load().webdav.endpointUrl, 'https://user-fixture.invalid/dav');
     assert.equal(store.loadFromSnapshot(snapshot).webdav.password, 'private-webdav-fixture-token');
+    assert.equal(store.loadFromSnapshot(snapshot).settings.zoteroLocalDataDir, path.join(root, 'private-zotero-fixture'));
+    assert.equal(store.load().settings.zoteroLocalDataDir, path.join(root, 'private-zotero-fixture'));
   } finally { store.close(); }
 });
 

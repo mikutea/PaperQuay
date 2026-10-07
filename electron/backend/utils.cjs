@@ -1028,6 +1028,7 @@ async function assertMineruZipOutputPathSafe(extractDir, outputPath, entryName) 
 }
 
 async function readZipWithAdm(zipBytes, extractDir, authorizeWrite) {
+  const nativeFs = require('./nativeFs.cjs');
   const { canonicalPath, assertBoundPath, writeBoundFile } = require('./pathAccess.cjs');
   extractDir = authorizeWrite ? authorizeWrite(extractDir) : canonicalPath(extractDir);
   const AdmZip = require('adm-zip');
@@ -1042,7 +1043,7 @@ async function readZipWithAdm(zipBytes, extractDir, authorizeWrite) {
   let markdownPath = null;
 
   assertBoundPath(extractDir);
-  await fsp.mkdir(extractDir, { recursive: true });
+  await nativeFs.mkdir(extractDir);
 
   for (const entry of entries) {
     const normalized = entry.entryName.replace(/\\/g, '/');
@@ -1053,7 +1054,7 @@ async function readZipWithAdm(zipBytes, extractDir, authorizeWrite) {
     const outputPath = path.join(extractDir, normalized);
     assertBoundPath(extractDir);
     await assertMineruZipOutputPathSafe(extractDir, outputPath, normalized);
-    await fsp.mkdir(path.dirname(outputPath), { recursive: true });
+    await nativeFs.mkdir(path.dirname(outputPath));
     const data = entry.getData();
     // Recheck after decompression, immediately before the destination is opened.
     await assertMineruZipOutputPathSafe(extractDir, outputPath, normalized);

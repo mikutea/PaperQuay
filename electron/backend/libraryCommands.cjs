@@ -1,6 +1,7 @@
 const fsp = require('node:fs/promises');
 const path = require('node:path');
-const { assertBoundPath } = require('./pathAccess.cjs');
+const { assertBoundPath, removeBoundFile, openAuthorizedReadFile, writeBoundFile } = require('./pathAccess.cjs');
+const nativeFs = require('./nativeFs.cjs');
 const {
   attachCategoryCounts,
   normalizeAuthor,
@@ -10,10 +11,8 @@ const {
 } = require('./libraryStore.cjs');
 const {
   cleanString,
-  ensureFile,
   fileNameFromPath,
   hashBytes,
-  hashFile,
   id,
   isPdf,
   now,
@@ -44,16 +43,8 @@ function pathExists(filePath) {
 }
 
 async function copyFileIfNeeded(sourcePath, targetPath, bound = false) {
-  if (bound) { assertBoundPath(sourcePath); assertBoundPath(targetPath); }
-  await fsp.mkdir(path.dirname(targetPath), { recursive: true });
-
-  if (await pathExists(targetPath)) {
-    return false;
-  }
-
-  if (bound) { assertBoundPath(sourcePath); assertBoundPath(targetPath); }
-  await fsp.copyFile(sourcePath, targetPath);
-  return true;
+  try { await nativeFs.copy(sourcePath, targetPath, { exclusive: true }); return true; }
+  catch (error) { if (error.code === 'EEXIST') return false; throw error; }
 }
 
 async function migrateLibraryStorageDirectory(library, previousStorageDir, nextStorageDir, approval = null) {
@@ -65,7 +56,7 @@ async function migrateLibraryStorageDirectory(library, previousStorageDir, nextS
     return { copiedFiles: 0, updatedAttachments: 0 };
   }
 
-  await fsp.mkdir(targetDir, { recursive: true });
+  await nativeFs.mkdir(targetDir);
   let copiedFiles = 0;
   let updatedAttachments = 0;
 
@@ -510,7 +501,7 @@ function createLibraryCommands(context) {
           library.settings.storageDir,
           approval,
         );
-        await fsp.mkdir(approval?.storageRoot || library.settings.storageDir, { recursive: true });
+        await nativeFs.mkdir(approval?.storageRoot || library.settings.storageDir);
       }
       if (approval) approval.commit(() => store.saveSync(library));
       else await store.save(library);
@@ -640,14 +631,19 @@ function createLibraryCommands(context) {
       const previous = structuredClone(library);
       const results = [];
       const storageDir = approved?.storageRoot || library.settings.storageDir || path.join(appPaths.dataDir, 'paperquay-data');
-      await fsp.mkdir(storageDir, { recursive: true });
+      const importMode = request.importMode || library.settings.importMode;
+      if (!['copy', 'move', 'keep'].includes(importMode)) throw new Error('Invalid PDF import mode.');
+      const sourceMappings = await context.approveImportSources?.(request.paths ?? [], { mode: importMode });
+      const moveCleanup = [];
 
       for (const sourcePath of request.paths ?? []) {
         try {
           if (!isPdf(sourcePath)) throw new Error('Only PDF files can be imported');
-          await ensureFile(sourcePath);
-
-          const bytes = await fsp.readFile(sourcePath);
+          const actualSource = sourceMappings?.get(sourcePath) || sourcePath;
+          const { handle } = await openAuthorizedReadFile(actualSource);
+          let bytes, sourceIdentity, sourceVersion;
+          try { bytes = await handle.readFile(); sourceIdentity = handle.identity; sourceVersion = handle.version; }
+          finally { await handle.close(); }
           const contentHash = hashBytes(bytes);
           const duplicate = library.papers.find((paper) =>
             paper.attachments.some((attachment) => attachment.contentHash === contentHash),
@@ -661,18 +657,13 @@ function createLibraryCommands(context) {
           const metadata = request.metadata?.[sourcePath] ?? {};
           const paperId = id('paper');
           const fileName = safeFileName(fileNameFromPath(sourcePath));
-          let storedPath = sourcePath;
+          let storedPath = actualSource;
           let relativePath = null;
-          const importMode = request.importMode || library.settings.importMode;
-
           if (importMode !== 'keep') {
             storedPath = path.join(storageDir, `${paperId}-${fileName}`);
-            if (importMode === 'move') await fsp.rename(sourcePath, storedPath);
-            else await fsp.copyFile(sourcePath, storedPath);
+            await writeBoundFile(storedPath, bytes, { flag: 'wx' });
             relativePath = path.relative(storageDir, storedPath);
           }
-
-          const stat = await fsp.stat(storedPath);
           const paper = {
             id: paperId,
             title: cleanString(metadata.title) || path.basename(fileName, path.extname(fileName)),
@@ -704,7 +695,7 @@ function createLibraryCommands(context) {
               relativePath,
               fileName,
               mimeType: 'application/pdf',
-              fileSize: stat.size,
+              fileSize: bytes.length,
               contentHash,
               createdAt: now(),
               missing: false,
@@ -712,6 +703,7 @@ function createLibraryCommands(context) {
           };
           library.papers.push(paper);
           results.push({ sourcePath, paper, duplicated: false, existingPaperId: null, status: 'imported', message: 'Imported' });
+          if (importMode === 'move') moveCleanup.push({ actualSource, sourceIdentity, sourceVersion, sourcePath });
         } catch (error) {
           results.push({ sourcePath, paper: null, duplicated: false, existingPaperId: null, status: 'failed', message: error instanceof Error ? error.message : String(error) });
         }
@@ -721,6 +713,16 @@ function createLibraryCommands(context) {
         results.filter((result) => result.status === 'imported').flatMap((result) => result.paper.attachments));
       if (approval) approval.commit(() => store.saveSync(library));
       else await store.save(library);
+      // Never remove a MOVE source before the destination and metadata exist.
+      // An independently replaced source is retained; report the partial move.
+      for (const source of moveCleanup) {
+        try { await removeBoundFile(source.actualSource, { expectedIdentity: source.sourceIdentity, expectedVersion: source.sourceVersion }); }
+        catch (error) {
+          const result = results.find((item) => item.sourcePath === source.sourcePath);
+          result.originalRetained = true;
+          result.message = `Imported copy; original retained: ${error instanceof Error ? error.message : String(error)}`;
+        }
+      }
       for (const result of results) {
         const paper = result.status === 'imported' ? result.paper : null;
         if (!paper?.id || !paper.doi) {
@@ -792,16 +794,17 @@ function createLibraryCommands(context) {
       const paper = library.papers.find((item) => item.id === request.paperId);
       const approved = request.deleteFiles && paper
         ? context.validateLibraryFileOperation?.(library, paper.attachments) : null;
-      library.papers = library.papers.filter((item) => item.id !== request.paperId);
-
       if (request.deleteFiles && paper) {
         for (const [index, attachment] of paper.attachments.entries()) {
           const target = approved?.attachmentPaths[index] || attachment.storedPath;
           if (approved) assertBoundPath(target);
-          await fsp.rm(target, { force: true }).catch(() => {});
+          // Leave metadata available for recovery/retry when any file fails.
+          // Missing files are harmless; denied/replaced paths are not.
+          await removeBoundFile(target, { force: true });
         }
       }
 
+      library.papers = library.papers.filter((item) => item.id !== request.paperId);
       await store.save(library);
     },
 
@@ -813,15 +816,19 @@ function createLibraryCommands(context) {
       if (!paper) throw new Error('Attachment does not exist');
 
       const attachment = paper.attachments.find((item) => item.id === request.attachmentId);
-      await ensureFile(request.newPath);
-      const stat = await fsp.stat(request.newPath);
-      attachment.storedPath = request.newPath;
+      const sources = await context.approveImportSources?.([request.newPath], { mode: 'keep' });
+      const actualSource = sources?.get(request.newPath) || request.newPath;
+      const { handle } = await openAuthorizedReadFile(actualSource);
+      let bytes;
+      try { bytes = await handle.readFile(); }
+      finally { await handle.close(); }
+      attachment.storedPath = actualSource;
       const storageDir = library.settings.storageDir || path.join(appPaths.dataDir, 'paperquay-data');
-      attachment.relativePath = isSubPath(storageDir, request.newPath)
-        ? path.relative(storageDir, request.newPath) : null;
-      attachment.fileName = fileNameFromPath(request.newPath);
-      attachment.fileSize = stat.size;
-      attachment.contentHash = await hashFile(request.newPath);
+      attachment.relativePath = isSubPath(storageDir, actualSource)
+        ? path.relative(storageDir, actualSource) : null;
+      attachment.fileName = fileNameFromPath(actualSource);
+      attachment.fileSize = bytes.length;
+      attachment.contentHash = hashBytes(bytes);
       attachment.missing = false;
       paper.updatedAt = now();
 

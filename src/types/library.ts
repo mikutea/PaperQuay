@@ -186,6 +186,7 @@ export interface ImportPdfRequest {
 }
 
 export interface ImportedPdfResult {
+  originalRetained?: boolean;
   sourcePath: string;
   paper: LiteraturePaper | null;
   duplicated: boolean;

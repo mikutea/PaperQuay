@@ -12,7 +12,7 @@ import {
 function createContext(overrides = {}) {
   return {
     appPaths: {
-      dataDir: overrides.dataDir ?? '',
+      dataDir: overrides.dataDir ?? path.join(os.tmpdir(), `paperquay-graph-empty-fixture-${process.pid}`),
     },
     store: {
       load() {

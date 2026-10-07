@@ -32,22 +32,16 @@ test('successive config saves commit in request order even when the older save i
   const firstPaused = new Promise((resolve) => { releaseFirst = resolve; });
   let reachedFirst;
   const firstReached = new Promise((resolve) => { reachedFirst = resolve; });
-  const staged = new Map();
   let saved;
   let renames = 0;
   const { appPaths, commands } = configFixture(t, {
-    'node:fs/promises': {
-      ...require('node:fs/promises'),
-      mkdir: async () => {},
-      rename: async (source) => {
-        renames++;
-        if (renames === 1) { reachedFirst(); await firstPaused; }
-        saved = staged.get(source);
-      },
-    },
     './pathAccess.cjs': {
       ...require('./pathAccess.cjs'),
-      writeBoundFile: async (target, content) => { staged.set(target, content); },
+      writeBoundFile: async (_target, content) => {
+        renames++;
+        if (renames === 1) { reachedFirst(); await firstPaused; }
+        saved = content;
+      },
     },
   });
   const first = commands.write_text_file({ path: appPaths.configPath, content: 'older' });
@@ -67,11 +61,11 @@ test('a failed config save retains the previous file and does not block a later 
   const fsp = require('node:fs/promises');
   let fail = true;
   const { appPaths, commands } = configFixture(t, {
-    'node:fs/promises': {
-      ...fsp,
-      rename: async (...args) => {
+    './pathAccess.cjs': {
+      ...require('./pathAccess.cjs'),
+      writeBoundFile: async (...args) => {
         if (fail) { fail = false; throw new Error('fixture disk write failure'); }
-        return fsp.rename(...args);
+        return require('./pathAccess.cjs').writeBoundFile(...args);
       },
     },
   });

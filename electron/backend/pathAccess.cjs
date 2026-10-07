@@ -1,6 +1,7 @@
 const fs = require('node:fs');
-const fsp = require('node:fs/promises');
 const path = require('node:path');
+const { promisify } = require('node:util');
+const nativeFs = require('./nativeFs.cjs');
 
 function comparable(filePath) {
   const resolved = path.resolve(filePath);
@@ -28,31 +29,42 @@ function isWithin(root, target) {
 }
 
 function assertBoundPath(target) {
-  if (comparable(canonicalPath(target)) !== comparable(target)) {
+  const inspected = nativeFs.inspectSync(target);
+  if (inspected.linkPath || comparable(inspected.actual) !== comparable(target)) {
     throw new Error('Approved write path changed before use.');
   }
   return target;
 }
 
 async function writeBoundFile(target, bytes, options) {
-  assertBoundPath(target);
-  await fsp.mkdir(path.dirname(target), { recursive: true });
-  assertBoundPath(target);
-  await fsp.writeFile(target, bytes, options);
+  const settings = typeof options === 'string' ? { encoding: options } : options || {};
+  if (settings.flag && !['w', 'wx'].includes(settings.flag)) throw new Error('Unsupported bound write mode.');
+  return nativeFs.write(target, Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes, settings.encoding || 'utf8'),
+    { exclusive: settings.flag === 'wx', mode: settings.mode ?? 0o666 });
 }
 
 async function openAuthorizedReadFile(filePath, authorize) {
-  const actual = canonicalPath(filePath);
-  const expected = fs.lstatSync(actual, { bigint: true });
-  if (!expected.isFile()) throw Object.assign(new Error('Read path is not a file.'), { code: 'EISDIR' });
-  await authorize?.(actual);
-  const handle = await fsp.open(actual, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+  // Raw authorization must precede *every* filesystem probe: realpath/lstat
+  // can themselves contact an unapproved SMB host. Honor the approved mapping.
+  const authorized = await authorize?.(filePath);
+  const actual = typeof authorized === 'string' ? authorized : filePath;
+  const opened = await nativeFs.openRead(actual);
+  let descriptor = opened.fd;
+  const handle = {
+    identity: opened.identity,
+    version: opened.version,
+    stat: (options) => promisify(fs.fstat)(descriptor, options),
+    readFile: (options) => promisify(fs.readFile)(descriptor, options),
+    close: async () => { if (descriptor < 0) return; const closing = descriptor; descriptor = -1; await promisify(fs.close)(closing); },
+    createReadStream(options = {}) {
+      const stream = fs.createReadStream(null, { ...options, fd: descriptor });
+      if (options.autoClose !== false) stream.once('close', () => { descriptor = -1; });
+      return stream;
+    },
+  };
   try {
-    const opened = await handle.stat({ bigint: true });
-    assertBoundPath(actual);
-    const current = fs.lstatSync(actual, { bigint: true });
-    if (!opened.isFile() || !current.isFile() || opened.dev !== expected.dev || opened.ino !== expected.ino ||
-        opened.dev !== current.dev || opened.ino !== current.ino) {
+    const current = nativeFs.inspectSync(actual);
+    if (current.linkPath || !current.exists || current.identity !== opened.identity) {
       throw new Error('Approved read file changed before use.');
     }
     return { handle, actual, stat: await handle.stat() };
@@ -60,6 +72,24 @@ async function openAuthorizedReadFile(filePath, authorize) {
     await handle.close();
     throw error;
   }
+}
+
+async function removeBoundFile(target, { force = false, expectedIdentity, expectedVersion } = {}) {
+  try { return await nativeFs.remove(target, { expectedIdentity, expectedVersion }); }
+  catch (error) { if (!force || error.code !== 'ENOENT') throw error; }
+}
+
+// Resolve links one at a time without following them. The predicate checks the
+// complete substituted target before its root/ancestors can cause network I/O.
+function resolveAuthorizedPath(filePath, allowed) {
+  let current = path.resolve(filePath);
+  for (let redirects = 0; redirects < 40; redirects++) {
+    if (!allowed(current)) throw new Error('Library file access settings changed; path is not approved and not allowed.');
+    const inspected = nativeFs.inspectSync(current);
+    if (!inspected.linkPath) return inspected.actual;
+    current = path.resolve(path.dirname(inspected.linkPath), inspected.target, inspected.suffix);
+  }
+  throw new Error('Too many filesystem links.');
 }
 
 async function readAuthorizedFile(filePath, authorize, options) {
@@ -74,25 +104,31 @@ function createWriteAuthorizer(context) {
   const configPath = appPaths.configPath && canonicalPath(appPaths.configPath);
   context.approvedWritePaths ??= new Set();
   context.approvedWriteDirectories ??= new Set();
+  context.approvedWriteAliases ??= new Map();
   return (filePath) => {
-    const actual = canonicalPath(filePath);
+    const alias = [...context.approvedWriteAliases.values()].sort((a, b) => b.raw.length - a.raw.length)
+      .find((item) => item.directory ? isWithin(item.raw, filePath) : comparable(item.raw) === comparable(filePath));
+    if (alias) filePath = alias.directory ? path.join(alias.actual, path.relative(alias.raw, filePath)) : alias.actual;
     // Only the actual config command path gets this exception, not an alias
     // planted in an adopted library that happens to resolve to the config.
-    if (configPath && comparable(filePath) === comparable(appPaths.configPath) &&
-        comparable(actual) === comparable(configPath)) return actual;
+    if (configPath && comparable(filePath) === comparable(appPaths.configPath)) return assertBoundPath(configPath);
     // Profile-local settings/cache operations do not depend on an unrelated
     // PDF storage volume being online. These canonical roots are pinned when
     // the backend is created or explicitly approved, not taken from SQLite.
     const independentRoots = [dataRoot, ...context.approvedWriteDirectories];
-    if (independentRoots.some((root) => isWithin(root, actual)) ||
-        [...context.approvedWritePaths].some((target) => comparable(target) === comparable(actual))) return actual;
+    const allowedIndependent = (target) => independentRoots.some((root) => isWithin(root, target)) ||
+      [...context.approvedWritePaths].some((approved) => comparable(approved) === comparable(target));
+    if (allowedIndependent(filePath)) return resolveAuthorizedPath(filePath, allowedIndependent);
     const library = context.store?.load() || { settings: {} };
     const approved = context.validateLibraryFileOperation?.(library, []);
     const storageRoot = approved?.storageRoot || canonicalPath(
       library.settings.storageDir || path.join(appPaths.dataDir, 'paperquay-data'));
-    if (isWithin(storageRoot, actual)) return actual;
+    const storageDirectory = library.settings.storageDir || path.join(appPaths.dataDir, 'paperquay-data');
+    const mapped = isWithin(storageDirectory, filePath) ? path.join(storageRoot, path.relative(storageDirectory, filePath)) : filePath;
+    if (isWithin(storageRoot, mapped)) return resolveAuthorizedPath(mapped, (target) => isWithin(storageRoot, target));
     throw new Error(`Writing to this path is not allowed until approved: ${filePath}`);
   };
 }
 
-module.exports = { canonicalPath, isWithin, assertBoundPath, writeBoundFile, createWriteAuthorizer, openAuthorizedReadFile, readAuthorizedFile };
+module.exports = { canonicalPath, isWithin, assertBoundPath, writeBoundFile, removeBoundFile, resolveAuthorizedPath,
+  createWriteAuthorizer, openAuthorizedReadFile, readAuthorizedFile };
