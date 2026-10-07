@@ -604,12 +604,33 @@ function createLibraryCommands(context) {
       return sortPapers(library.papers, request);
     },
 
+    async library_list_papers_page({ request = {} } = {}) {
+      const library = store.load();
+      const pageSize = Number.isSafeInteger(request.pageSize) && request.pageSize > 0
+        ? Math.min(request.pageSize, 500) : 100;
+      const requestedPage = Number.isSafeInteger(request.page) && request.page >= 0 ? request.page : 0;
+      const matches = sortPapers(library.papers.filter((paper) => paperMatches(paper, request, library)), request);
+      const total = matches.length;
+      const page = Math.min(requestedPage, Math.max(0, Math.ceil(total / pageSize) - 1));
+      return { papers: matches.slice(page * pageSize, (page + 1) * pageSize), total, page, pageSize };
+    },
+
     async library_reorder_papers({ request }) {
       const library = store.load();
-      const order = new Map((request.paperIds ?? []).map((paperId, index) => [paperId, index]));
-      for (const paper of library.papers) {
-        if (order.has(paper.id)) paper.sortOrder = order.get(paper.id);
+      const requestedIds = request?.paperIds;
+      const byId = new Map(library.papers.map((paper) => [paper.id, paper]));
+      if (!Array.isArray(requestedIds) || new Set(requestedIds).size !== requestedIds.length ||
+          requestedIds.some((paperId) => typeof paperId !== 'string' || !byId.has(paperId))) {
+        throw new Error('Invalid paper order; refresh the library and retry.');
       }
+      if (requestedIds.length < 2) return;
+      // A page or filtered list occupies slots in the global manual order.
+      // Replace only those slots; never move unseen papers to the beginning.
+      const selected = new Set(requestedIds);
+      let next = 0;
+      const ordered = sortPapers(library.papers, { sortBy: 'manual' });
+      const reordered = ordered.map((paper) => selected.has(paper.id) ? byId.get(requestedIds[next++]) : paper);
+      reordered.forEach((paper, index) => { paper.sortOrder = index; });
       await store.save(library);
     },
 

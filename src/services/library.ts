@@ -12,6 +12,8 @@ import type {
   LibrarySettings,
   LibrarySnapshot,
   ListPapersRequest,
+  ListPapersPageRequest,
+  LibraryPaperPage,
   PaperReference,
   LiteratureAttachment,
   LiteratureCategory,
@@ -134,6 +136,14 @@ export async function listAllLibraryPapers(
     return await invoke<LiteraturePaper[]>('library_list_all_papers', { request });
   } catch (error) {
     throw new Error(toErrorMessage(error, '读取完整文库失败'));
+  }
+}
+
+export async function listLibraryPapersPage(request: ListPapersPageRequest = {}): Promise<LibraryPaperPage> {
+  try {
+    return await invoke<LibraryPaperPage>('library_list_papers_page', { request });
+  } catch (error) {
+    throw new Error(toErrorMessage(error, '读取文献列表失败'));
   }
 }
 

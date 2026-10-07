@@ -46,6 +46,10 @@ interface LiteraturePaperListProps {
   queryPending?: boolean;
   queryError?: string;
   onRetrySearch?: () => void;
+  pageIndex?: number;
+  pageSize?: number;
+  paperTotal?: number;
+  onPageChange?: (page: number) => void;
   working: boolean;
   papers: LiteraturePaper[];
   paperStatuses: Record<string, LiteraturePaperListStatus>;
@@ -85,6 +89,10 @@ export default function LiteraturePaperList({
   queryPending = false,
   queryError = '',
   onRetrySearch,
+  pageIndex = 0,
+  pageSize = 100,
+  paperTotal = 0,
+  onPageChange,
   working,
   papers,
   paperStatuses,
@@ -110,6 +118,9 @@ export default function LiteraturePaperList({
 }: LiteraturePaperListProps) {
   const l = useLocaleText();
   const locale = useAppLocale();
+  const pageCount = Math.max(1, Math.ceil(paperTotal / pageSize));
+  const listScrollRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => { listScrollRef.current?.scrollTo({ top: 0 }); }, [pageIndex, searchQuery, sortBy, sortDirection]);
   const rootRef = useRef<HTMLElement | null>(null);
   const handleWheelCapture = useWheelScrollDelegate({ rootRef });
   const [dropIndicator, setDropIndicator] = useState<{
@@ -485,7 +496,9 @@ export default function LiteraturePaperList({
       </header>
 
       <div
+        ref={listScrollRef}
         data-wheel-scroll-target
+        style={{ containerType: 'inline-size', containerName: 'paper-list' }}
         aria-busy={loading || queryPending}
         className="h-0 min-h-0 flex-1 overflow-y-auto overscroll-y-contain p-3"
       >
@@ -571,10 +584,10 @@ export default function LiteraturePaperList({
                     onDoubleClick={() => onOpenPaper(paper)}
                     onKeyDown={(event) => handleRowKeyDown(event, paper)}
                     className={clsx(
-                      'pq-card grid w-full gap-3 px-3 py-3 text-left transition',
+                      'pq-card pq-paper-row grid w-full gap-3 px-3 py-3 text-left transition',
                       manualSortingEnabled ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer',
                       showReadingHeatmap
-                        ? 'grid-cols-[28px_minmax(0,1fr)_minmax(128px,160px)_72px_96px] max-[900px]:grid-cols-[28px_minmax(0,1fr)_64px_86px]'
+                        ? 'grid-cols-[28px_minmax(0,1fr)_minmax(128px,160px)_72px_96px]'
                         : 'grid-cols-[28px_minmax(0,1fr)_100px_110px]',
                       active
                         ? 'border-[var(--pq-accent-border-strong)] bg-[var(--pq-accent-soft)] ring-1 ring-[var(--pq-accent-ring)]'
@@ -670,7 +683,7 @@ export default function LiteraturePaperList({
                       </span>
                     </span>
                     {showReadingHeatmap ? (
-                      <span className="min-w-0 self-center max-[900px]:hidden">
+                      <span className="pq-paper-heatmap min-w-0 self-center">
                         <LiteratureReadingHeatmapPreview
                           heatmap={heatmapsByPaperId[paper.id] ?? null}
                         />
@@ -679,7 +692,7 @@ export default function LiteraturePaperList({
                     <span className="text-sm text-slate-500 dark:text-[#a0a0a0]">
                       {paper.year ?? 'n.d.'}
                     </span>
-                    <span className="text-right text-xs text-slate-400 dark:text-[#8d8d8d]">
+                    <span className="pq-paper-date text-right text-xs text-slate-400 dark:text-[#8d8d8d]">
                       {new Date(paper.importedAt).toLocaleDateString()}
                     </span>
                   </div>
@@ -692,6 +705,26 @@ export default function LiteraturePaperList({
           </div>
         )}
       </div>
+      {onPageChange ? (
+        <nav aria-label={l('文献分页', 'Paper pagination')} className="pq-toolbar flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-[var(--pq-border)] px-4 py-2">
+          <span role="status" className="text-xs text-[var(--pq-text-muted)]">
+            {loading || queryPending ? l('正在更新...', 'Updating...') : queryError ? l('列表加载失败', 'List unavailable') :
+              l(`第 ${paperTotal === 0 ? 0 : pageIndex * pageSize + 1}–${Math.min((pageIndex + 1) * pageSize, paperTotal)} 篇，共 ${paperTotal} 篇`,
+                `${paperTotal === 0 ? 0 : pageIndex * pageSize + 1}–${Math.min((pageIndex + 1) * pageSize, paperTotal)} of ${paperTotal} papers`)}
+          </span>
+          <div className="flex items-center gap-1">
+            <button type="button" onClick={() => onPageChange(0)} disabled={loading || queryPending || pageIndex === 0}
+              className="pq-button h-8 px-2 text-xs">{l('首页', 'First')}</button>
+            <button type="button" onClick={() => onPageChange(pageIndex - 1)} disabled={loading || queryPending || pageIndex === 0}
+              className="pq-button h-8 px-2 text-xs">{l('上一页', 'Previous')}</button>
+            <span className="min-w-12 text-center text-xs tabular-nums text-[var(--pq-text-muted)]">{pageIndex + 1} / {pageCount}</span>
+            <button type="button" onClick={() => onPageChange(pageIndex + 1)} disabled={loading || queryPending || pageIndex >= pageCount - 1}
+              className="pq-button h-8 px-2 text-xs">{l('下一页', 'Next')}</button>
+            <button type="button" onClick={() => onPageChange(pageCount - 1)} disabled={loading || queryPending || pageIndex >= pageCount - 1}
+              className="pq-button h-8 px-2 text-xs">{l('末页', 'Last')}</button>
+          </div>
+        </nav>
+      ) : null}
     </section>
   );
 }

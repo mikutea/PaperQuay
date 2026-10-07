@@ -1595,3 +1595,17 @@ textarea,
     animation: none;
   }
 }
+/* The library list shares the window with two resizable sidebars. Use its
+   own width, not the viewport width, when making room for paper titles. */
+@container paper-list (max-width: 620px) {
+  .pq-paper-row {
+    grid-template-columns: 20px minmax(0, 1fr) 54px 76px;
+    gap: 8px;
+  }
+  .pq-paper-heatmap { display: none; }
+}
+
+@container paper-list (max-width: 450px) {
+  .pq-paper-row { grid-template-columns: 20px minmax(0, 1fr) 54px; }
+  .pq-paper-date { display: none; }
+}

@@ -26,6 +26,7 @@ import {
   initializeLiteratureLibrary,
   listLibraryCategories,
   listLibraryPapers,
+  listLibraryPapersPage,
   moveLibraryCategory,
   reorderLibraryPapers,
   selectLibraryPdfFiles,
@@ -250,6 +251,9 @@ export default function LiteratureLibraryView({
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
   const [selectedPaperId, setSelectedPaperId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [pageIndex, setPageIndex] = useState(0);
+  const [paperTotal, setPaperTotal] = useState(0);
+  const pageSize = 100;
   const [queryPending, setQueryPending] = useState(false);
   const [queryError, setQueryError] = useState('');
   const [listQuery] = useState(createLatestLibraryQuery);
@@ -279,15 +283,16 @@ export default function LiteratureLibraryView({
   const [paperDragOverCategoryId, setPaperDragOverCategoryId] = useState<string | null>(null);
   const [tagDialogPaper, setTagDialogPaper] = useState<LiteraturePaper | null>(null);
   const [paperSort, setPaperSort] = useState(loadPaperSortState);
-  const queryRef = useRef({ categoryId: selectedCategoryId, search: searchQuery, ...paperSort });
+  useLayoutEffect(() => { setPageIndex(0); }, [selectedCategoryId, searchQuery, paperSort.sortBy, paperSort.sortDirection]);
+  const queryRef = useRef({ categoryId: selectedCategoryId, search: searchQuery, ...paperSort, page: pageIndex, pageSize });
   // Commit current filters before asynchronous completions or refresh callbacks
   // from an earlier edit can update the visible list.
   useLayoutEffect(() => {
-    queryRef.current = { categoryId: selectedCategoryId, search: searchQuery, ...paperSort };
+    queryRef.current = { categoryId: selectedCategoryId, search: searchQuery, ...paperSort, page: pageIndex, pageSize };
     listQuery.invalidate();
     setQueryError('');
     setQueryPending(true);
-  }, [listQuery, selectedCategoryId, searchQuery, paperSort.sortBy, paperSort.sortDirection]);
+  }, [listQuery, selectedCategoryId, searchQuery, paperSort.sortBy, paperSort.sortDirection, pageIndex]);
   useEffect(() => () => listQuery.invalidate(), [listQuery]);
   const [categorySidebarWidth, setCategorySidebarWidth] = useState(loadCategorySidebarWidth);
   const [categorySidebarResizing, setCategorySidebarResizing] = useState(false);
@@ -318,17 +323,6 @@ export default function LiteratureLibraryView({
   const selectedPaper = useMemo(
     () => queryPending || queryError ? null : papers.find((paper) => paper.id === selectedPaperId) ?? papers[0] ?? null,
     [papers, selectedPaperId, queryPending, queryError],
-  );
-
-  const resolveDemoPapers = useCallback(
-    (nextCategoryId = selectedCategoryId) => {
-      if (!demoLibrary) {
-        return [];
-      }
-
-      return filterDemoPapers(demoLibrary, nextCategoryId, searchQuery);
-    },
-    [demoLibrary, searchQuery, selectedCategoryId],
   );
 
   const showDemoLockedMessage = useCallback(() => {
@@ -400,16 +394,21 @@ export default function LiteratureLibraryView({
 
   const refreshPapers = useCallback(
     async (nextCategoryId = queryRef.current.categoryId, preferredPaperId?: string) => {
-      const request = { ...queryRef.current, categoryId: nextCategoryId, limit: 500 };
+      const request = { ...queryRef.current, categoryId: nextCategoryId };
       setQueryPending(true);
       setQueryError('');
       await listQuery.run(
-        () => demoLibrary
-          ? Promise.resolve(filterDemoPapers(demoLibrary, nextCategoryId, request.search))
-          : listLibraryPapers(request),
-        (nextPapers) => {
-          setPapers(nextPapers);
-          setSelectedPaperId((current) => resolveSelectedPaperId(preferredPaperId ?? current, nextPapers));
+        async () => {
+          if (!demoLibrary) return listLibraryPapersPage(request);
+          const matches = filterDemoPapers(demoLibrary, nextCategoryId, request.search);
+          const page = Math.min(request.page, Math.max(0, Math.ceil(matches.length / pageSize) - 1));
+          return { papers: matches.slice(page * pageSize, (page + 1) * pageSize), total: matches.length, page, pageSize };
+        },
+        (result) => {
+          setPapers(result.papers);
+          setPaperTotal(result.total);
+          setPageIndex(result.page);
+          setSelectedPaperId((current) => resolveSelectedPaperId(preferredPaperId ?? current, result.papers));
         },
         () => setQueryPending(false),
       );
@@ -419,29 +418,20 @@ export default function LiteratureLibraryView({
 
   const refreshAll = useCallback(async () => {
     if (demoLibrary) {
-      const nextPapers = resolveDemoPapers();
-
       setSettings(demoLibrary.settings);
       setCategories(demoLibrary.categories);
-      setPapers(nextPapers);
-      setSelectedPaperId((current) => resolveSelectedPaperId(current, nextPapers));
+      await refreshPapers();
       setStatusMessage(demoLibrary.statusMessage);
       return;
     }
 
-    const [nextCategories, , allPapers] = await Promise.all([
+    const [nextCategories] = await Promise.all([
       listLibraryCategories(),
       refreshPapers(),
-      listLibraryPapers({
-        sortBy: 'manual',
-        sortDirection: 'asc',
-        limit: 5000,
-      }),
     ]);
 
     setCategories(nextCategories);
-    void refreshMineruStatusesForPapers(allPapers);
-  }, [demoLibrary, refreshMineruStatusesForPapers, refreshPapers, resolveDemoPapers]);
+  }, [demoLibrary, refreshPapers]);
 
   const hydrateImportDraftsFromLocalPdf = useCallback(
     async (drafts: ImportDraftItem[]) => {
@@ -679,7 +669,7 @@ export default function LiteratureLibraryView({
         setSettings(snapshot.settings);
         setCategories(snapshot.categories);
         setSelectedCategoryId(allCategory?.id ?? snapshot.categories[0]?.id ?? null);
-        setPapers(snapshot.papers);
+        setPapers([]);
         setSelectedPaperId(snapshot.papers[0]?.id ?? null);
         setStatusMessage(l('文献库已就绪', 'Library is ready'));
       } catch (nextError) {
@@ -764,12 +754,7 @@ export default function LiteratureLibraryView({
     let cancelled = false;
 
     void (async () => {
-      const allPapers = await listLibraryPapers({
-        sortBy: 'manual',
-        sortDirection: 'asc',
-        limit: 5000,
-      });
-      await refreshMineruStatusesForPapers(allPapers, () => cancelled);
+      await refreshMineruStatusesForPapers(papers, () => cancelled);
     })();
 
     return () => {
@@ -780,6 +765,7 @@ export default function LiteratureLibraryView({
     loading,
     mineruStatusConfigKey,
     refreshMineruStatusesForPapers,
+    papers,
   ]);
 
   useEffect(() => {
@@ -796,7 +782,7 @@ export default function LiteratureLibraryView({
     }, 180);
 
     return () => window.clearTimeout(timer);
-  }, [loading, l, refreshPapers, selectedCategoryId, searchQuery, paperSort.sortBy, paperSort.sortDirection]);
+  }, [loading, l, refreshPapers, selectedCategoryId, searchQuery, paperSort.sortBy, paperSort.sortDirection, pageIndex]);
 
   const handleSelectCategory = (categoryId: string) => {
     setSelectedCategoryId(categoryId);
@@ -1977,6 +1963,10 @@ export default function LiteratureLibraryView({
           loading={loading}
           queryPending={queryPending}
           queryError={queryError}
+          pageIndex={pageIndex}
+          pageSize={pageSize}
+          paperTotal={paperTotal}
+          onPageChange={setPageIndex}
           onRetrySearch={() => void refreshPapers().catch((nextError) => {
             setQueryError(nextError instanceof Error ? nextError.message : l('搜索文献失败', 'Failed to search papers'));
           })}
