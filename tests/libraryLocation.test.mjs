@@ -497,7 +497,7 @@ test('an independent cache write does not ask the PDF-volume validator for permi
     store: { load: () => ({ settings: {} }) },
     validateLibraryFileOperation() { validations++; throw new Error('offline PDF volume probed'); } });
   const cacheFile = path.join(data, '.mineru-cache', 'document', 'full.md');
-  assert.equal(authorize(cacheFile), cacheFile);
+  assert.equal(authorize(cacheFile), path.join(realpathSync.native(data), '.mineru-cache', 'document', 'full.md'));
   assert.equal(validations, 0);
   assert.throws(() => authorize(path.join(f.root, 'outside', 'paper.pdf')), /offline PDF volume probed/);
 });
@@ -687,11 +687,11 @@ test('attachment roots are explicitly disclosed and confirmation-time path chang
   const manager = f.create(); manager.resolve(); manager.rememberActive();
   f.decisions.directory = supplied;
   const candidate = await manager.selectExisting();
-  assert.deepEqual(candidate.attachmentRoots, [path.dirname(realpathSync.native(victim))]);
+  assert.deepEqual(candidate.attachmentRoots, [path.dirname(victim)]);
   f.decisions.confirm = 1;
   f.decisions.onConfirm = () => { if (f.decisions.messages.at(-1).type === 'warning') f.decisions.confirm = 0; };
   await manager.activateSelected({ token: candidate.token });
-  assert.ok(f.decisions.messages.at(-1).detail.includes(JSON.stringify(path.dirname(realpathSync.native(victim)))));
+  assert.ok(f.decisions.messages.at(-1).detail.includes(JSON.stringify(path.dirname(victim))));
   assert.match(f.decisions.messages.at(-1).detail, /REMOVE original attachments/);
   assert.equal(f.create().resolve().dataDirectory, original);
   f.decisions.confirm = 1;
@@ -805,7 +805,7 @@ test('approved file access is bound across launches and guards actual import/del
   const [imported] = await commands.library_import_pdfs({ request: { paths: [victim] } });
   assert.equal(imported.status, 'imported');
   const storedPath = imported.paper.attachments[0].storedPath;
-  assert.ok(storedPath.startsWith(candidate.storageRoot + path.sep));
+  assert.ok(storedPath.startsWith(reopened.status().approvedFileAccess.storageRoot + path.sep));
   assert.equal(readFileSync(storedPath, 'utf8'), readFileSync(victim, 'utf8'));
   await commands.library_delete_paper({ request: { paperId: imported.paper.id, deleteFiles: true } });
   assert.equal(readdirSync(candidate.storageDirectory).includes(path.basename(storedPath)), false);
