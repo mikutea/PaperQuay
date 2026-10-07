@@ -101,7 +101,7 @@ function inspectLibraryDirectory(directory, {
       ? '此目录包含多个文库，请选择具体文库目录。 / Multiple libraries found; select the exact library folder.'
       : '没有找到 paperquay-library.sqlite。不会新建或覆盖文库。 / Library database not found. No library will be created or overwritten.');
   }
-  const dataDirectory = fs.realpathSync(candidates[0]);
+  const dataDirectory = fs.realpathSync.native(candidates[0]);
   for (const name of [LIBRARY_FILE, 'paperquay-notes.sqlite', 'paperquay-rag.sqlite', 'paperquay-knowledge-graph-relations.json', 'paperquay-library.json', '.backup-snapshots', '.mineru-cache', '.downloads', '.screenshots']) {
     for (const suffix of (name.endsWith('.sqlite') ? ['', '-wal', '-shm', '-journal'] : [''])) {
       const candidate = path.join(dataDirectory, name + suffix);
@@ -679,11 +679,14 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
     validateFileOperation(previous, previous.papers.flatMap((paper) => paper.attachments));
     const oldPolicy = active.approvedFileAccess;
     const roots = new Set();
+    const pathMappings = [];
     for (const attachment of attachments) {
       try { validateFileOperation(previous, [attachment]); }
       catch {
         if (typeof attachment.storedPath !== 'string' || !path.isAbsolute(attachment.storedPath)) throw new Error('Invalid imported attachment path.');
-        roots.add(path.dirname(canonicalPath(attachment.storedPath)));
+        const actual = canonicalPath(attachment.storedPath);
+        roots.add(path.dirname(actual));
+        pathMappings.push({ rawRoot: attachment.storedPath, canonicalRoot: actual, exact: true });
       }
     }
     if (!roots.size) return null;
@@ -692,10 +695,14 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
     });
     if (!await confirmAttachmentRoots([...roots].sort())) throw new Error('Keep-path import canceled.');
     validateUnchangedSettings(expected);
-    const policy = { ...oldPolicy, attachmentRoots: [...new Set([...oldPolicy.attachmentRoots, ...roots])].sort() };
+    const policy = { ...oldPolicy, attachmentRoots: [...new Set([...oldPolicy.attachmentRoots, ...roots])].sort(),
+      pathMappings: [...(oldPolicy.pathMappings || []), ...pathMappings] };
     // Re-resolve the selected files after the modal so links cannot silently
     // change the approved roots while the user is reviewing the prompt.
     assertApprovedFileAccess({ ...expected, attachmentRoots: attachments.map((item) => path.dirname(canonicalPath(item.storedPath))) }, policy);
+    if (pathMappings.some((item) => comparable(canonicalPath(item.rawRoot)) !== comparable(item.canonicalRoot))) {
+      throw new Error('Imported attachment changed during confirmation.');
+    }
     return { commit(save) {
       persistLocation(active.profileDirectory, active.dataDirectory, false, false, policy);
       try { save(); }

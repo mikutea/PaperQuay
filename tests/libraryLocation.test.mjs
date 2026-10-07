@@ -22,8 +22,9 @@ const { createNoteStore } = require('../electron/backend/noteStore.cjs');
 const { createKnowledgeGraphCommands } = require('../electron/backend/knowledgeGraphCommands.cjs');
 const { REGISTRY_NAME, createLibraryLocationManager, inspectLibraryDirectory, readRegistry } = require('../electron/libraryLocation.cjs');
 
-function fixture(t) {
-  const root = mkdtempSync(path.join(tmpdir(), 'paperquay-location-'));
+function fixture(t, preserveRawRoot = false) {
+  const created = mkdtempSync(path.join(tmpdir(), 'paperquay-location-'));
+  const root = preserveRawRoot ? created : realpathSync.native(created);
   const resources = [];
   t.after(() => { for (const close of resources) close(); rmSync(root, { recursive: true, force: true }); });
   const appData = path.join(root, 'Roaming');
@@ -56,6 +57,39 @@ function fixture(t) {
   const create = (profile, argv = []) => createLibraryLocationManager({ app: fakeApp(profile), dialog, argv, restart: () => { decisions.restarts++; } });
   return { root, appData, normalProfile, customProfile, fakeApp, makeLibrary, decisions, create, closeAfter: (close) => resources.push(close) };
 }
+
+test('native canonical library paths and approved raw import aliases survive reopening', async (t) => {
+  const f = fixture(t, true);
+  f.makeLibrary(path.join(f.normalProfile, 'PaperQuay'));
+  const supplied = f.makeLibrary(path.join(f.root, 'supplied'));
+  assert.equal(inspectLibraryDirectory(supplied).dataDirectory, realpathSync.native(supplied));
+  const manager = f.create(); manager.resolve(); manager.rememberActive();
+  f.decisions.directory = supplied; f.decisions.confirm = 1;
+  await manager.activateSelected({ token: (await manager.selectExisting()).token });
+  const active = f.create(); active.resolve();
+  const paths = createAppPaths(f.fakeApp(), supplied), store = createLibraryStore(paths);
+  f.closeAfter(() => store.close());
+  mkdirSync(paths.mineruCacheDir, { recursive: true });
+  const cache = path.join(paths.mineruCacheDir, 'local.txt'); writeFileSync(cache, 'cache');
+  assert.equal(active.authorizeKnownRead(store.load(), cache), realpathSync.native(cache));
+  const selected = path.join(f.root, 'selected'); mkdirSync(selected);
+  const pdf = path.join(selected, 'keep.pdf'); writeFileSync(pdf, 'approved PDF');
+  const alias = path.join(f.root, 'selected-alias');
+  symlinkSync(selected, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  const raw = path.join(alias, 'keep.pdf');
+  const attachment = { id: 'raw-import', storedPath: raw, relativePath: null, fileName: 'keep.pdf', mimeType: 'application/pdf' };
+  const library = store.load();
+  const approval = await active.approveImportedAttachments(library, [attachment]);
+  library.papers[0].attachments.push(attachment);
+  approval.commit(() => store.saveSync(library));
+  const reopened = f.create(); reopened.resolve();
+  assert.deepEqual(reopened.validateFileOperation(store.load(), [attachment]).attachmentPaths, [realpathSync.native(pdf)]);
+  // Approval pins the alias; subsequent retargeting cannot grant its new root.
+  const outside = path.join(f.root, 'outside'); mkdirSync(outside);
+  writeFileSync(path.join(outside, 'keep.pdf'), 'private');
+  unlinkSync(alias); symlinkSync(outside, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  assert.deepEqual(reopened.validateFileOperation(store.load(), [attachment]).attachmentPaths, [realpathSync.native(pdf)]);
+});
 
 test('an unregistered fresh profile is created before Electron setPath', (t) => {
   const f = fixture(t);

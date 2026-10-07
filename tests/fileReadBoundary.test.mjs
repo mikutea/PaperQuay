@@ -24,7 +24,7 @@ function load(relative, electron = {}, extras = {}) {
 }
 
 function fixture(t, electron = {}) {
-  const root = mkdtempSync(path.join(tmpdir(), 'paperquay-read-boundary-'));
+  const root = fs.realpathSync.native(mkdtempSync(path.join(tmpdir(), 'paperquay-read-boundary-')));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const external = path.join(root, 'shared'); mkdirSync(external);
   const appPaths = createAppPaths({ getPath: () => path.join(root, 'profile') }, external);

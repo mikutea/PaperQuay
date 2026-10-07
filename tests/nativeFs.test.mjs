@@ -16,6 +16,11 @@ function fixture(t) {
   return { root, inside, outside, file: path.join(inside, 'file.txt') };
 }
 
+test('native asynchronous failures retain their error text after stack unwinding', async () => {
+  await Promise.all(Array.from({ length: 128 }, () =>
+    assert.rejects(native.read('relative.pdf'), { code: 'EPERM', message: 'Absolute filesystem path required.' })));
+});
+
 test('native async/sync write, exclusive copy, listing, bounded reads and identity deletion', async (t) => {
   const f = fixture(t);
   await native.write(f.file, Buffer.from('old'));

@@ -11,6 +11,9 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#if defined(_WIN32) && !_HAS_EXCEPTIONS
+#error PaperQuay requires owning standard exceptions; remove node-gyp's _HAS_EXCEPTIONS=0.
+#endif
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX

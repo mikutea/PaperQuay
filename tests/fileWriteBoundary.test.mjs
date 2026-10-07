@@ -13,7 +13,7 @@ const { downloadZoteroAttachmentPdf } = require('./zoteroApi.cjs');
 const AdmZip = require('adm-zip');
 
 function fixture(t) {
-  const root = mkdtempSync(path.join(tmpdir(), 'paperquay-write-boundary-'));
+  const root = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'paperquay-write-boundary-')));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const external = path.join(root, 'library'), outside = path.join(root, 'outside');
   mkdirSync(external); mkdirSync(outside);
