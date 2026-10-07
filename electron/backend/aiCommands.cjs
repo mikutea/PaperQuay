@@ -949,7 +949,8 @@ function createAiCommands(context) {
     },
 
     async rag_embed_text({ request }) {
-      validateRagFileAccess();
+      // This endpoint embeds caller-supplied text; it neither reads attachments
+      // nor persists an index. Offline PDF volumes must not disable queries.
       const input = formatEmbeddingInput(
         request.text,
         request.embedding?.inputFormat,

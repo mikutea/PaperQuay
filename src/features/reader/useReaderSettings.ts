@@ -424,7 +424,14 @@ export function useReaderSettings({
       leftSidebarCollapsed: false,
     };
     scheduleReaderConfigWrite(nextConfig, appDefaultPaths,
-      () => { window.localStorage.removeItem(SECRETS_STORAGE_KEY); setConfigSaveError(''); },
+      (nativeSettings) => {
+        if (nativeSettings) {
+          setLibrarySettings(nativeSettings);
+          emitLibrarySettingsUpdated(nativeSettings, 'reader-config-save');
+        }
+        window.localStorage.removeItem(SECRETS_STORAGE_KEY);
+        setConfigSaveError('');
+      },
       () => setConfigSaveError(pickLocaleText(settings.uiLanguage,
         '设置尚未保存到磁盘，请检查磁盘空间或文件权限；关闭时会再次尝试保存。',
         'Settings have not been saved. Check disk space or file permissions; closing will retry the save.')),

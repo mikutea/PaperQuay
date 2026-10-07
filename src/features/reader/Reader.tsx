@@ -781,20 +781,6 @@ function Reader({ workspaceActive = true }: ReaderProps) {
   );
 
   useEffect(() => {
-    if (!configHydrated) {
-      return undefined;
-    }
-
-    const timer = window.setTimeout(() => {
-      void syncNativeLibraryZoteroDir(zoteroLocalDataDir, 'reader-zotero-input');
-    }, 500);
-
-    return () => {
-      window.clearTimeout(timer);
-    };
-  }, [configHydrated, syncNativeLibraryZoteroDir, zoteroLocalDataDir]);
-
-  useEffect(() => {
     const handleOpenStandalonePdfEvent = () => {
       void handleOpenStandalonePdf();
     };

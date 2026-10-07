@@ -62,7 +62,7 @@ export async function getLibrarySettings(): Promise<LibrarySettings> {
 }
 
 export async function updateLibrarySettings(
-  settings: LibrarySettings,
+  settings: Partial<LibrarySettings>,
 ): Promise<LibrarySettings> {
   try {
     return await invoke<LibrarySettings>('library_update_settings', { settings });
