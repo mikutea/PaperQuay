@@ -23,6 +23,8 @@ export default function ReaderPreferencesWindow({
   preferredSection,
   settings,
   translatedCount = 0,
+  configSaveError = '',
+  onRetryConfigSave,
   ...contentProps
 }: ReaderPreferencesWindowProps) {
   const l = <T,>(zh: T, en: T) => pickLocaleText(settings.uiLanguage, zh, en);
@@ -165,6 +167,15 @@ export default function ReaderPreferencesWindow({
               {l('关闭', 'Close')}
             </button>
           </header>
+
+          {configSaveError ? (
+            <div role="alert" className="flex shrink-0 items-center gap-3 border-b border-rose-300/40 bg-rose-500/10 px-6 py-3 text-sm text-rose-700 dark:text-rose-300">
+              <span className="min-w-0 flex-1">{configSaveError}</span>
+              <button type="button" className="pq-button shrink-0 px-3 py-2" onClick={onRetryConfigSave}>
+                {l('重试保存', 'Retry save')}
+              </button>
+            </div>
+          ) : null}
 
           <div
             data-wheel-scroll-target

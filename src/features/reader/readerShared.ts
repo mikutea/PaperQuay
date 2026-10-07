@@ -22,7 +22,6 @@ import { getFileNameFromPath } from '../../utils/text';
 
 export const SETTINGS_STORAGE_KEY = 'paper-reader-settings-v3';
 export const SECRETS_STORAGE_KEY = 'paper-reader-secrets-v1';
-export const CONFIG_WRITE_DEBOUNCE_MS = 350;
 
 export type PreferencesSectionKey =
   | 'general'

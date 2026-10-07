@@ -1,4 +1,5 @@
 import { invoke } from '../platform/electron/core';
+import { flushReaderConfigWrites } from './readerConfig';
 
 export interface LibraryLocation {
   profileDirectory: string;
@@ -20,5 +21,7 @@ export interface LibraryLocationCandidate {
 
 export const getLibraryLocation = () => invoke<LibraryLocation>('library_location_status');
 export const selectLibraryLocation = () => invoke<LibraryLocationCandidate | null>('library_location_select');
-export const activateLibraryLocation = (token: string) =>
-  invoke<{ restarting?: boolean; canceled?: boolean; unchanged?: boolean }>('library_location_activate', { token });
+export const activateLibraryLocation = async (token: string) => {
+  await flushReaderConfigWrites();
+  return invoke<{ restarting?: boolean; canceled?: boolean; unchanged?: boolean }>('library_location_activate', { token });
+};

@@ -1,4 +1,5 @@
 import { invoke } from '../platform/electron/core';
+import { flushReaderConfigWrites } from './readerConfig';
 
 export interface AppUpdateAsset {
   name: string;
@@ -90,6 +91,8 @@ export async function downloadAppUpdate(): Promise<AppUpdateStatus> {
 
 export async function installAppUpdate(): Promise<AppUpdateStatus> {
   try {
+    // The updater may start the installer before Electron emits close events.
+    await flushReaderConfigWrites();
     return await invoke<AppUpdateStatus>('app_update_install');
   } catch (error) {
     throw new Error(toErrorMessage(error, '安装软件更新失败'));

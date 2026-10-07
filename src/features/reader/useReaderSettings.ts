@@ -13,7 +13,8 @@ import {
 import type { AppDefaultPaths } from '../../services/desktop';
 import {
   readReaderConfigFile,
-  writeReaderConfigFile,
+  scheduleReaderConfigWrite,
+  flushReaderConfigWrites,
 } from '../../services/readerConfig';
 import {
   getLibrarySettings,
@@ -36,7 +37,6 @@ import {
 } from '../../app/appEvents';
 import {
   buildLegacyModelPresets,
-  CONFIG_WRITE_DEBOUNCE_MS,
   createQaPreset,
   DEFAULT_QA_PRESET,
   DEFAULT_QA_PRESET_ID,
@@ -71,6 +71,10 @@ export function useReaderSettings({
   const [librarySettings, setLibrarySettings] = useState<LibrarySettings | null>(null);
   const [appDefaultPaths, setAppDefaultPaths] = useState<AppDefaultPaths | null>(null);
   const [configHydrated, setConfigHydrated] = useState(false);
+  const [configSaveError, setConfigSaveError] = useState('');
+  const retryConfigSave = useCallback(() => {
+    void flushReaderConfigWrites().catch(() => {});
+  }, []);
 
   const l = useCallback<LocaleTextFn>(
     (zh, en) => pickLocaleText(settings.uiLanguage, zh, en),
@@ -412,27 +416,19 @@ export function useReaderSettings({
       return undefined;
     }
 
-    const timer = window.setTimeout(() => {
-      const nextConfig: Partial<ReaderConfigFile> = {
-        version: READER_CONFIG_VERSION,
-        settings,
-        secrets: readerSecrets,
-        zoteroLocalDataDir,
-        leftSidebarCollapsed: false,
-      };
-
-      void writeReaderConfigFile(nextConfig, appDefaultPaths)
-        .then(() => {
-          window.localStorage.removeItem(SECRETS_STORAGE_KEY);
-        })
-        .catch((error) => {
-          console.error('Failed to persist reader config to file.', error);
-        });
-    }, CONFIG_WRITE_DEBOUNCE_MS);
-
-    return () => {
-      window.clearTimeout(timer);
+    const nextConfig: Partial<ReaderConfigFile> = {
+      version: READER_CONFIG_VERSION,
+      settings,
+      secrets: readerSecrets,
+      zoteroLocalDataDir,
+      leftSidebarCollapsed: false,
     };
+    scheduleReaderConfigWrite(nextConfig, appDefaultPaths,
+      () => { window.localStorage.removeItem(SECRETS_STORAGE_KEY); setConfigSaveError(''); },
+      () => setConfigSaveError(pickLocaleText(settings.uiLanguage,
+        '设置尚未保存到磁盘，请检查磁盘空间或文件权限；关闭时会再次尝试保存。',
+        'Settings have not been saved. Check disk space or file permissions; closing will retry the save.')),
+    );
   }, [
     appDefaultPaths,
     configHydrated,
@@ -606,6 +602,8 @@ export function useReaderSettings({
   return {
     appDefaultPaths,
     configHydrated,
+    configSaveError,
+    retryConfigSave,
     l,
     qaModelPresets,
     readerSecrets,

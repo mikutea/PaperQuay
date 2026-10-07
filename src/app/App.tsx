@@ -31,6 +31,9 @@ import {
 import { PAPERQUAY_ICON_URL } from './appIcon';
 import { AppLocaleProvider } from '../i18n/uiLanguage';
 import { getCurrentWindow } from '../platform/electron/window';
+import { invoke } from '../platform/electron/core';
+import { listen } from '../platform/electron/event';
+import { flushReaderConfigWrites } from '../services/readerConfig';
 import { useThemeStore } from '../stores/useThemeStore';
 import { HOME_TAB_ID, useTabsStore } from '../stores/useTabsStore';
 
@@ -166,6 +169,22 @@ function App() {
         : 'library';
   const activeWorkspaceItem = workspaces.find((workspace) => workspace.key === activeWorkspace) ?? workspaces[0];
   const activeWorkspaceLabel = isEnglish ? activeWorkspaceItem.labelEn : activeWorkspaceItem.labelZh;
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listen<{ requestId: string }>('app:before-close', ({ payload }) => {
+      void flushReaderConfigWrites().then(
+        () => invoke('app_window_save_complete', { requestId: payload.requestId }),
+        () => invoke('app_window_save_complete', { requestId: payload.requestId, error: true }),
+      ).catch(console.error);
+    }).then((stop) => {
+      if (disposed) { stop(); return; }
+      unlisten = stop;
+      return invoke('app_window_save_ready');
+    }).catch(console.error);
+    return () => { disposed = true; unlisten?.(); };
+  }, []);
 
   useEffect(() => {
     window.localStorage.setItem(ACTIVE_WORKSPACE_STORAGE_KEY, activeWorkspace);

@@ -140,6 +140,8 @@ function Reader({ workspaceActive = true }: ReaderProps) {
   const [error, setError] = useState('');
   const {
     configHydrated,
+    configSaveError,
+    retryConfigSave,
     l,
     librarySettings,
     qaModelPresets,
@@ -975,6 +977,8 @@ function Reader({ workspaceActive = true }: ReaderProps) {
 
         <ReaderPreferencesWindow
           open={preferencesOpen}
+          configSaveError={configSaveError}
+          onRetryConfigSave={retryConfigSave}
           onClose={() => setPreferencesOpen(false)}
           preferredSection={preferredPreferencesSection}
           settings={settings}

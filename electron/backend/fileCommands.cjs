@@ -114,6 +114,7 @@ async function hasLooseMineruOutputFiles(directory) {
 function createFileCommands(context) {
   const { appPaths, approvedWritePaths } = context;
   const capturedScreenshots = new Set();
+  const pendingTextWrites = new Map();
   const screenshotRoot = path.join(canonicalPath(path.dirname(path.dirname(appPaths.configPath))), '.screenshots');
   const authorizeWrite = context.authorizeLocalWrite ||= createWriteAuthorizer(context);
   const configuredMineruCacheDir = cleanString(
@@ -156,7 +157,10 @@ function createFileCommands(context) {
       // Both locations come from the trusted profile, not the active library.
       // No caller-supplied path: derived-text loaders must use guarded reads.
       for (const filePath of [appPaths.configPath, appPaths.legacyConfigPath].filter(Boolean)) {
-        try { return await fsp.readFile(filePath, 'utf8'); }
+        try {
+          const content = (await fsp.readFile(filePath, 'utf8')).replace(/^\uFEFF/, '');
+          if (content.trim()) return content;
+        }
         catch (error) { if (error?.code !== 'ENOENT') throw error; }
       }
       return null;
@@ -384,7 +388,19 @@ function createFileCommands(context) {
     },
 
     async write_text_file({ path: filePath, content }) {
-      await writeTextFileAtomically(authorizeWrite(filePath), content);
+      const target = authorizeWrite(filePath);
+      const key = comparablePath(target);
+      const text = String(content ?? '');
+      // Atomic replacement prevents partial files, but overlapping replacements
+      // also need ordering so a slow older save cannot overwrite newer settings.
+      const previous = pendingTextWrites.get(key) ?? Promise.resolve();
+      const write = previous.catch(() => {}).then(() => writeTextFileAtomically(target, text));
+      pendingTextWrites.set(key, write);
+      const cleanup = () => {
+        if (pendingTextWrites.get(key) === write) pendingTextWrites.delete(key);
+      };
+      void write.then(cleanup, cleanup);
+      await write;
     },
 
     async read_binary_file_base64({ path: filePath }) {

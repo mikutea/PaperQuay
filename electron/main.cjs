@@ -2,6 +2,7 @@ const path = require('node:path');
 const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
 const { createBackend } = require('./backend.cjs');
 const { createLibraryLocationManager } = require('./libraryLocation.cjs');
+const { createWindowSaveBarrier } = require('./windowSaveBarrier.cjs');
 const {
   registerLocalPdfProtocol,
   registerLocalPdfProtocolScheme,
@@ -9,6 +10,12 @@ const {
 
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
 let backend = null;
+let quitRequested = false;
+const windowSaveBarrier = createWindowSaveBarrier({
+  dialog,
+  continueClose: (window) => { if (quitRequested) app.quit(); else window.close(); },
+  cancelClose: () => { quitRequested = false; },
+});
 const libraryLocation = createLibraryLocationManager({
   app, dialog,
   restart: () => {
@@ -73,6 +80,7 @@ function createWindow() {
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
   });
+  windowSaveBarrier.attach(mainWindow);
 
   if (isDev) {
     mainWindow.webContents.on('console-message', (event) => {
@@ -126,6 +134,8 @@ function createWindow() {
 }
 
 ipcMain.handle('paperquay:invoke', async (event, command, args) => {
+  if (command === 'app_window_save_ready') return windowSaveBarrier.ready(event.sender);
+  if (command === 'app_window_save_complete') return windowSaveBarrier.complete(event.sender, args);
   return getBackend().invoke(command, args ?? {}, event);
 });
 
@@ -197,6 +207,8 @@ app.on('window-all-closed', () => {
   }
 });
 
-app.on('before-quit', () => {
+app.on('before-quit', () => { quitRequested = true; });
+
+app.on('will-quit', () => {
   backend?.close();
 });

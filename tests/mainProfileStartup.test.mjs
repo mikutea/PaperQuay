@@ -47,6 +47,7 @@ async function startup({ unavailable = false, recover = false, backendFailure = 
       rememberActive() { events.push('remember'); },
     }; } },
     './localPdfProtocol.cjs': { registerLocalPdfProtocolScheme() {}, registerLocalPdfProtocol() {} },
+    './windowSaveBarrier.cjs': { createWindowSaveBarrier: () => ({ attach() {} }) },
   };
   vm.runInNewContext(source, {
     require(name) { assert.ok(name in dependencies, name); return dependencies[name]; },
