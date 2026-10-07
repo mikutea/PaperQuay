@@ -45,6 +45,12 @@ export default function ReaderPreferencesWindow({
     if (normalizedSection) {
       setActiveSection(normalizedSection);
     }
+  }, [open, preferredSection]);
+
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -54,7 +60,7 @@ export default function ReaderPreferencesWindow({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose, open, preferredSection]);
+  }, [onClose, open]);
 
   if (!open) {
     return null;
