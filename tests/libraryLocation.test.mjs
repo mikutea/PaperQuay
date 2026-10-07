@@ -9,6 +9,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
+const fs = require('node:fs');
 const { DatabaseSync } = require('../electron/backend/nodeSqlite.cjs');
 const { createAppPaths, createLibraryStore } = require('../electron/backend/libraryStore.cjs');
 const { createLibraryCommands } = require('../electron/backend/libraryCommands.cjs');
@@ -391,6 +392,239 @@ test('ordinary startup avoids full integrity scans while explicit selection stil
   }
 });
 
+function setStorageDirectory(directory, storageDirectory) {
+  const db = new DatabaseSync(path.join(directory, 'paperquay-library.sqlite'));
+  try { db.prepare('UPDATE library_settings SET value_json=? WHERE key=?').run(JSON.stringify(storageDirectory), 'storageDir'); }
+  finally { db.close(); }
+}
+
+// Trap sentinel references before native filesystem calls: these tests must
+// never contact an actual UNC host or a mapped drive, even if a check regresses.
+function trapReferenceIo(t, matches) {
+  const calls = [];
+  const originals = Object.fromEntries(['existsSync', 'lstatSync', 'realpathSync'].map((name) => [name, fs[name]]));
+  const wrap = (name, original) => (...args) => {
+    if (typeof args[0] === 'string' && matches(args[0])) {
+      calls.push({ name, path: args[0] });
+      throw new Error('Fixture blocked reference I/O');
+    }
+    return original(...args);
+  };
+  for (const [name, original] of Object.entries(originals)) fs[name] = wrap(name, original);
+  fs.realpathSync.native = wrap('realpathSync.native', originals.realpathSync.native);
+  t.after(() => { Object.assign(fs, originals); });
+  return calls;
+}
+
+test('ordinary startup and profile-local cache commands do not probe offline PDF storage', async (t) => {
+  const f = fixture(t);
+  const directory = f.makeLibrary(path.join(f.normalProfile, 'PaperQuay'));
+  const offlinePaths = process.platform === 'win32'
+    ? ['Q:\\paperquay-offline-fixture\\pdfs', '\\\\paperquay-fixture.invalid\\offline\\pdfs']
+    : ['/paperquay-offline-fixture/pdfs'];
+  const calls = trapReferenceIo(t, (value) => /paperquay-offline-fixture|paperquay-fixture\.invalid/i.test(value));
+  for (const storageDirectory of offlinePaths) {
+    setStorageDirectory(directory, storageDirectory);
+    const manager = f.create(); manager.resolve(); manager.rememberActive();
+    const reopened = f.create();
+    assert.equal(reopened.resolve().dataDirectory, directory);
+    assert.equal(reopened.status().paperCount, 1);
+    reopened.rememberActive();
+    f.decisions.directory = directory;
+    const selected = await reopened.selectExisting();
+    assert.equal((await reopened.activateSelected(selected)).unchanged, true);
+    const url = new URL('../electron/backend/fileCommands.cjs', import.meta.url), localRequire = createRequire(url);
+    const module = { exports: {} };
+    vm.runInNewContext(readFileSync(url, 'utf8'), { module, process, Buffer,
+      require: (name) => name === 'electron' ? {} : localRequire(name) });
+    const commands = module.exports.createFileCommands({ appPaths: createAppPaths(f.fakeApp()), approvedWritePaths: new Set(),
+      store: { load: () => ({ settings: { storageDir: storageDirectory } }) },
+      validateLibraryFileOperation: (library, attachments) => reopened.validateFileOperation(library, attachments) });
+    assert.ok(await commands.get_app_default_paths());
+  }
+  assert.deepEqual(calls, []);
+});
+
+test('selection and canceled recovery never probe declared network storage or attachment references', { skip: process.platform !== 'win32' }, async (t) => {
+  const f = fixture(t);
+  f.makeLibrary(path.join(f.normalProfile, 'PaperQuay'));
+  const supplied = f.makeLibrary(path.join(f.root, 'supplied-network'));
+  const network = '\\\\paperquay-fixture.invalid\\share';
+  setStorageDirectory(supplied, network + '\\pdfs');
+  replaceAttachments(supplied, [network + '\\direct\\paper.pdf']);
+  const db = new DatabaseSync(path.join(supplied, 'paperquay-library.sqlite'));
+  db.prepare('UPDATE attachments SET relative_path=?').run('relative\\paper.pdf'); db.close();
+  const calls = trapReferenceIo(t, (value) => value.includes('paperquay-fixture.invalid'));
+  const manager = f.create(); manager.resolve(); manager.rememberActive();
+  const before = readFileSync(path.join(f.appData, REGISTRY_NAME), 'utf8');
+  f.decisions.directory = supplied;
+  const selected = await manager.selectExisting();
+  assert.equal(selected.storageDirectory, network + '\\pdfs');
+  assert.equal(selected.fileAccessResolved, false);
+  assert.deepEqual(await manager.activateSelected(selected), { canceled: true });
+  assert.match(f.decisions.messages.at(-1).detail, /Windows authentication/);
+  f.decisions.confirm = 1;
+  f.decisions.onConfirm = () => { if (f.decisions.messages.at(-1).title.includes('Switch Library')) f.decisions.confirm = 0; };
+  assert.equal(await manager.recover(new Error('fixture offline')), false);
+  assert.deepEqual(calls, []);
+  assert.equal(readFileSync(path.join(f.appData, REGISTRY_NAME), 'utf8'), before);
+});
+
+test('an approved PDF volume may go offline without blocking metadata startup or renewing its permissions', async (t) => {
+  const f = fixture(t);
+  f.makeLibrary(path.join(f.normalProfile, 'PaperQuay'));
+  const supplied = f.makeLibrary(path.join(f.root, 'supplied'));
+  const volume = path.join(f.root, 'approved-volume'); mkdirSync(volume);
+  setStorageDirectory(supplied, volume);
+  const manager = f.create(); manager.resolve(); manager.rememberActive();
+  f.decisions.directory = supplied; f.decisions.confirm = 1;
+  await manager.activateSelected(await manager.selectExisting());
+  const before = readRegistry(path.join(f.appData, REGISTRY_NAME)).libraries[0].approvedFileAccess;
+  const calls = trapReferenceIo(t, (value) => value === volume || value.startsWith(volume + path.sep));
+  const reopened = f.create(); reopened.resolve(); reopened.rememberActive();
+  assert.deepEqual(reopened.status().approvedFileAccess, before);
+  assert.deepEqual(calls, []);
+  assert.throws(() => reopened.validateFileOperation({ settings: { storageDir: volume } }), /Fixture blocked reference I\/O/);
+  assert.ok(calls.length > 0, 'actual PDF operations still require the approved volume');
+});
+
+test('an independent cache write does not ask the PDF-volume validator for permission', (t) => {
+  const f = fixture(t);
+  const data = f.makeLibrary(path.join(f.normalProfile, 'PaperQuay'));
+  const { createWriteAuthorizer } = require('../electron/backend/pathAccess.cjs');
+  let validations = 0;
+  const authorize = createWriteAuthorizer({ appPaths: createAppPaths(f.fakeApp()),
+    store: { load: () => ({ settings: {} }) },
+    validateLibraryFileOperation() { validations++; throw new Error('offline PDF volume probed'); } });
+  const cacheFile = path.join(data, '.mineru-cache', 'document', 'full.md');
+  assert.equal(authorize(cacheFile), cacheFile);
+  assert.equal(validations, 0);
+  assert.throws(() => authorize(path.join(f.root, 'outside', 'paper.pdf')), /offline PDF volume probed/);
+});
+
+test('UNC and mapped-drive references are first inspected only after native consent', { skip: process.platform !== 'win32' }, async (t) => {
+  const f = fixture(t);
+  f.makeLibrary(path.join(f.normalProfile, 'PaperQuay'));
+  const supplied = f.makeLibrary(path.join(f.root, 'supplied'));
+  const calls = trapReferenceIo(t, (value) => /paperquay-network-fixture|paperquay-fixture\.invalid/.test(value));
+  const manager = f.create(); manager.resolve(); manager.rememberActive();
+  f.decisions.directory = supplied;
+  for (const destination of ['Q:\\paperquay-network-fixture\\pdfs', '\\\\paperquay-fixture.invalid\\share\\pdfs']) {
+    setStorageDirectory(supplied, destination);
+    f.decisions.confirm = 0; calls.length = 0;
+    const selected = await manager.selectExisting();
+    assert.deepEqual(calls, []);
+    f.decisions.confirm = 1;
+    let consented = false;
+    f.decisions.onConfirm = () => { consented = true; assert.deepEqual(calls, []); };
+    await assert.rejects(manager.activateSelected(selected), /Fixture blocked reference I\/O/);
+    assert.equal(consented, true);
+    assert.ok(calls.length > 0, 'explicit consent allows resolution to begin; the test trap prevents real traffic');
+    assert.equal(f.decisions.restarts, 0);
+  }
+});
+
+test('prompt-time path changes and adopted-policy drift fail before probing the new reference', { skip: process.platform !== 'win32' }, async (t) => {
+  const f = fixture(t);
+  f.makeLibrary(path.join(f.normalProfile, 'PaperQuay'));
+  const supplied = f.makeLibrary(path.join(f.root, 'supplied'));
+  const ordinary = path.join(supplied, 'paperquay-data');
+  const network = '\\\\paperquay-fixture.invalid\\unreviewed\\pdfs';
+  const calls = trapReferenceIo(t, (value) => value.includes('paperquay-fixture.invalid'));
+  const manager = f.create(); manager.resolve(); manager.rememberActive();
+  f.decisions.directory = supplied; f.decisions.confirm = 1;
+  const selected = await manager.selectExisting();
+  f.decisions.onConfirm = () => setStorageDirectory(supplied, network);
+  await assert.rejects(manager.activateSelected(selected), /settings changed/);
+  assert.deepEqual(calls, []);
+  f.decisions.onConfirm = null; setStorageDirectory(supplied, ordinary);
+  await manager.activateSelected(await manager.selectExisting());
+  const adopted = f.create(); adopted.resolve();
+  setStorageDirectory(supplied, network);
+  assert.throws(() => f.create().resolve(), /file access settings changed/);
+  assert.throws(() => adopted.rememberActive(), /file access settings changed/);
+  assert.throws(() => adopted.validateFileOperation({ settings: { storageDir: network } }), /file access settings changed/);
+  assert.deepEqual(calls, []);
+});
+
+test('local-looking link references remain untouched before consent and recheck changed resolved approvals', { skip: process.platform !== 'win32' }, async (t) => {
+  const f = fixture(t);
+  f.makeLibrary(path.join(f.normalProfile, 'PaperQuay'));
+  const supplied = f.makeLibrary(path.join(f.root, 'supplied'));
+  const target = path.join(f.root, 'resolved-pdfs'); mkdirSync(target);
+  const alias = path.join(f.root, 'declared-pdfs'); symlinkSync(target, alias, 'junction');
+  setStorageDirectory(supplied, alias);
+  const calls = trapReferenceIo(t, (value) => value.includes('paperquay-fixture.invalid'));
+  const manager = f.create(); manager.resolve(); manager.rememberActive();
+  f.decisions.directory = supplied;
+  const originalLstat = fs.lstatSync; let aliasProbes = 0;
+  fs.lstatSync = (...args) => { if (args[0] === alias) aliasProbes++; return originalLstat(...args); };
+  try {
+    const selected = await manager.selectExisting();
+    assert.equal(aliasProbes, 0);
+    await manager.activateSelected(selected);
+    assert.equal(aliasProbes, 0);
+    f.decisions.confirm = 1;
+    f.decisions.onConfirm = () => {
+      if (f.decisions.messages.at(-1).detail.includes('Resolved destination:')) {
+        setStorageDirectory(supplied, '\\\\paperquay-fixture.invalid\\changed-after-resolution\\pdfs');
+      }
+    };
+    await assert.rejects(manager.activateSelected(selected), /settings changed/);
+    assert.ok(aliasProbes > 0);
+    assert.deepEqual(calls, []);
+    assert.equal(f.decisions.restarts, 0);
+  } finally { fs.lstatSync = originalLstat; }
+});
+
+test('device namespaces are rejected as library, storage and attachment paths without device I/O', { skip: process.platform !== 'win32' }, (t) => {
+  const f = fixture(t);
+  const supplied = f.makeLibrary(path.join(f.root, 'supplied'));
+  const ordinary = path.join(supplied, 'paperquay-data');
+  const devices = ['\\\\.\\pipe\\paperquay-fixture', '\\\\?\\GLOBALROOT\\Device\\Mup\\host\\share',
+    '\\\\?\\UNC\\host\\share\\pdfs', '\\\\?\\C:\\paperquay-fixture', '//?/C:/paperquay-fixture', '\\??\\C:\\paperquay-fixture'];
+  const calls = trapReferenceIo(t, (value) => devices.includes(value));
+  for (const device of devices) {
+    assert.throws(() => inspectLibraryDirectory(device), /device paths/);
+    setStorageDirectory(supplied, device);
+    assert.throws(() => inspectLibraryDirectory(supplied), /device paths/);
+    setStorageDirectory(supplied, ordinary);
+    replaceAttachments(supplied, [device]);
+    assert.throws(() => inspectLibraryDirectory(supplied), /device paths/);
+    replaceAttachments(supplied, []);
+  }
+  assert.deepEqual(calls, []);
+});
+
+test('a linked primary SQLite file is rejected before an existence probe can follow it', (t) => {
+  const f = fixture(t);
+  const supplied = f.makeLibrary(path.join(f.root, 'supplied'));
+  const database = path.join(supplied, 'paperquay-library.sqlite');
+  const originalLstat = fs.lstatSync, originalExists = fs.existsSync; let followed = 0;
+  fs.lstatSync = (value, ...args) => value === database ? { isSymbolicLink: () => true } : originalLstat(value, ...args);
+  fs.existsSync = (value) => { if (value === database) followed++; return originalExists(value); };
+  try { assert.throws(() => inspectLibraryDirectory(supplied), /Linked library companion/); }
+  finally { fs.lstatSync = originalLstat; fs.existsSync = originalExists; }
+  assert.equal(followed, 0);
+});
+
+test('profile-folder discovery rejects a linked PaperQuay child before inspecting its descendants', (t) => {
+  const f = fixture(t);
+  const supplied = f.makeLibrary(path.join(f.root, 'supplied'));
+  const child = path.join(supplied, 'PaperQuay');
+  const originalLstat = fs.lstatSync; let descendantProbes = 0;
+  fs.lstatSync = (value, ...args) => {
+    if (value === child) return { isSymbolicLink: () => true };
+    if (typeof value === 'string' && value.startsWith(child + path.sep)) {
+      descendantProbes++; throw new Error('Fixture blocked linked child I/O');
+    }
+    return originalLstat(value, ...args);
+  };
+  try { assert.throws(() => inspectLibraryDirectory(supplied, { allowProfileDirectory: true }), /Linked library companion/); }
+  finally { fs.lstatSync = originalLstat; }
+  assert.equal(descendantProbes, 0);
+});
+
 test('external-library import destinations and destructive modes require explicit approval', async (t) => {
   const f = fixture(t);
   const original = f.makeLibrary(path.join(f.normalProfile, 'PaperQuay'));
@@ -742,7 +976,10 @@ test('storage migrations bind copies and metadata to the approved destination', 
   assert.equal(readFileSync(attachment.storedPath, 'utf8'), 'approved migration fixture');
   assert.equal(readFileSync(source, 'utf8'), 'approved migration fixture');
   assert.deepEqual(readdirSync(outside), []);
-  assert.throws(() => f.create().resolve(), /file access settings changed/, 'a retargeted setting is not implicitly reapproved on relaunch');
+  const reopened = f.create(); reopened.resolve();
+  assert.equal(reopened.status().approvedFileAccess.storageRoot, realpathSync.native(safe));
+  assert.throws(() => reopened.validateFileOperation(store.load(), [attachment]), /file access settings changed/,
+    'metadata can open without the PDF volume, but a retargeted setting is never implicitly reapproved for file operations');
 });
 
 test('attachment deletion consumes validated canonical paths after an alias is retargeted', async (t) => {

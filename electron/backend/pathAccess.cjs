@@ -80,13 +80,17 @@ function createWriteAuthorizer(context) {
     // planted in an adopted library that happens to resolve to the config.
     if (configPath && comparable(filePath) === comparable(appPaths.configPath) &&
         comparable(actual) === comparable(configPath)) return actual;
+    // Profile-local settings/cache operations do not depend on an unrelated
+    // PDF storage volume being online. These canonical roots are pinned when
+    // the backend is created or explicitly approved, not taken from SQLite.
+    const independentRoots = [dataRoot, ...context.approvedWriteDirectories];
+    if (independentRoots.some((root) => isWithin(root, actual)) ||
+        [...context.approvedWritePaths].some((target) => comparable(target) === comparable(actual))) return actual;
     const library = context.store?.load() || { settings: {} };
     const approved = context.validateLibraryFileOperation?.(library, []);
     const storageRoot = approved?.storageRoot || canonicalPath(
       library.settings.storageDir || path.join(appPaths.dataDir, 'paperquay-data'));
-    const roots = [dataRoot, storageRoot, ...context.approvedWriteDirectories];
-    if (roots.some((root) => isWithin(root, actual)) ||
-        [...context.approvedWritePaths].some((target) => comparable(target) === comparable(actual))) return actual;
+    if (isWithin(storageRoot, actual)) return actual;
     throw new Error(`Writing to this path is not allowed until approved: ${filePath}`);
   };
 }

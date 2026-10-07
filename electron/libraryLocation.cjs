@@ -1,6 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
-const { randomUUID } = require('node:crypto');
+const { randomUUID, createHash } = require('node:crypto');
 const { DatabaseSync, withTransaction } = require('./backend/nodeSqlite.cjs');
 const { canonicalPath } = require('./backend/pathAccess.cjs');
 
@@ -18,6 +18,7 @@ function profileKey(directory) {
 }
 
 function fileAccessPolicy(details) {
+  if (!details.fileAccessResolved) throw new Error('Library file access has not been inspected after consent.');
   return {
     storageDirectory: details.storageDirectory,
     storageRoot: details.storageRoot,
@@ -26,7 +27,23 @@ function fileAccessPolicy(details) {
   };
 }
 
-function effectiveRelativePath(storageDirectory, relativePath) {
+function assertFilesystemPath(filePath) {
+  if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) throw new Error('Invalid absolute filesystem path.');
+  // Device namespaces are not ordinary library/PDF paths. Check the spelling
+  // before normalization or any filesystem operation, including on Windows.
+  const windowsPath = filePath.replace(/\//g, '\\');
+  if (/^\\\\[?.]\\|^\\\?\?\\/.test(windowsPath)) {
+    throw new Error('Windows device paths are not supported for library files.');
+  }
+}
+
+function assertApprovedImportSettings(details, approved) {
+  if (approved && (comparable(details.storageDirectory) !== comparable(approved.storageDirectory) || details.importMode !== approved.importMode)) {
+    throw new Error('文库文件访问设置已更改。请通过“打开已有文库”重新确认。 / Library file access settings changed. Use Open Existing Library to approve them again.');
+  }
+}
+
+function effectiveRelativePath(storageDirectory, relativePath, resolvePath = canonicalPath) {
   if (relativePath == null || relativePath === '') return null;
   if (typeof relativePath !== 'string') throw new Error('Unsafe attachment relative path.');
   relativePath = relativePath.trim();
@@ -34,8 +51,8 @@ function effectiveRelativePath(storageDirectory, relativePath) {
   if (/^[\\/]|^[a-z]:/i.test(relativePath) || relativePath.split(/[\\/]/).includes('..')) {
     throw new Error('Unsafe attachment relative path.');
   }
-  const target = canonicalPath(path.join(storageDirectory, relativePath));
-  const relative = path.relative(comparable(canonicalPath(storageDirectory)), comparable(target));
+  const target = resolvePath(path.join(storageDirectory, relativePath));
+  const relative = path.relative(comparable(resolvePath(storageDirectory)), comparable(target));
   if (path.isAbsolute(relative) || relative === '..' || relative.startsWith('..' + path.sep)) throw new Error('Attachment relative path escapes storage root.');
   return target;
 }
@@ -52,12 +69,32 @@ function assertApprovedFileAccess(details, approved) {
   if (!allowed) throw new Error('文库文件访问设置已更改。请通过“打开已有文库”重新确认。 / Library file access settings changed. Use Open Existing Library to approve them again.');
 }
 
-function inspectLibraryDirectory(directory, { allowProfileDirectory = false, verifyIntegrity = true, inspectAttachmentRoots = verifyIntegrity } = {}) {
+function inspectLibraryDirectory(directory, {
+  allowProfileDirectory = false, verifyIntegrity = true, inspectAttachmentRoots = verifyIntegrity,
+  resolveFileAccess = false, approvedFileAccess = null, expectedFileAccessSignature = null,
+} = {}) {
   if (typeof directory !== 'string' || !path.isAbsolute(directory)) {
     throw new Error('请选择包含 PaperQuay 文库数据库的完整目录。 / Select an existing PaperQuay library directory.');
   }
+  assertFilesystemPath(directory);
   const candidates = (allowProfileDirectory ? [directory, path.join(directory, 'PaperQuay')] : [directory])
-    .filter((candidate) => fs.existsSync(path.join(candidate, LIBRARY_FILE)));
+    .filter((candidate) => {
+      // existsSync would follow a database symlink (possibly to an SMB host)
+      // before the linked-companion check below can reject it.
+      try {
+        if (candidate !== directory) {
+          const parent = fs.lstatSync(candidate);
+          if (parent.isSymbolicLink()) throw new Error('Linked library companion paths are not supported.');
+          if (!parent.isDirectory()) return false;
+        }
+        const stat = fs.lstatSync(path.join(candidate, LIBRARY_FILE));
+        if (stat.isSymbolicLink()) throw new Error('Linked library companion paths are not supported.');
+        return stat.isFile();
+      } catch (error) {
+        if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return false;
+        throw error;
+      }
+    });
   if (candidates.length !== 1) {
     throw new Error(candidates.length > 1
       ? '此目录包含多个文库，请选择具体文库目录。 / Multiple libraries found; select the exact library folder.'
@@ -103,16 +140,30 @@ function inspectLibraryDirectory(directory, { allowProfileDirectory = false, ver
     if (typeof storageDirectory !== 'string' || !path.isAbsolute(storageDirectory) || !['copy', 'move', 'keep'].includes(importMode)) {
       throw new Error('文库包含无效的 PDF 导入设置。 / Invalid PDF import settings in this library.');
     }
+    assertFilesystemPath(storageDirectory);
+    assertApprovedImportSettings({ storageDirectory, importMode }, approvedFileAccess);
+    const declaredAttachments = inspectAttachmentRoots
+      ? db.prepare(`SELECT DISTINCT stored_path${attachments.includes('relative_path') ? ', relative_path' : ''} FROM attachments ORDER BY stored_path${attachments.includes('relative_path') ? ', relative_path' : ''}`).all()
+      : [];
+    // Validate every supplied spelling before resolving even the first one.
+    for (const row of declaredAttachments) {
+      assertFilesystemPath(row.stored_path);
+      effectiveRelativePath(storageDirectory, row.relative_path, (value) => path.resolve(value));
+    }
+    const fileAccessSignature = createHash('sha256').update(JSON.stringify({ storageDirectory, importMode, declaredAttachments })).digest('hex');
+    if (expectedFileAccessSignature && fileAccessSignature !== expectedFileAccessSignature) {
+      throw new Error('文库的导入设置已更改，请重新选择并确认。 / Library import settings changed. Select and approve them again.');
+    }
+    // Metadata preview/startup must not probe PDF volumes. A drive letter can
+    // be mapped, and a local-looking path can traverse a remote symlink.
+    const resolveReference = resolveFileAccess ? canonicalPath : (value) => path.resolve(value);
     const attachmentRoots = [];
     if (inspectAttachmentRoots) {
       const roots = new Set();
-      for (const row of db.prepare(`SELECT DISTINCT stored_path${attachments.includes('relative_path') ? ', relative_path' : ''} FROM attachments`).all()) {
-        if (typeof row.stored_path !== 'string' || !path.isAbsolute(row.stored_path)) {
-          throw new Error('附件路径无效，不会打开此文库。 / Invalid attachment path; library was not adopted.');
-        }
-        const target = canonicalPath(row.stored_path);
+      for (const row of declaredAttachments) {
+        const target = resolveReference(row.stored_path);
         roots.add(path.dirname(target));
-        const effective = effectiveRelativePath(storageDirectory, row.relative_path);
+        const effective = effectiveRelativePath(storageDirectory, row.relative_path, resolveReference);
         if (effective) roots.add(path.dirname(effective));
       }
       attachmentRoots.push(...[...roots].sort());
@@ -121,7 +172,9 @@ function inspectLibraryDirectory(directory, { allowProfileDirectory = false, ver
       dataDirectory,
       databasePath,
       storageDirectory,
-      storageRoot: canonicalPath(storageDirectory),
+      storageRoot: resolveFileAccess ? canonicalPath(storageDirectory) : approvedFileAccess?.storageRoot || path.resolve(storageDirectory),
+      fileAccessResolved: resolveFileAccess,
+      fileAccessSignature,
       importMode,
       attachmentRoots,
       paperCount: Number(db.prepare('SELECT count(*) AS count FROM papers').get().count),
@@ -267,7 +320,9 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
       // This runs before ready, including when validation below throws.
       recoveryProfile = profileDirectory;
       app.setPath('userData', profileDirectory);
-      const details = inspectLibraryDirectory(entry.dataDirectory, { verifyIntegrity: false });
+      const details = inspectLibraryDirectory(entry.dataDirectory, {
+        verifyIntegrity: false, approvedFileAccess: entry.approvedFileAccess,
+      });
       assertApprovedFileAccess(details, entry.approvedFileAccess);
       active = { profileDirectory, ...details, approvedFileAccess: entry.approvedFileAccess, registered: true };
     } else {
@@ -312,7 +367,9 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
     if (!active) throw new Error('No active library location.');
     // Ordinary launches only remember a pointer. Full integrity scans belong
     // to the explicit existing-library selection/recovery flow, not startup.
-    const details = inspectLibraryDirectory(active.dataDirectory, { verifyIntegrity: false });
+    const details = inspectLibraryDirectory(active.dataDirectory, {
+      verifyIntegrity: false, approvedFileAccess: active.approvedFileAccess,
+    });
     assertApprovedFileAccess(details, active.approvedFileAccess);
     persistLocation(active.profileDirectory, details.dataDirectory, makeDefault);
     active = { ...active, ...details, registered: true };
@@ -352,9 +409,9 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
       pending = null;
       return { unchanged: true, ...current };
     }
-    if (!await confirmImportSettings(details)) return { canceled: true };
-    validateUnchangedSettings(details);
-    persistLocation(current.profileDirectory, details.dataDirectory, true, false, fileAccessPolicy(details));
+    const resolved = await approveSelectedFileAccess(details);
+    if (!resolved) return { canceled: true };
+    persistLocation(current.profileDirectory, resolved.dataDirectory, true, false, fileAccessPolicy(resolved));
     pending = null;
     restart();
     return { restarting: true };
@@ -373,7 +430,7 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
       type: 'question',
       title: '切换文库并重启 / Switch Library and Restart',
       message: `打开已有文库（${details.paperCount} 篇）？ / Open existing library (${details.paperCount} papers)?`,
-      detail: `${details.dataDirectory}\n\n此文库自带的后续 PDF 导入设置 / This library's settings for FUTURE PDF imports:\n存储目录 / Destination: ${JSON.stringify(details.storageDirectory)}\n导入方式 / Mode: ${modeDescription}\n\n现有附件 / Existing attachments: ${attachmentScope}\n\n仅在信任该目录和导入方式时继续；共享目录可能向他人暴露文件。 / Continue only if you trust this destination and import mode. Shared locations may expose files to others.\n\n请先保存编辑内容并关闭使用此文库的其他实例。本次切换不会复制、合并或覆盖任一文库。 / Save edits and close other instances. This switch does not copy, merge or overwrite either library.`,
+      detail: `${details.dataDirectory}\n\n此文库自带的后续 PDF 导入设置 / This library's settings for FUTURE PDF imports:\n存储目录 / Destination: ${JSON.stringify(details.storageDirectory)}${details.fileAccessResolved ? `\n实际目录 / Resolved destination: ${JSON.stringify(details.storageRoot)}` : ''}\n导入方式 / Mode: ${modeDescription}\n\n现有附件 / Existing attachments: ${attachmentScope}\n\n继续后才会检查这些路径。UNC、映射盘及符号链接可能连接远程服务器，并发送 Windows 身份验证信息；仅在信任全部路径及其链接目标时继续。 / Only after consent will these paths be inspected. UNC paths, mapped drives and symlinks may contact remote servers and send Windows authentication information. Continue only if you trust ALL paths and their link targets.\n\n共享目录可能向他人暴露文件。 / Shared locations may expose files to others.\n\n请先保存编辑内容并关闭使用此文库的其他实例。本次切换不会复制、合并或覆盖任一文库。 / Save edits and close other instances. This switch does not copy, merge or overwrite either library.`,
       buttons: ['取消 / Cancel', '信任导入设置并继续 / Trust Import Settings and Continue'], defaultId: 0, cancelId: 0,
       noLink: true,
     });
@@ -394,7 +451,7 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
       const result = await dialog.showMessageBox({
         type: 'warning', title: '确认附件访问范围 / Approve Attachment Access',
         message: `附件目录 ${index + 1}/${pages.length} / Attachment roots ${index + 1}/${pages.length}`,
-        detail: `${roots.join('\n')}\n\n删除文献并选择删除文件时，会删除这些目录及其子目录内的附件原文件，包括文库外文件。 / Deleting papers with Delete Files can REMOVE original attachments in these directories and subdirectories, including files outside the library.\n仅在信任这一页的全部目录时继续。 / Continue only if you trust EVERY root on this page.`,
+        detail: `${roots.join('\n')}\n\n检查网络、映射盘或链接路径可能连接远程服务器并发送 Windows 身份验证信息。 / Inspecting network, mapped-drive or linked paths may contact remote servers and send Windows authentication information.\n\n删除文献并选择删除文件时，会删除这些目录及其子目录内的附件原文件，包括文库外文件。 / Deleting papers with Delete Files can REMOVE original attachments in these directories and subdirectories, including files outside the library.\n仅在信任这一页的全部目录时继续。 / Continue only if you trust EVERY root on this page.`,
         buttons: ['取消 / Cancel', '信任本页目录 / Trust These Roots'], defaultId: 0, cancelId: 0, noLink: true,
       });
       if (result.response !== 1) return false;
@@ -403,11 +460,29 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
   }
 
   function validateUnchangedSettings(approved) {
-    const current = inspectLibraryDirectory(approved.dataDirectory);
+    const current = inspectLibraryDirectory(approved.dataDirectory, {
+      resolveFileAccess: approved.fileAccessResolved === true, expectedFileAccessSignature: approved.fileAccessSignature,
+    });
     if (current.storageDirectory !== approved.storageDirectory || current.storageRoot !== approved.storageRoot || current.importMode !== approved.importMode ||
         JSON.stringify(current.attachmentRoots) !== JSON.stringify(approved.attachmentRoots)) {
       throw new Error('文库的导入设置已更改，请重新选择并确认。 / Library import settings changed. Select and approve them again.');
     }
+  }
+
+  async function approveSelectedFileAccess(details) {
+    if (!await confirmImportSettings(details)) return null;
+    // Re-read only strings first: a prompt-time change must not cause an
+    // unreviewed network lookup even when the final canonical check rejects it.
+    validateUnchangedSettings(details);
+    const resolved = inspectLibraryDirectory(details.dataDirectory, {
+      resolveFileAccess: true, expectedFileAccessSignature: details.fileAccessSignature,
+    });
+    if (comparable(resolved.storageRoot) !== comparable(details.storageRoot) ||
+        JSON.stringify(resolved.attachmentRoots) !== JSON.stringify(details.attachmentRoots)) {
+      if (!await confirmImportSettings(resolved)) return null;
+    }
+    validateUnchangedSettings(resolved);
+    return resolved;
   }
 
   async function recover(error) {
@@ -420,24 +495,29 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
     if (answer.response !== 1) return false;
     const selected = await selectExisting();
     if (!selected) return false;
-    if (!await confirmImportSettings(selected)) return false;
-    validateUnchangedSettings(selected);
+    const resolved = await approveSelectedFileAccess(selected);
+    if (!resolved) return false;
     // Keep the remembered profile when only its library is unavailable. Fall
     // back to the launch profile only when the remembered profile was missing.
     fs.mkdirSync(recoveryProfile, { recursive: true });
-    persistLocation(recoveryProfile, selected.dataDirectory, true, true, fileAccessPolicy(selected));
+    persistLocation(recoveryProfile, resolved.dataDirectory, true, true, fileAccessPolicy(resolved));
     pending = null;
     return true;
   }
 
   function validateFileOperation(library, attachments = []) {
     if (!active?.approvedFileAccess) return;
-    const onDisk = inspectLibraryDirectory(active.dataDirectory, { verifyIntegrity: false });
+    const onDisk = inspectLibraryDirectory(active.dataDirectory, {
+      verifyIntegrity: false, resolveFileAccess: true, approvedFileAccess: active.approvedFileAccess,
+    });
     if (comparable(onDisk.dataDirectory) !== comparable(active.dataDirectory)) throw new Error('Library directory changed.');
     assertApprovedFileAccess(onDisk, active.approvedFileAccess);
     const storageDirectory = library.settings.storageDir || path.join(active.dataDirectory, 'paperquay-data');
+    assertFilesystemPath(storageDirectory);
+    assertApprovedImportSettings({ storageDirectory, importMode: library.settings.importMode || 'copy' }, active.approvedFileAccess);
     const attachmentPaths = attachments.map((attachment) => {
       if (typeof attachment.storedPath !== 'string' || !path.isAbsolute(attachment.storedPath)) throw new Error('Invalid attachment path. No files were changed.');
+      assertFilesystemPath(attachment.storedPath);
       return canonicalPath(attachment.storedPath);
     });
     const details = {
@@ -498,7 +578,9 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
       throw new Error('Invalid PDF storage directory or import mode.');
     }
     if (storageDirectory === previous.settings.storageDir && next.settings.importMode === previous.settings.importMode) return null;
-    const expected = inspectLibraryDirectory(active.dataDirectory, { verifyIntegrity: false, inspectAttachmentRoots: true });
+    const expected = inspectLibraryDirectory(active.dataDirectory, {
+      verifyIntegrity: false, inspectAttachmentRoots: true, resolveFileAccess: true, approvedFileAccess: active.approvedFileAccess,
+    });
     const approved = active.approvedFileAccess;
     const policy = { ...approved, storageDirectory, storageRoot: canonicalPath(storageDirectory), importMode: next.settings.importMode };
     const result = await dialog.showMessageBox({
@@ -546,7 +628,9 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
       }
     }
     if (!roots.size) return null;
-    const expected = inspectLibraryDirectory(active.dataDirectory, { verifyIntegrity: false, inspectAttachmentRoots: true });
+    const expected = inspectLibraryDirectory(active.dataDirectory, {
+      verifyIntegrity: false, inspectAttachmentRoots: true, resolveFileAccess: true, approvedFileAccess: active.approvedFileAccess,
+    });
     if (!await confirmAttachmentRoots([...roots].sort())) throw new Error('Keep-path import canceled.');
     validateUnchangedSettings(expected);
     const policy = { ...oldPolicy, attachmentRoots: [...new Set([...oldPolicy.attachmentRoots, ...roots])].sort() };
