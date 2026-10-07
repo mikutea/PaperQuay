@@ -79,9 +79,12 @@ test('repeated ancestor replacement races never overwrite or delete outside vict
     } catch (error) { if (!['EBUSY', 'EPERM', 'EACCES', 'EEXIST'].includes(error.code)) throw error; }
     await operation;
     if (moved) {
-      if (fs.lstatSync(f.inside).isSymbolicLink()) {
+      // The competing mkdir/open can make link creation fail after rename;
+      // an absent replacement is a valid race outcome, not a cleanup failure.
+      const replacement = fs.lstatSync(f.inside, { throwIfNoEntry: false });
+      if (replacement?.isSymbolicLink()) {
         if (process.platform === 'win32') fs.rmdirSync(f.inside); else fs.unlinkSync(f.inside);
-      } else fs.rmSync(f.inside, { recursive: true });
+      } else if (replacement) fs.rmSync(f.inside, { recursive: true });
       fs.renameSync(original, f.inside);
     }
     assert.equal(fs.readFileSync(victim, 'utf8'), 'private bytes');

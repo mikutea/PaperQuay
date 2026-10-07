@@ -34,6 +34,14 @@ test('cached Reader Markdown never creates fetching images and preserves text, m
     assert.match(ordinary, /<strong>Ordinary translation<\/strong>/);
     assert.match(ordinary, /class="katex"/);
     assert.match(ordinary, /<button type="button">citation<\/button>/);
+    for (const href of ['//host/share/payload.html', '/C:/supplier.html', '../supplier.html', 'file:///C:/supplier.html', 'javascript:alert(1)']) {
+      const html = renderToStaticMarkup(createElement(MarkdownPreview, { content: `[untrusted label](${href})` }));
+      assert.doesNotMatch(html, /<a[\s>]/i, href);
+      assert.match(html, /untrusted label/);
+    }
+    const external = renderToStaticMarkup(createElement(MarkdownPreview, { content: '[paper](https://example.com/paper)' }));
+    assert.match(external, /href="https:\/\/example.com\/paper"/);
+    assert.match(external, /target="_blank"/);
   } finally { await server.close(); }
 });
 

@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 import test from 'node:test';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const source = readFileSync(new URL('../electron/main.cjs', import.meta.url), 'utf8');
 
@@ -48,6 +50,7 @@ async function startup({ unavailable = false, recover = false, backendFailure = 
     }; } },
     './localPdfProtocol.cjs': { registerLocalPdfProtocolScheme() {}, registerLocalPdfProtocol() {} },
     './windowSaveBarrier.cjs': { createWindowSaveBarrier: () => ({ attach() {} }) },
+    './rendererTrust.cjs': require('../electron/rendererTrust.cjs'),
   };
   vm.runInNewContext(source, {
     require(name) { assert.ok(name in dependencies, name); return dependencies[name]; },

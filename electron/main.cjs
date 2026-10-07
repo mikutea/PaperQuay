@@ -3,6 +3,8 @@ const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
 const { createBackend } = require('./backend.cjs');
 const { createLibraryLocationManager } = require('./libraryLocation.cjs');
 const { createWindowSaveBarrier } = require('./windowSaveBarrier.cjs');
+const { attachRendererTrust, assertTrustedRenderer } = require('./rendererTrust.cjs');
+const trustedContents = new WeakSet();
 const {
   registerLocalPdfProtocol,
   registerLocalPdfProtocolScheme,
@@ -103,28 +105,8 @@ function createWindow() {
     });
   }
 
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:\/\//i.test(url)) {
-      void shell.openExternal(url);
-    }
-
-    return { action: 'deny' };
-  });
-
-  mainWindow.webContents.on('will-navigate', (event, url) => {
-    const allowedDevUrl = isDev && url.startsWith(process.env.VITE_DEV_SERVER_URL);
-    const allowedFileUrl = !isDev && url.startsWith('file://');
-
-    if (allowedDevUrl || allowedFileUrl) {
-      return;
-    }
-
-    event.preventDefault();
-
-    if (/^https?:\/\//i.test(url)) {
-      void shell.openExternal(url);
-    }
-  });
+  trustedContents.add(mainWindow.webContents);
+  attachRendererTrust(mainWindow.webContents, (url) => shell.openExternal(url));
 
   if (isDev) {
     void mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
@@ -134,12 +116,14 @@ function createWindow() {
 }
 
 ipcMain.handle('paperquay:invoke', async (event, command, args) => {
+  assertTrustedRenderer(event, trustedContents);
   if (command === 'app_window_save_ready') return windowSaveBarrier.ready(event.sender);
   if (command === 'app_window_save_complete') return windowSaveBarrier.complete(event.sender, args);
   return getBackend().invoke(command, args ?? {}, event);
 });
 
 ipcMain.handle('paperquay:window-control', (event, action) => {
+  assertTrustedRenderer(event, trustedContents);
   const targetWindow = BrowserWindow.fromWebContents(event.sender);
 
   if (!targetWindow) {

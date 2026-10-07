@@ -2,13 +2,12 @@ const fsp = require('node:fs/promises');
 const fs = require('node:fs');
 const path = require('node:path');
 const { pipeline } = require('node:stream/promises');
-const { randomUUID } = require('node:crypto');
-const { canonicalPath, writeBoundFile, openAuthorizedReadFile } = require('./pathAccess.cjs');
+const { randomUUID, createHash } = require('node:crypto');
+const { writeBoundFile, openAuthorizedReadFile, resolveAuthorizedPath } = require('./pathAccess.cjs');
+const nativeFs = require('./nativeFs.cjs');
 const {
   cleanString,
   hashBytes,
-  hashFile,
-  pathExists,
   readJson,
   safeFileName,
 } = require('./utils.cjs');
@@ -107,11 +106,15 @@ function previousObjectIndex(manifest) {
 }
 
 async function fileDigest(filePath) {
-  const stat = await fsp.stat(filePath);
-  return {
-    byteSize: stat.size,
-    checksum: await hashFile(filePath),
-  };
+  const { handle, stat } = await openAuthorizedReadFile(filePath);
+  try { return { byteSize: stat.size, checksum: await hashHandle(handle) }; }
+  finally { await handle.close(); }
+}
+
+async function hashHandle(handle) {
+  const hash = createHash('sha256');
+  for await (const bytes of handle.createReadStream({ autoClose: false })) hash.update(bytes);
+  return hash.digest('hex');
 }
 
 function classifyDerivedFile(relativePath) {
@@ -133,13 +136,14 @@ function classifyDerivedFile(relativePath) {
   return null;
 }
 
-async function collectFiles(root) {
+async function collectFiles(root, authorize) {
   const output = [];
+  root = await authorize?.(root) || root;
 
   async function walk(directory) {
     let entries = [];
     try {
-      entries = await fsp.readdir(directory, { withFileTypes: true });
+      entries = await nativeFs.list(directory);
     } catch (error) {
       if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return;
       throw new Error(
@@ -148,10 +152,12 @@ async function collectFiles(root) {
     }
 
     for (const entry of entries) {
-      const filePath = path.join(directory, entry.name);
-      if (entry.isDirectory()) {
+      const filePath = path.join(directory, entry);
+      const inspected = nativeFs.inspectSync(filePath);
+      if (inspected.linkPath || !inspected.exists) continue;
+      if (inspected.directory) {
         await walk(filePath);
-      } else if (entry.isFile()) {
+      } else {
         output.push(filePath);
       }
     }
@@ -218,7 +224,6 @@ async function collectBackupSources(context, backupId) {
         if (attachment.kind !== 'pdf' || !attachment.storedPath) continue;
 
         const approvedPath = approvedPaths.get(attachment) || attachment.storedPath;
-        const exists = await pathExists(approvedPath);
         const fileName = safeFileName(attachment.fileName || path.basename(attachment.storedPath));
         const remotePath = remoteJoin(
           'latest/pdfs',
@@ -227,7 +232,13 @@ async function collectBackupSources(context, backupId) {
           fileName,
         );
 
-        if (!exists) {
+        let localPath;
+        try {
+          localPath = await snapshotFile(approvedPath,
+            path.join(snapshotDir, 'pdfs', hashBytes(Buffer.from(remotePath))),
+            (target) => context.validateLibraryFileOperation?.(library, [{ storedPath: target }])?.attachmentPaths?.[0]);
+        } catch (error) {
+          if (!['ENOENT', 'ENOTDIR', 'EISDIR'].includes(error.code)) throw error;
           sources.push({
             kind: 'pdf',
             localPath: null,
@@ -238,15 +249,11 @@ async function collectBackupSources(context, backupId) {
           continue;
         }
 
-        const actualPath = await fsp.realpath(approvedPath);
-        const validated = context.validateLibraryFileOperation?.(library, [{ storedPath: actualPath }]);
         sources.push({
           kind: 'pdf',
           // Hashing and uploading both use a private snapshot, never a mutable
           // supplier pathname. snapshotFile binds its read to one descriptor.
-          localPath: await snapshotFile(validated?.attachmentPaths?.[0] || actualPath,
-            path.join(snapshotDir, 'pdfs', hashBytes(Buffer.from(remotePath))),
-            (target) => context.validateLibraryFileOperation?.(library, [{ storedPath: target }])),
+          localPath,
           remotePath,
           source: `paper:${paper.id}:attachment:${attachment.id}:${attachment.storedPath}`,
         });
@@ -256,7 +263,7 @@ async function collectBackupSources(context, backupId) {
 
   if (library.webdav.includeDerived !== false) {
     for (const root of configuredMineruRoots(appPaths)) {
-      const files = await collectFiles(root);
+      const files = await collectFiles(root, context.authorizeLocalRead);
       const isDefaultRoot = path.resolve(root) === path.resolve(appPaths.mineruCacheDir);
       const rootLabel = isDefaultRoot ? '' : `root-${hashBytes(Buffer.from(root)).slice(0, 8)}`;
 
@@ -684,15 +691,18 @@ function parseAttachmentSource(source) {
 }
 
 async function localFileMatches(filePath, object) {
+  let handle;
   try {
-    const stat = await fsp.stat(filePath);
-    if (!stat.isFile()) return false;
+    const opened = await openAuthorizedReadFile(filePath);
+    handle = opened.handle;
+    const stat = opened.stat;
     if (Number(object.byteSize) && stat.size !== Number(object.byteSize)) return false;
-    if (object.checksum) return await hashFile(filePath) === object.checksum;
+    if (object.checksum) return await hashHandle(handle) === object.checksum;
     return stat.size > 0;
-  } catch {
+  } catch (error) {
+    if (!['ENOENT', 'ENOTDIR', 'EISDIR'].includes(error.code)) throw error;
     return false;
-  }
+  } finally { await handle?.close(); }
 }
 
 function restorePdfTarget(library, object, appPaths) {
@@ -795,7 +805,8 @@ async function runRestore(context, webdav) {
         const approved = context.validateLibraryFileOperation?.(library, [{ storedPath: target }]);
         target = approved?.attachmentPaths[0] || target;
       }
-      target = context.validateLibraryRestoreTarget?.(object.kind, target) || canonicalPath(target);
+      target = context.validateLibraryRestoreTarget?.(object.kind, target) ||
+        resolveAuthorizedPath(target, (candidate) => path.resolve(candidate) === path.resolve(target));
       const result = object.kind === 'pdf'
         ? await restorePdfObject(webdav, library, object, target)
         : await restoreDerivedObject(webdav, object, target);

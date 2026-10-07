@@ -617,12 +617,14 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
   }
 
   function validateRestoreTarget(kind, target) {
-    const actual = canonicalPath(target);
-    if (!active?.approvedFileAccess) return actual;
-    const root = kind === 'pdf' ? active.approvedFileAccess.storageRoot : path.join(canonicalPath(active.dataDirectory), '.mineru-cache');
-    const relative = path.relative(comparable(root), comparable(actual));
-    if (path.isAbsolute(relative) || relative === '..' || relative.startsWith('..' + path.sep)) throw new Error('Restore target escapes approved root.');
-    return actual;
+    assertFilesystemPath(target);
+    if (!active?.approvedFileAccess) return resolveAuthorizedPath(target, (candidate) => comparable(candidate) === comparable(target));
+    const root = kind === 'pdf' ? active.approvedFileAccess.storageRoot : path.join(active.dataDirectory, '.mineru-cache');
+    if (!isWithin(root, target)) throw new Error('Restore target escapes approved root.');
+    return resolveAuthorizedPath(target, (candidate) => {
+      if (!isWithin(root, candidate)) throw new Error('Restore target escapes approved root.');
+      return true;
+    });
   }
 
   async function approveSettingsChange(previous, next) {
