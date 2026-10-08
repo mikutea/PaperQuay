@@ -10,6 +10,15 @@ import { useLocaleText } from '../../i18n/uiLanguage';
 import type { PaperSummary, SelectedExcerpt } from '../../types/reader';
 import { cn } from '../../utils/cn';
 import { normalizeMarkdownMath } from '../../utils/markdown';
+import { openExternalUrl } from '../../services/desktop';
+
+const SafeMarkdownLink: NonNullable<Components['a']> = ({ href, children }) => {
+  if (!href || !/^https?:\/\//i.test(href)) return <>{children}</>;
+  return <a href={href} target="_blank" rel="noreferrer" onClick={(event) => {
+    event.preventDefault();
+    void openExternalUrl(href).catch(() => {});
+  }}>{children}</a>;
+};
 
 function SectionCard({
   title,
@@ -212,7 +221,9 @@ function MarkdownPreview({
         )}
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[[rehypeKatex, { strict: 'ignore', throwOnError: false }]]}
-        components={components}
+        // Translation/summary caches can come from an adopted library. Match
+        // the Reader block renderer: retain labels, never fetch Markdown images.
+        components={{ a: SafeMarkdownLink, ...components, img: ({ alt }) => <>{alt}</> }}
       >
         {normalized.content}
       </ReactMarkdown>

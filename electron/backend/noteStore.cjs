@@ -1,8 +1,8 @@
 const fs = require('node:fs');
-const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { DatabaseSync, sqlStringLiteral, withTransaction } = require('./nodeSqlite.cjs');
 const { cleanString, id, now } = require('./utils.cjs');
+const { withSnapshotDatabase, assertSnapshotTables, replaceTables } = require('./databaseRestore.cjs');
 
 const NOTE_TYPES = new Set(['highlight', 'area', 'standalone', 'ai-chat']);
 const GLOBAL_NOTES_PAPER_ID = 'global-notes';
@@ -10,10 +10,15 @@ const GLOBAL_NOTES_PAPER_ID = 'global-notes';
 function openDatabase(databasePath) {
   fs.mkdirSync(path.dirname(databasePath), { recursive: true });
   const db = new DatabaseSync(databasePath, { timeout: 5000 });
-  db.exec('PRAGMA journal_mode = WAL;');
-  db.exec('PRAGMA foreign_keys = ON;');
-  createSchema(db);
-  return db;
+  try {
+    db.exec('PRAGMA journal_mode = WAL;');
+    db.exec('PRAGMA foreign_keys = ON;');
+    createSchema(db);
+    return db;
+  } catch (error) {
+    if (db.isOpen) db.close();
+    throw error;
+  }
 }
 
 function getTableColumns(db, tableName) {
@@ -962,21 +967,19 @@ function createNoteStore(appPaths) {
       return targetPath;
     },
     async replaceWithSnapshot(snapshotPath) {
-      const replacementPath = `${appPaths.notesDatabasePath}.restore-${Date.now()}.tmp`;
-      await fsp.mkdir(path.dirname(appPaths.notesDatabasePath), { recursive: true });
-      await fsp.copyFile(snapshotPath, replacementPath);
-
-      if (db.isOpen) db.close();
-
-      try {
-        await fsp.rm(appPaths.notesDatabasePath, { force: true });
-        await fsp.rm(`${appPaths.notesDatabasePath}-wal`, { force: true });
-        await fsp.rm(`${appPaths.notesDatabasePath}-shm`, { force: true });
-        await fsp.rename(replacementPath, appPaths.notesDatabasePath);
-      } finally {
-        await fsp.rm(replacementPath, { force: true }).catch(() => {});
-        db = openDatabase(appPaths.notesDatabasePath);
-      }
+      const tables = ['notes', 'note_tags', 'note_links', 'note_paper_links'];
+      return withSnapshotDatabase(snapshotPath, openDatabase, (source) => {
+        assertSnapshotTables(source, [...tables, 'notes_fts'], db);
+        return withTransaction(db, () => {
+          replaceTables(db, source, tables);
+          if (ftsTableExists(db)) {
+            db.exec(`DELETE FROM notes_fts;
+              INSERT INTO notes_fts (note_id, title, content_text, excerpt)
+              SELECT id, title, COALESCE(NULLIF(content_text, ''), content, ''), COALESCE(excerpt, '')
+              FROM notes WHERE deleted_at IS NULL`);
+          }
+        });
+      }, tables);
     },
   };
 }

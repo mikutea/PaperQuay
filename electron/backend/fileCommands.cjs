@@ -1,10 +1,13 @@
 const fsp = require('node:fs/promises');
 const path = require('node:path');
+const { randomUUID } = require('node:crypto');
 const { spawn } = require('node:child_process');
 const { BrowserWindow, clipboard, dialog, shell } = require('electron');
+const { canonicalPath, isWithin, assertBoundPath, writeBoundFile, createWriteAuthorizer, readAuthorizedFile, openAuthorizedReadFile, removeBoundFile, resolveAuthorizedPath } = require('./pathAccess.cjs');
+const nativeFs = require('./nativeFs.cjs');
+const { createSourceAccess, assertSourcePath } = require('./sourceAccess.cjs');
 const {
   cleanString,
-  ensureFile,
   pathExists,
   readJson,
   safeFileName,
@@ -35,8 +38,8 @@ function isPathInside(child, parent) {
 
 async function directoryExists(directory) {
   try {
-    const stat = await fsp.stat(directory);
-    return stat.isDirectory();
+    const stat = nativeFs.inspectSync(directory);
+    return stat.exists && !stat.linkPath && stat.directory;
   } catch {
     return false;
   }
@@ -44,10 +47,24 @@ async function directoryExists(directory) {
 
 async function fileExists(filePath) {
   try {
-    const stat = await fsp.stat(filePath);
-    return stat.isFile();
+    const stat = nativeFs.inspectSync(filePath);
+    return stat.exists && !stat.linkPath && !stat.directory;
   } catch {
     return false;
+  }
+}
+
+async function copyBoundDirectory(source, destination) {
+  await nativeFs.mkdir(destination);
+  for (const name of await nativeFs.list(source)) {
+    const from = path.join(source, name), to = path.join(destination, name);
+    const entry = nativeFs.inspectSync(from);
+    if (entry.linkPath) throw new Error('Linked cache entries cannot be migrated.');
+    if (entry.directory) await copyBoundDirectory(from, to);
+    else {
+      try { await nativeFs.copy(from, to, { exclusive: true }); }
+      catch (error) { if (error.code !== 'EEXIST') throw error; }
+    }
   }
 }
 
@@ -74,19 +91,19 @@ async function hasMineruCacheArtifact(directory) {
 
 async function listPaperQuayMineruCacheEntries(rootDir) {
   try {
-    const entries = await fsp.readdir(rootDir, { withFileTypes: true });
+    const entries = await nativeFs.list(rootDir);
     const cacheEntries = [];
 
     for (const entry of entries) {
-      if (!entry.isDirectory()) {
+      if (!await directoryExists(path.join(rootDir, entry))) {
         continue;
       }
 
-      const entryPath = path.join(rootDir, entry.name);
-      const looksStandard = entry.name.startsWith('document-');
+      const entryPath = path.join(rootDir, entry);
+      const looksStandard = entry.startsWith('document-');
 
       if (looksStandard || await hasMineruCacheArtifact(entryPath)) {
-        cacheEntries.push({ name: entry.name, path: entryPath });
+        cacheEntries.push({ name: entry, path: entryPath });
       }
     }
 
@@ -99,11 +116,10 @@ async function listPaperQuayMineruCacheEntries(rootDir) {
 
 async function hasLooseMineruOutputFiles(directory) {
   try {
-    const entries = await fsp.readdir(directory, { withFileTypes: true });
-
-    return entries.some((entry) => (
-      entry.isFile() && MINERU_OUTPUT_FILE_NAMES.has(entry.name.toLowerCase())
-    ));
+    for (const entry of await nativeFs.list(directory)) {
+      if (MINERU_OUTPUT_FILE_NAMES.has(entry.toLowerCase()) && await fileExists(path.join(directory, entry))) return true;
+    }
+    return false;
   } catch (error) {
     if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return false;
     throw error;
@@ -111,63 +127,64 @@ async function hasLooseMineruOutputFiles(directory) {
 }
 
 function createFileCommands(context) {
-  const { appPaths, approvedWritePaths, store } = context;
+  const { appPaths, approvedWritePaths } = context;
+  const sourceAccess = createSourceAccess(dialog);
+  const locationRead = context.authorizeLocalRead;
+  context.authorizeLocalRead = async (filePath) => sourceAccess.known(filePath) || await locationRead?.(filePath);
+  context.approveImportSources = sourceAccess.authorize;
+  context.rememberPickedZoteroSourceRoot = sourceAccess.rememberZoteroRoot;
+  context.approveZoteroSourceRoot = (source, { detected = false } = {}) => {
+    const configured = context.store?.load()?.settings?.zoteroLocalDataDir;
+    return sourceAccess.authorizeZoteroRoot(source, {
+      trusted: detected || Boolean(configured && isSamePath(configured, source)),
+    });
+  };
+  const capturedScreenshots = new Set();
+  const pendingTextWrites = new Map();
+  const screenshotRoot = path.join(canonicalPath(path.dirname(path.dirname(appPaths.configPath))), '.screenshots');
+  const authorizeWrite = context.authorizeLocalWrite ||= createWriteAuthorizer(context);
   const configuredMineruCacheDir = cleanString(
-    readJson(appPaths.configPath, null)?.settings?.mineruCacheDir,
+    (readJson(appPaths.configPath, null) || readJson(appPaths.legacyConfigPath, null))?.settings?.mineruCacheDir,
   );
 
   if (configuredMineruCacheDir) {
-    approvedWritePaths.add(path.resolve(configuredMineruCacheDir));
+    try { context.approvedWriteDirectories.add(canonicalPath(configuredMineruCacheDir)); }
+    catch (error) {
+      // An offline custom cache must not prevent opening the library/settings.
+      // Do not grant a lexical fallback: writes remain denied until available
+      // and explicitly approved or prepared again.
+      if (!['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM'].includes(error.code)) throw error;
+    }
   }
 
   async function writeTextFileAtomically(filePath, content) {
-    await fsp.mkdir(path.dirname(filePath), { recursive: true });
-    const temporaryPath = `${filePath}.tmp-${process.pid}-${now()}-${Math.random().toString(16).slice(2)}`;
-
-    try {
-      await fsp.writeFile(temporaryPath, String(content ?? ''), 'utf8');
-      await fsp.rename(temporaryPath, filePath);
-    } catch (error) {
-      await fsp.rm(temporaryPath, { force: true }).catch(() => undefined);
-      throw error;
-    }
-  }
-
-  function assertWriteAllowed(filePath) {
-    const absolute = path.resolve(filePath);
-    const comparableAbsolute = comparablePath(absolute);
-    const library = store.load();
-    const roots = [
-      path.resolve(appPaths.dataDir),
-      path.resolve(library.settings.storageDir || path.join(appPaths.dataDir, 'paperquay-data')),
-    ];
-
-    if (roots.some((root) => {
-      const comparableRoot = comparablePath(root);
-      return comparableAbsolute === comparableRoot ||
-        comparableAbsolute.startsWith(`${comparableRoot}${path.sep}`);
-    })) return;
-    for (const approvedPath of approvedWritePaths) {
-      const comparableApprovedPath = comparablePath(approvedPath);
-      if (
-        comparableAbsolute === comparableApprovedPath ||
-        comparableAbsolute.startsWith(`${comparableApprovedPath}${path.sep}`)
-      ) return;
-    }
-
-    throw new Error(`Writing to this path is not allowed until approved: ${filePath}`);
+    await writeBoundFile(filePath, String(content ?? ''), { encoding: 'utf8' });
   }
 
   async function selectFiles(properties, filters, event) {
     const win = BrowserWindow.fromWebContents(event.sender);
     const result = await dialog.showOpenDialog(win, { properties, filters });
+    if (!result.canceled && properties.includes('openFile')) sourceAccess.rememberPicked(result.filePaths);
     return result.canceled ? null : result.filePaths;
   }
 
-  return {
+  const commands = {
+    async read_app_config() {
+      // Both locations come from the trusted profile, not the active library.
+      // No caller-supplied path: derived-text loaders must use guarded reads.
+      for (const filePath of [appPaths.configPath, appPaths.legacyConfigPath].filter(Boolean)) {
+        try {
+          const content = (await fsp.readFile(filePath, 'utf8')).replace(/^\uFEFF/, '');
+          if (content.trim()) return content;
+        }
+        catch (error) { if (error?.code !== 'ENOENT') throw error; }
+      }
+      return null;
+    },
+
     async get_app_default_paths() {
-      await fsp.mkdir(appPaths.mineruCacheDir, { recursive: true });
-      await fsp.mkdir(appPaths.remotePdfDownloadDir, { recursive: true });
+      await nativeFs.mkdir(authorizeWrite(appPaths.mineruCacheDir));
+      await nativeFs.mkdir(authorizeWrite(appPaths.remotePdfDownloadDir));
 
       return {
         executableDir: appPaths.dataDir,
@@ -196,12 +213,12 @@ function createFileCommands(context) {
     },
 
     async capture_system_screenshot() {
-      await fsp.mkdir(appPaths.screenshotDir, { recursive: true });
-      const outputPath = path.join(appPaths.screenshotDir, `system-screenshot-${now()}.png`);
-
       if (process.platform !== 'win32') {
         return null;
       }
+      // Never grant the shared library write/read authority over captures.
+      assertBoundPath(screenshotRoot);
+      const outputPath = path.join(screenshotRoot, `system-screenshot-${randomUUID()}.png`);
 
       const previousImage = clipboard.readImage().toPNG();
       spawn('cmd', ['/C', 'start', '', 'ms-screenclip:'], { windowsHide: true, detached: true });
@@ -214,13 +231,13 @@ function createFileCommands(context) {
         if (!image.isEmpty()) {
           const bytes = image.toPNG();
           if (!Buffer.from(bytes).equals(Buffer.from(previousImage))) {
-            await fsp.writeFile(outputPath, bytes);
-            const stat = await fsp.stat(outputPath);
+            await writeBoundFile(outputPath, bytes, { flag: 'wx', mode: 0o600 });
+            capturedScreenshots.add(outputPath);
             return {
               path: outputPath,
               name: path.basename(outputPath),
               mimeType: 'image/png',
-              size: stat.size,
+              size: bytes.length,
             };
           }
         }
@@ -247,10 +264,10 @@ function createFileCommands(context) {
       const targetDir = cleanString(directory);
       if (!targetDir) throw new Error('MinerU cache directory cannot be empty');
 
-      const resolvedTargetDir = path.resolve(targetDir);
+      const resolvedTargetDir = await commands.approve_write_path({ path: targetDir });
       const existedBefore = await directoryExists(resolvedTargetDir);
-      await fsp.mkdir(resolvedTargetDir, { recursive: true });
-      approvedWritePaths.add(resolvedTargetDir);
+      await nativeFs.mkdir(resolvedTargetDir);
+      context.approvedWriteDirectories.add(resolvedTargetDir);
 
       const looseOutputFilesIgnored = await hasLooseMineruOutputFiles(resolvedTargetDir);
       const previousDir = cleanString(previousDirectory);
@@ -259,7 +276,8 @@ function createFileCommands(context) {
       const errors = [];
 
       if (previousDir) {
-        const resolvedPreviousDir = path.resolve(previousDir);
+        const previousSources = await sourceAccess.authorize([previousDir], { mode: 'read' });
+        const resolvedPreviousDir = previousSources.get(previousDir);
 
         if (!isSamePath(resolvedPreviousDir, resolvedTargetDir) && await directoryExists(resolvedPreviousDir)) {
           const cacheEntries = await listPaperQuayMineruCacheEntries(resolvedPreviousDir);
@@ -275,7 +293,7 @@ function createFileCommands(context) {
               continue;
             }
 
-            const destination = path.join(resolvedTargetDir, entry.name);
+            const destination = authorizeWrite(path.join(resolvedTargetDir, entry.name));
 
             try {
               if (await directoryExists(destination)) {
@@ -283,11 +301,7 @@ function createFileCommands(context) {
                 continue;
               }
 
-              await fsp.cp(entry.path, destination, {
-                recursive: true,
-                force: false,
-                errorOnExist: false,
-              });
+              await copyBoundDirectory(entry.path, destination);
               migratedCount += 1;
             } catch (error) {
               errors.push({
@@ -299,7 +313,7 @@ function createFileCommands(context) {
         }
       }
 
-      const markerPath = path.join(resolvedTargetDir, MINERU_CACHE_MARKER_FILE);
+      const markerPath = authorizeWrite(path.join(resolvedTargetDir, MINERU_CACHE_MARKER_FILE));
       const cacheEntries = await listPaperQuayMineruCacheEntries(resolvedTargetDir);
       const marker = {
         version: 1,
@@ -308,7 +322,7 @@ function createFileCommands(context) {
         updatedAt: new Date().toISOString(),
       };
 
-      await fsp.writeFile(markerPath, JSON.stringify(marker, null, 2), 'utf8');
+      await writeBoundFile(markerPath, JSON.stringify(marker, null, 2), 'utf8');
 
       return {
         directory: resolvedTargetDir,
@@ -352,63 +366,114 @@ function createFileCommands(context) {
 
       if (result.canceled || !result.filePath) return null;
 
-      approvedWritePaths.add(path.resolve(result.filePath));
-      return result.filePath;
+      const actual = resolveAuthorizedPath(result.filePath, () => true);
+      approvedWritePaths.add(actual);
+      return actual;
     },
 
     async approve_write_path({ path: filePath }) {
-      approvedWritePaths.add(path.resolve(filePath));
+      assertSourcePath(filePath);
+      try { return authorizeWrite(filePath); } catch { /* New permissions require native consent. */ }
+      const confirm = async (actual) => {
+        const answer = await dialog.showMessageBox({
+          type: 'warning', title: '批准文件写入 / Approve File Writes',
+          message: actual ? '批准写入实际目标？ / Approve writes to this resolved target?' : '批准此文件或目录的写入？ / Approve writes to this file or directory?',
+          detail: `${JSON.stringify(filePath)}${actual ? `\n→ ${JSON.stringify(actual)}` : ''}\n\n这会允许覆盖该文件；如果是目录，也会允许写入其子目录。继续后才检查路径，网络、映射盘和链接可能连接远程服务器并发送身份验证信息。 / This permits overwriting this file, or writing descendants if it is a directory. Only after consent will the path be inspected; network paths, mapped drives and links may contact remote servers and send authentication information.`,
+          buttons: ['取消 / Cancel', '批准写入 / Approve Writes'], defaultId: 0, cancelId: 0, noLink: true,
+        });
+        if (answer.response !== 1) throw new Error('File write approval canceled.');
+      };
+      await confirm();
+      const actual = resolveAuthorizedPath(filePath, () => true);
+      if (!isSamePath(actual, filePath)) await confirm(actual);
+      const directory = await directoryExists(actual);
+      if (directory) context.approvedWriteDirectories.add(actual); else approvedWritePaths.add(actual);
+      context.approvedWriteAliases.set(filePath, { raw: filePath, actual, directory });
+      return actual;
     },
 
     async path_exists({ path: filePath }) {
-      return pathExists(filePath);
+      // Background cache checks must never pop up consent dialogs or follow
+      // a library-supplied network path before authorization.
+      const cacheRoots = [...context.approvedWriteDirectories];
+      const actual = cacheRoots.some((root) => isWithin(root, filePath))
+        ? resolveAuthorizedPath(filePath, (candidate) => cacheRoots.some((root) => isWithin(root, candidate)))
+        : context.authorizeLocalProbe?.(filePath) || filePath;
+      const inspected = nativeFs.inspectSync(actual);
+      return inspected.exists && !inspected.linkPath;
+    },
+
+    async authorized_file_exists({ path: filePath }) {
+      try {
+        const { handle } = await openAuthorizedReadFile(filePath, context.authorizeLocalRead);
+        await handle.close();
+        return true;
+      } catch (error) {
+        if (['ENOENT', 'ENOTDIR', 'EISDIR'].includes(error.code)) return false;
+        throw error;
+      }
     },
 
     async read_text_file({ path: filePath }) {
-      await ensureFile(filePath);
-      return fsp.readFile(filePath, 'utf8');
+      return readAuthorizedFile(filePath, context.authorizeLocalRead, 'utf8');
     },
 
     async read_text_file_if_exists({ path: filePath }) {
       try {
-        const stat = await fsp.stat(filePath);
-        if (!stat.isFile()) return null;
-        return fsp.readFile(filePath, 'utf8');
+        return await readAuthorizedFile(filePath, context.authorizeLocalRead, 'utf8');
       } catch (error) {
-        if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return null;
+        if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR' || error?.code === 'EISDIR') return null;
         throw error;
       }
     },
 
     async write_text_file({ path: filePath, content }) {
-      assertWriteAllowed(filePath);
-      await writeTextFileAtomically(filePath, content);
+      const target = authorizeWrite(filePath);
+      const key = comparablePath(target);
+      const text = String(content ?? '');
+      // Atomic replacement prevents partial files, but overlapping replacements
+      // also need ordering so a slow older save cannot overwrite newer settings.
+      const previous = pendingTextWrites.get(key) ?? Promise.resolve();
+      const write = previous.catch(() => {}).then(() => writeTextFileAtomically(target, text));
+      pendingTextWrites.set(key, write);
+      const cleanup = () => {
+        if (pendingTextWrites.get(key) === write) pendingTextWrites.delete(key);
+      };
+      void write.then(cleanup, cleanup);
+      await write;
     },
 
     async read_binary_file_base64({ path: filePath }) {
-      await ensureFile(filePath);
-      return (await fsp.readFile(filePath)).toString('base64');
+      if (capturedScreenshots.delete(filePath)) {
+        try {
+          assertBoundPath(filePath);
+          return (await readAuthorizedFile(filePath)).toString('base64');
+        }
+        finally {
+          assertBoundPath(filePath);
+          await removeBoundFile(filePath, { force: true });
+        }
+      }
+      return (await readAuthorizedFile(filePath, context.authorizeLocalRead)).toString('base64');
     },
 
     async write_binary_file_base64({ path: filePath, contentBase64 }) {
-      assertWriteAllowed(filePath);
-      await fsp.mkdir(path.dirname(filePath), { recursive: true });
-      await fsp.writeFile(filePath, Buffer.from(contentBase64, 'base64'));
+      await writeBoundFile(authorizeWrite(filePath), Buffer.from(contentBase64, 'base64'));
     },
 
     async download_remote_file_to_path({ url, path: filePath, headers }) {
-      assertWriteAllowed(filePath);
+      const target = authorizeWrite(filePath);
       const response = await fetch(url, { headers: headers ?? undefined });
       if (!response.ok) throw new Error(`Remote download returned HTTP ${response.status}`);
 
-      await fsp.mkdir(path.dirname(filePath), { recursive: true });
-      await fsp.writeFile(filePath, Buffer.from(await response.arrayBuffer()));
+      await writeBoundFile(target, Buffer.from(await response.arrayBuffer()));
     },
 
     library_select_pdf_files(_args, event) {
       return selectFiles(['openFile', 'multiSelections'], [{ name: 'PDF', extensions: ['pdf'] }], event).then((paths) => paths ?? []);
     },
   };
+  return commands;
 }
 
 module.exports = { createFileCommands };

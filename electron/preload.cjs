@@ -1,4 +1,5 @@
 const { clipboard, contextBridge, ipcRenderer, webUtils } = require('electron');
+const { isTrustedRendererUrl } = require('./rendererTrust.cjs');
 
 function toFilePath(file) {
   if (webUtils && typeof webUtils.getPathForFile === 'function') {
@@ -83,7 +84,9 @@ function createDropSubscription(callback) {
   };
 }
 
-contextBridge.exposeInMainWorld('paperquay', {
+// Navigation events do not cover main-process loadURL. Never expose even direct
+// clipboard APIs when a foreign document is loaded into this webContents.
+if (process.isMainFrame && isTrustedRendererUrl(window.location.href)) contextBridge.exposeInMainWorld('paperquay', {
   platform: process.platform,
   invoke(command, args) {
     return ipcRenderer.invoke('paperquay:invoke', command, args ?? {});

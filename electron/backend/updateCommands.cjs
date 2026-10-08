@@ -1,5 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const { createUpdatePreferences } = require('./updatePreferences.cjs');
 
 const UPDATE_REPOSITORY = {
   owner: 'mikutea',
@@ -142,6 +143,7 @@ function normalizeRelease(release) {
 
 async function fetchLatestRelease() {
   const response = await fetch(RELEASES_API_URL, {
+    signal: AbortSignal.timeout(15_000),
     headers: {
       Accept: 'application/vnd.github+json',
       'User-Agent': 'PaperQuay-Updater',
@@ -194,6 +196,12 @@ function createUpdateCommands(context) {
   const autoUpdater = context.autoUpdater ?? require('electron-updater').autoUpdater;
   const runtime = context.updateRuntime;
   const releaseFetcher = context.fetchLatestRelease ?? fetchLatestRelease;
+  const preferences = context.updatePreferences ?? createUpdatePreferences(
+    typeof app.getPath === 'function' ? path.join(app.getPath('userData'), 'paperquay-update-preferences.json') : null,
+  );
+  let checkingPromise = null;
+  let startupPromise = null;
+  let startupDismissed = false;
   const state = {
     checking: false,
     downloading: false,
@@ -222,9 +230,8 @@ function createUpdateCommands(context) {
     state.downloading = false;
   });
 
-  autoUpdater.on('update-available', () => {
-    state.updateAvailableFromUpdater = true;
-  });
+  // Availability is accepted only after the feed's version is matched to
+  // the selected immutable release below, not on the early updater event.
 
   autoUpdater.on('update-not-available', () => {
     state.updateAvailableFromUpdater = false;
@@ -239,7 +246,12 @@ function createUpdateCommands(context) {
     };
   });
 
-  autoUpdater.on('update-downloaded', () => {
+  autoUpdater.on('update-downloaded', (info) => {
+    if (info?.version && cleanVersion(info.version) !== state.latestRelease?.version) {
+      state.error = 'Downloaded update version does not match the selected release.';
+      state.downloading = false;
+      return;
+    }
     state.downloaded = true;
     state.downloading = false;
     state.downloadProgress = {
@@ -284,11 +296,12 @@ function createUpdateCommands(context) {
       releaseDate: state.latestRelease?.publishedAt ?? '',
       releaseUrl: state.latestRelease?.url ?? `https://github.com/${UPDATE_REPOSITORY.owner}/${UPDATE_REPOSITORY.repo}/releases`,
       assets: state.latestRelease?.assets ?? [],
+      ...preferences.read(),
       ...extra,
     };
   }
 
-  async function checkForLatestRelease() {
+  async function performCheck() {
     state.checking = true;
     state.error = '';
 
@@ -308,6 +321,9 @@ function createUpdateCommands(context) {
         // published stable.yml and NSIS asset without consulting upstream.
         autoUpdater.setFeedURL({ provider: 'generic', url: releaseDownloadBaseUrl(state.latestRelease) });
         const result = await autoUpdater.checkForUpdates();
+        if (result?.updateInfo && cleanVersion(result.updateInfo.version) !== state.latestRelease.version) {
+          throw new Error('Update feed version does not match the selected release. Please try again later.');
+        }
         state.updateAvailableFromUpdater = Boolean(result?.updateInfo);
       }
     } catch (error) {
@@ -319,6 +335,14 @@ function createUpdateCommands(context) {
     return buildStatus();
   }
 
+  function checkForLatestRelease() {
+    if (state.downloading || state.downloaded) return Promise.resolve(buildStatus());
+    if (!checkingPromise) {
+      checkingPromise = performCheck().finally(() => { checkingPromise = null; });
+    }
+    return checkingPromise;
+  }
+
   return {
     app_update_get_status() {
       return buildStatus();
@@ -328,7 +352,36 @@ function createUpdateCommands(context) {
       return checkForLatestRelease();
     },
 
+    async app_update_check_startup() {
+      if (!startupPromise) {
+        startupPromise = app.isPackaged && preferences.read().autoCheckOnStartup
+          ? checkForLatestRelease()
+          : Promise.resolve(buildStatus());
+      }
+      await startupPromise;
+      const status = buildStatus();
+      return {
+        ...status,
+        showStartupNotice: Boolean(app.isPackaged && preferences.read().autoCheckOnStartup &&
+          status.hasUpdate && !status.error && !startupDismissed && status.latestVersion !== status.skippedVersion),
+      };
+    },
+
+    app_update_set_preferences(args) {
+      preferences.write(args ?? {});
+      return buildStatus();
+    },
+
+    app_update_dismiss_startup(args) {
+      if (args?.skipVersion === true && state.latestRelease?.version) {
+        preferences.write({ skippedVersion: state.latestRelease.version });
+      }
+      startupDismissed = true;
+      return buildStatus();
+    },
+
     async app_update_download() {
+      if (checkingPromise) await checkingPromise;
       const status = buildStatus();
 
       if (!status.autoUpdateSupported) {
@@ -339,9 +392,10 @@ function createUpdateCommands(context) {
         throw new Error('No newer PaperQuay release is available.');
       }
 
+      if (state.downloading || state.downloaded) return buildStatus();
+
       if (!state.updateAvailableFromUpdater) {
-        autoUpdater.setFeedURL({ provider: 'generic', url: releaseDownloadBaseUrl(state.latestRelease) });
-        await autoUpdater.checkForUpdates();
+        throw new Error('The update feed has not been verified. Check for updates again before downloading.');
       }
 
       state.downloading = true;
@@ -359,13 +413,14 @@ function createUpdateCommands(context) {
       return buildStatus();
     },
 
-    app_update_install() {
+    async app_update_install() {
       const status = buildStatus();
 
       if (!status.canInstall) {
         throw new Error('No downloaded PaperQuay update is ready to install.');
       }
 
+      await context.prepareForUpdate?.();
       autoUpdater.quitAndInstall(false, true);
       return buildStatus({ installing: true });
     },

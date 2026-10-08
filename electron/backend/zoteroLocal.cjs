@@ -1,7 +1,8 @@
 const fs = require('node:fs');
-const fsp = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
+const nativeFs = require('./nativeFs.cjs');
+const { readAuthorizedFile } = require('./pathAccess.cjs');
 const { cleanString } = require('./utils.cjs');
 const { yearFromDate } = require('./zoteroApi.cjs');
 
@@ -84,9 +85,7 @@ function candidateLocalZoteroProfileDirs() {
 function resolveLocalZoteroDataDir(input) {
   const requested = cleanString(input);
   if (requested) {
-    const dataDir = path.resolve(requested);
-    if (isReadableFile(path.join(dataDir, 'zotero.sqlite'))) return dataDir;
-    throw new Error(`zotero.sqlite was not found in: ${dataDir}`);
+    return path.resolve(requested);
   }
 
   const detected = candidateLocalZoteroDirs().find((candidate) =>
@@ -117,7 +116,7 @@ function decodePrefsString(value) {
 function readZoteroPreference(filePath, prefName) {
   let text = '';
   try {
-    text = fs.readFileSync(filePath, 'utf8');
+    text = nativeFs.readSync(filePath, { singleLink: true }).bytes.toString('utf8');
   } catch {
     return '';
   }
@@ -186,14 +185,8 @@ function readBaseAttachmentPath(dataDir) {
 async function withLocalZoteroDatabase(dataDirInput, callback) {
   const dataDir = resolveLocalZoteroDataDir(dataDirInput);
   const source = path.join(dataDir, 'zotero.sqlite');
-  const tempDir = path.join(os.tmpdir(), 'paperquay-zotero');
-  const sqliteCopy = path.join(tempDir, `zotero-${Date.now()}-${process.pid}.sqlite`);
-
-  await fsp.mkdir(tempDir, { recursive: true });
-  await fsp.copyFile(source, sqliteCopy);
-
   const SQL = await getSqlModule();
-  const bytes = await fsp.readFile(sqliteCopy);
+  const bytes = (await nativeFs.read(source, { singleLink: true })).bytes;
   const db = new SQL.Database(bytes);
   const baseAttachmentPath = readBaseAttachmentPath(dataDir);
 
@@ -201,7 +194,6 @@ async function withLocalZoteroDatabase(dataDirInput, callback) {
     return await callback(db, dataDir, baseAttachmentPath);
   } finally {
     db.close();
-    await fsp.rm(sqliteCopy, { force: true }).catch(() => {});
   }
 }
 
@@ -272,17 +264,25 @@ function resolveLocalAttachmentPath(dataDir, attachmentKey, rawPath, baseAttachm
   if (!raw) return undefined;
 
   let candidate;
+  const safeRelative = (value) => value && !/^[\\/]|^[a-z]:/i.test(value) &&
+    !value.split(/[\\/]/).some((part) => part === '..' || part === '.' || !part) && !value.includes('\0');
 
   if (raw.startsWith('storage:')) {
-    candidate = path.join(dataDir, 'storage', attachmentKey, raw.slice('storage:'.length));
+    const suffix = raw.slice('storage:'.length);
+    if (!/^[a-z0-9_-]+$/i.test(attachmentKey) || !safeRelative(suffix)) return undefined;
+    candidate = path.join(dataDir, 'storage', attachmentKey, suffix);
   } else if (raw.startsWith('attachments:')) {
-    const relativePath = raw.slice('attachments:'.length).replace(/^[/\\]+/, '');
+    const relativePath = raw.slice('attachments:'.length);
+    if (!safeRelative(relativePath)) return undefined;
     candidate = baseAttachmentPath ? path.join(baseAttachmentPath, relativePath) : '';
   } else {
+    if (!path.isAbsolute(raw) && !safeRelative(raw)) return undefined;
     candidate = path.isAbsolute(raw) ? raw : path.join(dataDir, raw);
   }
 
-  return candidate && isReadableFile(candidate) ? candidate : undefined;
+  // SQLite/prefs contain untrusted references. Listing metadata must not stat
+  // them (which can contact SMB); import/read authorization checks availability.
+  return candidate || undefined;
 }
 
 function attachmentFilename(rawPath) {
@@ -360,7 +360,7 @@ function loadRelatedNoteItems(db, parentItemId, parentItemKey) {
     }));
 }
 
-async function loadRelatedFileNotes(db, dataDir, baseAttachmentPath, parentItemId, parentItemKey) {
+async function loadRelatedFileNotes(db, dataDir, baseAttachmentPath, parentItemId, parentItemKey, authorizeSources) {
   const notes = [];
   const fileRows = rows(db, `
     select attachment.key as attachmentKey, ia.path as rawPath, coalesce(ia.contentType, '') as contentType
@@ -383,11 +383,14 @@ async function loadRelatedFileNotes(db, dataDir, baseAttachmentPath, parentItemI
     order by attachment.dateModified desc
   `, [parentItemId]);
 
-  for (const row of fileRows) {
-    const filePath = resolveLocalAttachmentPath(dataDir, String(row.attachmentKey), String(row.rawPath), baseAttachmentPath);
-    if (!filePath) continue;
+  const candidates = fileRows.map((row) => ({ row, filePath: resolveLocalAttachmentPath(dataDir, String(row.attachmentKey), String(row.rawPath), baseAttachmentPath) }))
+    .filter((item) => item.filePath);
+  const mappings = await authorizeSources?.(candidates.map((item) => item.filePath), { mode: 'read' });
+  for (const { row, filePath } of candidates) {
 
-    const content = await fsp.readFile(filePath, 'utf8').catch(() => '');
+    let content;
+    try { content = await readAuthorizedFile(mappings?.get(filePath) || filePath, null, 'utf8'); }
+    catch (error) { if (error.code === 'ENOENT') continue; throw error; }
     if (!cleanString(content)) continue;
 
     const lowerPath = filePath.toLowerCase();
@@ -537,7 +540,7 @@ async function listRelatedNotes(options = {}) {
     if (!parent) return [];
 
     const noteItems = loadRelatedNoteItems(db, Number(parent.itemId), itemKey);
-    const fileNotes = await loadRelatedFileNotes(db, dataDir, baseAttachmentPath, Number(parent.itemId), itemKey);
+    const fileNotes = await loadRelatedFileNotes(db, dataDir, baseAttachmentPath, Number(parent.itemId), itemKey, options.authorizeSources);
     return [...noteItems, ...fileNotes];
   });
 }

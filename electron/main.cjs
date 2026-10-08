@@ -1,6 +1,10 @@
 const path = require('node:path');
-const { app, BrowserWindow, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
 const { createBackend } = require('./backend.cjs');
+const { createLibraryLocationManager } = require('./libraryLocation.cjs');
+const { createWindowSaveBarrier } = require('./windowSaveBarrier.cjs');
+const { attachRendererTrust, assertTrustedRenderer } = require('./rendererTrust.cjs');
+const trustedContents = new WeakSet();
 const {
   registerLocalPdfProtocol,
   registerLocalPdfProtocolScheme,
@@ -8,12 +12,33 @@ const {
 
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
 let backend = null;
+let quitRequested = false;
+const windowSaveBarrier = createWindowSaveBarrier({
+  dialog,
+  continueClose: (window) => { if (quitRequested) app.quit(); else window.close(); },
+  cancelClose: () => { quitRequested = false; },
+});
+const libraryLocation = createLibraryLocationManager({
+  app, dialog,
+  restart: () => {
+    setImmediate(() => { app.relaunch(); app.quit(); });
+  },
+});
+let libraryLocationError = null;
+
+// Chromium's default session must see the restored profile before readiness.
+// Restoring only the backend location after ready is too late for session data.
+try {
+  libraryLocation.resolve();
+} catch (error) {
+  libraryLocationError = error;
+}
 
 registerLocalPdfProtocolScheme();
 
 function getBackend() {
   if (!backend) {
-    backend = createBackend({ app });
+    backend = createBackend({ app, libraryLocation });
   }
 
   return backend;
@@ -57,6 +82,7 @@ function createWindow() {
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
   });
+  windowSaveBarrier.attach(mainWindow);
 
   if (isDev) {
     mainWindow.webContents.on('console-message', (event) => {
@@ -79,28 +105,8 @@ function createWindow() {
     });
   }
 
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:\/\//i.test(url)) {
-      void shell.openExternal(url);
-    }
-
-    return { action: 'deny' };
-  });
-
-  mainWindow.webContents.on('will-navigate', (event, url) => {
-    const allowedDevUrl = isDev && url.startsWith(process.env.VITE_DEV_SERVER_URL);
-    const allowedFileUrl = !isDev && url.startsWith('file://');
-
-    if (allowedDevUrl || allowedFileUrl) {
-      return;
-    }
-
-    event.preventDefault();
-
-    if (/^https?:\/\//i.test(url)) {
-      void shell.openExternal(url);
-    }
-  });
+  trustedContents.add(mainWindow.webContents);
+  attachRendererTrust(mainWindow.webContents, (url) => shell.openExternal(url));
 
   if (isDev) {
     void mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
@@ -110,10 +116,14 @@ function createWindow() {
 }
 
 ipcMain.handle('paperquay:invoke', async (event, command, args) => {
+  assertTrustedRenderer(event, trustedContents);
+  if (command === 'app_window_save_ready') return windowSaveBarrier.ready(event.sender);
+  if (command === 'app_window_save_complete') return windowSaveBarrier.complete(event.sender, args);
   return getBackend().invoke(command, args ?? {}, event);
 });
 
 ipcMain.handle('paperquay:window-control', (event, action) => {
+  assertTrustedRenderer(event, trustedContents);
   const targetWindow = BrowserWindow.fromWebContents(event.sender);
 
   if (!targetWindow) {
@@ -139,13 +149,30 @@ ipcMain.handle('paperquay:window-control', (event, action) => {
   }
 });
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   if (process.platform === 'win32') {
     app.setAppUserModelId('dev.paperquay.app');
   }
 
-  getBackend();
-  registerLocalPdfProtocol();
+  if (libraryLocationError) {
+    // Native dialogs require ready. Persist the selected recovery location and
+    // start a fresh process so it too resolves the profile before ready; never
+    // open a backend/window against a late-switched Chromium session.
+    if (await libraryLocation.recover(libraryLocationError)) app.relaunch();
+    app.quit();
+    return;
+  }
+  try {
+    getBackend();
+    libraryLocation.rememberActive();
+  } catch (error) {
+    backend?.close();
+    backend = null;
+    if (await libraryLocation.recover(error)) app.relaunch();
+    app.quit();
+    return;
+  }
+  registerLocalPdfProtocol((filePath) => getBackend().authorizeLocalRead(filePath));
   createWindow();
 
   app.on('activate', () => {
@@ -153,6 +180,9 @@ app.whenReady().then(() => {
       createWindow();
     }
   });
+}).catch((error) => {
+  dialog.showErrorBox('PaperQuay 启动失败 / Startup Failed', error instanceof Error ? error.message : String(error));
+  app.quit();
 });
 
 app.on('window-all-closed', () => {
@@ -161,6 +191,8 @@ app.on('window-all-closed', () => {
   }
 });
 
-app.on('before-quit', () => {
+app.on('before-quit', () => { quitRequested = true; });
+
+app.on('will-quit', () => {
   backend?.close();
 });

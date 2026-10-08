@@ -82,3 +82,30 @@ test('RAG handlers prefix model input but retain the original indexed chunk text
     globalThis.fetch = previousFetch;
   }
 });
+
+test('generic query and candidate embeddings never load an offline library, while ingestion stays validated', async () => {
+  const previousFetch = globalThis.fetch;
+  let requests = 0;
+  let fileChecks = 0;
+  globalThis.fetch = async () => {
+    requests++;
+    return new Response(JSON.stringify({ data: [{ index: 0, embedding: [0.5] }] }), { status: 200 });
+  };
+  try {
+    const commands = createAiCommands({
+      ragStore: { indexDocument() { assert.fail('offline ingestion must not persist'); } },
+      store: { load() { fileChecks++; throw new Error('attachment volume offline'); } },
+      validateLibraryFileOperation() { assert.fail('text embeddings must not inspect library files'); },
+    });
+    const embedding = { baseUrl: 'http://127.0.0.1:1234/v1', apiKey: 'fixture', model: 'fixture' };
+    for (const role of ['query', 'passage']) {
+      assert.deepEqual(await commands.rag_embed_text({ request: { text: 'Unrelated supplied text', role, embedding } }), [0.5]);
+    }
+    assert.equal(fileChecks, 0);
+    assert.equal(requests, 2);
+    await assert.rejects(commands.rag_embed_chunks({ request: { chunks: [], embedding } }), /offline/);
+    await assert.rejects(commands.rag_index_document({ request: {} }), /offline/);
+    assert.equal(fileChecks, 2);
+    assert.equal(requests, 2, 'ingestion still fails before external model access');
+  } finally { globalThis.fetch = previousFetch; }
+});

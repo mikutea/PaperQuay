@@ -1,10 +1,13 @@
 const fsp = require('node:fs/promises');
+const fs = require('node:fs');
 const path = require('node:path');
+const { pipeline } = require('node:stream/promises');
+const { randomUUID, createHash } = require('node:crypto');
+const { writeBoundFile, openAuthorizedReadFile, resolveAuthorizedPath } = require('./pathAccess.cjs');
+const nativeFs = require('./nativeFs.cjs');
 const {
   cleanString,
   hashBytes,
-  hashFile,
-  pathExists,
   readJson,
   safeFileName,
 } = require('./utils.cjs');
@@ -22,7 +25,20 @@ function isoTimestamp() {
 }
 
 function createBackupId() {
-  return isoTimestamp().replace(/[:.]/g, '-');
+  return isoTimestamp().replace(/[:.]/g, '-') + '-' + randomUUID();
+}
+
+function backupSnapshotDirectory(appPaths, backupId) {
+  return path.join(appPaths.backupSnapshotDir || path.join(appPaths.dataDir, '.backup-snapshots'), backupId);
+}
+
+async function snapshotFile(sourcePath, snapshotPath, authorize) {
+  const { handle: source } = await openAuthorizedReadFile(sourcePath, authorize);
+  try {
+    await fsp.mkdir(path.dirname(snapshotPath), { recursive: true });
+    await pipeline(source.createReadStream({ autoClose: false }), fs.createWriteStream(snapshotPath, { flags: 'wx', mode: 0o600 }));
+  } finally { await source.close(); }
+  return snapshotPath;
 }
 
 function remoteSegment(value, fallback = 'item') {
@@ -90,11 +106,15 @@ function previousObjectIndex(manifest) {
 }
 
 async function fileDigest(filePath) {
-  const stat = await fsp.stat(filePath);
-  return {
-    byteSize: stat.size,
-    checksum: await hashFile(filePath),
-  };
+  const { handle, stat } = await openAuthorizedReadFile(filePath);
+  try { return { byteSize: stat.size, checksum: await hashHandle(handle) }; }
+  finally { await handle.close(); }
+}
+
+async function hashHandle(handle) {
+  const hash = createHash('sha256');
+  for await (const bytes of handle.createReadStream({ autoClose: false })) hash.update(bytes);
+  return hash.digest('hex');
 }
 
 function classifyDerivedFile(relativePath) {
@@ -116,13 +136,14 @@ function classifyDerivedFile(relativePath) {
   return null;
 }
 
-async function collectFiles(root) {
+async function collectFiles(root, authorize) {
   const output = [];
+  root = await authorize?.(root) || root;
 
   async function walk(directory) {
     let entries = [];
     try {
-      entries = await fsp.readdir(directory, { withFileTypes: true });
+      entries = await nativeFs.list(directory);
     } catch (error) {
       if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return;
       throw new Error(
@@ -131,10 +152,12 @@ async function collectFiles(root) {
     }
 
     for (const entry of entries) {
-      const filePath = path.join(directory, entry.name);
-      if (entry.isDirectory()) {
+      const filePath = path.join(directory, entry);
+      const inspected = nativeFs.inspectSync(filePath);
+      if (inspected.linkPath || !inspected.exists) continue;
+      if (inspected.directory) {
         await walk(filePath);
-      } else if (entry.isFile()) {
+      } else {
         output.push(filePath);
       }
     }
@@ -165,9 +188,12 @@ function configuredMineruRoots(appPaths) {
 async function collectBackupSources(context, backupId) {
   const { appPaths, noteStore, ragStore, store } = context;
   const library = store.load();
+  const attachments = library.webdav.includePdfs !== false ? library.papers.flatMap((paper) => paper.attachments ?? []) : [];
+  const approved = context.validateLibraryFileOperation?.(library, attachments);
+  const approvedPaths = new Map(attachments.map((attachment, index) => [attachment, approved?.attachmentPaths?.[index]]));
   await store.save(library);
 
-  const snapshotDir = path.join(appPaths.dataDir, '.backup-snapshots', backupId);
+  const snapshotDir = backupSnapshotDirectory(appPaths, backupId);
   const librarySnapshotPath = path.join(snapshotDir, 'paperquay-library.sqlite');
   const notesSnapshotPath = path.join(snapshotDir, 'paperquay-notes.sqlite');
   const ragSnapshotPath = path.join(snapshotDir, 'paperquay-rag.sqlite');
@@ -197,7 +223,7 @@ async function collectBackupSources(context, backupId) {
       for (const attachment of paper.attachments ?? []) {
         if (attachment.kind !== 'pdf' || !attachment.storedPath) continue;
 
-        const exists = await pathExists(attachment.storedPath);
+        const approvedPath = approvedPaths.get(attachment) || attachment.storedPath;
         const fileName = safeFileName(attachment.fileName || path.basename(attachment.storedPath));
         const remotePath = remoteJoin(
           'latest/pdfs',
@@ -206,7 +232,13 @@ async function collectBackupSources(context, backupId) {
           fileName,
         );
 
-        if (!exists) {
+        let localPath;
+        try {
+          localPath = await snapshotFile(approvedPath,
+            path.join(snapshotDir, 'pdfs', hashBytes(Buffer.from(remotePath))),
+            (target) => context.validateLibraryFileOperation?.(library, [{ storedPath: target }])?.attachmentPaths?.[0]);
+        } catch (error) {
+          if (!['ENOENT', 'ENOTDIR', 'EISDIR'].includes(error.code)) throw error;
           sources.push({
             kind: 'pdf',
             localPath: null,
@@ -219,7 +251,9 @@ async function collectBackupSources(context, backupId) {
 
         sources.push({
           kind: 'pdf',
-          localPath: attachment.storedPath,
+          // Hashing and uploading both use a private snapshot, never a mutable
+          // supplier pathname. snapshotFile binds its read to one descriptor.
+          localPath,
           remotePath,
           source: `paper:${paper.id}:attachment:${attachment.id}:${attachment.storedPath}`,
         });
@@ -229,7 +263,7 @@ async function collectBackupSources(context, backupId) {
 
   if (library.webdav.includeDerived !== false) {
     for (const root of configuredMineruRoots(appPaths)) {
-      const files = await collectFiles(root);
+      const files = await collectFiles(root, context.authorizeLocalRead);
       const isDefaultRoot = path.resolve(root) === path.resolve(appPaths.mineruCacheDir);
       const rootLabel = isDefaultRoot ? '' : `root-${hashBytes(Buffer.from(root)).slice(0, 8)}`;
 
@@ -240,7 +274,8 @@ async function collectBackupSources(context, backupId) {
 
         sources.push({
           kind,
-          localPath: filePath,
+          localPath: await snapshotFile(filePath,
+            path.join(snapshotDir, 'derived', hashBytes(Buffer.from(filePath))), context.authorizeLocalRead),
           remotePath: remoteJoin(DERIVED_REMOTE_ROOT, rootLabel, relative),
           source: filePath,
         });
@@ -334,7 +369,7 @@ async function uploadSource(webdav, backupId, source, previous) {
 async function runBackup(context, webdav, options = {}) {
   const backupId = createBackupId();
   const createdAt = isoTimestamp();
-  const snapshotDir = path.join(context.appPaths.dataDir, '.backup-snapshots', backupId);
+  const snapshotDir = backupSnapshotDirectory(context.appPaths, backupId);
   const objects = [];
   const onProgress = typeof options.onProgress === 'function'
     ? options.onProgress
@@ -479,12 +514,16 @@ function objectForRemotePath(manifest, remotePath) {
   );
 }
 
-async function writeRestoreTempFile(appPaths, backupId, fileName, bytes) {
-  const restoreDir = path.join(appPaths.dataDir, '.backup-restores', cleanString(backupId) || String(Date.now()));
+async function writeRestoreTempFile(appPaths, fileName, bytes) {
+  // Remote backup IDs are metadata, never local path components. Keep incoming
+  // database bytes away from supplier-controlled companion directories.
+  const base = appPaths.backupSnapshotDir || path.join(appPaths.dataDir, '.backup-snapshots');
+  await fsp.mkdir(base, { recursive: true });
+  const restoreDir = await fsp.mkdtemp(path.join(base, 'restore-'));
   const filePath = path.join(restoreDir, safeFileName(fileName));
 
-  await fsp.mkdir(restoreDir, { recursive: true });
-  await fsp.writeFile(filePath, bytes);
+  try { await fsp.writeFile(filePath, bytes, { flag: 'wx', mode: 0o600 }); }
+  catch (error) { await removeDirectoryQuietly(restoreDir); throw error; }
 
   return { restoreDir, filePath };
 }
@@ -500,13 +539,15 @@ async function restoreLibraryDatabaseObject(context, webdav, manifest, objects, 
       const bytes = await webdav.getBytes(LIBRARY_DATABASE_REMOTE_PATH);
       if (!bytes) throw new Error('Remote library SQLite database is missing');
 
-      const temp = await writeRestoreTempFile(appPaths, manifest.backupId, 'paperquay-library.sqlite', bytes);
+      const temp = await writeRestoreTempFile(appPaths, 'paperquay-library.sqlite', bytes);
       restoreDir = temp.restoreDir;
       const incoming = store.loadFromSnapshot(temp.filePath);
       const current = store.load();
 
-      tables.push(...mergeLibrary(current, incoming));
+      const mergedTables = mergeLibrary(current, incoming);
+      context.validateLibraryFileOperation?.(current, current.papers.flatMap((paper) => paper.attachments ?? []));
       await store.save(current);
+      tables.push(...mergedTables);
       objects.push({
         kind: 'database',
         remotePath: LIBRARY_DATABASE_REMOTE_PATH,
@@ -540,8 +581,10 @@ async function restoreLibraryDatabaseObject(context, webdav, manifest, objects, 
 
       const incoming = JSON.parse(bytes.toString('utf8'));
       const current = store.load();
-      tables.push(...mergeLibrary(current, incoming));
+      const mergedTables = mergeLibrary(current, incoming);
+      context.validateLibraryFileOperation?.(current, current.papers.flatMap((paper) => paper.attachments ?? []));
       await store.save(current);
+      tables.push(...mergedTables);
       objects.push({
         kind: 'database',
         remotePath: LEGACY_LIBRARY_JSON_REMOTE_PATH,
@@ -576,7 +619,7 @@ async function restoreRagDatabaseObject(context, webdav, manifest, objects) {
     const bytes = await webdav.getBytes(RAG_DATABASE_REMOTE_PATH);
     if (!bytes) throw new Error('Remote RAG SQLite database is missing');
 
-    const temp = await writeRestoreTempFile(appPaths, manifest.backupId, 'paperquay-rag.sqlite', bytes);
+    const temp = await writeRestoreTempFile(appPaths, 'paperquay-rag.sqlite', bytes);
     restoreDir = temp.restoreDir;
     await ragStore.replaceWithSnapshot(temp.filePath);
     objects.push({
@@ -614,7 +657,7 @@ async function restoreNotesDatabaseObject(context, webdav, manifest, objects) {
     const bytes = await webdav.getBytes(NOTES_DATABASE_REMOTE_PATH);
     if (!bytes) throw new Error('Remote notes SQLite database is missing');
 
-    const temp = await writeRestoreTempFile(appPaths, manifest.backupId, 'paperquay-notes.sqlite', bytes);
+    const temp = await writeRestoreTempFile(appPaths, 'paperquay-notes.sqlite', bytes);
     restoreDir = temp.restoreDir;
     await noteStore.replaceWithSnapshot(temp.filePath);
     objects.push({
@@ -648,15 +691,18 @@ function parseAttachmentSource(source) {
 }
 
 async function localFileMatches(filePath, object) {
+  let handle;
   try {
-    const stat = await fsp.stat(filePath);
-    if (!stat.isFile()) return false;
+    const opened = await openAuthorizedReadFile(filePath);
+    handle = opened.handle;
+    const stat = opened.stat;
     if (Number(object.byteSize) && stat.size !== Number(object.byteSize)) return false;
-    if (object.checksum) return await hashFile(filePath) === object.checksum;
+    if (object.checksum) return await hashHandle(handle) === object.checksum;
     return stat.size > 0;
-  } catch {
+  } catch (error) {
+    if (!['ENOENT', 'ENOTDIR', 'EISDIR'].includes(error.code)) throw error;
     return false;
-  }
+  } finally { await handle?.close(); }
 }
 
 function restorePdfTarget(library, object, appPaths) {
@@ -668,11 +714,10 @@ function restorePdfTarget(library, object, appPaths) {
   const preferred = attachment?.storedPath || source?.originalPath || '';
 
   if (preferred && isSubPath(storageDir, preferred)) return preferred;
-  return path.join(storageDir, `${source?.paperId || 'restored'}-${fileName}`);
+  return path.join(storageDir, `${safeFileName(source?.paperId || 'restored')}-${fileName}`);
 }
 
-async function restorePdfObject(webdav, library, object, appPaths) {
-  const target = restorePdfTarget(library, object, appPaths);
+async function restorePdfObject(webdav, library, object, target) {
   if (await localFileMatches(target, object)) {
     return { kind: 'pdf', remotePath: object.remotePath, localPath: target, byteSize: object.byteSize, checksum: object.checksum, status: 'skipped', message: 'local file already matches backup' };
   }
@@ -680,8 +725,7 @@ async function restorePdfObject(webdav, library, object, appPaths) {
   const bytes = await webdav.getBytes(object.remotePath);
   if (!bytes) throw new Error(`Remote PDF is missing: ${object.remotePath}`);
 
-  await fsp.mkdir(path.dirname(target), { recursive: true });
-  await fsp.writeFile(target, bytes);
+  await writeBoundFile(target, bytes);
 
   const source = parseAttachmentSource(object.source);
   const paper = source ? library.papers.find((item) => item.id === source.paperId) : null;
@@ -705,8 +749,7 @@ function derivedRestorePath(object, appPaths) {
   return safeLocalJoin(appPaths.mineruCacheDir, withoutCustomRoot);
 }
 
-async function restoreDerivedObject(webdav, object, appPaths) {
-  const target = derivedRestorePath(object, appPaths);
+async function restoreDerivedObject(webdav, object, target) {
   if (await localFileMatches(target, object)) {
     return { kind: object.kind, remotePath: object.remotePath, localPath: target, byteSize: object.byteSize, checksum: object.checksum, status: 'skipped', message: 'local file already matches backup' };
   }
@@ -714,14 +757,15 @@ async function restoreDerivedObject(webdav, object, appPaths) {
   const bytes = await webdav.getBytes(object.remotePath);
   if (!bytes) throw new Error(`Remote derived object is missing: ${object.remotePath}`);
 
-  await fsp.mkdir(path.dirname(target), { recursive: true });
-  await fsp.writeFile(target, bytes);
+  await writeBoundFile(target, bytes);
 
   return { kind: object.kind, remotePath: object.remotePath, localPath: target, byteSize: bytes.length, checksum: object.checksum || hashBytes(bytes), status: 'downloaded', message: null };
 }
 
 async function runRestore(context, webdav) {
   const { appPaths, store } = context;
+  const initial = store.load();
+  context.validateLibraryFileOperation?.(initial, initial.papers.flatMap((paper) => paper.attachments ?? []));
   const manifest = await loadLatestManifest(webdav);
   if (!manifest) {
     return {
@@ -749,14 +793,23 @@ async function runRestore(context, webdav) {
   await restoreRagDatabaseObject(context, webdav, manifest, objects);
 
   const library = store.load();
+  context.validateLibraryFileOperation?.(library, library.papers.flatMap((paper) => paper.attachments ?? []));
   for (const object of manifest.objects ?? []) {
     if (object.status === 'failed' || !object.remotePath || object.kind === 'database') continue;
     if (!['pdf', 'mineru', 'translation', 'summary'].includes(object.kind)) continue;
 
     try {
+      let target = object.kind === 'pdf'
+        ? restorePdfTarget(library, object, appPaths) : derivedRestorePath(object, appPaths);
+      if (object.kind === 'pdf') {
+        const approved = context.validateLibraryFileOperation?.(library, [{ storedPath: target }]);
+        target = approved?.attachmentPaths[0] || target;
+      }
+      target = context.validateLibraryRestoreTarget?.(object.kind, target) ||
+        resolveAuthorizedPath(target, (candidate) => path.resolve(candidate) === path.resolve(target));
       const result = object.kind === 'pdf'
-        ? await restorePdfObject(webdav, library, object, appPaths)
-        : await restoreDerivedObject(webdav, object, appPaths);
+        ? await restorePdfObject(webdav, library, object, target)
+        : await restoreDerivedObject(webdav, object, target);
       objects.push(result);
     } catch (error) {
       objects.push({

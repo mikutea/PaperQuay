@@ -2,7 +2,13 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { DatabaseSync, sqlStringLiteral, withTransaction } = require('./nodeSqlite.cjs');
-const { cleanString, readJson, writeJsonSync } = require('./utils.cjs');
+const { cleanString } = require('./utils.cjs');
+const nativeFs = require('./nativeFs.cjs');
+
+function readLegacyLibrary(filePath) {
+  try { return JSON.parse(nativeFs.readSync(filePath, { singleLink: true }).bytes.toString('utf8')); }
+  catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+}
 
 function openDatabase(databasePath) {
   fs.mkdirSync(path.dirname(databasePath), { recursive: true });
@@ -674,12 +680,17 @@ function createLibraryDatabaseStore(appPaths, helpers) {
   let db = openDatabase(appPaths.libraryDatabasePath);
   const { normalizeLibrary } = helpers;
 
-  if (!databaseInitialized(db)) {
-    const rawLibrary = readJson(appPaths.libraryPath, null);
+  try {
+    if (!databaseInitialized(db)) {
+      const rawLibrary = readLegacyLibrary(appPaths.libraryPath);
 
-    if (rawLibrary && typeof rawLibrary === 'object') {
-      saveLibraryToDb(db, appPaths, normalizeLibrary, rawLibrary);
+      if (rawLibrary && typeof rawLibrary === 'object') {
+        saveLibraryToDb(db, appPaths, normalizeLibrary, rawLibrary);
+      }
     }
+  } catch (error) {
+    db.close();
+    throw error;
   }
 
   return {
@@ -728,15 +739,15 @@ function createLibraryDatabaseStore(appPaths, helpers) {
     },
 
     loadLegacyRagIndexes() {
-      return legacyRagIndexes(readJson(appPaths.libraryPath, null));
+      return legacyRagIndexes(readLegacyLibrary(appPaths.libraryPath));
     },
 
     clearLegacyRagIndexesSync() {
-      const rawLibrary = readJson(appPaths.libraryPath, null);
+      const rawLibrary = readLegacyLibrary(appPaths.libraryPath);
       if (!rawLibrary || typeof rawLibrary !== 'object' || !rawLibrary.ragIndexes) return;
 
       delete rawLibrary.ragIndexes;
-      writeJsonSync(appPaths.libraryPath, rawLibrary);
+      nativeFs.writeSync(appPaths.libraryPath, JSON.stringify(rawLibrary, null, 2));
     },
 
     async replaceWithSnapshot(snapshotPath) {

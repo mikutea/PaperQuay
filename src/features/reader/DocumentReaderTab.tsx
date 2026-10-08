@@ -5,7 +5,7 @@ import {
   downloadRemoteFileToPath,
   loadPdfBinary,
   listLocalDirectoryFiles,
-  localPathExists,
+  authorizedLocalFileExists,
   readLocalTextFile,
   readLocalTextFileIfExists,
   runMineruCloudParse,
@@ -1091,7 +1091,7 @@ function DocumentReaderTab({
 
         let nextResolvedItem = resolvedItem;
 
-        if (source.kind === 'local-path' && !(await localPathExists(source.path))) {
+        if (source.kind === 'local-path' && !(await authorizedLocalFileExists(source.path))) {
           throw new Error(
             lRef.current(
               `PDF 文件不存在：${source.path}`,
@@ -2195,7 +2195,7 @@ function DocumentReaderTab({
       try {
         const nextSource: Exclude<PdfSource, null> = { kind: 'local-path', path };
 
-        if (!(await localPathExists(path))) {
+        if (!(await authorizedLocalFileExists(path))) {
           throw new Error(
             lRef.current(
               `PDF 文件不存在：${path}`,

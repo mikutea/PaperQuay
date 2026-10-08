@@ -42,6 +42,8 @@ export interface ReaderPreferencesWindowProps {
   mineruBatchHydrating?: boolean;
   statusMessage?: string;
   errorMessage?: string;
+  configSaveError?: string;
+  onRetryConfigSave?: () => void;
   translating?: boolean;
   translatedCount?: number;
   onSettingChange: ReaderSettingsChangeHandler;

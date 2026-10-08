@@ -137,6 +137,18 @@ export interface ListPapersRequest {
   limit?: number;
 }
 
+export interface LibraryPaperPage {
+  papers: LiteraturePaper[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface ListPapersPageRequest extends Omit<ListPapersRequest, 'limit'> {
+  page?: number;
+  pageSize?: number;
+}
+
 export interface CreateCategoryRequest {
   name: string;
   parentId?: string | null;
@@ -174,6 +186,7 @@ export interface ImportPdfRequest {
 }
 
 export interface ImportedPdfResult {
+  originalRetained?: boolean;
   sourcePath: string;
   paper: LiteraturePaper | null;
   duplicated: boolean;

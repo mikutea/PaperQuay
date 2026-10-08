@@ -1,4 +1,5 @@
 import { invoke } from '../platform/electron/core';
+import { flushReaderConfigWrites } from './readerConfig';
 
 export interface AppUpdateAsset {
   name: string;
@@ -35,6 +36,9 @@ export interface AppUpdateStatus {
   releaseUrl: string;
   assets: AppUpdateAsset[];
   installing?: boolean;
+  autoCheckOnStartup: boolean;
+  skippedVersion: string;
+  showStartupNotice?: boolean;
 }
 
 function toErrorMessage(error: unknown, fallback: string): string {
@@ -65,6 +69,18 @@ export async function checkForAppUpdate(): Promise<AppUpdateStatus> {
   }
 }
 
+export function checkForStartupUpdate(): Promise<AppUpdateStatus> {
+  return invoke<AppUpdateStatus>('app_update_check_startup');
+}
+
+export function setAppUpdatePreferences(autoCheckOnStartup: boolean): Promise<AppUpdateStatus> {
+  return invoke<AppUpdateStatus>('app_update_set_preferences', { autoCheckOnStartup });
+}
+
+export function dismissStartupUpdate(skipVersion = false): Promise<AppUpdateStatus> {
+  return invoke<AppUpdateStatus>('app_update_dismiss_startup', { skipVersion });
+}
+
 export async function downloadAppUpdate(): Promise<AppUpdateStatus> {
   try {
     return await invoke<AppUpdateStatus>('app_update_download');
@@ -75,6 +91,8 @@ export async function downloadAppUpdate(): Promise<AppUpdateStatus> {
 
 export async function installAppUpdate(): Promise<AppUpdateStatus> {
   try {
+    // The updater may start the installer before Electron emits close events.
+    await flushReaderConfigWrites();
     return await invoke<AppUpdateStatus>('app_update_install');
   } catch (error) {
     throw new Error(toErrorMessage(error, '安装软件更新失败'));

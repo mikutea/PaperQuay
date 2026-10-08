@@ -1,9 +1,8 @@
-const fsp = require('node:fs/promises');
 const path = require('node:path');
+const { createWriteAuthorizer, readAuthorizedFile } = require('./pathAccess.cjs');
 const {
   MINERU_API_BASE,
   cleanString,
-  ensureFile,
   fileNameFromPath,
   hashBytes,
   now,
@@ -13,6 +12,7 @@ const {
 
 function createMineruCommands(context) {
   const { appPaths } = context;
+  const authorizeWrite = context.authorizeLocalWrite ||= createWriteAuthorizer(context);
 
   return {
     async run_mineru_cloud_parse({ options }) {
@@ -20,8 +20,9 @@ function createMineruCommands(context) {
       if (!token) throw new Error('MinerU API Token cannot be empty');
       const apiBaseUrl = cleanString(options.apiBaseUrl).replace(/\/+$/, '') || MINERU_API_BASE;
 
-      const pdfPath = options.pdfPath;
-      await ensureFile(pdfPath);
+      const pdfPath = await context.authorizeCloudParsePath?.(context.store.load(), options.pdfPath) || options.pdfPath;
+      const uploadBytes = await readAuthorizedFile(pdfPath,
+        (actual) => context.authorizeCloudParsePath?.(context.store.load(), actual));
 
       const fileName = fileNameFromPath(pdfPath);
       const dataId = `paper_reader_${now()}`;
@@ -47,7 +48,9 @@ function createMineruCommands(context) {
       const uploadUrl = uploadEnvelope.data?.file_urls?.[0];
       if (!batchId || !uploadUrl) throw new Error('MinerU did not return an upload URL');
 
-      const putResponse = await fetch(uploadUrl, { method: 'PUT', body: await fsp.readFile(pdfPath) });
+      // Keep the captured bytes, but recheck policy after the upload-URL request.
+      await context.authorizeCloudParsePath?.(context.store.load(), pdfPath);
+      const putResponse = await fetch(uploadUrl, { method: 'PUT', body: uploadBytes });
       if (!putResponse.ok) throw new Error(`MinerU PDF upload failed: HTTP ${putResponse.status}`);
 
       const timeoutAt = Date.now() + (options.timeoutSecs ?? 900) * 1000;
@@ -87,11 +90,11 @@ function createMineruCommands(context) {
       const zipResponse = await fetch(finalResult.full_zip_url);
       if (!zipResponse.ok) throw new Error(`MinerU zip download failed: HTTP ${zipResponse.status}`);
 
-      const extractDir = options.extractDir || path.join(
+      const extractDir = authorizeWrite(options.extractDir || path.join(
         appPaths.mineruCacheDir,
         `${path.basename(fileName, '.pdf')}-${hashBytes(Buffer.from(dataId)).slice(0, 8)}`,
-      );
-      const extracted = await readZipWithAdm(Buffer.from(await zipResponse.arrayBuffer()), extractDir);
+      ));
+      const extracted = await readZipWithAdm(Buffer.from(await zipResponse.arrayBuffer()), extractDir, authorizeWrite);
 
       return {
         batchId,

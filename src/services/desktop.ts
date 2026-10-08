@@ -206,6 +206,14 @@ export async function getAppDefaultPaths(): Promise<AppDefaultPaths> {
   }
 }
 
+export async function readAppConfig(): Promise<string | null> {
+  return invoke<string | null>('read_app_config');
+}
+
+export async function authorizedLocalFileExists(path: string): Promise<boolean> {
+  return invoke<boolean>('authorized_file_exists', { path });
+}
+
 export async function readLocalTextFile(path: string): Promise<string> {
   try {
     return await invoke<string>('read_text_file', { path });

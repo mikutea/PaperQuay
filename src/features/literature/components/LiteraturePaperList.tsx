@@ -14,7 +14,6 @@ import {
   FilePlus2,
   GripVertical,
   RefreshCw,
-  Search,
   Star,
 } from 'lucide-react';
 import { useAppLocale, useLocaleText } from '../../../i18n/uiLanguage';
@@ -31,6 +30,7 @@ import {
   paperPdfPath,
 } from '../literatureUi';
 import LiteratureReadingHeatmapPreview from './LiteratureReadingHeatmapPreview';
+import LibrarySearchInput from './LibrarySearchInput';
 
 export interface LiteraturePaperListStatus {
   mineruParsed: boolean;
@@ -43,6 +43,13 @@ export type LiteraturePaperListSortDirection = NonNullable<ListPapersRequest['so
 
 interface LiteraturePaperListProps {
   loading: boolean;
+  queryPending?: boolean;
+  queryError?: string;
+  onRetrySearch?: () => void;
+  pageIndex?: number;
+  pageSize?: number;
+  paperTotal?: number;
+  onPageChange?: (page: number) => void;
   working: boolean;
   papers: LiteraturePaper[];
   paperStatuses: Record<string, LiteraturePaperListStatus>;
@@ -79,6 +86,13 @@ interface LiteraturePaperListProps {
 
 export default function LiteraturePaperList({
   loading,
+  queryPending = false,
+  queryError = '',
+  onRetrySearch,
+  pageIndex = 0,
+  pageSize = 100,
+  paperTotal = 0,
+  onPageChange,
   working,
   papers,
   paperStatuses,
@@ -104,6 +118,9 @@ export default function LiteraturePaperList({
 }: LiteraturePaperListProps) {
   const l = useLocaleText();
   const locale = useAppLocale();
+  const pageCount = Math.max(1, Math.ceil(paperTotal / pageSize));
+  const listScrollRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => { listScrollRef.current?.scrollTo({ top: 0 }); }, [pageIndex, searchQuery, sortBy, sortDirection]);
   const rootRef = useRef<HTMLElement | null>(null);
   const handleWheelCapture = useWheelScrollDelegate({ rootRef });
   const [dropIndicator, setDropIndicator] = useState<{
@@ -422,15 +439,7 @@ export default function LiteraturePaperList({
     >
       <header className="pq-toolbar px-4 py-3">
         <div className="flex flex-wrap items-center gap-2.5">
-          <div className="relative min-w-[260px] flex-1">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" strokeWidth={1.8} />
-            <input
-              value={searchQuery}
-              onChange={(event) => onSearchQueryChange(event.target.value)}
-              placeholder={l('搜索标题、作者、摘要、DOI...', 'Search title, author, abstract, DOI...')}
-              className="pq-input h-9 w-full pl-9 pr-3 text-sm placeholder:text-[var(--pq-text-faint)]"
-            />
-          </div>
+          <LibrarySearchInput value={searchQuery} onChange={onSearchQueryChange} />
 
           <select
             value={sortValue}
@@ -487,25 +496,43 @@ export default function LiteraturePaperList({
       </header>
 
       <div
+        ref={listScrollRef}
         data-wheel-scroll-target
+        style={{ containerType: 'inline-size', containerName: 'paper-list' }}
+        aria-busy={loading || queryPending}
         className="h-0 min-h-0 flex-1 overflow-y-auto overscroll-y-contain p-3"
       >
         {loading ? (
           <div className="pq-card p-6 text-sm text-[var(--pq-text-muted)]">
             {l('正在加载文献库...', 'Loading library...')}
           </div>
+        ) : queryPending ? (
+          <div role="status" className="pq-card p-6 text-sm text-[var(--pq-text-muted)]">
+            {l('正在更新文献列表...', 'Updating papers...')}
+          </div>
+        ) : queryError ? (
+          <div role="alert" className="pq-card p-6 text-sm">
+            <p className="font-semibold">{l('未能加载文献列表', 'Could not load papers')}</p>
+            <p className="mt-2 break-words text-[var(--pq-text-muted)]">{queryError}</p>
+            <button type="button" onClick={onRetrySearch ?? onRefresh} className="pq-button mt-4 h-9 px-3">
+              {l('重试搜索', 'Retry search')}
+            </button>
+          </div>
         ) : papers.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-[var(--pq-border)] bg-white/58 p-8 text-center dark:bg-white/5">
             <BookOpenText className="mx-auto h-9 w-9 text-slate-400 dark:text-[#a0a0a0]" strokeWidth={1.7} />
             <div className="mt-4 text-lg font-semibold">
-              {l('还没有文献', 'No papers yet')}
+              {searchQuery.trim() ? l('没有找到匹配的文献', 'No matching papers') : l('当前分类暂无文献', 'No papers in this category')}
             </div>
             <div className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500 dark:text-[#a0a0a0]">
-              {l(
+              {searchQuery.trim() ? l('试试其他关键词，或清空搜索以查看当前分类。', 'Try another keyword or clear the search to see this category.') : l(
                 '点击“导入 PDF”选择一个或多个文件。应用会把路径、附件和基础元数据保存到本地文库。',
                 'Click "Import PDF" to select one or more files. The app will save paths, attachments, and basic metadata into the local library.',
               )}
             </div>
+            {searchQuery.trim() ? <button type="button" onClick={() => onSearchQueryChange('')} className="pq-button mt-4 h-9 px-3 text-sm">
+              {l('清空关键词', 'Clear keywords')}
+            </button> : null}
           </div>
         ) : (
           <div className="space-y-2">
@@ -557,10 +584,10 @@ export default function LiteraturePaperList({
                     onDoubleClick={() => onOpenPaper(paper)}
                     onKeyDown={(event) => handleRowKeyDown(event, paper)}
                     className={clsx(
-                      'pq-card grid w-full gap-3 px-3 py-3 text-left transition',
+                      'pq-card pq-paper-row grid w-full gap-3 px-3 py-3 text-left transition',
                       manualSortingEnabled ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer',
                       showReadingHeatmap
-                        ? 'grid-cols-[28px_minmax(0,1fr)_minmax(128px,160px)_72px_96px] max-[900px]:grid-cols-[28px_minmax(0,1fr)_64px_86px]'
+                        ? 'grid-cols-[28px_minmax(0,1fr)_minmax(128px,160px)_72px_96px]'
                         : 'grid-cols-[28px_minmax(0,1fr)_100px_110px]',
                       active
                         ? 'border-[var(--pq-accent-border-strong)] bg-[var(--pq-accent-soft)] ring-1 ring-[var(--pq-accent-ring)]'
@@ -656,7 +683,7 @@ export default function LiteraturePaperList({
                       </span>
                     </span>
                     {showReadingHeatmap ? (
-                      <span className="min-w-0 self-center max-[900px]:hidden">
+                      <span className="pq-paper-heatmap min-w-0 self-center">
                         <LiteratureReadingHeatmapPreview
                           heatmap={heatmapsByPaperId[paper.id] ?? null}
                         />
@@ -665,7 +692,7 @@ export default function LiteraturePaperList({
                     <span className="text-sm text-slate-500 dark:text-[#a0a0a0]">
                       {paper.year ?? 'n.d.'}
                     </span>
-                    <span className="text-right text-xs text-slate-400 dark:text-[#8d8d8d]">
+                    <span className="pq-paper-date text-right text-xs text-slate-400 dark:text-[#8d8d8d]">
                       {new Date(paper.importedAt).toLocaleDateString()}
                     </span>
                   </div>
@@ -678,6 +705,26 @@ export default function LiteraturePaperList({
           </div>
         )}
       </div>
+      {onPageChange ? (
+        <nav aria-label={l('文献分页', 'Paper pagination')} className="pq-toolbar flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-[var(--pq-border)] px-4 py-2">
+          <span role="status" className="text-xs text-[var(--pq-text-muted)]">
+            {loading || queryPending ? l('正在更新...', 'Updating...') : queryError ? l('列表加载失败', 'List unavailable') :
+              l(`第 ${paperTotal === 0 ? 0 : pageIndex * pageSize + 1}–${Math.min((pageIndex + 1) * pageSize, paperTotal)} 篇，共 ${paperTotal} 篇`,
+                `${paperTotal === 0 ? 0 : pageIndex * pageSize + 1}–${Math.min((pageIndex + 1) * pageSize, paperTotal)} of ${paperTotal} papers`)}
+          </span>
+          <div className="flex items-center gap-1">
+            <button type="button" onClick={() => onPageChange(0)} disabled={loading || queryPending || pageIndex === 0}
+              className="pq-button h-8 px-2 text-xs">{l('首页', 'First')}</button>
+            <button type="button" onClick={() => onPageChange(pageIndex - 1)} disabled={loading || queryPending || pageIndex === 0}
+              className="pq-button h-8 px-2 text-xs">{l('上一页', 'Previous')}</button>
+            <span className="min-w-12 text-center text-xs tabular-nums text-[var(--pq-text-muted)]">{pageIndex + 1} / {pageCount}</span>
+            <button type="button" onClick={() => onPageChange(pageIndex + 1)} disabled={loading || queryPending || pageIndex >= pageCount - 1}
+              className="pq-button h-8 px-2 text-xs">{l('下一页', 'Next')}</button>
+            <button type="button" onClick={() => onPageChange(pageCount - 1)} disabled={loading || queryPending || pageIndex >= pageCount - 1}
+              className="pq-button h-8 px-2 text-xs">{l('末页', 'Last')}</button>
+          </div>
+        </nav>
+      ) : null}
     </section>
   );
 }

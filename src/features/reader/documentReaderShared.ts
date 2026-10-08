@@ -278,6 +278,7 @@ export async function buildScreenshotAttachmentFromPath(
   return {
     ...attachment,
     kind: 'screenshot',
+    filePath: undefined, // Capture bytes have been consumed; do not persist a stale private path.
     summary: `${pickLocaleText(locale, '系统截图', 'System screenshot')} · ${formatFileSize(attachment.size)}`,
   };
 }

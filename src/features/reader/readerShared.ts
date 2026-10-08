@@ -22,7 +22,6 @@ import { getFileNameFromPath } from '../../utils/text';
 
 export const SETTINGS_STORAGE_KEY = 'paper-reader-settings-v3';
 export const SECRETS_STORAGE_KEY = 'paper-reader-secrets-v1';
-export const CONFIG_WRITE_DEBOUNCE_MS = 350;
 
 export type PreferencesSectionKey =
   | 'general'
@@ -784,6 +783,7 @@ export function normalizeReaderSettings(value?: Partial<ReaderSettings> | null):
     showLibraryReadingHeatmap: merged.showLibraryReadingHeatmap !== false,
     enablePdfReadingHeatmap: merged.enablePdfReadingHeatmap !== false,
     enableSelectionTranslation: merged.enableSelectionTranslation !== false,
+    autoTranslateSelection: merged.autoTranslateSelection === true,
     highlightSelectionTranslation: merged.highlightSelectionTranslation !== false,
     enablePdfParagraphTranslationPopover: merged.enablePdfParagraphTranslationPopover !== false,
     mineruApiBaseUrl: merged.mineruApiBaseUrl?.trim() ?? '',

@@ -53,10 +53,12 @@ function createRagStoreSafely(appPaths) {
   }
 }
 
-function createBackend({ app }) {
-  const appPaths = createAppPaths(app);
+function createBackend({ app, libraryLocation }) {
+  const appPaths = createAppPaths(app, libraryLocation?.status().dataDirectory);
   const store = createLibraryStore(appPaths);
-  const noteStore = createNoteStore(appPaths);
+  let noteStore;
+  try { noteStore = createNoteStore(appPaths); }
+  catch (error) { store.close(); throw error; }
   const ragStore = createRagStoreSafely(appPaths);
   const legacyRagIndexes = store.loadLegacyRagIndexes();
 
@@ -77,6 +79,14 @@ function createBackend({ app }) {
     approvedWritePaths: new Set(),
     ragStore,
     store,
+    prepareForUpdate: () => libraryLocation?.rememberActive({ makeDefault: true }),
+    validateLibraryFileOperation: (library, attachments, options) => libraryLocation?.validateFileOperation(library, attachments, options),
+    approveLibrarySettingsChange: (previous, next) => libraryLocation?.approveSettingsChange(previous, next),
+    approveImportedAttachments: (previous, attachments) => libraryLocation?.approveImportedAttachments(previous, attachments),
+    validateLibraryRestoreTarget: (kind, target) => libraryLocation?.validateRestoreTarget(kind, target),
+    authorizeCloudParsePath: (library, pdfPath) => libraryLocation?.authorizeCloudParsePath(library, pdfPath),
+    authorizeLocalRead: (filePath) => libraryLocation?.authorizeLocalRead(store.load(), filePath),
+    authorizeLocalProbe: (filePath) => libraryLocation?.authorizeKnownRead(store.load(), filePath),
   };
   const fileCommands = createFileCommands(context);
   context.fileCommands = fileCommands;
@@ -90,9 +100,15 @@ function createBackend({ app }) {
     ...createIntegrationCommands(context),
     ...createReviewCommands(context),
     ...createUpdateCommands(context),
+    ...(libraryLocation ? {
+      library_location_status: () => libraryLocation.status(),
+      library_location_select: () => libraryLocation.selectExisting(),
+      library_location_activate: (args) => libraryLocation.activateSelected(args),
+    } : {}),
   };
 
   return {
+    authorizeLocalRead: context.authorizeLocalRead,
     close() {
       noteStore.close();
       ragStore.close();

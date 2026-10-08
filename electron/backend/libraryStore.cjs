@@ -1,6 +1,9 @@
 const path = require('node:path');
+const fs = require('node:fs');
+const { randomUUID } = require('node:crypto');
 const { createLibraryDatabaseStore } = require('./libraryDatabaseStore.cjs');
 const { hashBytes, now } = require('./utils.cjs');
+const { canonicalPath } = require('./pathAccess.cjs');
 
 const SYSTEM_CATEGORIES = [
   ['system-all', 'All Papers', 'all', 0],
@@ -9,19 +12,37 @@ const SYSTEM_CATEGORIES = [
   ['system-favorites', 'Favorites', 'favorites', 3],
 ];
 
-function createAppPaths(app) {
-  const dataDir = path.join(app.getPath('userData'), 'PaperQuay');
+function createAppPaths(app, dataDirectory) {
+  // Pin explicitly selected/profile-owned roots before deriving companions.
+  const profileLibrary = canonicalPath(path.join(app.getPath('userData'), 'PaperQuay'));
+  const dataDir = canonicalPath(dataDirectory || profileLibrary);
+  const normalizedPath = (value) => {
+    let ancestor = path.resolve(value);
+    const missing = [];
+    while (!fs.existsSync(ancestor) && path.dirname(ancestor) !== ancestor) {
+      missing.unshift(path.basename(ancestor)); ancestor = path.dirname(ancestor);
+    }
+    const canonical = path.join(fs.realpathSync.native(ancestor), ...missing);
+    return process.platform === 'win32' ? canonical.toLowerCase() : canonical;
+  };
+  const external = normalizedPath(dataDir) !== normalizedPath(profileLibrary);
 
   return {
     dataDir,
-    configPath: path.join(dataDir, '.settings', 'paperquay.config.json'),
+    // Model endpoints, credentials and automation belong to the trusted local
+    // profile, never to a supplied/shared library selected by the user.
+    configPath: path.join(profileLibrary, '.settings', 'paperquay.config.json'),
+    legacyConfigPath: path.join(profileLibrary, 'paperquay-data', 'paperquay.config.json'),
+    backupSnapshotDir: path.join(profileLibrary, '.backup-snapshots'),
+    privateLibrarySettingsPath: external ? path.join(profileLibrary, '.settings', 'libraries',
+      hashBytes(Buffer.from(normalizedPath(dataDir))) + '.json') : null,
     mineruCacheDir: path.join(dataDir, '.mineru-cache'),
     remotePdfDownloadDir: path.join(dataDir, '.downloads', 'pdfs'),
     libraryPath: path.join(dataDir, 'paperquay-library.json'),
     libraryDatabasePath: path.join(dataDir, 'paperquay-library.sqlite'),
     notesDatabasePath: path.join(dataDir, 'paperquay-notes.sqlite'),
     ragDatabasePath: path.join(dataDir, 'paperquay-rag.sqlite'),
-    screenshotDir: path.join(dataDir, '.screenshots'),
+    screenshotDir: path.join(profileLibrary, '.screenshots'),
   };
 }
 
@@ -92,7 +113,64 @@ function normalizeLibrary(raw, appPaths) {
 }
 
 function createLibraryStore(appPaths) {
-  return createLibraryDatabaseStore(appPaths, { normalizeLibrary });
+  const store = createLibraryDatabaseStore(appPaths, { normalizeLibrary });
+  const privatePath = appPaths.privateLibrarySettingsPath;
+  if (!privatePath) return store;
+
+  const defaults = createDefaultLibrary(appPaths);
+  const privateDefaults = () => ({ webdav: { ...defaults.webdav }, openAlexApiKey: '', openAlexMailto: '', zoteroLocalDataDir: '' });
+  function readPrivate() {
+    if (!fs.existsSync(privatePath)) return privateDefaults();
+    const text = fs.readFileSync(privatePath, 'utf8');
+    let value;
+    try { value = JSON.parse(text); } catch (error) { if (!(error instanceof SyntaxError)) throw error; }
+    const valid = value && typeof value === 'object' && !Array.isArray(value) &&
+      value.webdav && typeof value.webdav === 'object' && !Array.isArray(value.webdav) &&
+      ['endpointUrl', 'remoteRoot', 'username', 'password'].every((key) => value.webdav[key] == null || typeof value.webdav[key] === 'string') &&
+      ['openAlexApiKey', 'openAlexMailto', 'zoteroLocalDataDir'].every((key) => value[key] == null || typeof value[key] === 'string');
+    if (valid) return value;
+    // Preserve the original bytes for recovery. Never restore a remote endpoint
+    // or credential from the supplied library when local settings are damaged.
+    fs.renameSync(privatePath, privatePath + '.' + randomUUID() + '.corrupt');
+    const replacement = privateDefaults();
+    writePrivate(replacement);
+    return replacement;
+  }
+  function writePrivate(value) {
+    const text = JSON.stringify(value);
+    if (fs.existsSync(privatePath) && fs.readFileSync(privatePath, 'utf8') === text) return;
+    fs.mkdirSync(path.dirname(privatePath), { recursive: true });
+    const temporary = privatePath + '.' + randomUUID() + '.tmp';
+    try {
+      fs.writeFileSync(temporary, text, { flag: 'wx', mode: 0o600 });
+      fs.renameSync(temporary, privatePath);
+    } finally {
+      if (fs.existsSync(temporary)) fs.unlinkSync(temporary);
+    }
+  }
+  function withPrivate(library) {
+    const local = readPrivate();
+    return { ...library, webdav: { ...defaults.webdav, ...local.webdav },
+      settings: { ...library.settings, openAlexApiKey: local.openAlexApiKey || '', openAlexMailto: local.openAlexMailto || '',
+        zoteroLocalDataDir: local.zoteroLocalDataDir || '' } };
+  }
+  function save(library) {
+    const previous = readPrivate();
+    writePrivate({ webdav: library.webdav, openAlexApiKey: library.settings.openAlexApiKey || '', openAlexMailto: library.settings.openAlexMailto || '',
+      zoteroLocalDataDir: library.settings.zoteroLocalDataDir || '' });
+    try {
+      store.saveSync({ ...library, webdav: defaults.webdav,
+        settings: { ...library.settings, openAlexApiKey: '', openAlexMailto: '', zoteroLocalDataDir: '' } });
+    } catch (error) {
+      writePrivate(previous);
+      throw error;
+    }
+  }
+  // Never trust imported endpoints/tokens, including snapshots restored later.
+  // Keep the whole WebDAV connection local so a changed endpoint cannot receive
+  // an otherwise trusted local password. No secret is serialized into this DB.
+  return { ...store, load: () => withPrivate(store.load()), save, saveSync: save,
+    loadFromSnapshot: (snapshotPath) => withPrivate(store.loadFromSnapshot(snapshotPath)) };
 }
 
 function categoryCounts(library) {
