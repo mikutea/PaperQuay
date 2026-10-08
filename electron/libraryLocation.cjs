@@ -657,10 +657,12 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
       storageRoot: policy.storageRoot,
       sourcePaths: new Map(attachments.map((attachment, index) => [attachment.storedPath, sources.attachmentPaths[index]])),
       validateDestination(target) {
-        const actual = canonicalPath(target);
-        const relative = path.relative(comparable(policy.storageRoot), comparable(actual));
-        if (path.isAbsolute(relative) || relative === '..' || relative.startsWith('..' + path.sep)) throw new Error('Migration destination escapes approved storage root.');
-        return actual;
+        const pinned = isWithin(storageDirectory, target)
+          ? path.join(policy.storageRoot, path.relative(storageDirectory, target)) : target;
+        return resolveAuthorizedPath(pinned, (candidate) => {
+          if (!isWithin(policy.storageRoot, candidate)) throw new Error('Migration destination escapes approved storage root.');
+          return true;
+        });
       },
       commit(save) {
         // Both writes are synchronous; failures restore the previous policy.

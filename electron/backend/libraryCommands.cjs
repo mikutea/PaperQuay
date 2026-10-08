@@ -42,9 +42,31 @@ function pathExists(filePath) {
   return fsp.access(filePath).then(() => true).catch(() => false);
 }
 
-async function copyFileIfNeeded(sourcePath, targetPath, bound = false) {
-  try { await nativeFs.copy(sourcePath, targetPath, { exclusive: true }); return true; }
-  catch (error) { if (error.code === 'EEXIST') return false; throw error; }
+async function boundFileExists(filePath) {
+  try {
+    const { handle } = await openAuthorizedReadFile(filePath);
+    await handle.close();
+    return true;
+  } catch (error) {
+    if (['ENOENT', 'ENOTDIR', 'EISDIR'].includes(error.code)) return false;
+    throw error;
+  }
+}
+
+async function copyFileIfNeeded(sourcePath, targetPath) {
+  let opened;
+  try { opened = await openAuthorizedReadFile(sourcePath); }
+  catch (error) {
+    if (['ENOENT', 'ENOTDIR', 'EISDIR'].includes(error.code)) return false;
+    throw error;
+  }
+  try {
+    await nativeFs.copy(sourcePath, targetPath, {
+      exclusive: true, expectedIdentity: opened.handle.identity, expectedVersion: opened.handle.version,
+    });
+    return true;
+  } catch (error) { if (error.code === 'EEXIST') return false; throw error; }
+  finally { await opened.handle.close(); }
 }
 
 async function migrateLibraryStorageDirectory(library, previousStorageDir, nextStorageDir, approval = null) {
@@ -92,14 +114,12 @@ async function migrateLibraryStorageDirectory(library, previousStorageDir, nextS
 
       if (!isSamePath(storedPath, nextPath)) {
         const sourcePath = approval?.sourcePaths?.get(storedPath) || storedPath;
-        if (await pathExists(sourcePath)) {
-          copiedFiles += await copyFileIfNeeded(sourcePath, nextPath, Boolean(approval)) ? 1 : 0;
-        }
+        copiedFiles += await copyFileIfNeeded(sourcePath, nextPath) ? 1 : 0;
 
         attachment.storedPath = nextPath;
         attachment.relativePath = relativePath;
         attachment.fileName = attachment.fileName || fileNameFromPath(nextPath);
-        attachment.missing = !(await pathExists(nextPath));
+        attachment.missing = !(await boundFileExists(nextPath));
         updatedAttachments += 1;
         paper.updatedAt = now();
       }

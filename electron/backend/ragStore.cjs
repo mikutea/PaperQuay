@@ -1,9 +1,9 @@
 const fs = require('node:fs');
-const fsp = require('node:fs/promises');
 const path = require('node:path');
 const sqliteVec = require('sqlite-vec');
 const { DatabaseSync, sqlStringLiteral, withTransaction } = require('./nodeSqlite.cjs');
 const { cleanString, toError } = require('./utils.cjs');
+const { withSnapshotDatabase, assertSnapshotTables, copyTable, replaceTables } = require('./databaseRestore.cjs');
 
 const RAG_SOURCE_TYPES = new Set(['mineru-markdown', 'pdf-text']);
 const MAX_VECTOR_DIMENSION = 32768;
@@ -232,16 +232,17 @@ function openDatabase(databasePath) {
     timeout: 5000,
   });
 
-  db.enableLoadExtension(true);
   try {
-    loadSqliteVec(db);
-  } finally {
-    db.enableLoadExtension(false);
+    db.enableLoadExtension(true);
+    try { loadSqliteVec(db); }
+    finally { db.enableLoadExtension(false); }
+    db.exec('PRAGMA journal_mode = WAL;');
+    createSchema(db);
+    return db;
+  } catch (error) {
+    if (db.isOpen) db.close();
+    throw error;
   }
-
-  db.exec('PRAGMA journal_mode = WAL;');
-  createSchema(db);
-  return db;
 }
 
 function ensureVectorTable(db, dimension) {
@@ -784,21 +785,29 @@ function createRagStore(appPaths) {
       return targetPath;
     },
     async replaceWithSnapshot(snapshotPath) {
-      const replacementPath = `${appPaths.ragDatabasePath}.restore-${Date.now()}.tmp`;
-      await fsp.mkdir(path.dirname(appPaths.ragDatabasePath), { recursive: true });
-      await fsp.copyFile(snapshotPath, replacementPath);
-
-      if (db.isOpen) db.close();
-
-      try {
-        await fsp.rm(appPaths.ragDatabasePath, { force: true });
-        await fsp.rm(`${appPaths.ragDatabasePath}-wal`, { force: true });
-        await fsp.rm(`${appPaths.ragDatabasePath}-shm`, { force: true });
-        await fsp.rename(replacementPath, appPaths.ragDatabasePath);
-      } finally {
-        await fsp.rm(replacementPath, { force: true }).catch(() => {});
-        db = openDatabase(appPaths.ragDatabasePath);
-      }
+      const tables = ['rag_indexes', 'rag_chunks', 'rag_vec_dimensions'];
+      return withSnapshotDatabase(snapshotPath, openDatabase, (source) => {
+        const dimensions = knownVectorDimensions(source).map(normalizeVectorDimension);
+        // sqlite-vec reports its embedding chunk table as an ordinary table,
+        // unlike its other shadow tables. There is one embedding column here.
+        assertSnapshotTables(source, [...tables, ...dimensions.flatMap(dimension => {
+          const table = vectorTableName(dimension);
+          return [table, `${table}_vector_chunks00`];
+        })], db);
+        return withTransaction(db, () => {
+          for (const dimension of knownVectorDimensions(db)) db.exec(`DROP TABLE ${vectorTableName(dimension)}`);
+          replaceTables(db, source, tables);
+          db.prepare("DELETE FROM sqlite_sequence WHERE name = 'rag_chunks'").run();
+          const sequence = source.prepare("SELECT seq FROM sqlite_sequence WHERE name = 'rag_chunks'");
+          sequence.setReadBigInts(true);
+          const row = sequence.get();
+          if (row) db.prepare("INSERT INTO sqlite_sequence (name, seq) VALUES ('rag_chunks', ?)").run(row.seq);
+          for (const dimension of dimensions) {
+            const table = ensureVectorTable(db, dimension);
+            copyTable(db, source, table, ['rowid', 'document_key', 'source_type', 'embedding']);
+          }
+        });
+      }, tables);
     },
   };
 }

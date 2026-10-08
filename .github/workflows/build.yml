@@ -54,5 +54,5 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run native:build
-      - run: node --test tests/nativeFs.test.mjs tests/sourceAccess.test.mjs
+      - run: node --test tests/nativeFs.test.mjs tests/sourceAccess.test.mjs tests/databaseRestoreBoundary.test.mjs tests/migrationReadBoundary.test.mjs
       - run: node electron/native/smoke.cjs
