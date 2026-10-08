@@ -47,8 +47,9 @@ test('parent links cannot redirect native read/write/copy/list/delete into outsi
   const target = path.join(alias, 'file.txt');
   for (const operation of [() => native.read(target), () => native.write(target, Buffer.from('bad')),
     () => native.copy(victim, target), () => native.list(alias), () => native.remove(target)]) {
-    await assert.rejects(operation);
+    await assert.rejects(operation, { code: 'EPERM' });
   }
+  await assert.rejects(native.openRead(path.join(f.inside, 'absent', 'file.txt')), { code: 'ENOENT' });
   assert.equal(fs.readFileSync(victim, 'utf8'), 'private bytes');
   const inspection = native.inspectSync(target);
   assert.equal(inspection.linkPath, alias);

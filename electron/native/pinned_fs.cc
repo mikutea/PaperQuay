@@ -240,7 +240,12 @@ struct Parent {
 #else
       if (create && mkdirat(handle(), name.c_str(), 0777) && errno != EEXIST) posixError("Create directory");
       Owned child(openat(handle(), name.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
-      if (child.value == Invalid) posixError("Open directory");
+      if (child.value == Invalid) {
+        // O_DIRECTORY | O_NOFOLLOW reports a symlink as ENOTDIR on POSIX.
+        // Do not let callers classify an unsafe parent as a missing file.
+        if (errno == ENOTDIR || errno == ELOOP) unsafe("Approved path changed: linked or non-directory parent is not supported.");
+        posixError("Open directory");
+      }
 #endif
       const auto details = info(child.value);
       if (!details.directory || details.reparse) unsafe("Approved path changed: linked directory is not supported.");
