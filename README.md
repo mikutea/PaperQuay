@@ -1,11 +1,11 @@
 <h1 align="center">PaperQuay</h1>
 
 <p align="center">
-  English | <a href="./README.zh-CN.md">Chinese</a>
+  中文 | <a href="./README.en.md">English</a>
 </p>
 
 <p align="center">
-  <strong>An open-source AI paper workspace for PDF reading, translation, structured overviews, inline notes, Zotero import, Agent workflows, and local RAG.</strong>
+  <strong>开源 AI 论文工作台，覆盖 PDF 阅读、全文翻译、结构化概览、内联笔记、Zotero 导入、Agent 工作流和本地 RAG。</strong>
 </p>
 
 <p align="center">
@@ -13,17 +13,17 @@
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-4b5563?style=flat-square" alt="Windows macOS Linux">
   <img src="https://img.shields.io/badge/built%20with-Electron-47848f?style=flat-square" alt="Electron">
   <img src="https://img.shields.io/badge/frontend-React%20%2B%20TypeScript-0f766e?style=flat-square" alt="React TypeScript">
-  <img src="https://img.shields.io/badge/storage-local%20SQLite-111827?style=flat-square" alt="Local SQLite storage">
+  <img src="https://img.shields.io/badge/storage-local%20SQLite-111827?style=flat-square" alt="本地 SQLite 存储">
   <img src="https://img.shields.io/badge/editor-Tiptap-0d9488?style=flat-square" alt="Tiptap editor">
   <img src="https://img.shields.io/badge/license-AGPL--3.0--only-b91c1c?style=flat-square" alt="AGPL-3.0-only">
 </p>
 
 <p align="center">
-  <a href="#quick-navigation">Quick Navigation</a> |
-  <a href="#paperquay---open-ai-paper-workspace-that-keeps-reading-flow-intact">Why PaperQuay</a> |
-  <a href="#completed-features">Features</a> |
-  <a href="#first-run-workflow">Quick Start</a> |
-  <a href="#development">Development</a>
+  <a href="#快速导航">快速导航</a> |
+  <a href="#paperquay---保持阅读心流的开源-ai-论文工作台">为什么选择 PaperQuay</a> |
+  <a href="#已完成功能">当前功能</a> |
+  <a href="#第一次使用流程">快速开始</a> |
+  <a href="#本地开发">本地开发</a>
 </p>
 
 <p align="center">
@@ -32,121 +32,121 @@
 
 ---
 
-## Quick Navigation
+## 快速导航
 
 <p>
-  <a href="#paperquay---open-ai-paper-workspace-that-keeps-reading-flow-intact">Problem & Positioning</a> |
-  <a href="#latest-update">Latest Update</a> |
-  <a href="#what-makes-paperquay-different">What Makes It Different</a> |
-  <a href="#core-workflow">Core Workflow</a> |
-  <a href="#completed-features">Completed Features</a> |
-  <a href="#architecture">Architecture</a> |
-  <a href="#zotero-compatibility">Zotero Compatibility</a> |
-  <a href="#todo-roadmap">Todo</a>
+  <a href="#paperquay---保持阅读心流的开源-ai-论文工作台">问题与定位</a> |
+  <a href="#近期更新">近期更新</a> |
+  <a href="#paperquay-有什么不同">差异点</a> |
+  <a href="#核心工作流">核心工作流</a> |
+  <a href="#已完成功能">已完成功能</a> |
+  <a href="#技术架构">技术架构</a> |
+  <a href="#zotero-兼容">Zotero 兼容</a> |
+  <a href="#待做计划">待做计划</a>
 </p>
 
 ---
 
-## Latest Update
+## 近期更新
 
-The v0.1.24 release focuses on review writing, knowledge graph usability, MinerU configuration, library storage migration, and note synchronization polish:
+v0.1.24 主要改进综述写作、知识图谱、MinerU 配置、文献库存储迁移和笔记同步：
 
-- Review Word export now handles LaTeX formulas, missing figures, localized section titles, richer references, and inline figure placement from model output.
-- Knowledge graph workflows now include reference syncing, clearer relation controls, edge legends, export tools, and more direct node interactions.
-- MinerU parsing can use a configurable API base URL, making local MinerU deployments easier to use.
-- Library storage folder changes now migrate the existing directory structure and attachment paths into the new location.
-- Reader and notes workflows gained selection-translation highlighting, resizable library navigation, paper-list sorting, and safer note external-update detection.
-
----
-
-## PaperQuay - Open AI Paper Workspace That Keeps Reading Flow Intact
-
-**PaperQuay is more than a PDF reader, AI summary tool, or Zotero add-on.** It is a local-first, open-source AI paper workspace designed for graduate students, researchers, and heavy paper-reading users who want to import papers, read PDFs, translate, generate paper overviews, write inline research notes, organize tags, import Zotero libraries, use Agent-assisted literature management, and build a local RAG knowledge base without leaving the same desktop app.
-
-Traditional paper reading often means switching between Zotero, a PDF reader, translation tools, ChatGPT, and a separate note app. PaperQuay brings those steps into one continuous desktop workflow so importing, reading, understanding, translating, annotating, note-taking, organizing, and knowledge-base building can happen in the same place while keeping Zotero compatibility optional rather than mandatory.
-
-Technically, PaperQuay is built as an Electron + React + TypeScript/Vite desktop application. The React renderer implements the literature library, PDF reader, rich notes, Agent workspace, and settings UI; the Electron main process and local Node.js backend handle filesystem access, IPC, Zotero import, SQLite persistence, app updates, and cross-platform packaging. PDF rendering uses PDF.js, rich notes use Tiptap/ProseMirror, local data uses SQLite/sql.js and sqlite-vec, and AI features connect through OpenAI-compatible APIs for translation, paper overviews, Agent tool use, and RAG retrieval.
-
-| Research workflow problem                 | Traditional tools                                                  | PaperQuay                                                                                  |
-| ----------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
-| Translation latency interrupts reading    | Translate only after selecting text, often with visible API delay  | Pre-translate MinerU structural blocks and jump instantly to cached translations           |
-| Side-by-side translation hurts focus      | Two columns require constant eye movement and can break formatting | Keep the original PDF visible while navigating to precise translated blocks on demand      |
-| Pure translated files lose source context | Original wording, terminology, and academic expression are hidden  | Keep source text, parsed blocks, translation, notes, and overview linked together          |
-| Paper notes become detached               | Notes live in a separate app and lose PDF position context         | Store rich notes, tags, links, paper references, and backlinks in the local library        |
-| Fast paper screening is repetitive        | Upload PDFs to an LLM one by one and manually organize outputs     | Generate and store structured paper overviews inside the local library                     |
-| AI model choices are locked down          | Built-in models or platform-specific token pricing                 | Bring your own OpenAI-compatible endpoint, model, and runtime parameters                   |
-| Large libraries are hard to clean         | Manual renaming, tagging, metadata fixes, and classification       | Agent tools can assist with batch rename, metadata completion, tagging, and classification |
-| Zotero migration is inconvenient          | Either stay locked in Zotero or rebuild everything manually        | Import Zotero collections, tags, and PDF attachments as an optional source                 |
+- 综述导出 Word 时，改进 LaTeX 公式、缺失图片、本地化章节标题、参考文献和模型输出中的内联图片排版。
+- 知识图谱增加参考文献同步、更清晰的关系控制、连线图例、导出工具和更直接的节点交互。
+- MinerU 解析支持配置 API 基础地址，便于使用本地部署的 MinerU 服务。
+- 修改文献库存储文件夹时，将现有目录结构和附件路径一并迁移到新位置。
+- 阅读器和笔记新增划词翻译高亮、可调整宽度的文库导航、论文列表排序，并改进笔记外部更新检测。
 
 ---
 
-## What Makes PaperQuay Different
+## PaperQuay - 保持阅读心流的开源 AI 论文工作台
+
+**PaperQuay 不只是 PDF 阅读器、AI 总结工具，也不是 Zotero 的附属工具。** 它是一款本地优先、开源免费的桌面端 AI 论文工作台，面向研究生、科研工作者和论文阅读重度用户，目标是在同一个应用中完成论文导入、PDF 阅读、AI 翻译、论文概览、内联阅读笔记、标签管理、Zotero 文献库导入、Agent 文献整理和本地 RAG 知识库构建。
+
+传统论文阅读往往需要在 Zotero、PDF 阅读器、翻译工具、ChatGPT 和笔记软件之间频繁切换。PaperQuay 希望把导入、阅读、理解、翻译、批注、笔记、整理和知识库构建合并到一个连续的桌面端流程中，同时保留 Zotero 兼容能力，但不把 Zotero 作为必要依赖。
+
+技术上，PaperQuay 主要基于 Electron + React + TypeScript/Vite 构建跨平台桌面端应用。React 渲染层负责文献库、PDF 阅读器、富文本笔记、Agent 工作区和设置界面；Electron 主进程与本地 Node.js 后端模块负责文件系统访问、IPC 通信、Zotero 导入、SQLite 持久化、应用更新和跨平台打包。PDF 阅读与渲染主要基于 PDF.js，富文本笔记基于 Tiptap/ProseMirror，本地数据使用 SQLite/sql.js 及 sqlite-vec 存储文献、笔记、阅读记录和 RAG 索引；AI 能力通过 OpenAI-compatible API 接入，用于论文概览、全文/划词翻译、Agent 工具调用和 RAG 检索增强问答。
+
+| 科研工作流痛点 | 传统工具 | PaperQuay |
+| -------------- | -------- | --------- |
+| 翻译延迟打断阅读 | 通常需要划词后等待 API 返回 | 可提前翻译 MinerU 结构块，阅读时瞬间跳转到缓存译文 |
+| 左右对照影响专注 | 两栏来回扫视，格式也难以完全保持 | 保留原始 PDF，需要时跳转到精确对应译文 |
+| 纯中文文件丢失原文语境 | 原文用词、术语和学术表达被隐藏 | 原文、结构块、译文、笔记和概览保持关联 |
+| 论文笔记容易脱离上下文 | 笔记放在独立应用里，PDF 位置和文献关系丢失 | 富文本笔记、标签、双向链接、文献引用和反向链接写入本地文献库 |
+| 大量论文速读繁琐 | 反复上传 PDF 给大模型，再手动整理结果 | 在本地文献库中生成并保存结构化论文概览 |
+| AI 模型选择受限 | 只能用内置模型或平台计费规则 | 支持自定义 OpenAI 兼容接口、模型和运行参数 |
+| 大型文献库难维护 | 重命名、打标签、元数据和分类主要靠手动 | Agent 可辅助批量重命名、元数据补全、打标签和分类 |
+| Zotero 迁移不方便 | 要么继续依赖 Zotero，要么手动重建 | 可选导入 Zotero 分类、标签和 PDF 附件 |
+
+---
+
+## PaperQuay 有什么不同
 
 <p align="center">
   <img src="./docs/assets/show.gif" alt="PaperQuay workflow demo" width="1200">
 </p>
 
 <p align="center">
-  <em>Live workflow demo: browse the library, open papers, inspect structured reading, and move into the Agent workspace without leaving the same desktop flow.</em>
+  <em>动态流程演示：从文库浏览、打开论文、查看结构化阅读，到进入 Agent 工作区，整个过程都在同一个桌面工作流内完成。</em>
 </p>
 
-### Instant Block-Level Translation
+### 块级瞬间跳转翻译
 
-PaperQuay uses a translation workflow designed for long paper reading sessions. It can translate and cache MinerU-parsed structural blocks in advance. Later, when reading, clicking a source block can instantly jump to its translated counterpart. Translation no longer needs to happen only after each click or selection.
+PaperQuay 使用更适合长时间论文阅读的翻译范式。它可以提前翻译并缓存 MinerU 解析出的结构块。之后阅读时，点击原文块即可快速跳转到对应译文，翻译不再必须发生在每次点击或划词之后。
 
-### Tiptap-Based Notes Workspace
+### 基于 Tiptap 的笔记工作区
 
-PaperQuay includes a dedicated Notes workspace built on Tiptap. Each note is stored locally as Tiptap JSON, rendered HTML, and searchable plain text. The editor supports headings, lists, task lists, code blocks, tables, images, math, highlights, links, slash-style insertions, folders, pin and favorite states, outline, backlinks, and autosave.
+PaperQuay 内置独立的 Notes 工作区，编辑器基于 Tiptap。每篇笔记都会在本地保存 Tiptap JSON、渲染 HTML 和用于搜索的纯文本。编辑器支持标题、列表、任务列表、代码块、表格、图片、数学公式、高亮、链接、斜杠菜单式插入、文件夹、置顶、收藏、大纲、反向链接和本地自动保存。
 
-Notes are designed to stay inline with the research workflow. You can connect ideas with `[[note]]` links, organize topics with `#tags`, reference library papers with `@paper`, and jump through those inline references instead of keeping reading notes in a separate note silo.
+笔记不是独立在文献库之外的孤岛。你可以用 `[[笔记]]` 连接想法，用 `#标签` 组织主题，用 `@paper` 引用文献，并通过这些内联引用在笔记和论文之间跳转，让阅读、摘录和后续整理保持在同一个研究工作流里。
 
-### Fast Paper Screening from the Overview Panel
+### 论文速读概览页
 
-PaperQuay is designed not only for deep reading, but also for screening large numbers of papers quickly. In the overview panel, each paper can directly surface AI-generated fields such as background, research question, method, experiment setup, key findings, conclusions, and limitations.
+PaperQuay 不只适合精读，也适合大批量速读筛选论文。在概览页中，每篇论文都可以直接展示由大模型生成的背景、研究问题、方法、实验设置、主要发现、结论和局限等信息。
 
-### Text Markup
+### 划词标记
 
-Select text in the PDF or structured reading pane to choose a color and add a highlight or underline from the selection popup. You can also activate the PDF highlighter before dragging over text. The palette labels identify highlight, text, and ink colors. Use **Export Annotated PDF** to save PDF marks (underlines are exported as thin highlight annotations). Marks in the structured original and translated text are saved with reading history; select their text again to clear them.
+在 PDF 或双栏对照的正文中拖选文字后，可直接在划词浮层选择颜色、添加高亮或下划线。PDF 工具栏的荧光笔也支持先启用再拖选文字；颜色区会显示当前控制的是高亮、文字还是手写颜色。PDF 标记通过“导出批注 PDF”保存，下划线以细条高亮批注导出；右栏原文和译文的标记随阅读记录保存，可重新选中文字后清除。
 
-### Reading Time Visibility
+### 阅读时间可视化
 
-PaperQuay records time spent across PDF positions and surfaces it as reading heat previews in the library and a dedicated reading-time chart in the paper detail panel. This makes it easier to see which parts of a paper have actually received attention.
+PaperQuay 会记录 PDF 不同位置的停留阅读时间，并在文献列表显示阅读热力预览，在文献详情面板显示独立的阅读时间图。你可以更直观地看到一篇论文哪些部分真正被读过、哪些部分还没有投入时间。
 
-### Literature Library, Not Just Import
+### 独立文献库，而不是只做导入
 
-PaperQuay can build an independent local library with PDF import, a configurable storage folder, categories, tags, metadata editing, search, filtering, notes, and local SQLite persistence. Zotero remains supported as an optional import source, not a required dependency.
+PaperQuay 可以独立建立本地文献库，支持 PDF 导入、默认文献存储文件夹、分类、标签、元数据编辑、搜索筛选、笔记和本地 SQLite 持久化。Zotero 仍然兼容，但只是可选导入来源。
 
-### Agent Operations for Paper Management
+### 面向文献管理的 Agent 操作
 
-The agent workspace is designed for library operations, not just conversation. It can assist with batch renaming, metadata completion, smart tagging, tag cleanup, automatic classification, and paper summarization while exposing tool calls and results for user review.
-
----
-
-## Core Workflow
-
-| Step                   | What happens                                                                          |
-| ---------------------- | ------------------------------------------------------------------------------------- |
-| 1. Import PDFs         | Drag PDFs into the app or choose files from the import dialog.                        |
-| 2. Confirm metadata    | Review title, authors, year, venue, DOI, abstract, keywords, and duplicate warnings.  |
-| 3. Organize library    | Create categories, drag papers into collections, add tags, and mark favorites.        |
-| 4. Parse with MinerU   | Convert PDFs into structured blocks with page-region linkage.                         |
-| 5. Generate overviews  | Produce reusable paper overviews for fast screening and later review.                 |
-| 6. Translate full text | Cache translated blocks so reading can jump instantly between source and translation. |
-| 7. Read and annotate   | Highlight, write, add notes, jump to annotations, and export annotated PDFs.          |
-| 8. Review reading time | Inspect reading-time charts and heat previews to see which parts of the PDF were read. |
-| 9. Write notes         | Create rich Tiptap notes, organize them in folders, link notes with `[[title]]`, add `#tags`, and jump through `@paper` references. |
-| 10. Use the agent      | Ask the agent to rename, classify, tag, clean metadata, or summarize selected papers. |
+Agent 工作区不是普通聊天框，而是面向文献库操作设计。它可以辅助批量重命名、元数据补全、智能标签、标签清洗、自动分类和论文总结，并展示工具调用过程和执行结果，方便用户确认。
 
 ---
 
-## PaperQuay Screenshots
+## 核心工作流
+
+| 步骤 | 发生什么 |
+| ---- | -------- |
+| 1. 导入 PDF | 将 PDF 拖入软件，或从导入窗口选择文件。 |
+| 2. 确认元数据 | 检查标题、作者、年份、期刊/会议、DOI、摘要、关键词和重复提示。 |
+| 3. 整理文献库 | 创建分类，将论文拖入分类，添加标签并标记收藏。 |
+| 4. MinerU 解析 | 将 PDF 转成结构化块，并建立页面区域关联。 |
+| 5. 生成论文概览 | 保存可复用的论文速读结果，便于后续筛选和回顾。 |
+| 6. 全文翻译 | 缓存翻译后的结构块，让阅读时可以瞬间切换原文与译文。 |
+| 7. 阅读与批注 | 高亮、写字、添加笔记、跳转批注，并导出批注后的 PDF。 |
+| 8. 查看阅读时间 | 通过阅读时间图和热力预览查看 PDF 不同位置的累计阅读投入。 |
+| 9. 写笔记 | 创建 Tiptap 富文本笔记，用文件夹整理，用 `[[标题]]` 连接笔记，用 `#标签` 组织主题，并通过 `@paper` 跳转文献。 |
+| 10. 使用 Agent | 让 Agent 对选中文献执行重命名、分类、打标签、补全元数据或总结。 |
+
+---
+
+## PaperQuay 截图
 
 <p align="center">
   <img src="./docs/assets/main.png" alt="PaperQuay literature library workspace" width="1200">
 </p>
 
 <p align="center">
-  <em>Main library workspace: manage papers, categories, metadata, reading progress, notes, and AI-generated overviews in one desktop view.</em>
+  <em>主文库界面：在同一个桌面视图中管理论文、分类、元数据、阅读进度、笔记和 AI 生成的概览。</em>
 </p>
 
 <p align="center">
@@ -154,117 +154,117 @@ The agent workspace is designed for library operations, not just conversation. I
 </p>
 
 <p align="center">
-  <em>Agent workspace: chat with the paper assistant, inspect execution traces, review tool calls, and run batch library operations with human confirmation.</em>
+  <em>Agent 工作区：与论文助手对话、查看执行轨迹、审查工具调用，并在确认后执行批量文库操作。</em>
 </p>
 
 ---
 
-## Completed Features
+## 已完成功能
 
-These items are implemented in the current desktop app.
+下面是当前桌面端已经落地的能力。
 
-| Area              | Completed capabilities                                                                                                                        |
-| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| Local library     | Local SQLite storage for papers, authors, categories, tags, attachments, notes, annotations, import records, settings, and RAG indexes          |
-| PDF import        | File picker and drag-and-drop import with a confirmation screen before files enter the library                                                  |
-| File management   | Configurable storage folder, copy / move / keep-path import modes, naming rules, original-path tracking, and private local file handling        |
-| Metadata          | OpenAlex enrichment by DOI or title, optional OpenAlex API key / mailto settings, Crossref fallback, and manual editing before import           |
-| Categories        | System categories, custom categories, nested subcategories, collapsible branches, context menus, drag sorting, hierarchy changes, and favorites |
-| Paper details     | Title, authors, year, venue, DOI, URL, abstract, keywords, tags, notes, citation, favorite state, and a reading-time chart                      |
-| Notes workspace   | Dedicated Tiptap notes workspace with folders, search, tags, pinned notes, favorites, outline, backlinks, and local autosave                    |
-| Notes editor      | Rich text, headings, lists, task lists, code blocks, tables, images, math, highlights, links, component blocks, and slash-style insertions       |
-| Inline note links | `[[note]]` wiki links, `#tag` references, `@paper` references, autocomplete menus, and inline navigation across notes and papers                 |
-| Reader            | PDF reader with MinerU structured block views, region-based linkage, reading heat progress, reading-time recording, and annotation tools         |
-| Translation       | Full-text translation, cached block translations, and selection translation through OpenAI-compatible models                                     |
-| Paper overview    | AI-generated screening fields for background, research questions, methods, experiment setup, findings, conclusions, and limitations              |
-| Agent workspace   | Conversation UI with execution traces, tool call cards, paper selection, metadata tools, rename tools, tagging, classification, and summaries    |
-| Zotero import     | Import local Zotero collections, tags, and available PDF attachments from `zotero.sqlite`                                                        |
-| Backup            | WebDAV backup and restore for the library database, notes database, and local RAG SQLite database                                                |
-| Updates           | In-app update checks, Windows and Linux automatic update flow, and macOS release-page handoff                                                    |
-| Themes            | Light and dark UI modes optimized for long desktop reading sessions                                                                             |
-
----
-
-## First-Run Workflow
-
-1. Open Settings and choose a default paper storage folder.
-2. Import PDFs by drag and drop or by clicking the import button.
-3. Confirm or edit metadata in the import confirmation dialog.
-4. Let PaperQuay copy PDFs into its storage folder and save records in the local library.
-5. Create categories and subcategories from the left sidebar.
-6. Drag papers into categories, add tags, mark favorites, and open papers in the reader.
-7. Open Notes to create rich-text notes, link related ideas, and connect notes to papers.
-8. Configure an OpenAI-compatible endpoint and model if you want AI features.
-9. Configure a MinerU API key if you want MinerU parsing.
-10. Optionally connect a Zotero data directory and import existing Zotero collections and PDFs.
-
-For local RAG, choose the embedding input format in its dedicated settings. **Plain text** remains the default for existing configurations. Select **Retrieval prefixes (`query:` / `passage:`)** only when your embedding model requires different inputs for search queries and document passages. Changing this option uses a different RAG index key, so existing documents must be indexed again for the new format.
+| 模块 | 已完成能力 |
+| ---- | ---------- |
+| 本地文献库 | 使用本地 SQLite 保存论文、作者、分类、标签、附件、笔记、批注、导入记录、设置和 RAG 索引 |
+| PDF 导入 | 支持文件选择器和拖拽导入，入库前进入导入确认窗口 |
+| 文件管理 | 支持文献存储文件夹、复制/移动/保留原路径、命名规则、原始路径记录和本地私有文件管理 |
+| 元数据 | 支持通过 DOI 或标题优先调用 OpenAlex 补全，可配置 OpenAlex API Key / mailto，Crossref 兜底，导入前可手动编辑 |
+| 分类树 | 支持系统分类、自定义分类、子分类、折叠、右键菜单、拖拽排序、层级调整和收藏 |
+| 文献详情 | 支持标题、作者、年份、期刊/会议、DOI、URL、摘要、关键词、标签、笔记、引用、收藏和阅读时间图 |
+| 笔记工作区 | 支持独立 Tiptap 笔记工作区、文件夹、搜索、标签、置顶、收藏、大纲、反向链接和本地自动保存 |
+| 笔记编辑器 | 支持富文本、标题、列表、任务列表、代码块、表格、图片、数学公式、高亮、链接、组件块和斜杠菜单式插入 |
+| 内联笔记链接 | 支持 `[[笔记]]` 双向链接、`#标签`、`@paper` 文献引用、补全菜单，以及笔记和文献之间的内联跳转 |
+| 阅读器 | 支持 PDF 阅读、MinerU 结构块视图、PDF 区域联动、阅读热力进度、阅读时间记录和批注工具 |
+| 翻译 | 支持全文翻译、块级翻译缓存和划词翻译，模型使用 OpenAI 兼容接口 |
+| 论文概览 | 支持背景、研究问题、方法、实验设置、主要发现、结论和局限等速读概览字段 |
+| Agent 工作区 | 支持对话、执行轨迹、工具调用卡片、文献选择、元数据工具、重命名、打标签、分类和总结 |
+| Zotero 导入 | 支持从 `zotero.sqlite` 导入 Zotero 分类、标签和可用 PDF 附件 |
+| 备份 | 支持通过 WebDAV 备份和恢复文献库数据库、笔记数据库和本地 RAG SQLite 数据库 |
+| 软件更新 | 支持应用内检查更新、Windows 和 Linux 自动更新流程，以及 macOS 打开发布页手动下载 |
+| 主题 | 支持浅色和深色主题，面向桌面端长时间阅读优化 |
 
 ---
 
-## Architecture
+## 第一次使用流程
 
-PaperQuay uses Electron as its desktop host. The React renderer talks to a local Electron backend through IPC for filesystem access, persistence, Zotero import, PDF handling, and packaging.
+1. 打开设置，选择默认文献存储文件夹。
+2. 通过拖拽或导入按钮添加 PDF。
+3. 在导入确认窗口中检查或修改元数据。
+4. PaperQuay 会复制 PDF 到文献库存储文件夹，并写入本地文献库。
+5. 在左侧创建分类和子分类。
+6. 将文献拖入分类，添加标签，标记收藏，然后打开阅读。
+7. 打开 Notes 工作区，创建富文本笔记、连接相关想法，并把笔记和文献关联起来。
+8. 如需 AI 功能，在设置中配置 OpenAI 兼容接口和模型。
+9. 如需 MinerU 解析，在设置中配置 MinerU API key。
+10. 如果已有 Zotero 文库，可以在设置中选择 Zotero 数据目录并导入分类和 PDF。
 
-| Path                       | Responsibility                                                                                                    |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `src/`                     | React + TypeScript UI, feature modules, state, and frontend services                                              |
-| `src/features/literature/` | Local literature library UI, import workflow, category tree, and paper details                                    |
-| `src/features/reader/`     | Reader shell, linked reading workspace, settings, and AI reading actions                                          |
-| `src/features/pdf/`        | PDF rendering, overlays, annotation surface, and PDF-specific interactions                                        |
-| `src/features/blocks/`     | MinerU block rendering and structured content views                                                               |
-| `src/features/agent/`      | Agent chat UI, execution traces, tool cards, and library operation entry points                                   |
-| `src/features/notes/`      | Tiptap-based notes workspace, editor toolbar, custom autocomplete extensions, outline, and backlinks              |
-| `src/stores/useNotesStore.ts` | Zustand state for notes, tags, active note selection, autosave, and workspace errors                           |
-| `src/services/`            | Frontend bridges to Electron IPC commands                                                                         |
-| `src/platform/electron/`   | Renderer-side bridge wrappers for commands, events, window controls, and file-drop events                         |
-| `electron/`                | Electron main process, preload bridge, command backend, packaging helpers, and local persistence                   |
-
-The Notes editor uses the official Tiptap packages and was implemented against the upstream source at [ueberdosis/tiptap](https://github.com/ueberdosis/tiptap). The local `WikiLink`, `HashTag`, and `PaperReference` extensions follow the same architecture as Tiptap's official `Mention` node and `@tiptap/suggestion` plugin: a Tiptap inline node stores structured attributes, and the Suggestion plugin handles matching, rendering, keyboard navigation, and insertion. The editor also follows Tiptap's React NodeView examples for component blocks: custom blocks are real Tiptap nodes rendered through `ReactNodeViewRenderer`, with `NodeViewWrapper` and `NodeViewContent` separating non-editable controls from editable content.
+本地 RAG 的向量输入格式可在独立的 Embedding 设置中选择。已有配置默认保持“原样输入”；仅当向量模型要求区分检索问题与文献段落时，才启用“检索前缀（`query:` / `passage:`）”。切换格式会使用新的 RAG 索引键，需要按新格式重新建立文献索引。
 
 ---
 
-## Requirements
+## 技术架构
 
-- Node.js 18 or newer
-- Windows, macOS, or Linux
+PaperQuay 使用 Electron 作为桌面宿主。React 渲染进程通过 IPC 调用本地 Electron 后端，用于文件系统访问、本地持久化、Zotero 导入、PDF 处理和打包。
 
-Optional external services:
+| 路径 | 职责 |
+| ---- | ---- |
+| `src/` | React + TypeScript 前端界面、功能模块、状态和服务层 |
+| `src/features/literature/` | 本地文献库、导入流程、分类树和文献详情 |
+| `src/features/reader/` | 阅读器外壳、联动阅读工作区、设置和 AI 阅读动作 |
+| `src/features/pdf/` | PDF 渲染、覆盖层、批注表面和 PDF 交互 |
+| `src/features/blocks/` | MinerU 块渲染和结构化内容视图 |
+| `src/features/agent/` | Agent 对话界面、执行轨迹、工具卡片和文献库操作入口 |
+| `src/features/notes/` | 基于 Tiptap 的笔记工作区、编辑器工具栏、自定义补全扩展、大纲和反向链接 |
+| `src/stores/useNotesStore.ts` | 笔记、标签、当前笔记、自动保存和工作区错误状态管理 |
+| `src/services/` | 前端到 Electron IPC commands 的调用封装 |
+| `src/platform/electron/` | 渲染进程侧的命令、事件、窗口控制和文件拖放桥接封装 |
+| `electron/` | Electron 主进程、preload 桥接、命令后端、打包辅助和本地持久化 |
 
-- MinerU API key for cloud PDF structure parsing.
-- OpenAI-compatible API key for paper overviews, translation, QA, and agent tasks.
-- Internet access for OpenAlex and Crossref metadata enrichment.
-- Optional OpenAlex premium API key and `mailto` polite-pool email for steadier batch metadata lookup.
+笔记编辑器使用官方 Tiptap 包实现，并参考了上游仓库 [ueberdosis/tiptap](https://github.com/ueberdosis/tiptap) 的源码。本地的 `WikiLink`、`HashTag` 和 `PaperReference` 扩展沿用了官方 `Mention` 节点和 `@tiptap/suggestion` 插件的架构：由 Tiptap inline node 保存结构化属性，由 Suggestion 插件负责匹配、渲染、键盘导航和插入。编辑器的组件块也参考了 Tiptap 官方 React NodeView 示例：自定义块是通过 `ReactNodeViewRenderer` 渲染的真实 Tiptap 节点，并用 `NodeViewWrapper` 和 `NodeViewContent` 分离不可编辑控件和可编辑内容。
 
 ---
 
-## Development
+## 环境要求
 
-Install dependencies:
+- Node.js 18 或更高版本
+- Windows、macOS 或 Linux
+
+可选外部服务：
+
+- MinerU API key：用于云端 PDF 结构解析。
+- OpenAI 兼容 API key：用于论文概览、翻译、问答和 Agent。
+- 网络连接：用于 OpenAlex 和 Crossref 元数据补全。
+- 可选 OpenAlex Premium API key 和 `mailto` polite-pool 邮箱：用于更稳定的批量元数据查询。
+
+---
+
+## 本地开发
+
+安装依赖：
 
 ```bash
 npm install
 ```
 
-Start the desktop app in development mode:
+启动桌面开发模式：
 
 ```bash
 npm run dev
 ```
 
-Build the frontend only:
+只构建前端：
 
 ```bash
 npm run build
 ```
 
-Preview the built web assets:
+预览构建后的 Web 资源：
 
 ```bash
 npm run preview
 ```
 
-Build the desktop installer:
+构建桌面安装包：
 
 ```bash
 npm run electron:build
@@ -272,52 +272,52 @@ npm run electron:build
 
 ---
 
-## Zotero Compatibility
+## Zotero 兼容
 
-PaperQuay can read a local Zotero data directory that contains `zotero.sqlite`. During import it copies the Zotero database to a temporary read-only working file and does not modify your original Zotero database.
+PaperQuay 可以读取包含 `zotero.sqlite` 的 Zotero 本地数据目录。导入时会将 Zotero 数据库复制到临时只读工作文件中读取，不会修改 Zotero 原始数据库。
 
-Imported data enters PaperQuay's own local literature library. Zotero collections become local categories, and available local PDFs inside those collections are copied into the PaperQuay paper storage folder.
+导入结果会进入 PaperQuay 自己的本地文献库。Zotero collections 会变成本地分类，分类下可访问的本地 PDF 会复制到 PaperQuay 的文献存储文件夹中。
 
-Zotero is an optional compatibility source, not a required dependency. You can build a complete library directly inside PaperQuay without using Zotero.
-
----
-
-## Data and Privacy
-
-PaperQuay is local-first. The literature library, notes, and local RAG indexes are stored in SQLite databases, and imported PDFs are stored in the paper storage folder you configure.
-
-Optional WebDAV backup can upload the local library, notes, and RAG databases to the remote server you configure. API keys, local PDFs, parser outputs, and backups should stay out of source control.
-
-Do not commit local data, API keys, PDFs, parser outputs, notes databases, or backups. The `.gitignore` excludes common local runtime folders, SQLite databases, legacy JSON library data, API key files, build output, backup archives, and private PDFs by default.
+Zotero 是 PaperQuay 的兼容来源之一，不是必要依赖。你可以完全不使用 Zotero，直接在 PaperQuay 中建立自己的文献库。
 
 ---
 
-## Todo Roadmap
+## 数据与隐私
 
-These items are planned or still being deepened beyond the completed features above.
+PaperQuay 是本地优先。文献库、笔记和本地 RAG 索引保存在 SQLite 数据库，导入的 PDF 保存到你配置的文献存储文件夹中。
 
-- Better metadata extraction from PDF first pages.
-- DOI / arXiv / Semantic Scholar enrichment options.
-- Deeper two-way binding between PDF regions, annotations, and standalone notes.
-- Citation style generation and export.
-- Folder watching and automatic import queues.
-- RAG-based knowledge-base QA across papers and notes.
-- One-click survey generation and Word / LaTeX research draft generation.
-- Signed macOS release flow for smoother installation and update checks.
-- Optional cloud sync after the local-first model is stable.
+可选 WebDAV 备份会把本地文献库、笔记和 RAG 数据库上传到你配置的远端服务。API key、本地 PDF、解析产物和备份文件都不应该进入源码仓库。
+
+不要提交本地数据、API key、PDF、解析结果、笔记数据库或备份文件。当前 `.gitignore` 已默认排除运行时目录、SQLite 数据库、旧版 JSON 文献库数据、API key 文件、构建产物、备份包和私人 PDF。
 
 ---
 
-## Acknowledgements
+## 待做计划
 
-PaperQuay is also shaped by discussions, feedback, and shared ideas from the [LinuxDo community](https://linux.do/).
+下面这些是还没完全落地、或需要继续深化的方向；已经实现的笔记、阅读时间图、WebDAV 备份和软件更新能力已放在“当前功能”中。
 
-The Notes workspace builds on [Tiptap](https://github.com/ueberdosis/tiptap). Thanks to the Tiptap maintainers for the extensible editor framework and examples that help power PaperQuay's note-taking experience.
+- 从 PDF 首页提取更稳定的元数据。
+- 增加 DOI / arXiv / Semantic Scholar 补全来源。
+- 深化 PDF 区域、批注和独立笔记之间的双向绑定。
+- 增加引用格式生成和导出。
+- 增加文件夹监听和自动导入队列。
+- 增加跨论文和笔记的 RAG 知识库问答。
+- 支持一键生成综述、Word / LaTeX 草稿等研究写作能力。
+- 完善签名后的 macOS 发布流程，让安装和更新检查更顺畅。
+- 本地优先模型稳定后，再考虑可选云同步。
 
 ---
 
-## License
+## 致谢
 
-PaperQuay Community Edition is licensed under `AGPL-3.0-only`.
+PaperQuay 的不少设计与打磨，也受到 [LinuxDo 社区](https://linux.do/) 讨论、反馈和想法的启发。
 
-If you distribute modified versions or provide modified versions over a network, keep the license and copyright notices, mark your changes, and provide the corresponding source code under AGPL terms. For closed-source commercial licensing, commercial support, or brand-name permission, contact the maintainer separately. See [TRADEMARKS.md](./TRADEMARKS.md) for brand-use notes.
+PaperQuay 的笔记工作区构建在 [Tiptap](https://github.com/ueberdosis/tiptap) 之上。感谢 Tiptap 维护者提供可扩展的编辑器框架与示例，支撑 PaperQuay 的笔记体验。
+
+---
+
+## 许可证
+
+PaperQuay Community Edition 使用 `AGPL-3.0-only` 许可证。
+
+如果你分发修改后的版本，或把修改后的版本作为网络服务提供给用户，需要保留许可证和版权声明，说明修改内容，并按 AGPL 要求提供对应源代码。闭源商业授权、商业支持或品牌名称使用许可需要与维护者另行协商。品牌使用说明见 [TRADEMARKS.md](./TRADEMARKS.md)。
