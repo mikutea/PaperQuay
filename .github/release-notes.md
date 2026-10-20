@@ -17,9 +17,17 @@ Linux x64 packages and macOS Intel/Apple Silicon disk images are also provided. 
 
 ## Known limitation
 
-The startup database-path P2 reported in [#26](https://github.com/mikutea/PaperQuay/pull/26#discussion_r4214657505) remains unfixed and was explicitly accepted for this release. If another party can modify an adopted library while it is being opened, the SQLite path can be redirected outside that library. Use only library/profile directories that you control and that untrusted users cannot modify; accepting a library does not remove this risk.
+The startup database-path P2 reported in [#26](https://github.com/mikutea/PaperQuay/pull/26#discussion_r4214657505) remains unfixed in this prerelease. If another party can modify an adopted library while it is being opened, the SQLite path can be redirected outside that library. Use only library/profile directories that you control and that untrusted users cannot modify; accepting a library does not remove this risk.
 
-## Changes since app-v0.1.26-mikutea.12
+## Changes since app-v0.1.26-mikutea.13
+
+- Adds PDF highlights and underlines to the selection popup, supports activating the highlighter before selecting text, preserves the selection after adding a note, and restores the correct tool color palette ([#28](https://github.com/mikutea/PaperQuay/pull/28)).
+- Saves highlights and underlines in structured original and translated text. Marks remain available with selection translation disabled and stay attached to image captions, tables, and equations when switching display modes ([#28](https://github.com/mikutea/PaperQuay/pull/28)).
+- Prevents PDF page-count updates from restarting the same document load and avoids showing a previous document's page count after switching sources ([#29](https://github.com/mikutea/PaperQuay/pull/29)).
+- Matches Crossref metadata against five title candidates before accepting a DOI, year, or title ([#29](https://github.com/mikutea/PaperQuay/pull/29)).
+- Makes Chinese the default README while preserving the complete English version and language links ([#30](https://github.com/mikutea/PaperQuay/pull/30)).
+
+## Earlier changes in app-v0.1.26-mikutea.13 (since .12)
 
 - Remembers the selected library across restarts and updates, and provides consent-based recovery of an existing library instead of silently replacing it with an empty one ([#26](https://github.com/mikutea/PaperQuay/pull/26)).
 - Loads the complete paginated library, including collections over 1,000 papers, and preserves accurate counts and manual ordering after filtering ([#26](https://github.com/mikutea/PaperQuay/pull/26)).
@@ -71,6 +79,8 @@ Personal device-to-device library synchronization is intentionally not an applic
 
 ## Verification
 
+- PR #28 completed code review and validation, but its security review did not start and was waived for that merge by explicit maintainer authorization. This is not a completed security review.
+
 - The tagged commit is checked by the complete test suite, TypeScript, and production Vite build before publication.
 - Windows x64, Linux x64, macOS Intel, and macOS Apple Silicon packaging and packaged-runtime smoke verification are performed by the release workflow before publication.
 - Packaged-runtime smoke checks do not establish a successful installer upgrade or validate every existing library on a real device.
@@ -100,9 +110,17 @@ Windows x64 构建：
 
 ## 已知限制
 
-[#26](https://github.com/mikutea/PaperQuay/pull/26#discussion_r4214657505) 中的启动数据库路径 P2 尚未修复，本次发布已明确接受该风险。若其他人能在已有文库打开期间修改其目录，SQLite 路径可能被重定向到文库之外。请仅使用由你控制、且不可信用户无法修改的文库／配置目录；同意接入文库并不能消除这一风险。
+[#26](https://github.com/mikutea/PaperQuay/pull/26#discussion_r4214657505) 中的启动数据库路径 P2 在此预发布中仍未修复。若其他人能在已有文库打开期间修改其目录，SQLite 路径可能被重定向到文库之外。请仅使用由你控制、且不可信用户无法修改的文库／配置目录；同意接入文库并不能消除这一风险。
 
-## 相比 app-v0.1.26-mikutea.12 的更新
+## 相比 app-v0.1.26-mikutea.13 的更新
+
+- PDF 划词浮层可添加高亮和下划线，荧光笔支持先启用再选字；加入笔记后仍保留选区，并恢复正确的工具色板（[#28](https://github.com/mikutea/PaperQuay/pull/28)）。
+- 右栏原文和译文可保存高亮、下划线；关闭划词翻译后仍可标记，图片说明、表格和公式的标记在切换显示模式后保持对应文字范围（[#28](https://github.com/mikutea/PaperQuay/pull/28)）。
+- 修复 PDF 页数变化导致同一文档重复加载，以及切换来源后短暂显示旧页数的问题（[#29](https://github.com/mikutea/PaperQuay/pull/29)）。
+- Crossref 元数据先在五个候选中匹配题名，再接受 DOI、年份和题名，减少误取无关首条结果（[#29](https://github.com/mikutea/PaperQuay/pull/29)）。
+- 仓库默认 README 切换为中文，完整保留英文版及语言互链（[#30](https://github.com/mikutea/PaperQuay/pull/30)）。
+
+## .13 中已有的更新（相对 .12）
 
 - 重启和更新后记住所选文库，并在获得确认后恢复已有文库，避免静默替换为空文库（[#26](https://github.com/mikutea/PaperQuay/pull/26)）。
 - 完整加载分页文库，覆盖超过 1000 篇论文的集合，筛选后仍保持正确计数和手动排序（[#26](https://github.com/mikutea/PaperQuay/pull/26)）。
@@ -153,6 +171,8 @@ Windows x64 构建：
 两台个人设备之间的文献同步明确不是应用功能，也不包含在本软件二进制中。
 
 ## 验证
+
+- PR #28 已完成代码审查和验证；其安全审查未能启动，经维护者明确授权在该次合并中豁免，不记为安全审查通过。
 
 - 发布前对标签提交运行完整测试集、TypeScript 检查和生产版 Vite 构建。
 - Windows x64、Linux x64、macOS Intel 与 macOS Apple Silicon 打包及发行物运行时烟雾测试由发行工作流完成，并在发布前作为门禁。
