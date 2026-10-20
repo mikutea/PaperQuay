@@ -469,43 +469,47 @@ function TableContentComponent({
       />
 
       {showTranslatedOnly ? (
-        <MarkdownContent markdown={translatedText || fallbackMarkdown} scale={scale} />
+        <div data-text-mark-content="translation">
+          <MarkdownContent markdown={translatedText || fallbackMarkdown} scale={scale} />
+        </div>
       ) : (
         <>
-          {visibleCaptionText && sanitizedTableHtml ? (
-            <div
-              className="font-medium leading-6 text-slate-600 dark:text-[var(--pq-text-muted)]"
-              style={{
-                fontSize: `${14 * scale}px`,
-                lineHeight: `${24 * scale}px`,
-              }}
-            >
-              {captionMathMarkdown
-                ? <MarkdownContent markdown={captionMathMarkdown} scale={scale} />
-                : <InlineCaptionContent text={visibleCaptionText} />}
-            </div>
-          ) : null}
-
-          {sanitizedTableHtml ? (
-            <>
-              <div className="overflow-auto rounded-[20px] border border-slate-200/80 bg-white shadow-[0_10px_24px_rgba(15,23,42,0.05)] dark:border-[var(--pq-border)] dark:bg-[var(--pq-surface-1)] dark:shadow-[0_10px_24px_rgba(0,0,0,0.18)]">
-                <div
-                  className="mineru-table min-w-max p-4"
-                  style={{ fontSize: `${14 * scale}px` }}
-                  dangerouslySetInnerHTML={{ __html: sanitizedTableHtml }}
-                />
+          <div data-text-mark-content="original" className="space-y-4">
+            {visibleCaptionText && sanitizedTableHtml ? (
+              <div
+                className="font-medium leading-6 text-slate-600 dark:text-[var(--pq-text-muted)]"
+                style={{
+                  fontSize: `${14 * scale}px`,
+                  lineHeight: `${24 * scale}px`,
+                }}
+              >
+                {captionMathMarkdown
+                  ? <MarkdownContent markdown={captionMathMarkdown} scale={scale} />
+                  : <InlineCaptionContent text={visibleCaptionText} />}
               </div>
-              {tableOcrMarkdown ? <MarkdownContent markdown={tableOcrMarkdown} scale={scale} /> : null}
-              {tableFootnoteText ? (
-                <div className="leading-6 text-slate-600 dark:text-[var(--pq-text-muted)]"
-                  style={{ fontSize: `${14 * scale}px`, lineHeight: `${24 * scale}px` }}>
-                  <MarkdownContent markdown={tableFootnoteText} scale={scale} />
+            ) : null}
+
+            {sanitizedTableHtml ? (
+              <>
+                <div className="overflow-auto rounded-[20px] border border-slate-200/80 bg-white shadow-[0_10px_24px_rgba(15,23,42,0.05)] dark:border-[var(--pq-border)] dark:bg-[var(--pq-surface-1)] dark:shadow-[0_10px_24px_rgba(0,0,0,0.18)]">
+                  <div
+                    className="mineru-table min-w-max p-4"
+                    style={{ fontSize: `${14 * scale}px` }}
+                    dangerouslySetInnerHTML={{ __html: sanitizedTableHtml }}
+                  />
                 </div>
-              ) : null}
-            </>
-          ) : (
-            <MarkdownContent markdown={fallbackMarkdown} scale={scale} />
-          )}
+                {tableOcrMarkdown ? <MarkdownContent markdown={tableOcrMarkdown} scale={scale} /> : null}
+                {tableFootnoteText ? (
+                  <div className="leading-6 text-slate-600 dark:text-[var(--pq-text-muted)]"
+                    style={{ fontSize: `${14 * scale}px`, lineHeight: `${24 * scale}px` }}>
+                    <MarkdownContent markdown={tableFootnoteText} scale={scale} />
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <MarkdownContent markdown={fallbackMarkdown} scale={scale} />
+            )}
+          </div>
 
           {showBilingual && translatedText ? (
             <div className="rounded-[18px] border border-indigo-100 bg-indigo-50/70 px-4 py-3 dark:border-indigo-500/30 dark:bg-indigo-500/10">
@@ -513,7 +517,9 @@ function TableContentComponent({
                 <Languages className="h-3.5 w-3.5" strokeWidth={1.9} />
                 {l('译文', 'Translation')}
               </div>
-              <MarkdownContent markdown={translatedText} scale={scale} />
+              <div data-text-mark-content="translation">
+                <MarkdownContent markdown={translatedText} scale={scale} />
+              </div>
             </div>
           ) : null}
         </>
@@ -553,10 +559,12 @@ function ImageContentComponent({
         scale={scale}
       />
 
-      <MarkdownContent
-        markdown={showTranslatedOnly ? translatedText || fallbackMarkdown : fallbackMarkdown}
-        scale={scale}
-      />
+      <div data-text-mark-content={showTranslatedOnly ? 'translation' : 'original'}>
+        <MarkdownContent
+          markdown={showTranslatedOnly ? translatedText || fallbackMarkdown : fallbackMarkdown}
+          scale={scale}
+        />
+      </div>
 
       {showBilingual && translatedText ? (
         <div className="rounded-[18px] border border-indigo-100 bg-indigo-50/70 px-4 py-3 dark:border-indigo-500/30 dark:bg-indigo-500/10">
@@ -564,7 +572,9 @@ function ImageContentComponent({
             <Languages className="h-3.5 w-3.5" strokeWidth={1.9} />
             {l('译文', 'Translation')}
           </div>
-          <MarkdownContent markdown={translatedText} scale={scale} />
+          <div data-text-mark-content="translation">
+            <MarkdownContent markdown={translatedText} scale={scale} />
+          </div>
         </div>
       ) : null}
     </div>
@@ -726,7 +736,7 @@ function BlockItemComponent({
       ) : null}
 
       {block.type === 'title' ? (
-        <div className={cn('first:mt-0', compactMode ? 'mt-2' : 'mt-4')}>
+        <div data-text-mark-content={showTranslatedOnly ? 'translation' : 'original'} className={cn('first:mt-0', compactMode ? 'mt-2' : 'mt-4')}>
           <MarkdownContent
             markdown={
               effectiveMarkdown ||
@@ -768,11 +778,13 @@ function BlockItemComponent({
 
       {!['title', 'image', 'table'].includes(block.type) ? (
         <>
-          {block.type === 'equation' ? (
-            <EquationContent latex={mathText || markdown} scale={scale} />
-          ) : (
-            <MarkdownContent markdown={displayMarkdown} scale={scale} />
-          )}
+          <div data-text-mark-content={showTranslatedOnly && block.type !== 'equation' ? 'translation' : 'original'}>
+            {block.type === 'equation' ? (
+              <EquationContent latex={mathText || markdown} scale={scale} />
+            ) : (
+              <MarkdownContent markdown={displayMarkdown} scale={scale} />
+            )}
+          </div>
 
           {showBilingual && translatedText && block.type !== 'equation' ? (
             <div className="mt-4 rounded-[18px] border border-indigo-100 bg-indigo-50/70 px-4 py-3 dark:border-white/10 dark:bg-[var(--pq-surface-1)]">
@@ -780,7 +792,9 @@ function BlockItemComponent({
                 <Languages className="h-3.5 w-3.5" strokeWidth={1.9} />
                 {l('译文', 'Translation')}
               </div>
-              <MarkdownContent markdown={displayTranslatedMarkdown || ''} scale={scale} />
+              <div data-text-mark-content="translation">
+                <MarkdownContent markdown={displayTranslatedMarkdown || ''} scale={scale} />
+              </div>
             </div>
           ) : null}
         </>

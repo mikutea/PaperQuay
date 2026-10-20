@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReaderWorkspace from './ReaderWorkspace';
+import { updateBlockTextMarks } from '../blocks/blockTextMarks';
+import { PDF_ANNOTATION_COLOR_PRESETS } from '../pdf/annotationColors';
 import {
   captureSystemScreenshot,
   downloadRemoteFileToPath,
@@ -64,6 +66,8 @@ import {
 } from './paperTaskState';
 import type {
   AssistantPanelKey,
+  BlockTextMark,
+  TextMarkupStyle,
   DocumentChatAttachment,
   DocumentChatCitation,
   DocumentChatMessage,
@@ -421,6 +425,7 @@ function DocumentReaderTab({
     [],
   );
   const [annotations, setAnnotations] = useState<PaperAnnotation[]>([]);
+  const [blockTextMarks, setBlockTextMarks] = useState<BlockTextMark[]>([]);
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
   const [zoteroRelatedNotes, setZoteroRelatedNotes] = useState<ZoteroRelatedNote[]>([]);
   const [zoteroRelatedNotesLoading, setZoteroRelatedNotesLoading] = useState(false);
@@ -585,12 +590,14 @@ function DocumentReaderTab({
         paperSummarySourceKey,
         workspaceNoteMarkdown: '',
         annotations,
+        blockTextMarks,
         qaSessions: qaSessionsRef.current,
       });
     },
     [
       activeBlockId,
       annotations,
+      blockTextMarks,
       currentDocument,
       isActive,
       mineruPath,
@@ -2031,10 +2038,6 @@ function DocumentReaderTab({
   );
 
   const handleTextSelect = useCallback((selection: TextSelectionPayload, source: TextSelectionSource) => {
-    if (!settings.enableSelectionTranslation) {
-      return;
-    }
-
     const normalizedText = normalizeSelectedText(selection.text);
 
     if (!normalizedText) {
@@ -2080,6 +2083,8 @@ function DocumentReaderTab({
 
     setSelectedExcerpt({
       text: normalizedText,
+      pdfTextSelection: selection.pdfTextSelection,
+      blockTextRanges: selection.blockTextRanges,
       source,
       blockId: selection.blockId,
       createdAt: Date.now(),
@@ -2099,7 +2104,7 @@ function DocumentReaderTab({
         ? lRef.current('已选中 PDF 划词', 'Selected text from the PDF')
         : lRef.current('已选中结构块文本', 'Selected text from the structured block'),
     );
-  }, [resetSelectedExcerptTranslationState, settings.enableSelectionTranslation]);
+  }, [resetSelectedExcerptTranslationState]);
 
   const handleAppendSelectedExcerptToQa = useCallback(() => {
     if (!selectedExcerpt) {
@@ -2160,14 +2165,9 @@ function DocumentReaderTab({
   ]);
 
   useEffect(() => {
-    if (!selectedExcerpt) {
-      return;
-    }
-
     if (
-      selectedExcerpt.origin === 'pdf-block'
-        ? !settings.enablePdfParagraphTranslationPopover
-        : !settings.enableSelectionTranslation
+      selectedExcerpt?.origin === 'pdf-block' &&
+      !settings.enablePdfParagraphTranslationPopover
     ) {
       handleClearSelectedExcerpt();
     }
@@ -2175,7 +2175,6 @@ function DocumentReaderTab({
     handleClearSelectedExcerpt,
     selectedExcerpt,
     settings.enablePdfParagraphTranslationPopover,
-    settings.enableSelectionTranslation,
   ]);
 
   const legacyHandlePdfAnnotationSaveSuccess = useCallback((path: string) => {
@@ -2599,6 +2598,16 @@ function DocumentReaderTab({
     }
     return savedNote;
   }, [readerNoteEditorSourceId]);
+
+  const handleMarkBlockSelection = useCallback((style: TextMarkupStyle | 'clear', color: string) => {
+    if (!selectedExcerpt?.blockTextRanges?.length) return;
+    const markColor = style === 'underline'
+      ? PDF_ANNOTATION_COLOR_PRESETS.find((preset) => preset.highlightHex === color)?.editorHex ?? color
+      : color;
+    setBlockTextMarks((current) => updateBlockTextMarks(current, selectedExcerpt.blockTextRanges!, style, markColor));
+    window.getSelection()?.removeAllRanges();
+    setSelectedExcerpt(null);
+  }, [selectedExcerpt]);
 
   const handleAddSelectionToNote = useCallback(async (excerptOverride?: SelectedExcerpt) => {
     const excerpt = excerptOverride ?? selectedExcerpt;
@@ -3240,6 +3249,7 @@ function DocumentReaderTab({
     pendingHistoryActiveBlockIdRef.current = history?.lastActiveBlockId ?? null;
 
     if (!history) {
+      setBlockTextMarks([]);
       setReadingViewMode('dual-pane');
       return;
     }
@@ -3249,6 +3259,7 @@ function DocumentReaderTab({
     setPaperSummary(history.paperSummary);
     setPaperSummarySourceKey(history.paperSummarySourceKey);
     setAnnotations(history.annotations);
+    setBlockTextMarks(history.blockTextMarks ?? []);
 
     if (history.paperSummary || history.annotations.length > 0) {
       setStatusMessage(lRef.current('已恢复上次阅读记录', 'Restored the last reading history'));
@@ -3881,6 +3892,8 @@ function DocumentReaderTab({
         notes={notes}
         onAddSelectionToNote={() => void handleAddSelectionToNote()}
         annotations={annotations}
+        blockTextMarks={blockTextMarks}
+        onMarkBlockSelection={handleMarkBlockSelection}
         selectedAnnotationId={selectedAnnotationId}
         onSelectAnnotation={handleSelectAnnotation}
         paperSummary={paperSummary}
@@ -3920,6 +3933,8 @@ function DocumentReaderTab({
         selectedExcerptTranslation={selectedExcerptTranslation}
         selectedExcerptTranslating={selectedExcerptTranslating}
         selectedExcerptError={selectedExcerptError}
+        selectionTranslationEnabled={selectedExcerpt?.origin === 'pdf-block'
+          ? settings.enablePdfParagraphTranslationPopover : settings.enableSelectionTranslation}
         autoTranslateSelection={settings.enableSelectionTranslation && settings.autoTranslateSelection}
         onAppendSelectedExcerptToQa={handleAppendSelectedExcerptToQa}
         onTranslateSelectedExcerpt={() => void handleTranslateSelectedExcerpt()}

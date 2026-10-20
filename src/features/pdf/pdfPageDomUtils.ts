@@ -2,6 +2,7 @@ import type { ClientAnchorRect, TextSelectionPayload, PositionedMineruBlock } fr
 import { bboxToRect, type PageSize } from '../../utils/bbox.ts';
 import { normalizeSelectionText } from '../../utils/text.ts';
 import { resolveBBoxBaseSize } from './pdfViewerUtils.ts';
+import { capturePdfTextSelection } from './pdfTextMarkup.ts';
 
 export interface PageHostState {
   element: HTMLDivElement;
@@ -179,6 +180,7 @@ export function getScopedSelectionPayload(container: HTMLElement | null): TextSe
 
   return {
     text,
+    pdfTextSelection: capturePdfTextSelection(container, range),
     anchorClientX,
     anchorClientY,
     anchorClientRect,

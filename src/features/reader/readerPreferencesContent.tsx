@@ -1109,8 +1109,8 @@ export function ReaderPreferencesContent({
             <ToggleRow
               title={l('启用划词翻译浮层', 'Enable Selection Translation Popover')}
               description={l(
-                '在 PDF 或结构化正文中选中文本后，显示划词翻译浮层和相关操作。',
-                'Show the selection translation popover and related actions after selecting text in the PDF or structured text.',
+                '在选中文字的菜单中显示翻译。关闭后仍可使用高亮、下划线和摘录操作。',
+                'Show translation in the text selection menu. Highlight, underline, and excerpt actions remain available when disabled.',
               )}
               checked={settings.enableSelectionTranslation}
               onChange={(checked) => onSettingChange('enableSelectionTranslation', checked)}

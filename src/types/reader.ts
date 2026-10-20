@@ -418,8 +418,32 @@ export type TextSelectionPlacement = "top" | "bottom";
 
 export type SelectedExcerptOrigin = "text-selection" | "pdf-block";
 
+export type TextMarkupStyle = "highlight" | "underline";
+
+export interface PdfTextSelection {
+  pageIndex: number;
+  /** Fractions of the rendered page, retained when the browser selection loses focus. */
+  rects: Array<{ x: number; y: number; width: number; height: number }>;
+}
+
+export interface BlockTextRange {
+  blockId: string;
+  contentKey: string;
+  start: number;
+  end: number;
+  text: string;
+}
+
+export interface BlockTextMark extends BlockTextRange {
+  id: string;
+  style: TextMarkupStyle;
+  color: string;
+}
+
 export interface TextSelectionPayload {
   text: string;
+  pdfTextSelection?: PdfTextSelection[];
+  blockTextRanges?: BlockTextRange[];
   blockId?: string;
   anchorClientX: number;
   anchorClientY: number;
@@ -437,6 +461,8 @@ export interface TextSelectionPayload {
 
 export interface SelectedExcerpt {
   text: string;
+  pdfTextSelection?: PdfTextSelection[];
+  blockTextRanges?: BlockTextRange[];
   source: TextSelectionSource;
   origin?: SelectedExcerptOrigin;
   blockId?: string;
@@ -613,6 +639,7 @@ export interface PaperHistoryRecord {
   paperSummarySourceKey: string;
   workspaceNoteMarkdown: string;
   annotations: PaperAnnotation[];
+  blockTextMarks?: BlockTextMark[];
   qaSessions: DocumentChatSession[];
   qaMessages?: DocumentChatMessage[];
 }

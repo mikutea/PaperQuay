@@ -27,10 +27,9 @@ import {
 
 type Localize = (zh: string, en: string) => string;
 
-export type AnnotationEditorTool = 'none' | 'freetext' | 'ink';
+export type AnnotationEditorTool = 'none' | 'highlight' | 'freetext' | 'ink';
 
 type ToolbarToolKey = 'select' | 'highlight' | 'freetext' | 'ink';
-type EditableToolbarToolKey = Extract<ToolbarToolKey, 'freetext' | 'ink'>;
 
 interface ToolbarTool {
   key: ToolbarToolKey;
@@ -39,7 +38,6 @@ interface ToolbarTool {
 }
 
 interface PdfViewerToolbarProps {
-  activeColorTool: PdfAnnotationColorTool;
   annotationColors: PdfAnnotationToolColors;
   canShowReadingHeatmapBar: boolean;
   currentPage: number;
@@ -51,7 +49,6 @@ interface PdfViewerToolbarProps {
   hideToolbar: boolean;
   l: Localize;
   loading: boolean;
-  onActiveColorToolChange: Dispatch<SetStateAction<PdfAnnotationColorTool>>;
   onAnnotationToolColorChange: (tool: PdfAnnotationColorTool, value: string) => void;
   onCreateHighlight: () => void | Promise<void>;
   onDeleteSelected: () => void;
@@ -73,7 +70,6 @@ interface PdfViewerToolbarProps {
 }
 
 export function PdfViewerToolbar({
-  activeColorTool,
   annotationColors,
   canShowReadingHeatmapBar,
   currentPage,
@@ -85,7 +81,6 @@ export function PdfViewerToolbar({
   hideToolbar,
   l,
   loading,
-  onActiveColorToolChange,
   onAnnotationToolColorChange,
   onCreateHighlight,
   onDeleteSelected,
@@ -105,7 +100,10 @@ export function PdfViewerToolbar({
   translationProgressTotal,
   zoomLabel,
 }: PdfViewerToolbarProps) {
+  const activeColorTool = editorTool === 'none' ? 'highlight' : editorTool;
   const activeToolColor = annotationColors[activeColorTool];
+  const colorToolLabel = activeColorTool === 'highlight' ? l('高亮颜色', 'Highlight color')
+    : activeColorTool === 'freetext' ? l('文字颜色', 'Text color') : l('手写颜色', 'Ink color');
   const translationProgressRatio = getPercentProgress(
     translationProgressCompleted,
     translationProgressTotal,
@@ -135,7 +133,7 @@ export function PdfViewerToolbar({
 
   const getToolLabel = (key: ToolbarToolKey) => {
     if (key === 'select') return l('选择联动', 'Select & Link');
-    if (key === 'highlight') return l('高亮', 'Highlight');
+    if (key === 'highlight') return l('高亮：点击后拖选文字，也可先选文字再点击', 'Highlight: select this tool and drag over text, or highlight selected text');
     if (key === 'freetext') return l('文本批注', 'Text Annotation');
     return l('手写批注', 'Ink Annotation');
   };
@@ -151,10 +149,11 @@ export function PdfViewerToolbar({
             <button
               key={item.key}
               type="button"
+              onMouseDown={(event) => event.preventDefault()}
               onClick={() => {
                 if (item.key === 'highlight') {
-                  onActiveColorToolChange('highlight');
-                  void onCreateHighlight();
+                  if (hasLiveTextSelection && editorTool === 'none') void onCreateHighlight();
+                  else onEditorToolChange((current) => current === 'highlight' ? 'none' : 'highlight');
                   return;
                 }
 
@@ -163,22 +162,17 @@ export function PdfViewerToolbar({
                   return;
                 }
 
-                const editableTool = item.key as EditableToolbarToolKey;
-                onActiveColorToolChange(editableTool);
+                const editableTool = item.key;
                 onEditorToolChange((current) => (current === editableTool ? 'none' : editableTool));
               }}
-              disabled={
-                item.key === 'highlight'
-                  ? !hasLiveTextSelection || editorTool !== 'none' || loading || saving
-                  : loading || saving
-              }
+              disabled={loading || saving}
+              aria-pressed={item.key === 'select' ? editorTool === 'none' : editorTool === item.key}
               title={getToolLabel(item.key)}
               aria-label={getToolLabel(item.key)}
               className={cn(
                 'inline-flex h-10 w-10 items-center justify-center rounded-xl border text-slate-500 transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-55',
                 ((item.key === 'select' && editorTool === 'none') ||
                   (item.key !== 'select' &&
-                    item.key !== 'highlight' &&
                     editorTool === item.key))
                   ? 'border-indigo-200 bg-white text-indigo-600 shadow-[0_8px_18px_rgba(79,70,229,0.12)] dark:border-indigo-400/30 dark:bg-[var(--pq-surface-2)] dark:text-indigo-400 dark:shadow-[0_8px_18px_rgba(79,70,229,0.18)]'
                   : 'border-transparent bg-transparent hover:border-slate-200 hover:bg-white hover:text-slate-800 dark:hover:border-white/15 dark:hover:bg-[var(--pq-surface-2)] dark:hover:text-[var(--pq-text)]',
@@ -190,6 +184,7 @@ export function PdfViewerToolbar({
         </div>
 
         <div className="inline-flex max-w-full flex-wrap items-center gap-2 rounded-2xl border border-slate-200 bg-white/86 px-2.5 py-2 dark:border-white/10 dark:bg-[var(--pq-surface-1)]">
+          <span className="text-xs text-slate-500 dark:text-[var(--pq-text-muted)]">{colorToolLabel}</span>
           <div className="flex flex-wrap items-center gap-1.5">
             {PDF_ANNOTATION_COLOR_PRESETS.map((preset) => {
               const colorValue = getPdfAnnotationColorValue(preset, activeColorTool);
@@ -200,6 +195,7 @@ export function PdfViewerToolbar({
                 <button
                   key={`${activeColorTool}-${preset.id}`}
                   type="button"
+                  onMouseDown={(event) => event.preventDefault()}
                   onClick={() => onAnnotationToolColorChange(activeColorTool, colorValue)}
                   className={cn(
                     'h-6 w-6 rounded-full border-2 transition-all duration-200',
@@ -208,18 +204,20 @@ export function PdfViewerToolbar({
                       : 'border-white hover:scale-105 hover:border-slate-300 dark:border-[var(--pq-border)] dark:hover:border-[var(--pq-border-strong)]',
                   )}
                   style={{ backgroundColor: colorValue }}
-                  title={colorLabel}
-                  aria-label={colorLabel}
+                  title={`${colorToolLabel} · ${colorLabel}`}
+                  aria-label={`${colorToolLabel} · ${colorLabel}`}
+                  aria-pressed={active}
                 />
               );
             })}
           </div>
           <label
             className="inline-flex cursor-pointer items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-600 transition hover:border-slate-300 hover:bg-white dark:border-white/10 dark:bg-[var(--pq-surface-1)] dark:text-[var(--pq-text-muted)] dark:hover:border-white/15 dark:hover:bg-[var(--pq-surface-2)]"
-            title={l('Custom color', 'Custom color')}
+            title={`${colorToolLabel} · ${l('自定义颜色', 'Custom color')}`}
           >
             <input
               type="color"
+              aria-label={`${colorToolLabel} · ${l('自定义颜色', 'Custom color')}`}
               value={activeToolColor}
               onChange={(event) => onAnnotationToolColorChange(activeColorTool, event.target.value)}
               className="sr-only"
@@ -228,7 +226,7 @@ export function PdfViewerToolbar({
               className="h-4 w-4 rounded-full border border-white shadow-sm"
               style={{ backgroundColor: activeToolColor }}
             />
-            {l('Custom', 'Custom')}
+            {l('自定义', 'Custom')}
           </label>
         </div>
 

@@ -31,6 +31,8 @@ import type {
   PdfReadingHeatmap,
   PdfScrollPosition,
   PdfSource,
+  PdfTextSelection,
+  TextMarkupStyle,
   PositionedMineruBlock,
   TextSelectionPayload,
 } from '../../types/reader';
@@ -47,10 +49,11 @@ import { getFileNameFromPath } from '../../utils/text';
 import {
   applyPdfAnnotationToolColors,
   buildPdfJsHighlightColorOptions,
-  loadPdfAnnotationToolColors,
-  persistPdfAnnotationToolColors,
   type PdfAnnotationColorTool,
+  type PdfAnnotationToolColors,
+  PDF_ANNOTATION_COLOR_PRESETS,
 } from './annotationColors';
+import { buildPdfTextMarkup } from './pdfTextMarkup';
 import { buildPdfJsDocumentInit, getPdfSourceSignature, type PdfJsDocumentInit } from './pdfDocumentSource';
 import { PdfPageOverlay } from './PdfPageOverlay';
 import { PdfReadingHeatmapBar } from './PdfReadingHeatmapBar';
@@ -119,6 +122,10 @@ type BBoxPageSizeSource = Pick<
 > | null;
 
 interface PdfViewerProps {
+  annotationColors: PdfAnnotationToolColors;
+  onAnnotationToolColorChange: (tool: PdfAnnotationColorTool, value: string) => void;
+  markupRequest: { id: number; style: TextMarkupStyle; selection: PdfTextSelection[] } | null;
+  onMarkupApplied: () => void;
   source: PdfSource;
   pdfData: Uint8Array | null;
   scrollPosition?: PdfScrollPosition | null;
@@ -154,6 +161,8 @@ interface PdfViewerProps {
 
 function resolveToolMode(mode: AnnotationEditorTool) {
   switch (mode) {
+    case 'highlight':
+      return AnnotationEditorType.HIGHLIGHT;
     case 'freetext':
       return AnnotationEditorType.FREETEXT;
     case 'ink':
@@ -206,6 +215,10 @@ function setBooleanStateIfChanged(
 }
 
 function PdfViewer({
+  annotationColors,
+  onAnnotationToolColorChange,
+  markupRequest,
+  onMarkupApplied,
   source,
   pdfData,
   scrollPosition = null,
@@ -255,6 +268,9 @@ function PdfViewer({
   const observedPageElementsRef = useRef<Set<HTMLDivElement>>(new Set());
   const pointerStartRef = useRef<{ x: number; y: number } | null>(null);
   const lastSelectionRef = useRef<{ text: string; emittedAt: number } | null>(null);
+  const savedTextSelectionRef = useRef<PdfTextSelection[]>([]);
+  const handledMarkupRequestRef = useRef(0);
+  const creatingMarkupRef = useRef(false);
   const lRef = useRef(l);
   const activeRef = useRef(active);
   const pageSizesRef = useRef<Record<number, PageSize>>({});
@@ -296,8 +312,6 @@ function PdfViewer({
   const [saveMessage, setSaveMessage] = useState('');
   const [hasSelectedEditor, setHasSelectedEditor] = useState(false);
   const [hasLiveTextSelection, setHasLiveTextSelection] = useState(false);
-  const [annotationColors, setAnnotationColors] = useState(() => loadPdfAnnotationToolColors());
-  const [activeColorTool, setActiveColorTool] = useState<PdfAnnotationColorTool>('highlight');
   const [thumbnailsCollapsed, setThumbnailsCollapsed] = useState(() =>
     loadStoredBoolean(PDF_THUMBNAILS_COLLAPSED_STORAGE_KEY, true),
   );
@@ -547,24 +561,6 @@ function PdfViewer({
       return originalPage;
     },
     [requestPageSize],
-  );
-
-  const updateAnnotationToolColor = useCallback(
-    (tool: PdfAnnotationColorTool, value: string) => {
-      const nextColor = value.trim().toLowerCase();
-
-      setAnnotationColors((current) => {
-        if (current[tool] === nextColor) {
-          return current;
-        }
-
-        return {
-          ...current,
-          [tool]: nextColor,
-        };
-      });
-    },
-    [],
   );
 
   const syncPageHosts = useCallback(() => {
@@ -1233,12 +1229,12 @@ function PdfViewer({
     }
   }, []);
 
-  const waitForAnnotationEditorMode = useCallback((mode: number, timeout = 240) => {
-    return new Promise<void>((resolve) => {
+  const waitForAnnotationEditorMode = useCallback((mode: number, timeout = 5000) => {
+    return new Promise<void>((resolve, reject) => {
       const pdfViewer = pdfViewerRef.current;
       const eventBus = eventBusRef.current;
 
-      if (pdfViewer?.annotationEditorMode?.mode === mode || !eventBus?.on || !eventBus?.off) {
+      if (pdfViewer?.annotationEditorMode === mode || !eventBus?.on || !eventBus?.off) {
         resolve();
         return;
       }
@@ -1259,7 +1255,11 @@ function PdfViewer({
         window.clearTimeout(timerId);
         resolve();
       };
-      const timerId = window.setTimeout(finish, timeout);
+      const timerId = window.setTimeout(() => {
+        eventBus.off('annotationeditormodechanged', handleModeChanged);
+        settled = true;
+        reject(new Error(lRef.current('PDF 批注工具尚未就绪，请重试。', 'PDF annotation tools are not ready. Please retry.')));
+      }, timeout);
 
       eventBus.on('annotationeditormodechanged', handleModeChanged);
     });
@@ -1278,6 +1278,7 @@ function PdfViewer({
     }
 
     const now = Date.now();
+    savedTextSelectionRef.current = selection.pdfTextSelection ?? [];
 
     if (
       lastSelectionRef.current &&
@@ -1349,10 +1350,11 @@ function PdfViewer({
     });
   }, []);
 
-  const handleCreatePdfHighlight = useCallback(async () => {
+  const handleCreatePdfMarkup = useCallback(async (style: TextMarkupStyle, selection: PdfTextSelection[]) => {
     const pdfViewer = pdfViewerRef.current;
     const uiManager = annotationEditorUiManagerRef.current;
 
+    if (creatingMarkupRef.current) return;
     if (!pdfViewer || !uiManager) {
       setDocumentError(
         lRef.current('PDF annotation tools are not ready yet.', 'PDF annotation tools are not ready yet.'),
@@ -1360,19 +1362,21 @@ function PdfViewer({
       return;
     }
 
-    if (!selectionBelongsToContainer(containerRef.current) || !hasActiveTextSelection()) {
+    if (!selection.length) {
       setDocumentError(
         lRef.current(
-          'Select text in the PDF before creating a highlight.',
-          'Select text in the PDF before creating a highlight.',
+          '请先在 PDF 中拖选需要标记的文字。',
+          'Select text in the PDF before adding a mark.',
         ),
       );
       return;
     }
 
+    const entries: Array<{ layer: any; editor: any }> = [];
+    let applied = false;
     try {
+      creatingMarkupRef.current = true;
       setDocumentError('');
-      setActiveColorTool('highlight');
       clearSelectionCommitTimer();
       clearPendingBlockSelect();
 
@@ -1381,31 +1385,64 @@ function PdfViewer({
         isFromKeyboard: false,
       };
       await waitForAnnotationEditorMode(AnnotationEditorType.HIGHLIGHT);
-
-      uiManager.highlightSelection('paperquay_toolbar');
+      if (pdfViewerRef.current !== pdfViewer) return;
+      const color = style === 'highlight' ? annotationColors.highlight
+        : PDF_ANNOTATION_COLOR_PRESETS.find((preset) => preset.highlightHex === annotationColors.highlight)?.editorHex ?? annotationColors.highlight;
+      const targets = selection.map((selectedPage) => {
+        const pageView = pdfViewer.getPageView(selectedPage.pageIndex);
+        const layer = pageView?.annotationEditorLayer?.annotationEditorLayer;
+        if (!layer) throw new Error(lRef.current('请将所选页面滚动到可见位置后重试。', 'Scroll the selected pages into view and retry.'));
+        return { selectedPage, pageView, layer };
+      });
+      for (const { selectedPage, pageView, layer } of targets) {
+        const editor = await layer.deserialize(buildPdfTextMarkup(selectedPage, pageView.viewport, style, color, AnnotationEditorType));
+        if (!editor) throw new Error(lRef.current('无法创建文字标记。', 'Unable to create the text mark.'));
+        entries.push({ layer, editor });
+      }
+      if (pdfViewerRef.current !== pdfViewer) return;
+      uiManager.addCommands({
+        cmd: () => { for (const { layer, editor } of entries) layer.addOrRebuild(editor); },
+        undo: () => { for (const { editor } of entries) editor.remove(); },
+        mustExec: true,
+      });
+      applied = true;
+      window.getSelection()?.removeAllRanges();
+      savedTextSelectionRef.current = [];
+      lastSelectionRef.current = null;
+      onMarkupApplied();
 
       pdfViewer.annotationEditorMode = {
-        mode: AnnotationEditorType.NONE,
+        mode: resolveToolMode(editorToolRef.current),
         isFromKeyboard: false,
       };
-      await waitForAnnotationEditorMode(AnnotationEditorType.NONE);
+      await waitForAnnotationEditorMode(resolveToolMode(editorToolRef.current));
       setBooleanStateIfChanged(setHasLiveTextSelection, false);
-    } catch (highlightError) {
+    } catch (markupError) {
       setDocumentError(
-        highlightError instanceof Error
-          ? highlightError.message
-          : lRef.current('创建 PDF 高亮失败', 'Failed to create the PDF highlight'),
+        markupError instanceof Error
+          ? markupError.message
+          : lRef.current('创建 PDF 标记失败', 'Failed to create the PDF mark'),
       );
+    } finally {
+      creatingMarkupRef.current = false;
+      if (pdfViewerRef.current === pdfViewer) {
+        if (!applied) for (const { editor } of entries) editor.remove();
+        pdfViewer.annotationEditorMode = { mode: resolveToolMode(editorToolRef.current), isFromKeyboard: false };
+      }
     }
   }, [
     clearPendingBlockSelect,
     clearSelectionCommitTimer,
     waitForAnnotationEditorMode,
+    annotationColors.highlight,
+    onMarkupApplied,
   ]);
 
   useEffect(() => {
-    persistPdfAnnotationToolColors(annotationColors);
-  }, [annotationColors]);
+    if (!markupRequest || markupRequest.id === handledMarkupRequestRef.current) return;
+    handledMarkupRequestRef.current = markupRequest.id;
+    void handleCreatePdfMarkup(markupRequest.style, markupRequest.selection);
+  }, [markupRequest, handleCreatePdfMarkup]);
 
   useEffect(() => {
     localStorage.setItem(PDF_THUMBNAILS_COLLAPSED_STORAGE_KEY, String(thumbnailsCollapsed));
@@ -1603,6 +1640,7 @@ function PdfViewer({
     };
 
     if (editorTool !== 'none') {
+      savedTextSelectionRef.current = [];
       clearSelectionCommitTimer();
       clearPendingBlockSelect();
       window.getSelection()?.removeAllRanges();
@@ -1646,6 +1684,7 @@ function PdfViewer({
 
   useEffect(() => {
     setLoadedPageCount(null);
+    savedTextSelectionRef.current = [];
     pageSizesRef.current = {};
     pendingPageSizeRequestsRef.current.clear();
     setPageSizes({});
@@ -2079,6 +2118,7 @@ function PdfViewer({
       selectionStartedInsideRef.current = isEventInsideContainer(event);
 
       if (selectionStartedInsideRef.current) {
+        savedTextSelectionRef.current = [];
         clearPendingBlockSelect();
       }
     };
@@ -2118,7 +2158,7 @@ function PdfViewer({
       const activeSelectionInside = selectionInside && hasActiveTextSelection();
       setBooleanStateIfChanged(
         setHasLiveTextSelection,
-        activeSelectionInside,
+        activeSelectionInside || savedTextSelectionRef.current.length > 0,
       );
 
       if (editorToolRef.current !== 'none') {
@@ -2631,7 +2671,6 @@ function PdfViewer({
       data-soft-shadow={softPageShadow ? 'true' : 'false'}
     >
       <PdfViewerToolbar
-        activeColorTool={activeColorTool}
         annotationColors={annotationColors}
         canShowReadingHeatmapBar={canShowReadingHeatmapBar}
         currentPage={currentPage}
@@ -2643,9 +2682,8 @@ function PdfViewer({
         hideToolbar={hideToolbar}
         l={l}
         loading={loading}
-        onActiveColorToolChange={setActiveColorTool}
-        onAnnotationToolColorChange={updateAnnotationToolColor}
-        onCreateHighlight={handleCreatePdfHighlight}
+        onAnnotationToolColorChange={onAnnotationToolColorChange}
+        onCreateHighlight={() => handleCreatePdfMarkup('highlight', savedTextSelectionRef.current)}
         onDeleteSelected={handleDeleteSelected}
         onEditorToolChange={setEditorTool}
         onSave={handleSave}

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type RefObject } from 'react
 import { Minimize2 } from 'lucide-react';
 import BlockViewer from '../blocks/BlockViewer';
 import PdfViewer from '../pdf/PdfViewer';
+import { loadPdfAnnotationToolColors, persistPdfAnnotationToolColors, type PdfAnnotationColorTool } from '../pdf/annotationColors';
 import { useLocaleText } from '../../i18n/uiLanguage';
 import { ReaderWorkspaceOverview } from './readerWorkspaceOverview';
 import { ReaderWorkspaceHeader } from './readerWorkspaceHeader';
@@ -13,6 +14,9 @@ import {
 import type { Note } from '../../types/notes';
 import type {
   DocumentChatAttachment,
+  BlockTextMark,
+  PdfTextSelection,
+  TextMarkupStyle,
   DocumentChatCitation,
   DocumentChatMessage,
   DocumentChatRenderMode,
@@ -108,6 +112,8 @@ interface ReaderWorkspaceProps {
   notes: Note[];
   onAddSelectionToNote: () => void;
   annotations: PaperAnnotation[];
+  blockTextMarks: BlockTextMark[];
+  onMarkBlockSelection: (style: TextMarkupStyle | 'clear', color: string) => void;
   selectedAnnotationId: string | null;
   onSelectAnnotation: (annotationId: string) => void;
   paperSummary: PaperSummary | null;
@@ -147,6 +153,7 @@ interface ReaderWorkspaceProps {
   selectedExcerptTranslation: string;
   selectedExcerptTranslating: boolean;
   selectedExcerptError: string;
+  selectionTranslationEnabled: boolean;
   autoTranslateSelection: boolean;
   onAppendSelectedExcerptToQa: () => void;
   onTranslateSelectedExcerpt: () => void;
@@ -162,6 +169,12 @@ interface ReaderWorkspaceProps {
 
 function ReadingStage(props: ReaderWorkspaceProps & { immersiveReading: boolean }) {
   const l = useLocaleText();
+  const [annotationColors, setAnnotationColors] = useState(loadPdfAnnotationToolColors);
+  const [markupRequest, setMarkupRequest] = useState<{ id: number; style: TextMarkupStyle; selection: PdfTextSelection[] } | null>(null);
+  const updateAnnotationToolColor = useCallback((tool: PdfAnnotationColorTool, value: string) => {
+    setAnnotationColors((current) => ({ ...current, [tool]: value.toLowerCase() }));
+  }, []);
+  useEffect(() => persistPdfAnnotationToolColors(annotationColors), [annotationColors]);
   const {
     blocks,
     translations,
@@ -326,6 +339,10 @@ function ReadingStage(props: ReaderWorkspaceProps & { immersiveReading: boolean 
             }}
           >
             <PdfViewer
+              annotationColors={annotationColors}
+              onAnnotationToolColorChange={updateAnnotationToolColor}
+              markupRequest={markupRequest}
+              onMarkupApplied={onClearSelectedExcerpt}
               source={pdfSource}
               pdfData={pdfData}
               scrollPosition={pdfScrollPosition}
@@ -379,6 +396,7 @@ function ReadingStage(props: ReaderWorkspaceProps & { immersiveReading: boolean 
 
               <section data-tour="block-translation" className="min-h-0 min-w-0 flex-1 bg-[#f7f9fc] transition-all duration-300">
                 <BlockViewer
+                  textMarks={props.blockTextMarks}
                   blocks={blocks}
                   mineruPath={mineruPath}
                   translations={translations}
@@ -408,11 +426,21 @@ function ReadingStage(props: ReaderWorkspaceProps & { immersiveReading: boolean 
       </div>
 
       <SelectionQuickActions
+        highlightColor={annotationColors.highlight}
+        onHighlightColorChange={(color) => updateAnnotationToolColor('highlight', color)}
+        onMarkSelection={(style) => {
+          if (selectedExcerpt?.source === 'pdf' && style !== 'clear') {
+            setMarkupRequest((current) => ({ id: (current?.id ?? 0) + 1, style, selection: selectedExcerpt.pdfTextSelection ?? [] }));
+          } else {
+            props.onMarkBlockSelection(style, annotationColors.highlight);
+          }
+        }}
         selectedExcerpt={selectedExcerpt}
         selectedExcerptTranslation={selectedExcerptTranslation}
         selectedExcerptTranslating={selectedExcerptTranslating}
         selectedExcerptError={selectedExcerptError}
         aiConfigured={aiConfigured}
+        translationEnabled={props.selectionTranslationEnabled}
         autoTranslateSelection={props.autoTranslateSelection}
         onAppendSelectedExcerptToQa={onAppendSelectedExcerptToQa}
         onAddSelectionToNote={onAddSelectionToNote}

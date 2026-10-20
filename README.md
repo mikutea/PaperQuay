@@ -104,6 +104,10 @@ Notes are designed to stay inline with the research workflow. You can connect id
 
 PaperQuay is designed not only for deep reading, but also for screening large numbers of papers quickly. In the overview panel, each paper can directly surface AI-generated fields such as background, research question, method, experiment setup, key findings, conclusions, and limitations.
 
+### Text Markup
+
+Select text in the PDF or structured reading pane to choose a color and add a highlight or underline from the selection popup. You can also activate the PDF highlighter before dragging over text. The palette labels identify highlight, text, and ink colors. Use **Export Annotated PDF** to save PDF marks (underlines are exported as thin highlight annotations). Marks in the structured original and translated text are saved with reading history; select their text again to clear them.
+
 ### Reading Time Visibility
 
 PaperQuay records time spent across PDF positions and surfaces it as reading heat previews in the library and a dedicated reading-time chart in the paper detail panel. This makes it easier to see which parts of a paper have actually received attention.

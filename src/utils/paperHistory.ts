@@ -8,6 +8,8 @@ import type {
   PdfScrollPosition,
 } from '../types/reader';
 
+import { normalizeBlockTextMarks } from '../features/blocks/blockTextMarks.ts';
+
 const PAPER_HISTORY_STORAGE_KEY = 'paper-reader-paper-history-v1';
 const PAPER_HISTORY_VERSION = 6;
 const PDF_READING_HEATMAP_BIN_COUNT = 120;
@@ -286,6 +288,7 @@ export function loadPaperHistoryMap(): Record<string, PaperHistoryRecord> {
         ),
         workspaceNoteMarkdown,
         annotations,
+        blockTextMarks: normalizeBlockTextMarks(value.blockTextMarks),
         qaSessions,
         qaMessages: undefined,
       };
@@ -318,6 +321,7 @@ export function savePaperHistory(record: PaperHistoryRecord): PaperHistoryRecord
     pdfReadingHeatmaps: normalizePdfReadingHeatmaps(record.pdfReadingHeatmaps),
     workspaceNoteMarkdown: record.workspaceNoteMarkdown,
     annotations: normalizedAnnotations,
+    blockTextMarks: normalizeBlockTextMarks(record.blockTextMarks),
     qaSessions: normalizedSessions,
     qaMessages: undefined,
   };

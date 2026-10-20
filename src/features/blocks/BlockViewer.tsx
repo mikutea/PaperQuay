@@ -1,5 +1,6 @@
 import {
   memo,
+  useId,
   useCallback,
   useEffect,
   useMemo,
@@ -23,6 +24,7 @@ import { useLocaleText } from '../../i18n/uiLanguage';
 import { buildRenderableBlocks } from '../../services/mineru';
 import type {
   PositionedMineruBlock,
+  BlockTextMark,
   TextSelectionPayload,
   TranslationDisplayMode,
   TranslationMap,
@@ -30,8 +32,10 @@ import type {
 import { cn } from '../../utils/cn';
 import { normalizeSelectionText } from '../../utils/text';
 import { BlockItem } from './blockViewerContent';
+import { captureBlockTextRanges, renderBlockTextMarks } from './blockTextMarks';
 
 interface BlockViewerProps {
+  textMarks?: BlockTextMark[];
   blocks: PositionedMineruBlock[];
   mineruPath: string;
   translations: TranslationMap;
@@ -112,6 +116,7 @@ function getScopedSelectionPayload(container: HTMLElement | null): TextSelection
 
   return {
     text,
+    blockTextRanges: captureBlockTextRanges(container, range),
     anchorClientX,
     anchorClientY,
     anchorClientRect,
@@ -179,6 +184,7 @@ function requestDeferredRender(callback: () => void) {
 }
 
 function BlockViewer({
+  textMarks,
   blocks,
   mineruPath,
   translations,
@@ -199,6 +205,7 @@ function BlockViewer({
   onTranslationDisplayModeChange,
   onTextSelect,
 }: BlockViewerProps) {
+  const textMarkId = `pq-marks-${useId().replace(/[^a-zA-Z0-9-]/g, '')}`;
   const l = useLocaleText();
   const visibleBlocks = useMemo(
     () => {
@@ -568,6 +575,18 @@ function BlockViewer({
       document.removeEventListener('selectionchange', handleSelectionChange);
     };
   }, [active, onTextSelect]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || !active || !textMarks?.length) return;
+    let clear = renderBlockTextMarks(container, textMarks, textMarkId);
+    const observer = new MutationObserver(() => {
+      clear();
+      clear = renderBlockTextMarks(container, textMarks, textMarkId);
+    });
+    observer.observe(container, { childList: true, subtree: true, characterData: true });
+    return () => { observer.disconnect(); clear(); };
+  }, [active, textMarks, textMarkId, renderableBlocks, translations, translationDisplayMode]);
 
   if (renderableBlocks.length === 0) {
     return (
