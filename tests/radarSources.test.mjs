@@ -59,6 +59,22 @@ test('cancel propagates without emitting a successful or empty result', async ()
   await assert.rejects(pending, /fixture cancellation/);
 });
 
+test('query-specific failures continue to the remaining queries and keep independent results', async () => {
+  let calls = 0;
+  const result = await searchTopic(config({ sources: ['crossref'], queries: ['timeout', 'bad filter', 'working query'] }), {}, { throttleMs: 0,
+    fetchImpl: async () => { calls++; if (calls === 1) throw new Error('fixture timeout'); if (calls === 2) return new Response('', { status: 400 }); return response({ message: { items: [work(1)], 'total-results': 1 } }); } });
+  assert.equal(calls, 3); assert.equal(result.reports.length, 3); assert.equal(result.records.length, 1);
+  assert.equal(result.reports[0].error, 'Request failed or timed out'); assert.equal(result.reports[1].error, 'HTTP 400');
+  assert.equal(result.reports[2].error, null);
+});
+
+test('authentication failures stop all remaining queries for that provider', async () => {
+  let calls = 0;
+  const result = await searchTopic(config({ sources: ['crossref'], queries: ['first', 'second'] }), {}, { throttleMs: 0,
+    fetchImpl: async () => { calls++; return new Response('', { status: 401 }); } });
+  assert.equal(calls, 1); assert.equal(result.reports[0].error, 'HTTP 401');
+});
+
 test('bounded JSON cancels an oversized body before reading and limits streamed responses', async () => {
   let cancelled = false;
   const body = new ReadableStream({ cancel() { cancelled = true; } });

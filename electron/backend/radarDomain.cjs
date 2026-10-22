@@ -48,16 +48,24 @@ function normalizeTopic(input, previous) {
     weights[key] = value;
   }
   if (!Object.values(weights).some(Boolean)) throw new Error('At least one ranking weight must be greater than zero.');
+  const sourcesChanged = previous && JSON.stringify([...sources].sort()) !== JSON.stringify([...previous.sources].sort());
+  const queriesChanged = previous && JSON.stringify(queries) !== JSON.stringify(previous.queries);
+  // A provider cooldown still applies when only its query changes. Removing
+  // that provider must not block the remaining sources or retain its due time.
+  const retryAt = sourcesChanged ? Math.max(0, ...(previous.lastRun?.reports || [])
+    .filter((report) => sources.includes(report.source)).map((report) => report.retryAt || 0)) : previous?.retryAt ?? null;
+  const nextRunAt = sourcesChanged || queriesChanged ? retryAt || null :
+    previous?.intervalHours === intervalHours ? previous.nextRunAt :
+      previous?.lastAttemptAt ? Math.max(previous.lastAttemptAt + intervalHours * 3600000, retryAt || 0) : null;
   return {
     id: previous?.id || `topic-${randomUUID()}`, revision: (previous?.revision || 0) + 1,
     name, queries, sources, lookbackDays, intervalHours, enabled: input.enabled === true,
     includeTerms: terms(input.includeTerms ?? []), excludeTerms: terms(input.excludeTerms ?? []),
     priorityTerms: terms(input.priorityTerms ?? []), methodTerms: terms(input.methodTerms ?? []), weights,
     lastAttemptAt: previous?.lastAttemptAt ?? null, lastSuccessAt: previous?.lastSuccessAt ?? null,
-    nextRunAt: previous?.intervalHours === intervalHours ? previous.nextRunAt :
-      previous?.lastAttemptAt ? previous.lastAttemptAt + intervalHours * 3600000 : null,
+    nextRunAt,
     lastRun: previous?.lastRun ?? null,
-    retryAt: previous?.retryAt ?? null,
+    retryAt,
   };
 }
 
@@ -80,6 +88,8 @@ function candidateKey(paper) {
   return `candidate-${hash(p.doi ? `doi:${p.doi}` : `${p.title}|${p.year}|${p.author}|${!p.author || !p.year ? paper.sourceId : ''}`)}`;
 }
 
+const candidatePaperId = (candidateId) => `paper-radar-${hash(candidateId)}`;
+
 // Avoid repeatedly normalizing every library title for every candidate. A
 // fallback match still requires title, year and first author and never merges
 // two distinct known DOIs.
@@ -92,7 +102,7 @@ function createPaperIndex(papers) {
     if (identity.doi && !byDoi.has(identity.doi)) byDoi.set(identity.doi, paper);
     if (key) {
       if (!byMetadata.has(key)) byMetadata.set(key, []);
-      byMetadata.get(key).push(paper);
+      if (!byMetadata.get(key).includes(paper)) byMetadata.get(key).push(paper);
     }
   }
   for (const paper of papers) add(paper);
@@ -146,7 +156,9 @@ function buildQueue(library, state, topicId, timestamp = Date.now()) {
   const overrides = new Map(state.queue.map((item) => [item.paperId, item]));
   return library.papers.map((paper) => {
     const preference = overrides.get(paper.id);
-    const status = preference?.status || (Number(paper.readingProgress) >= 1 ? 'read' : 'unread');
+    // Reader position/heatmap and the legacy readingProgress field are not an
+    // explicit completion decision. Keep Read/Later under the reader's control.
+    const status = preference?.status || 'unread';
     const availablePdf = (paper.attachments || []).some((item) => item.kind === 'pdf' && !item.missing);
     return { paper, ...rankPaper(paper, topic, timestamp), status, pinned: preference?.pinned === true,
       evidence: availablePdf ? 'pdf-available' : paper.abstractText ? 'abstract' : 'metadata' };
@@ -165,8 +177,12 @@ function mergeCandidates(state, records, topic, timestamp, library) {
       existing.topicIds = [...new Set([...existing.topicIds, topic.id])];
       existing.sources = [...new Set([...existing.sources, record.source])];
       existing.lastSeenAt = timestamp;
-      if (!existing.doi && record.doi) { existing.doi = record.doi; candidates.add(existing); }
-      if (!existing.abstractText && record.abstractText) existing.abstractText = record.abstractText;
+      for (const key of ['doi', 'year', 'publication', 'url', 'abstractText']) {
+        if (!existing[key] && record[key]) existing[key] = record[key];
+      }
+      if (!existing.authors.length && record.authors.length) existing.authors = record.authors;
+      if (!existing.keywords?.length && record.keywords?.length) existing.keywords = record.keywords;
+      candidates.add(existing);
       if (linked) existing.paperId = linked.id;
       known++;
     } else if (state.candidates.length < 5000) {
@@ -180,4 +196,4 @@ function mergeCandidates(state, records, topic, timestamp, library) {
 }
 
 module.exports = { DAY_MS, DEFAULT_WEIGHTS, SOURCES, text, comparable, normalizeDoi, publicUrl, normalizeTopic,
-  candidateKey, samePaper, createPaperIndex, topicAccepts, rankPaper, buildQueue, mergeCandidates, hash };
+  candidateKey, candidatePaperId, samePaper, createPaperIndex, topicAccepts, rankPaper, buildQueue, mergeCandidates, hash };

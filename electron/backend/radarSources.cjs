@@ -44,6 +44,7 @@ function mapWork(source, item) {
 async function readBoundedJson(response) {
   if (!response.ok) {
     const error = new Error(`HTTP ${response.status}`);
+    error.status = response.status;
     if ([429, 503].includes(response.status)) {
       const header = response.headers.get('retry-after');
       const milliseconds = header && /^\d+$/.test(header) ? Number(header) * 1000 : Date.parse(header || '') - Date.now();
@@ -78,7 +79,7 @@ async function searchTopic(topic, settings = {}, { signal, fetchImpl = fetch, ti
   const until = new Date(timestamp).toISOString().slice(0, 10);
   let requests = 0;
   for (const source of topic.sources) {
-    let failed = false;
+    let stopProvider = false;
     for (const query of topic.queries) {
       if (signal?.aborted) throw signal.reason || new Error('Cancelled');
       let received = 0, total = 0;
@@ -122,10 +123,10 @@ async function searchTopic(topic, settings = {}, { signal, fetchImpl = fetch, ti
         // Never return request URLs, provider response bodies, or API keys.
         const message = /^HTTP \d{3}$|^Response too large$|^Invalid response$/.test(error?.message || '') ? error.message : 'Request failed or timed out';
         reports.push({ source, query, received, total, limited: false, error: message, retryAt: error?.retryAt || null });
-        failed = true;
+        stopProvider = [401, 403, 429, 503].includes(error?.status);
       }
       // Rate limits/auth failures stop this provider for the whole run.
-      if (failed) break;
+      if (stopProvider) break;
     }
   }
   return { records, reports };

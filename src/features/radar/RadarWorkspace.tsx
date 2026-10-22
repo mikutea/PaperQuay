@@ -71,7 +71,7 @@ export default function RadarWorkspace({ active = true }: { active?: boolean }) 
       <p className="pq-radar-muted">{l('发现值得读的下一篇', 'Find your next paper')}</p>
       <button className="pq-button pq-radar-add" onClick={() => setEditor({ topic: null })}><Plus size={15} />{l('新建主题', 'New topic')}</button>
       <nav aria-label={l('研究主题', 'Research topics')}>{data?.topics.map((item) => <button key={item.id} className={topic?.id === item.id ? 'selected' : ''} onClick={() => { setTopicId(item.id); setError(''); }}><span>{item.name}</span><small>{item.enabled ? l('自动检查', 'Scheduled') : l('手动检查', 'Manual')}</small></button>)}</nav>
-      <div className="pq-radar-sidebar-foot">{l('主题决定检索与排序依据。阅读队列始终包含全库论文。', 'Topics define discovery and ranking. The reading queue spans your whole library.')}</div>
+      <div className="pq-radar-sidebar-foot">{l('主题决定检索与排序依据。阅读队列包含全库论文；已读状态由你手动标记。', 'Topics define discovery and ranking. The queue spans your whole library; you mark papers as read explicitly.')}</div>
     </aside>
     <div className="pq-radar-main">
       <header className="pq-radar-header"><div><h2>{topic?.name || l('从一个研究方向开始', 'Start with a research interest')}</h2><p className="pq-radar-muted">{topic ? l(`最近检查：${date(topic.lastAttemptAt)}`, `Last check: ${date(topic.lastAttemptAt)}`) : l('设置关键词，查找新文献，再决定是否入库。', 'Set up queries, discover papers and choose what to add.')}</p></div>

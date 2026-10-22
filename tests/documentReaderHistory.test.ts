@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   arePdfScrollPositionsEquivalent,
   buildReaderLocalPdfPathCandidates,
+  getReaderDocumentSignature,
   restorePaperQaHistory,
   restorePdfSourceHistory,
   shouldStorePdfReadingHeatmap,
@@ -25,6 +26,17 @@ function scrollPosition(overrides: Partial<PdfScrollPosition> = {}): PdfScrollPo
     ...overrides,
   };
 }
+
+test('reader reopens a native paper when its missing PDF is attached or replaced', () => {
+  const native = { workspaceId: 'native-library:paper-1', source: 'native-library' as const };
+  const missing = getReaderDocumentSignature(native);
+  const attached = getReaderDocumentSignature({ ...native, localPdfPath: 'D:/papers/first.pdf' });
+  const replaced = getReaderDocumentSignature({ ...native, localPdfPath: 'D:/papers/replacement.pdf' });
+  assert.notEqual(missing, attached);
+  assert.notEqual(attached, replaced);
+  const zotero = { workspaceId: 'zotero:paper-1', source: 'zotero' as const, attachmentKey: 'ATTACHMENT' };
+  assert.equal(getReaderDocumentSignature(zotero), getReaderDocumentSignature({ ...zotero, localPdfPath: 'D:/download.pdf' }));
+});
 
 function heatmap(overrides: Partial<PdfReadingHeatmap> = {}): PdfReadingHeatmap {
   return {

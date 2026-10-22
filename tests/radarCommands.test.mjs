@@ -54,6 +54,19 @@ test('a candidate-record failure after library commit can be retried without dup
   assert.equal(f.store.load().papers.length, 1);
 });
 
+test('sparse records remain linked after a failed candidate write and never duplicate on retry', async (t) => {
+  const f = fixture(t, { discover: async () => ({ records: [record({ doi: '', year: '', authors: [], source: 'openalex', sourceId: 'https://openalex.org/W1' })], reports: [report] }) });
+  await f.commands.radar_run({ topicId: f.topic.id });
+  const id = f.persistence.load().candidates[0].id, update = f.persistence.update;
+  f.persistence.update = () => { throw new Error('fixture disk failure'); };
+  assert.throws(() => f.commands.radar_import_candidate({ candidateId: id }), /fixture disk failure/);
+  f.persistence.update = update;
+  const committed = f.store.load().papers[0];
+  assert.equal(f.commands.radar_get_snapshot().candidates[0].paperId, committed.id);
+  assert.equal(f.commands.radar_import_candidate({ candidateId: id }).id, committed.id);
+  assert.equal(f.store.load().papers.length, 1);
+});
+
 test('overlapping runs are rejected and cancelled results never enter the inbox', async (t) => {
   let complete;
   const f = fixture(t, { discover: () => new Promise((resolve) => { complete = resolve; }) });
@@ -86,6 +99,18 @@ test('schedules are opt-in, catch up once and respect rate-limit cooldown across
   f.advance(3600000); await assert.rejects(f.commands.radar_run({ topicId: f.topic.id }), /cooldown/);
   assert.equal(f.persistence.load().topics[0].nextRunAt, Date.UTC(2026, 9, 23));
   f.advance(3 * 86400000); await f.controller.tick(); await f.controller.tick(); assert.equal(calls, 2);
+});
+
+test('removing a rate-limited source unblocks the remaining source and its obsolete schedule', async (t) => {
+  let calls = 0;
+  const f = fixture(t, { discover: async () => ({ records: [], reports: ++calls === 1
+    ? [{ ...report, source: 'openalex', error: 'HTTP 429', retryAt: Date.UTC(2026, 9, 23) }] : [report] }) });
+  f.commands.radar_save_topic({ topic: { ...f.topic, sources: ['crossref', 'openalex'], enabled: true, intervalHours: 6 } });
+  await f.commands.radar_run({ topicId: f.topic.id }); f.advance();
+  const updated = f.commands.radar_save_topic({ topic: { ...f.topic, sources: ['crossref'], enabled: true, intervalHours: 6 } });
+  assert.equal(updated.retryAt, 0); assert.equal(updated.nextRunAt, null);
+  await f.controller.tick(); assert.equal(calls, 2);
+  assert.equal(f.persistence.load().topics[0].lastRun.status, 'success');
 });
 
 test('a completed check preserves concurrent queue choices and a failed source reports partial coverage', async (t) => {
@@ -161,4 +186,23 @@ test('PDF attachment rejects invalid documents and detects library changes durin
   await assert.rejects(f.commands.radar_attach_pdf({ paperId: paper.id, sourcePath: source }), /library changed/);
   assert.equal(fs.readdirSync(f.store.load().settings.storageDir).length, 0);
   assert.equal(fs.existsSync(source), true);
+});
+
+test('a missing PDF can be replaced with identical bytes while preserving non-PDF attachments and the source', async (t) => {
+  const f = fixture(t); await f.commands.radar_run({ topicId: f.topic.id });
+  const paper = f.commands.radar_import_candidate({ candidateId: f.persistence.load().candidates[0].id });
+  const source = path.join(f.root, 'source.pdf'); fs.writeFileSync(source, '%PDF-1.4\nreplacement fixture\n%%EOF');
+  const first = await f.commands.radar_attach_pdf({ paperId: paper.id, sourcePath: source });
+  const oldPdf = first.attachments[0], notes = path.join(f.root, 'notes.txt'); fs.writeFileSync(notes, 'keep these notes');
+  const library = f.store.load(), target = library.papers[0];
+  target.attachments[0].missing = true;
+  target.attachments.push({ ...oldPdf, id: 'other-attachment', kind: 'text', storedPath: notes, originalPath: notes, relativePath: '', fileName: 'notes.txt', contentHash: 'notes-hash' });
+  f.store.saveSync(library); fs.unlinkSync(oldPdf.storedPath);
+  assert.equal(f.commands.radar_get_snapshot().candidates[0].hasPdf, false);
+  const result = await f.commands.radar_attach_pdf({ paperId: paper.id, sourcePath: source });
+  const pdf = result.attachments.find((item) => item.kind === 'pdf');
+  assert.equal(result.attachments.length, 2); assert.notEqual(pdf.id, oldPdf.id); assert.equal(pdf.missing, false);
+  assert.deepEqual(fs.readFileSync(pdf.storedPath), fs.readFileSync(source));
+  assert.equal(fs.readFileSync(notes, 'utf8'), 'keep these notes');
+  assert.equal(f.commands.radar_get_snapshot().candidates[0].hasPdf, true);
 });

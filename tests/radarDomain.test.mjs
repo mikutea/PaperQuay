@@ -65,6 +65,37 @@ test('indexed merging keeps distinct known DOIs and ambiguous undated records se
   assert.equal(state.candidates.length, 4);
 });
 
+test('duplicate sources fill blank metadata and update fallback identity without overwriting known values', () => {
+  const research = topic(), state = { candidates: [] };
+  const first = { ...paper(), authors: [], year: '', publication: '', url: '', abstractText: '', keywords: [], source: 'crossref', sourceId: 'first' };
+  mergeCandidates(state, [first], research, 1, { papers: [] }); const id = state.candidates[0].id;
+  mergeCandidates(state, [{ ...first, authors: ['Ada Researcher'], year: '2026', publication: 'Journal', url: 'https://publisher.example/work', abstractText: 'An experiment', keywords: ['battery'], source: 'openalex' }], research, 2, { papers: [] });
+  const enriched = state.candidates[0];
+  assert.equal(enriched.id, id); assert.deepEqual(enriched.authors, ['Ada Researcher']); assert.equal(enriched.year, '2026');
+  assert.equal(enriched.publication, 'Journal'); assert.equal(enriched.url, 'https://publisher.example/work');
+  assert.deepEqual(enriched.keywords, ['battery']); assert.equal(rankPaper(enriched, research, Date.UTC(2026, 9, 22)).reasons.at(-1).points, 10);
+  mergeCandidates(state, [{ ...first, doi: '', year: '2026', authors: ['Ada Researcher'], publication: 'Different journal' }], research, 3, { papers: [] });
+  assert.equal(state.candidates.length, 1); assert.equal(enriched.publication, 'Journal');
+});
+
+test('editing queries keeps a selected provider cooldown while removing that provider clears it', () => {
+  const prior = topic({ sources: ['crossref', 'openalex'] });
+  prior.retryAt = 123456789; prior.nextRunAt = prior.retryAt;
+  prior.lastRun = { reports: [{ source: 'openalex', retryAt: prior.retryAt }] };
+  assert.equal(normalizeTopic({ ...prior, queries: ['new query'] }, prior).retryAt, prior.retryAt);
+  const remaining = normalizeTopic({ ...prior, sources: ['crossref'] }, prior);
+  assert.equal(remaining.retryAt, 0); assert.equal(remaining.nextRunAt, null);
+});
+
+test('queue Read status is explicit and is not inferred from legacy reader progress', () => {
+  const research = topic(), library = { papers: [paper({ readingProgress: 1 })] };
+  const state = { topics: [research], queue: [] };
+  assert.equal(buildQueue(library, state, research.id)[0].status, 'unread');
+  state.queue.push({ paperId: 'p1', status: 'read' });
+  library.papers[0].readingProgress = 0;
+  assert.equal(buildQueue(library, state, research.id)[0].status, 'read');
+});
+
 test('the queue includes old and new papers without the library UI page limit and preserves manual choices', () => {
   const research = topic();
   const papers = Array.from({ length: 1002 }, (_, i) => paper({ id: `p${i}`, importedAt: i }));

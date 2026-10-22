@@ -19,7 +19,7 @@ function validState(state) {
       Number.isSafeInteger(run.added) && Number.isSafeInteger(run.known) && typeof run.capacity === 'boolean' &&
       list(run.reports, 8, (report) => report && SOURCES.includes(report.source) && string(report.query, 120) &&
         Number.isFinite(report.received) && Number.isFinite(report.total) && typeof report.limited === 'boolean' &&
-        (report.error === null || string(report.error, 200))));
+        (report.error === null || string(report.error, 200)) && (report.retryAt === undefined || stamp(report.retryAt))));
   }) || !uniqueIds(state.topics)) return false;
   const topicIds = new Set(state.topics.map((topic) => topic.id));
   return list(state.candidates, 5000, (item) => item && string(item.id, 100) && string(item.title) &&

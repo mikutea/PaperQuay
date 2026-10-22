@@ -2,7 +2,7 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { createRadarStore } = require('./radarStore.cjs');
 const { searchTopic } = require('./radarSources.cjs');
-const { normalizeTopic, samePaper, createPaperIndex, buildQueue, mergeCandidates, rankPaper } = require('./radarDomain.cjs');
+const { normalizeTopic, samePaper, candidatePaperId, createPaperIndex, buildQueue, mergeCandidates, rankPaper } = require('./radarDomain.cjs');
 const { openAuthorizedReadFile, writeBoundFile, removeBoundFile } = require('./pathAccess.cjs');
 const { hashBytes, safeFileName } = require('./utils.cjs');
 
@@ -20,7 +20,7 @@ function createRadarController(context, options = {}) {
     const papers = createPaperIndex(library.papers);
     return { topics: state.topics, activeTopicId: active?.topicId || null,
       candidates: state.candidates.map((candidate) => {
-        const paper = papers.byId.get(candidate.paperId) || papers.find(candidate);
+        const paper = papers.byId.get(candidate.paperId) || papers.byId.get(candidatePaperId(candidate.id)) || papers.find(candidate);
         return { ...candidate, paperId: paper?.id || null, hasPdf: Boolean(paper?.attachments?.some((a) => a.kind === 'pdf' && !a.missing)),
           ranking: topic ? rankPaper(candidate, topic, clock()) : null };
       }), queue: buildQueue(library, state, topic?.id, clock()), selectedTopicId: topic?.id || null };
@@ -95,9 +95,10 @@ function createRadarController(context, options = {}) {
     const candidate = persistence.load().candidates.find((item) => item.id === candidateId);
     if (!candidate) throw new Error('Candidate does not exist.');
     const library = context.store.load();
-    const existing = library.papers.find((item) => item.id === candidate.paperId || samePaper(item, candidate));
+    const paperId = candidatePaperId(candidate.id);
+    const existing = library.papers.find((item) => item.id === candidate.paperId || item.id === paperId || samePaper(item, candidate));
     if (existing) { markImported(candidateId, existing.id); return existing; }
-    const now = clock(), paperId = `paper-${randomUUID()}`;
+    const now = clock();
     const paper = {
       id: paperId, title: candidate.title, year: candidate.year || null, doi: candidate.doi || null,
       publication: candidate.publication || null, url: candidate.url || null, abstractText: candidate.abstractText || null,
@@ -108,7 +109,8 @@ function createRadarController(context, options = {}) {
     };
     library.papers.push(paper);
     // No await between loading and committing. If recording the candidate fails
-    // after this commit, DOI/title matching makes a retry idempotent.
+    // after this commit, the deterministic candidate ID also makes sparse
+    // metadata (no DOI, year or author) retry-safe.
     context.store.saveSync(library);
     markImported(candidateId, paperId);
     return paper;
@@ -118,7 +120,10 @@ function createRadarController(context, options = {}) {
     if (attaching.has(paperId)) throw new Error('A PDF is already being attached to this paper.');
     const previous = context.store.load();
     const paper = previous.papers.find((item) => item.id === paperId);
-    if (!paper || paper.attachments.length) throw new Error('Select a paper without a PDF attachment.');
+    if (!paper || paper.attachments.some((item) => item.kind === 'pdf' && !item.missing)) throw new Error('Select a paper without an available PDF attachment.');
+    const previousPdfs = JSON.stringify(paper.attachments.filter((item) => item.kind === 'pdf'));
+    const duplicate = (library, hash) => library.papers.some((item) => item.attachments.some((attachment) =>
+      attachment.contentHash === hash && !(item.id === paperId && attachment.kind === 'pdf' && attachment.missing)));
     if (typeof sourcePath !== 'string' || !sourcePath.toLowerCase().endsWith('.pdf')) throw new Error('Select a PDF file.');
     attaching.add(paperId);
     let destination = null, writtenIdentity, committed = false;
@@ -141,7 +146,7 @@ function createRadarController(context, options = {}) {
       } finally { await handle.close(); }
       if (!bytes.subarray(0, 1024).includes(Buffer.from('%PDF-')) || !bytes.subarray(-8192).includes(Buffer.from('%%EOF'))) throw new Error('This file does not contain a complete PDF header and trailer.');
       const contentHash = hashBytes(bytes);
-      if (previous.papers.some((item) => item.attachments.some((attachment) => attachment.contentHash === contentHash))) throw new Error('This PDF is already attached to another library paper.');
+      if (duplicate(previous, contentHash)) throw new Error('This PDF is already attached to another library paper.');
       const storageDir = approved?.storageRoot || previous.settings.storageDir || path.join(context.appPaths.dataDir, 'paperquay-data');
       const fileName = safeFileName(path.basename(sourcePath));
       destination = path.join(storageDir, `paper-${randomUUID()}-${fileName}`);
@@ -154,9 +159,10 @@ function createRadarController(context, options = {}) {
       const commit = () => {
         const current = context.store.load();
         const target = current.papers.find((item) => item.id === paperId);
-        if (!target || target.attachments.length || current.settings.storageDir !== previous.settings.storageDir) throw new Error('The library changed; refresh and try again.');
-        if (current.papers.some((item) => item.attachments.some((entry) => entry.contentHash === contentHash))) throw new Error('This PDF was already attached while importing.');
-        target.attachments = [attachment]; target.updatedAt = clock();
+        if (!target || JSON.stringify(target.attachments.filter((item) => item.kind === 'pdf')) !== previousPdfs ||
+            current.settings.storageDir !== previous.settings.storageDir) throw new Error('The library changed; refresh and try again.');
+        if (duplicate(current, contentHash)) throw new Error('This PDF was already attached while importing.');
+        target.attachments = [...target.attachments.filter((item) => item.kind !== 'pdf'), attachment]; target.updatedAt = clock();
         context.store.saveSync(current);
         committed = true;
       };

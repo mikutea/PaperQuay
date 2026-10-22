@@ -35,8 +35,9 @@ including papers imported before this feature and metadata-only records. It
 does not use the library screen's 1,000-result limit. Use **To read**, **Later**,
 **Read** and **Pin** to control the queue. Those preferences survive restart and
 do not rewrite library order, favorites, annotations or PDF reading progress.
-Without a manual choice, a paper with reading progress of 100% is treated as read.
-Manual status takes precedence thereafter.
+Papers default to **To read** until you choose a status. **Read** is an explicit
+decision: scrolling, heatmap activity and the legacy library progress field do
+not change this status automatically.
 
 Ranking is an explainable keyword heuristic, not an AI assessment or paper-quality
 score. Each of relevance, priority and methods earns its configured weight times
