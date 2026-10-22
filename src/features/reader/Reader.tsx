@@ -743,12 +743,8 @@ function Reader({ workspaceActive = true }: ReaderProps) {
         return true;
       };
 
-      const cachedPaper = notePaperCandidates.find((paper) => paper.id === normalizedPaperId);
-      if (cachedPaper && openPaper(cachedPaper)) {
-        return;
-      }
-
       try {
+        // Attachments may have changed in another workspace since the note list loaded.
         const papers = await listAllLibraryPapers({ sortBy: 'updatedAt', sortDirection: 'desc' });
         setNotePaperCandidates(papers);
 
@@ -771,7 +767,6 @@ function Reader({ workspaceActive = true }: ReaderProps) {
     [
       l,
       librarySettings?.storageDir,
-      notePaperCandidates,
       openTab,
       setError,
       setNativeLibraryItems,

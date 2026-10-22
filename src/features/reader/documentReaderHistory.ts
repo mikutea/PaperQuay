@@ -3,9 +3,17 @@ import type {
   PaperHistoryRecord,
   PdfReadingHeatmap,
   PdfScrollPosition,
+  WorkspaceItem,
 } from '../../types/reader';
 
 export const READER_PDF_HISTORY_LIMIT = 8;
+
+export function getReaderDocumentSignature(
+  document: Pick<WorkspaceItem, 'workspaceId' | 'attachmentKey' | 'source' | 'localPdfPath'>,
+): string {
+  return JSON.stringify([document.workspaceId, document.attachmentKey ?? '',
+    document.source === 'native-library' ? document.localPdfPath ?? '' : '']);
+}
 
 type ReaderPdfHistorySnapshot = Pick<
   PaperHistoryRecord,

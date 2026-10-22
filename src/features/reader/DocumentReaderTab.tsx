@@ -163,6 +163,7 @@ import {
 } from './documentReaderNotes';
 import {
   buildReaderLocalPdfPathCandidates,
+  getReaderDocumentSignature,
   restorePaperQaHistory,
   restorePdfSourceHistory,
   upsertRecentPdfReadingHeatmap,
@@ -1141,6 +1142,8 @@ function DocumentReaderTab({
         setPdfPath(resolvedPdfPath);
         setCurrentDocument(nextResolvedItem);
         setWorkspaceStage(nextStage);
+        // A resolved history path is already open; do not reopen it when the parent refreshes.
+        lastDocumentSignatureRef.current = getReaderDocumentSignature(nextResolvedItem);
         onDocumentResolved(nextResolvedItem);
 
         requestDeferredReaderStartupWork(() => {
@@ -3634,7 +3637,7 @@ function DocumentReaderTab({
 
 
   useEffect(() => {
-    const signature = `${document.workspaceId}::${document.attachmentKey ?? ''}`;
+    const signature = getReaderDocumentSignature(document);
 
     if (lastDocumentSignatureRef.current === signature) {
       return;
@@ -3645,7 +3648,7 @@ function DocumentReaderTab({
     pdfTextPendingRef.current = null;
     setQaRagEnabled(true);
     void openDocumentItem();
-  }, [document.attachmentKey, document.workspaceId, openDocumentItem]);
+  }, [document.attachmentKey, document.workspaceId, document.source, document.localPdfPath, openDocumentItem]);
 
   useEffect(() => {
     if (!currentDocument || !paperSummaryNextSourceKey) {

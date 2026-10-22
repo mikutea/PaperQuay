@@ -49,6 +49,10 @@
 
 ## Latest Update
 
+This fork adds a configurable [literature radar and unified reading queue](./docs/literature-radar.md):
+discover candidates by research topic, choose what to import, and prioritize new
+and existing library papers with explained scores and persistent reading choices.
+
 The v0.1.24 release focuses on review writing, knowledge graph usability, MinerU configuration, library storage migration, and note synchronization polish:
 
 - Review Word export now handles LaTeX formulas, missing figures, localized section titles, richer references, and inline figure placement from model output.

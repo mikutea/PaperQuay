@@ -1,4 +1,5 @@
 import LibraryLocationPanel from '../../components/LibraryLocationPanel';
+import { LIBRARY_CONTENT_CHANGED_EVENT } from '../../services/radar';
 import {
   useCallback,
   useEffect,
@@ -1044,6 +1045,12 @@ export default function LiteratureLibraryView({
       window.removeEventListener(ZOTERO_IMPORT_REQUEST_EVENT, handleZoteroImportRequest);
     };
   }, [handleImportZoteroLibrary]);
+
+  useEffect(() => {
+    const changed = () => { void refreshAll().catch((cause) => setQueryError(cause instanceof Error ? cause.message : String(cause))); };
+    window.addEventListener(LIBRARY_CONTENT_CHANGED_EVENT, changed);
+    return () => window.removeEventListener(LIBRARY_CONTENT_CHANGED_EVENT, changed);
+  }, [refreshAll]);
 
   const handleImportPdfs = async () => {
     if (demoMode) {
