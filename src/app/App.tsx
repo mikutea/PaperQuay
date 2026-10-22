@@ -1,4 +1,4 @@
-import { Component, useEffect, useMemo, useState, type ErrorInfo, type ReactNode } from 'react';
+import { Component, lazy, Suspense, useEffect, useMemo, useState, type ErrorInfo, type ReactNode } from 'react';
 import {
   Bot,
   BookOpenCheck,
@@ -8,6 +8,7 @@ import {
   Minus,
   Moon,
   NotebookText,
+  Radar,
   Settings2,
   Square,
   Sun,
@@ -37,7 +38,8 @@ import { flushReaderConfigWrites } from '../services/readerConfig';
 import { useThemeStore } from '../stores/useThemeStore';
 import { HOME_TAB_ID, useTabsStore } from '../stores/useTabsStore';
 
-type AppWorkspaceKey = 'library' | 'agent' | 'notes' | 'review' | 'graph';
+const RadarWorkspace = lazy(() => import('../features/radar/RadarWorkspace'));
+type AppWorkspaceKey = 'library' | 'agent' | 'notes' | 'review' | 'graph' | 'radar';
 type UiLanguage = 'zh-CN' | 'en-US';
 
 interface AppWorkspaceItem {
@@ -53,6 +55,7 @@ const SETTINGS_STORAGE_KEY = 'paper-reader-settings-v3';
 const workspaces: AppWorkspaceItem[] = [
   { key: 'library', icon: Library, labelZh: '\u6587\u5e93', labelEn: 'Library' },
   { key: 'agent', icon: Bot, labelZh: 'Agent', labelEn: 'Agent' },
+  { key: 'radar', icon: Radar, labelZh: '文献雷达', labelEn: 'Literature radar' },
   { key: 'review', icon: BookOpenCheck, labelZh: '综述', labelEn: 'Review' },
   { key: 'graph', icon: GitBranch, labelZh: '图谱', labelEn: 'Graph' },
   { key: 'notes', icon: NotebookText, labelZh: '\u7b14\u8bb0', labelEn: 'Notes' },
@@ -124,7 +127,7 @@ function loadUiLanguage(): UiLanguage {
 
 function loadInitialWorkspace(): AppWorkspaceKey {
   const stored = window.localStorage.getItem(ACTIVE_WORKSPACE_STORAGE_KEY);
-  return stored === 'agent' || stored === 'notes' || stored === 'review' || stored === 'graph' ? stored : 'library';
+  return stored === 'agent' || stored === 'notes' || stored === 'review' || stored === 'graph' || stored === 'radar' ? stored : 'library';
 }
 
 function isMacPlatform() {
@@ -149,7 +152,9 @@ function App() {
   const openNotesTab = useTabsStore((state) => state.openNotesTab);
   const openReviewTab = useTabsStore((state) => state.openReviewTab);
   const openGraphTab = useTabsStore((state) => state.openGraphTab);
+  const openRadarTab = useTabsStore((state) => state.openRadarTab);
   const [uiLanguage, setUiLanguage] = useState<UiLanguage>(loadUiLanguage);
+  const [initialWorkspace] = useState(loadInitialWorkspace);
   const resolvedTheme = useThemeStore((state) => state.resolved);
   const toggleTheme = useThemeStore((state) => state.toggle);
   const isEnglish = uiLanguage === 'en-US';
@@ -158,7 +163,7 @@ function App() {
     [activeTabId, tabs],
   );
   const activeWorkspace: AppWorkspaceKey =
-    activeTab?.type === 'agent'
+    activeTab?.type === 'radar' ? 'radar' : activeTab?.type === 'agent'
       ? 'agent'
       : activeTab?.type === 'review'
         ? 'review'
@@ -191,8 +196,6 @@ function App() {
   }, [activeWorkspace]);
 
   useEffect(() => {
-    const initialWorkspace = loadInitialWorkspace();
-
     if (initialWorkspace === 'agent') {
       openAgentTab();
       return;
@@ -211,7 +214,8 @@ function App() {
     if (initialWorkspace === 'graph') {
       openGraphTab();
     }
-  }, [openAgentTab, openGraphTab, openNotesTab, openReviewTab]);
+    if (initialWorkspace === 'radar') openRadarTab();
+  }, [initialWorkspace, openAgentTab, openGraphTab, openNotesTab, openReviewTab, openRadarTab]);
 
   useEffect(() => {
     const handleLanguageChanged = (event: Event) => {
@@ -240,7 +244,7 @@ function App() {
         const { activeTabId: nextActiveTabId, tabs: nextTabs } = useTabsStore.getState();
         const nextActiveTab = nextTabs.find((tab) => tab.id === nextActiveTabId);
 
-        if (!nextActiveTab || nextActiveTab.type === 'agent' || nextActiveTab.type === 'notes' || nextActiveTab.type === 'note' || nextActiveTab.type === 'review' || nextActiveTab.type === 'graph') {
+        if (!nextActiveTab || nextActiveTab.type === 'agent' || nextActiveTab.type === 'notes' || nextActiveTab.type === 'note' || nextActiveTab.type === 'review' || nextActiveTab.type === 'graph' || nextActiveTab.type === 'radar') {
           setActiveTab(HOME_TAB_ID);
         }
       }, 0);
@@ -426,6 +430,11 @@ function App() {
                         return;
                       }
 
+                      if (workspace.key === 'radar') {
+                        openRadarTab();
+                        return;
+                      }
+
                       openNotesTab();
                     }}
                     title={label}
@@ -446,6 +455,13 @@ function App() {
           </aside>
 
           <main className="min-w-0 flex-1 overflow-hidden p-1.5">
+            {tabs.some((tab) => tab.type === 'radar') ? <div className="h-full min-h-0 overflow-hidden" hidden={activeWorkspace !== 'radar'}>
+              <WorkspaceErrorBoundary name="Literature radar" resetKey={activeWorkspace}>
+                <Suspense fallback={<div className="p-6 text-sm text-[var(--pq-text-muted)]">{isEnglish ? 'Loading literature radar…' : '正在加载文献雷达…'}</div>}>
+                  <RadarWorkspace active={activeWorkspace === 'radar'} />
+                </Suspense>
+              </WorkspaceErrorBoundary>
+            </div> : null}
             <div className="h-full min-h-0 overflow-hidden" hidden={activeWorkspace !== 'library'}>
               <WorkspaceErrorBoundary name="Library" resetKey={activeWorkspace}>
                 <Reader workspaceActive={activeWorkspace === 'library'} />

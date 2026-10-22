@@ -679,7 +679,8 @@ export default function LiteraturePaperList({
                         </span>
                       ) : null}
                       <span className="mt-2 block truncate text-[11px] text-slate-400 dark:text-[#8d8d8d]">
-                        {pdfPath ? truncateMiddle(pdfPath, 68) : l('缺少 PDF 附件', 'Missing PDF attachment')}
+                        {pdfPath ? truncateMiddle(pdfPath, 68) : paper.attachments.some((attachment) => attachment.kind === 'pdf')
+                          ? l('缺少 PDF 附件', 'Missing PDF attachment') : l('仅题录，尚未添加 PDF', 'Metadata only; no PDF attached')}
                       </span>
                     </span>
                     {showReadingHeatmap ? (

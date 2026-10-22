@@ -1,4 +1,4 @@
-import { Bot, FileText, Library, NotebookText, X } from 'lucide-react';
+import { Bot, FileText, Library, NotebookText, Radar, X } from 'lucide-react';
 import type { DragEvent, MouseEvent } from 'react';
 import { useLocaleText } from '../../i18n/uiLanguage';
 import type { AppTab } from '../../stores/useTabsStore';
@@ -36,8 +36,9 @@ function TabItem({
   onContextMenu,
 }: TabItemProps) {
   const l = useLocaleText();
+  const title = tab.type === 'radar' ? l('文献雷达', 'Literature radar') : tab.title;
   const Icon =
-    tab.type === 'library'
+    tab.type === 'radar' ? Radar : tab.type === 'library'
       ? Library
       : tab.type === 'agent'
         ? Bot
@@ -93,7 +94,7 @@ function TabItem({
       >
         <Icon className="h-3.5 w-3.5" strokeWidth={1.9} />
       </span>
-      <span className="min-w-0 flex-1 truncate text-left">{tab.title}</span>
+      <span className="min-w-0 flex-1 truncate text-left">{title}</span>
       {tab.type === 'note' && tab.externalUpdate ? (
         <span
           className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--pq-accent)]"
@@ -110,7 +111,7 @@ function TabItem({
             'inline-flex h-5 w-5 shrink-0 cursor-default items-center justify-center rounded text-[var(--pq-text-faint)] transition hover:bg-[var(--pq-hover)] hover:text-[var(--pq-text)]',
             active ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
           )}
-          aria-label={l(`关闭 ${tab.title}`, `Close ${tab.title}`)}
+          aria-label={l(`关闭 ${title}`, `Close ${title}`)}
         >
           <X className="h-3.5 w-3.5" strokeWidth={2} />
         </button>

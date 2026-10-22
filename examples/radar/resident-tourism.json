@@ -1,0 +1,13 @@
+{
+  "name": "居游共生",
+  "queries": ["tourism resident conflict", "participatory agent based tourism"],
+  "includeTerms": ["tourism", "tourist", "resident", "居民", "游客"],
+  "excludeTerms": [],
+  "priorityTerms": ["resident", "conflict", "governance", "居民", "冲突", "治理"],
+  "methodTerms": ["agent-based", "GAMA", "participatory", "serious game", "参与式", "严肃游戏"],
+  "sources": ["crossref", "openalex"],
+  "lookbackDays": 90,
+  "intervalHours": 24,
+  "enabled": false,
+  "weights": { "relevance": 40, "priority": 30, "methods": 20, "recency": 10 }
+}

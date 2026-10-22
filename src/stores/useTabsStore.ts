@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-export type AppTabType = 'library' | 'reader' | 'agent' | 'notes' | 'note' | 'review' | 'graph';
+export type AppTabType = 'library' | 'reader' | 'agent' | 'notes' | 'note' | 'review' | 'graph' | 'radar';
 
 export interface BaseAppTab {
   id: string;
@@ -38,13 +38,18 @@ export interface GraphTab extends BaseAppTab {
   type: 'graph';
 }
 
+export interface RadarTab extends BaseAppTab {
+  id: 'radar';
+  type: 'radar';
+}
+
 export interface NoteTab extends BaseAppTab {
   type: 'note';
   noteId: string;
   externalUpdate?: boolean;
 }
 
-export type AppTab = LibraryTab | ReaderTab | AgentTab | NotesTab | NoteTab | ReviewTab | GraphTab;
+export type AppTab = LibraryTab | ReaderTab | AgentTab | NotesTab | NoteTab | ReviewTab | GraphTab | RadarTab;
 
 interface TabsState {
   tabs: AppTab[];
@@ -54,6 +59,7 @@ interface TabsState {
   openNotesTab: () => string;
   openReviewTab: () => string;
   openGraphTab: () => string;
+  openRadarTab: () => string;
   openNoteTab: (noteId: string, title: string) => string;
   updateNoteTabTitle: (noteId: string, title: string) => void;
   setNoteTabExternalUpdate: (noteId: string, externalUpdate: boolean) => void;
@@ -213,6 +219,13 @@ export const useTabsStore = create<TabsState>()((set, get) => ({
       activeTabId: nextTab.id,
     }));
 
+    return nextTab.id;
+  },
+  openRadarTab: () => {
+    const existing = get().tabs.find((tab) => tab.id === 'radar');
+    if (existing) { set({ activeTabId: existing.id }); return existing.id; }
+    const nextTab: RadarTab = { id: 'radar', type: 'radar', title: '文献雷达' };
+    set((state) => ({ tabs: [...state.tabs, nextTab], activeTabId: nextTab.id }));
     return nextTab.id;
   },
   openNoteTab: (noteId, title) => {
