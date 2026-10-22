@@ -19,7 +19,15 @@ Linux x64 packages and macOS Intel/Apple Silicon disk images are also provided. 
 
 The startup database-path P2 reported in [#26](https://github.com/mikutea/PaperQuay/pull/26#discussion_r4214657505) remains unfixed in this prerelease. If another party can modify an adopted library while it is being opened, the SQLite path can be redirected outside that library. Use only library/profile directories that you control and that untrusted users cannot modify; accepting a library does not remove this risk.
 
-## Changes since app-v0.1.26-mikutea.13
+## Changes since app-v0.1.26-mikutea.14
+
+- Adds a configurable literature radar with Crossref/OpenAlex discovery, a deduplicated candidate inbox, explicit metadata import, and local PDF attachment ([#32](https://github.com/mikutea/PaperQuay/pull/32)).
+- Adds one reading queue for new and existing library papers, with explainable keyword/recency ranking and persistent Pin, Later and manually selected Read states. Queue choices stay separate from PDF position and reading heatmaps.
+- Keeps research interests in importable/exportable topic configurations; resident–tourist research is an optional example. Automatic checks are off by default and run only while the application is open. Checks report partial/capped results and respect provider cooldowns.
+- Makes sparse metadata imports retry-safe, fills missing fields across duplicate sources, and allows missing PDFs to be reattached without losing other attachments. Reader opens the refreshed attachment, including in an already-open tab.
+- Includes Chinese/English UI and [usage documentation](https://github.com/mikutea/PaperQuay/blob/app-v{{VERSION}}/docs/literature-radar.md). The feature passed 643 local tests and isolated Windows Electron checks for discovery, import, queue choices, PDF reattachment and restart persistence. Scheduling was tested with an injected clock; macOS/Linux rendered UI has not been exercised locally.
+
+## Changes already included in .14 (relative to .13)
 
 - Adds PDF highlights and underlines to the selection popup, supports activating the highlighter before selecting text, preserves the selection after adding a note, and restores the correct tool color palette ([#28](https://github.com/mikutea/PaperQuay/pull/28)).
 - Saves highlights and underlines in structured original and translated text. Marks remain available with selection translation disabled and stay attached to image captions, tables, and equations when switching display modes ([#28](https://github.com/mikutea/PaperQuay/pull/28)).
@@ -112,7 +120,15 @@ Windows x64 构建：
 
 [#26](https://github.com/mikutea/PaperQuay/pull/26#discussion_r4214657505) 中的启动数据库路径 P2 在此预发布中仍未修复。若其他人能在已有文库打开期间修改其目录，SQLite 路径可能被重定向到文库之外。请仅使用由你控制、且不可信用户无法修改的文库／配置目录；同意接入文库并不能消除这一风险。
 
-## 相比 app-v0.1.26-mikutea.13 的更新
+## 相比 app-v0.1.26-mikutea.14 的更新
+
+- 新增通用文献雷达：通过 Crossref／OpenAlex 查新，将结果放入去重候选箱，再由用户选择题录入库和添加本地 PDF（[#32](https://github.com/mikutea/PaperQuay/pull/32)）。
+- 全库新旧论文进入统一阅读队列，支持可解释的关键词／新近程度排序、置顶、稍后和手动已读；队列状态与 PDF 阅读位置、热力图分别保存。
+- 研究方向由可导入／导出的主题配置表达，居游共生仅作为可选示例。自动检查默认关闭，开启后仅在应用运行时执行；检查会说明部分结果和数量上限，并遵守来源冷却时间。
+- 缺少 DOI／年份／作者的题录在写入失败后可安全重试；不同来源的重复记录可补齐缺失信息。支持重新补挂缺失 PDF，保留其他附件，并刷新已打开的阅读标签页。
+- 提供中英文界面和[使用说明](https://github.com/mikutea/PaperQuay/blob/app-v{{VERSION}}/docs/literature-radar.md)。功能通过 643 项本地测试，并在隔离 Windows Electron 配置中验证查新、入库、队列操作、PDF 补挂及重启恢复。定时检查使用可控时钟测试，未在本地实测 macOS／Linux 图形界面。
+
+## .14 中已有的更新（相对 .13）
 
 - PDF 划词浮层可添加高亮和下划线，荧光笔支持先启用再选字；加入笔记后仍保留选区，并恢复正确的工具色板（[#28](https://github.com/mikutea/PaperQuay/pull/28)）。
 - 右栏原文和译文可保存高亮、下划线；关闭划词翻译后仍可标记，图片说明、表格和公式的标记在切换显示模式后保持对应文字范围（[#28](https://github.com/mikutea/PaperQuay/pull/28)）。
