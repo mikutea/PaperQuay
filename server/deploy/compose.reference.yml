@@ -1,0 +1,42 @@
+# Disposable local/CI reference, not a production deployment.
+# Run from server/: docker compose --env-file .env -f deploy/compose.reference.yml up -d
+name: paperquay-sync-local
+services:
+  postgres:
+    image: postgres:18.6
+    environment:
+      POSTGRES_USER: paperquay_test
+      POSTGRES_PASSWORD: ${PAPERQUAY_TEST_POSTGRES_ADMIN_PASSWORD:?set an independent local admin password}
+      POSTGRES_DB: paperquay_sync_test
+      PAPERQUAY_MIGRATION_DB_PASSWORD: ${PAPERQUAY_MIGRATION_DB_PASSWORD:?set a migration password}
+      PAPERQUAY_RUNTIME_DB_PASSWORD: ${PAPERQUAY_RUNTIME_DB_PASSWORD:?set a runtime password}
+    ports:
+      - "127.0.0.1:55439:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql
+      - ./init-local-database.sql:/docker-entrypoint-initdb.d/010-paperquay.sql:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "paperquay_test", "-d", "paperquay_sync_test"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    security_opt:
+      - no-new-privileges:true
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.1
+    command: ["start-dev", "--http-port=8080", "--import-realm"]
+    environment:
+      KC_HOSTNAME: http://127.0.0.1:18081
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      - "127.0.0.1:18081:8080"
+    volumes:
+      - keycloak-data:/opt/keycloak/data
+      - ../.runtime/realm:/opt/keycloak/data/import:ro
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  postgres-data:
+  keycloak-data:
