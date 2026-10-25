@@ -1,6 +1,15 @@
 export const ENTITY_TYPES = ['paper', 'attachmentVersion', 'note', 'annotation', 'readingPosition'] as const;
 export type EntityType = typeof ENTITY_TYPES[number];
 
+export interface PaperOrganization {
+  favorite: boolean;
+  readingStatus: 'unread' | 'reading' | 'read';
+  tags: string[];
+  collections: string[];
+  /** Null is outside the reading queue; equal ranks sort by stable entity ID. */
+  queueRank: number | null;
+}
+
 export interface PaperData {
   title: string;
   doi: string | null;
@@ -9,6 +18,7 @@ export interface PaperData {
   abstractText: string | null;
   authors: string[];
   keywords: string[];
+  organization?: PaperOrganization;
 }
 
 export interface AttachmentVersionData {

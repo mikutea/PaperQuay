@@ -32,19 +32,22 @@ export function normalizeServiceUrl(value: string): string {
   }
 }
 
-export function parseAppConfig(input: PublicConfigInput, pageOrigin: string): AppConfig {
+export const NATIVE_REDIRECT_URI = 'dev.paperquay.mobile://auth/callback';
+export const NATIVE_LOGOUT_URI = 'dev.paperquay.mobile://auth/logout';
+
+export function parseAppConfig(input: PublicConfigInput, pageOrigin: string, native = false): AppConfig {
   if (!input.apiBaseUrl?.trim() || !input.oidcAuthority?.trim() || !input.oidcClientId?.trim()) {
     throw new ClientError('CONFIG_MISSING');
   }
-  const origin = normalizeServiceUrl(pageOrigin);
-  if (new URL(origin).pathname !== '/') throw new ClientError('CONFIG_INVALID');
+  const origin = native ? '' : normalizeServiceUrl(pageOrigin);
+  if (!native && new URL(origin).pathname !== '/') throw new ClientError('CONFIG_INVALID');
   const clientId = input.oidcClientId.trim();
   if (!/^[A-Za-z0-9._:-]{1,160}$/.test(clientId)) throw new ClientError('CONFIG_INVALID');
   return {
     apiBaseUrl: normalizeServiceUrl(input.apiBaseUrl.trim()),
     oidcAuthority: normalizeServiceUrl(input.oidcAuthority.trim()),
     oidcClientId: clientId,
-    redirectUri: `${origin}/auth/callback`,
-    logoutRedirectUri: `${origin}/`,
+    redirectUri: native ? NATIVE_REDIRECT_URI : `${origin}/auth/callback`,
+    logoutRedirectUri: native ? NATIVE_LOGOUT_URI : `${origin}/`,
   };
 }

@@ -60,7 +60,14 @@ export const ENTITY_DATA_SCHEMAS: Record<EntityType, JsonSchema> = {
     abstractText: nullable(text(SYNC_LIMITS.maxAbstractLength)),
     authors: list(text(SYNC_LIMITS.maxNameLength, 1), SYNC_LIMITS.maxAuthors),
     keywords: list(text(SYNC_LIMITS.maxNameLength, 1), SYNC_LIMITS.maxKeywords),
-  }),
+    organization: object({
+      favorite: { type: 'boolean' },
+      readingStatus: { enum: ['unread', 'reading', 'read'] },
+      tags: list(text(80, 1), 64),
+      collections: list(text(80, 1), 32),
+      queueRank: nullable(integer()),
+    }),
+  }, ['title', 'doi', 'year', 'publication', 'abstractText', 'authors', 'keywords']),
   attachmentVersion: object({
     paperId: uuid,
     attachmentId: uuid,

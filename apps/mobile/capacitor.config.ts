@@ -1,10 +1,17 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
-// M1 validates the Web client. Native projects and secure storage are M2 work.
 const config: CapacitorConfig = {
   appId: 'dev.paperquay.mobile',
   appName: 'PaperQuay',
   webDir: 'dist',
+  android: { allowMixedContent: false, webContentsDebuggingEnabled: false },
+  ios: { webContentsDebuggingEnabled: false },
+  plugins: {
+    // Standard fetch preserves cancellation, redirect rejection and incremental SSE chunks.
+    // IdP, sync and model endpoints must allow the documented Capacitor WebView origins.
+    CapacitorHttp: { enabled: false },
+    CapacitorSQLite: { iosDatabaseLocation: 'Library/CapacitorDatabase', iosIsEncryption: false, androidIsEncryption: false },
+  },
 };
 
 export default config;

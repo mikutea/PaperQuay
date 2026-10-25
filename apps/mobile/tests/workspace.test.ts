@@ -265,6 +265,7 @@ function setup(
   api = new FakeApi(),
   factory = new IDBFactory(),
   databaseName = crypto.randomUUID(),
+  supportsPaperOrganization = false,
 ) {
   const store = new AccountStore({ decode: decodeWorkspace, indexedDB: factory, databaseName });
   const controller = new WorkspaceController({
@@ -273,9 +274,40 @@ function setup(
     store,
     online: false,
     now: () => NOW,
+    supportsPaperOrganization: () => supportsPaperOrganization,
   });
   return { api, factory, databaseName, store, controller };
 }
+
+test('opting into organization restarts the feed once without dropping cached records or pending work', async () => {
+  const env = setup();
+  await env.controller.bind('A');
+  const original: SyncRecord<'paper'> = { entityType: 'paper', entityId: PAPER, schemaVersion: 1, revision: 1,
+    deletedAt: null, updatedAt: NOW, modifiedByDeviceId: DEVICE, data: paperEdit().data };
+  env.api.records.set(A, [original]);
+  env.controller.setOnline(true); await env.controller.syncNow(); env.controller.setOnline(false);
+  await env.controller.save(edit('Pending through upgrade'));
+  const before = env.controller.getSnapshot().workspace!;
+  assert.ok(before.sync.cursor);
+  env.controller.deactivate(); await env.store.close();
+  const upgraded = setup(env.api, env.factory, env.databaseName, true);
+  const organization = { favorite: true, readingStatus: 'reading' as const, tags: ['tag'], collections: ['group'], queueRank: 1 };
+  env.api.records.set(A, [{ ...original, data: { ...original.data!, organization } }]);
+  await upgraded.controller.bind('A');
+  const migrating = upgraded.controller.getSnapshot().workspace!;
+  assert.equal(migrating.paperOrganizationVersion, 1);
+  assert.equal(migrating.sync.cursor, null);
+  assert.deepEqual(migrating.sync.outbox, before.sync.outbox);
+  assert.deepEqual(migrating.sync.serverRecords, before.sync.serverRecords);
+  upgraded.controller.setOnline(true); await upgraded.controller.syncNow();
+  assert.equal(upgraded.controller.getSnapshot().error, null);
+  assert.deepEqual((getVisibleEntity(upgraded.controller.getSnapshot().workspace!.sync, 'paper', PAPER)?.data as PaperData).organization, organization);
+  const cursor = upgraded.controller.getSnapshot().workspace!.sync.cursor;
+  await upgraded.controller.bind('A');
+  assert.equal(upgraded.controller.getSnapshot().workspace!.sync.cursor, cursor);
+  assert.equal(upgraded.controller.getSnapshot().workspace!.paperOrganizationVersion, 1);
+  upgraded.controller.deactivate(); await upgraded.store.close();
+});
 
 async function setupConflictWithOverlay() {
   const env = setup();

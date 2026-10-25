@@ -1,4 +1,6 @@
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -17,13 +19,18 @@ import {
   type VisibleEntity,
 } from '../../../packages/sync-core/src/index.ts';
 import { SyncApi, type ServerConflict } from './api.ts';
-import { OidcSession } from './auth/oidc.ts';
+import { createAuthSession, type AuthSession } from './auth/oidc.ts';
 import { parseAppConfig, type AppConfig, type PublicConfigInput } from './config.ts';
 import { ContentPreview, EntityEditor } from './components/EntityEditor.tsx';
 import { Icon } from './components/Icon.tsx';
 import { ClientError, describeError } from './errors.ts';
-import { assertM1WebRuntime } from './platform.ts';
-import { AccountStore } from './storage/accountStore.ts';
+import { assertPlatformReady, getPlatformCapabilities } from './platform.ts';
+import { createAccountStorage } from './storage/accountStore.ts';
+import { createSecretStore, type SecretStore } from './platform/secretStore.ts';
+import { verifiedBinding } from './storage/verifiedBinding.ts';
+import { filterPapers, organizationOf, readingStatusLabels } from './library/organization.ts';
+import type { PdfAiContext, PdfCitationTarget } from './pdf/types.ts';
+import { assertAiNoteTarget } from './integration/aiNotes.ts';
 import {
   decodeWorkspace,
   WorkspaceController,
@@ -35,17 +42,21 @@ import { entityStatus, hasEntityConflict } from './viewState.ts';
 const CONFIG_KEY = 'paperquay.mobile.public-config.v1';
 const DEVICE_NAME_KEY = 'paperquay.mobile.device-name.v1';
 type Section = 'library' | 'notes' | 'account' | 'conflicts';
+const PaperReader = lazy(() => import('./components/PaperReader.tsx').then((module) => ({ default: module.PaperReader })));
+const AiWorkspace = lazy(() => import('./components/AiWorkspace.tsx').then((module) => ({ default: module.AiWorkspace })));
 interface Runtime {
   config: AppConfig;
-  auth: OidcSession;
+  auth: AuthSession;
   controller: WorkspaceController;
+  secretStore?: SecretStore;
+  dispose?: () => Promise<void>;
 }
 function initialConfig(): PublicConfigInput {
   try {
     const local = localStorage.getItem(CONFIG_KEY);
     if (local) {
       const input = JSON.parse(local) as PublicConfigInput;
-      parseAppConfig(input, location.origin);
+      parseAppConfig(input, location.origin, getPlatformCapabilities().native);
       return input;
     }
   } catch {
@@ -57,45 +68,71 @@ function initialConfig(): PublicConfigInput {
     oidcClientId: import.meta.env.VITE_OIDC_CLIENT_ID ?? '',
   };
 }
-function makeRuntime(input: PublicConfigInput): Runtime {
-  assertM1WebRuntime();
-  const config = parseAppConfig(input, location.origin);
-  const auth = new OidcSession(config, sessionStorage);
+async function makeRuntime(input: PublicConfigInput): Promise<Runtime> {
+  assertPlatformReady();
+  const config = parseAppConfig(input, location.origin, getPlatformCapabilities().native);
+  const results = await Promise.allSettled([
+    createAuthSession(config), createAccountStorage<StoredWorkspace>({ decode: decodeWorkspace }), createSecretStore(),
+  ]);
+  const [authResult, storeResult, secretResult] = results;
+  if (authResult.status !== 'fulfilled' || storeResult.status !== 'fulfilled' || secretResult.status !== 'fulfilled') {
+    if (authResult.status === 'fulfilled') await authResult.value.dispose();
+    if (storeResult.status === 'fulfilled') await storeResult.value.close().catch(() => undefined);
+    throw results.find((result) => result.status === 'rejected')!.reason;
+  }
+  const auth = authResult.value;
+  const store = storeResult.value;
+  const secretStore = secretResult.value;
+  const binding = verifiedBinding(config, secretStore, auth.getSubject);
+  const api = new SyncApi(config.apiBaseUrl, auth.getAccessToken, undefined, binding.key);
   const controller = new WorkspaceController({
     apiBaseUrl: config.apiBaseUrl,
-    api: new SyncApi(config.apiBaseUrl, auth.getAccessToken),
-    store: new AccountStore<StoredWorkspace>({ decode: decodeWorkspace }),
+    api,
+    store,
     online: navigator.onLine,
+    supportsPaperOrganization: () => api.supportsPaperOrganization,
+    binding: { ...binding, prepare: (signal) => api.capabilities(signal) },
   });
-  return { config, auth, controller };
+  return { config, auth, controller, secretStore, dispose: async () => {
+    controller.deactivate();
+    await auth.dispose();
+    await store.close();
+  } };
 }
 
 export function App() {
   const [input, setInput] = useState(initialConfig);
-  const [runtime, setRuntime] = useState<Runtime | null>(() => {
-    try {
-      return makeRuntime(input);
-    } catch {
-      return null;
-    }
-  });
+  const [runtime, setRuntime] = useState<Runtime | null>(null);
+  const [loading, setLoading] = useState(true);
   const [configError, setConfigError] = useState<string | null>(null);
+  useEffect(() => {
+    let current = true;
+    let created: Runtime | null = null;
+    setLoading(true);
+    setRuntime(null);
+    void makeRuntime(input).then(async (next) => {
+      created = next;
+      if (current) setRuntime(next);
+      else await next.dispose?.();
+    }).catch((error) => {
+      if (current && input.apiBaseUrl) setConfigError(describeError(error));
+    }).finally(() => { if (current) setLoading(false); });
+    return () => { current = false; void created?.dispose?.().catch(() => undefined); };
+  }, [input]);
   async function configure(next: PublicConfigInput) {
     try {
-      const parsed = parseAppConfig(next, location.origin);
+      const parsed = parseAppConfig(next, location.origin, getPlatformCapabilities().native);
       const clean = {
         apiBaseUrl: parsed.apiBaseUrl,
         oidcAuthority: parsed.oidcAuthority,
         oidcClientId: parsed.oidcClientId,
       };
-      const replacement = makeRuntime(clean);
       if (runtime) {
         runtime.controller.deactivate();
         await runtime.auth.clearLocalSession();
       }
       localStorage.setItem(CONFIG_KEY, JSON.stringify(clean));
       setInput(clean);
-      setRuntime(replacement);
       setConfigError(null);
     } catch (error) {
       setConfigError(describeError(error));
@@ -109,7 +146,7 @@ export function App() {
           <span className="eyebrow">你的研究，随身继续</span>
           <h1>连接你的 PaperQuay</h1>
           <p className="muted">填写自托管服务提供的地址，然后使用账号登录。</p>
-          <ConfigForm input={input} onSave={configure} />
+          {loading ? <p role="status">正在打开此设备的数据…</p> : <ConfigForm input={input} onSave={configure} />}
           {configError && <ErrorMessage message={configError} />}
         </main>
       </div>
@@ -157,36 +194,69 @@ export function ConnectedApp({
 }) {
   const { auth, controller } = runtime;
   const authState = useSyncExternalStore(auth.subscribe, auth.getSnapshot);
+  const authSubjectKey = JSON.stringify(auth.getSubject?.() ?? null);
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
   const [section, setSection] = useState<Section>('library');
   const [selection, setSelection] = useState<{ type: 'paper' | 'note'; id: string } | null>(null);
+  const [readingId, setReadingId] = useState<string | null>(null);
+  const [readingPanel, setReadingPanel] = useState<'notes' | 'ai' | null>('notes');
+  const [readingNoteId, setReadingNoteId] = useState<string | null>(null);
+  const [aiContext, setAiContext] = useState<PdfAiContext | null>(null);
+  const liveAiContext = useRef<PdfAiContext | null>(null);
+  const [citationTarget, setCitationTarget] = useState<PdfCitationTarget | null>(null);
+  const [aiSettings, setAiSettings] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const [readerDirty, setReaderDirty] = useState(false);
+  const unsaved = useRef(false);
+  const resumeSync = useRef<() => Promise<void>>(async () => {});
   const [uiError, setUiError] = useState<string | null>(null);
   const [deviceName, setDeviceName] = useState(() => {
     try {
-      return sessionStorage.getItem(DEVICE_NAME_KEY)?.slice(0, 80) || '我的 Web 浏览器';
+      return sessionStorage.getItem(DEVICE_NAME_KEY)?.slice(0, 80) || (getPlatformCapabilities().native ? '我的移动设备' : '我的 Web 浏览器');
     } catch {
       return '我的 Web 浏览器';
     }
   });
   const dirtyChanged = useCallback((value: boolean) => setDirty(value), []);
+  const readerDirtyChanged = useCallback((value: boolean) => setReaderDirty(value), []);
+  const invalidateAiContext = useCallback(() => {
+    liveAiContext.current = null; setAiContext(null); setCitationTarget(null);
+  }, []);
+  useLayoutEffect(() => { liveAiContext.current = aiContext; }, [aiContext]);
+  useLayoutEffect(() => { unsaved.current = dirty || readerDirty; }, [dirty, readerDirty]);
 
   useEffect(() => {
-    if (location.pathname === '/auth/callback') {
-      const callback = location.href;
+    let current = true;
+    const callback = location.pathname === '/auth/callback' ? location.href : null;
+    if (callback) {
       // Remove one-time authorization parameters before loading other application UI.
       history.replaceState(null, '', '/');
-      void auth.completeSignIn(callback).catch((error) => setUiError(describeError(error)));
     }
-    const onOnline = () => controller.setOnline(true);
+    void auth.initialize().then(async () => {
+      if (current && callback) await auth.completeSignIn(callback);
+    }).catch((error) => { if (current) setUiError(describeError(error)); });
+    let reconnecting = false;
+    const resume = async () => {
+      if (reconnecting || !current || unsaved.current) return;
+      if (controller.getSnapshot().needsLogin && auth.getSnapshot().status === 'signed-in') {
+        reconnecting = true;
+        try { await controller.bind(deviceName, true); }
+        finally { reconnecting = false; }
+      }
+      if (current) await controller.syncNow();
+    };
+    resumeSync.current = resume;
+    const onOnline = () => { controller.setOnline(true); void resume(); };
     const onOffline = () => controller.setOnline(false);
     const onFocus = () => {
-      if (document.visibilityState === 'visible') void controller.syncNow();
+      if (document.visibilityState === 'visible' && controller.getSnapshot().online) void resume();
     };
     window.addEventListener('online', onOnline);
     window.addEventListener('offline', onOffline);
     document.addEventListener('visibilitychange', onFocus);
     return () => {
+      current = false;
+      resumeSync.current = async () => {};
       window.removeEventListener('online', onOnline);
       window.removeEventListener('offline', onOffline);
       document.removeEventListener('visibilitychange', onFocus);
@@ -201,26 +271,36 @@ export function ConnectedApp({
     else if (authState.status === 'signed-out' || authState.status === 'signing-in') {
       controller.deactivate();
       setSelection(null);
+      setReadingId(null);
+      setAiContext(null);
+      setCitationTarget(null);
       setDirty(false);
+      setReaderDirty(false);
     }
-  }, [authState.status, auth, controller]);
+  }, [authState.status, authSubjectKey, auth, controller]);
   useEffect(() => {
-    if (!dirty) return;
+    if (!dirty && !readerDirty && state.online && state.needsLogin && authState.status === 'signed-in') void resumeSync.current();
+  }, [dirty, readerDirty, state.online, state.needsLogin, authState.status]);
+  useEffect(() => {
+    if (!dirty && !readerDirty) return;
     const confirmClose = (event: BeforeUnloadEvent) => {
       event.preventDefault();
       event.returnValue = '';
     };
     window.addEventListener('beforeunload', confirmClose);
     return () => window.removeEventListener('beforeunload', confirmClose);
-  }, [dirty]);
+  }, [dirty, readerDirty]);
 
   function canLeave(): boolean {
-    return !dirty || window.confirm('当前编辑还没有保存。放弃这些未保存的文字？');
+    return (!dirty && !readerDirty) || window.confirm('当前改动尚未确认保存。离开可能丢失这些改动，仍然离开？');
   }
   function navigate(next: Section) {
     if (!canLeave()) return;
     setSection(next);
     setSelection(null);
+    setReadingId(null);
+    setAiContext(null);
+    setCitationTarget(null);
     setDirty(false);
     setUiError(null);
   }
@@ -228,6 +308,7 @@ export function ConnectedApp({
     if (selection?.type === type && selection.id === id) return;
     if (!canLeave()) return;
     setSelection({ type, id });
+    setReadingId(null);
     setDirty(false);
     setUiError(null);
   }
@@ -262,6 +343,24 @@ export function ConnectedApp({
   );
   const papers = entities.filter((entity) => entity.entityType === 'paper');
   const notes = entities.filter((entity) => entity.entityType === 'note');
+  const readingPaper = papers.find((paper) => paper.entityId === readingId && !paper.deleted);
+  const scope = state.identity ? { apiBaseUrl: runtime.config.apiBaseUrl, accountId: state.identity.accountId } : null;
+  const organizationEnabled = state.workspace?.paperOrganizationVersion === 1;
+  function leaveReader() {
+    if (!canLeave()) return;
+    setReadingId(null);
+    setAiContext(null);
+    setCitationTarget(null);
+    setDirty(false);
+  }
+  function openReader(id: string) {
+    if (!canLeave()) return;
+    setReadingId(id);
+    setReadingNoteId(null);
+    setAiContext(null);
+    setCitationTarget(null);
+    setDirty(false);
+  }
   const conflictCount = new Set([
     ...state.conflicts.map((conflict) => conflict.conflictId),
     ...Object.keys(state.workspace?.sync.conflicts ?? {}),
@@ -340,7 +439,9 @@ export function ConnectedApp({
             <ConfigForm input={configInput} onSave={onConfigure} />
           </details>
           <p className="privacy-note">
-            内容按账号保存在此浏览器。刷新后需重新登录；已确认保存的改动会保留。
+            {getPlatformCapabilities().native
+              ? '内容按账号保存在此设备。曾经验证过的账号可以离线阅读和记录，联网后继续同步。'
+              : '内容按账号保存在此浏览器。刷新后需重新登录；已确认保存的改动会保留。'}
           </p>
         </main>
       </div>
@@ -376,7 +477,7 @@ export function ConnectedApp({
             )}
           </div>
         )}
-        {(section === 'library' || section === 'notes') && (
+        {(section === 'library' || section === 'notes') && !readingId && (
           <div className={`workspace-grid ${selection ? 'has-selection' : ''}`}>
             <EntityList
               type={section === 'library' ? 'paper' : 'note'}
@@ -412,6 +513,8 @@ export function ConnectedApp({
                 }}
                 onDirty={dirtyChanged}
                 onConflicts={() => navigate('conflicts')}
+                organizationEnabled={organizationEnabled}
+                onRead={selection.type === 'paper' ? () => openReader(selection.id) : undefined}
               />
             ) : (
               <div className="editor-placeholder">
@@ -426,6 +529,56 @@ export function ConnectedApp({
             )}
           </div>
         )}
+        {readingId && readingPaper && scope && <div className={`reading-workspace ${readingPanel ? 'with-panel' : ''}`}>
+          <div className="reading-main">
+            <div className="reading-panel-tabs" aria-label="阅读工作区">
+              <button className={readingPanel === 'notes' ? 'secondary active' : 'text-button'} onClick={() => {
+                if (canLeave()) { setReadingPanel(readingPanel === 'notes' ? null : 'notes'); setDirty(false); }
+              }}>阅读笔记</button>
+              <button className={readingPanel === 'ai' ? 'secondary active' : 'text-button'} onClick={() => {
+                if (canLeave()) { setReadingPanel(readingPanel === 'ai' ? null : 'ai'); setDirty(false); }
+              }}>AI 助手</button>
+            </div>
+            <Suspense fallback={<p className="loading-message" role="status">正在打开阅读器…</p>}>
+              <PaperReader key={`${scope.apiBaseUrl}:${scope.accountId}:${state.workspace!.sync.deviceId}:${state.workspace!.sync.generation}:${readingId}`} scope={scope} paper={readingPaper}
+                attachmentVersions={entities.filter((entity) => entity.entityType === 'attachmentVersion')}
+                annotations={entities.filter((entity) => entity.entityType === 'annotation')}
+                positions={entities.filter((entity) => entity.entityType === 'readingPosition')}
+                controller={controller} onBack={leaveReader} jumpTo={citationTarget ?? undefined}
+                onDirtyChange={readerDirtyChanged}
+                onContextInvalidated={invalidateAiContext}
+                onAskAi={(context) => { if (canLeave()) { liveAiContext.current = context; setAiContext(context); setReadingPanel('ai'); setDirty(false); } }} />
+            </Suspense>
+          </div>
+          {readingPanel === 'notes' && <aside className="reading-side" aria-label="阅读笔记">
+            <div className="reading-side-heading"><h2>阅读笔记</h2><button className="secondary" onClick={() => {
+              if (canLeave()) { setReadingNoteId(crypto.randomUUID()); setDirty(false); }
+            }}>新建笔记</button></div>
+            <div className="related-note-list">{notes.filter((note) => !note.deleted && (note.data as NoteData).paperId === readingId).map((note) =>
+              <button key={note.entityId} className={note.entityId === readingNoteId ? 'secondary active' : 'text-button'} onClick={() => {
+                if (canLeave()) { setReadingNoteId(note.entityId); setDirty(false); }
+              }}>{(note.data as NoteData).title}</button>)}</div>
+            {readingNoteId ? <EntityEditor key={`reading-note:${readingNoteId}`} type="note" entityId={readingNoteId}
+              entity={notes.find((note) => note.entityId === readingNoteId)} defaultPaperId={readingId}
+              papers={papers} controller={controller} hasConflict={hasEntityConflict(state.workspace!.sync, { entityType: 'note', entityId: readingNoteId })}
+              onBack={() => { if (canLeave()) { setReadingNoteId(null); setDirty(false); } }} onDirty={dirtyChanged}
+              onConflicts={() => navigate('conflicts')} /> : <p className="muted reading-hint">选择一条关联笔记，或新建笔记。输入后会自动保存到此设备。</p>}
+          </aside>}
+          {readingPanel === 'ai' && runtime.secretStore && <aside className="reading-side" aria-label="阅读 AI 助手">
+            <Suspense fallback={<p role="status">正在打开 AI 助手…</p>}><AiWorkspace accountScope={scope} context={aiContext}
+              secretStore={runtime.secretStore} onSaveNote={async (note, source) => {
+                assertAiNoteTarget(controller.getSnapshot(), runtime.config.apiBaseUrl, liveAiContext.current, source, note);
+                await controller.save({ entityType: 'note', entityId: crypto.randomUUID(), mutation: 'put', data: note });
+              }} onNavigateCitation={(target) => {
+                const version = entities.find((entity) => entity.entityType === 'attachmentVersion' && entity.entityId === target.attachmentVersionId && !entity.deleted);
+                if (!version?.data || !('paperId' in version.data) || version.data.paperId !== readingId || !('sha256' in version.data) || version.data.sha256 !== target.sha256) {
+                  setUiError('引用对应的 PDF 版本当前不可用。'); return;
+                }
+                setCitationTarget({ ...target, requestId: crypto.randomUUID() });
+              }} /></Suspense>
+          </aside>}
+        </div>}
+        {readingId && !readingPaper && <div className="empty-state"><p>这篇文献已删除或当前不可用。</p><button className="secondary" onClick={leaveReader}>返回文库</button></div>}
         {section === 'account' && (
           <AccountView
             state={state}
@@ -444,6 +597,10 @@ export function ConnectedApp({
               ) {
                 try {
                   await controller.clearLocalData();
+                  if (scope) {
+                    const { clearPdfCache } = await import('./pdf/cache.ts');
+                    await clearPdfCache(scope, { includePinned: true });
+                  }
                 } catch (problem) {
                   setUiError(describeError(problem));
                 }
@@ -463,6 +620,11 @@ export function ConnectedApp({
             }}
           />
         )}
+        {section === 'account' && scope && runtime.secretStore && <section className="account-ai-settings">
+          <button className="secondary" onClick={() => setAiSettings(!aiSettings)}>{aiSettings ? '收起 AI 设置' : 'AI 提供商设置'}</button>
+          {aiSettings && <Suspense fallback={<p role="status">正在打开设置…</p>}><AiWorkspace accountScope={scope} context={null}
+            secretStore={runtime.secretStore} onSaveNote={async () => { throw new ClientError('ACCOUNT_CHANGED'); }} onNavigateCitation={() => {}} /></Suspense>}
+        </section>}
         {section === 'conflicts' && (
           <ConflictsView
             state={state}
@@ -595,9 +757,15 @@ function EntityList({
 }) {
   const [query, setQuery] = useState('');
   const [showDeleted, setShowDeleted] = useState(false);
+  const [favorite, setFavorite] = useState(false);
+  const [readingStatus, setReadingStatus] = useState<'' | 'unread' | 'reading' | 'read'>('');
+  const [tag, setTag] = useState('');
+  const [collection, setCollection] = useState('');
+  const [year, setYear] = useState('');
+  const [queued, setQueued] = useState(false);
   const noun = type === 'paper' ? '文献' : '笔记';
   const visible = entities.filter((entity) => (showDeleted ? entity.deleted : !entity.deleted));
-  const filtered = visible.filter((entity) => {
+  const filtered = type === 'paper' ? filterPapers(visible, { query, favorite, readingStatus, tag, collection, year, queued }) : visible.filter((entity) => {
     const data = entity.data;
     const values =
       data && 'authors' in data
@@ -618,6 +786,8 @@ function EntityList({
       values.some((value) => value?.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
     );
   });
+  const paperData = type === 'paper' ? visible.filter((entity) => entity.data).map((entity) => entity.data as PaperData) : [];
+  const options = (items: string[]) => [...new Set(items)].sort((a, b) => a.localeCompare(b));
   return (
     <section className="list-pane" aria-label={type === 'paper' ? '文库' : '笔记列表'}>
       <div className="list-heading">
@@ -638,6 +808,28 @@ function EntityList({
           placeholder={`搜索${noun}`}
         />
       </label>
+      {type === 'paper' && <details className="library-filters">
+        <summary>筛选文库{favorite || readingStatus || tag || collection || year || queued ? ' · 已启用' : ''}</summary>
+        <div className="filter-checks"><label className="check-field"><input type="checkbox" checked={favorite}
+          onChange={(event) => setFavorite(event.target.checked)} />仅收藏</label>
+          <label className="check-field"><input type="checkbox" checked={queued}
+            onChange={(event) => setQueued(event.target.checked)} />阅读队列</label></div>
+        <div className="filter-grid">
+          <label className="field">阅读状态<select value={readingStatus} onChange={(event) => setReadingStatus(event.target.value as typeof readingStatus)}>
+            <option value="">全部状态</option>{Object.entries(readingStatusLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+          </select></label>
+          <label className="field">年份<select value={year} onChange={(event) => setYear(event.target.value)}><option value="">全部年份</option>
+            {options(paperData.map((paper) => paper.year).filter((value): value is string => Boolean(value))).map((value) => <option key={value}>{value}</option>)}
+          </select></label>
+          <label className="field">标签<select value={tag} onChange={(event) => setTag(event.target.value)}><option value="">全部标签</option>
+            {options(paperData.flatMap((paper) => organizationOf(paper).tags)).map((value) => <option key={value}>{value}</option>)}
+          </select></label>
+          <label className="field">合集<select value={collection} onChange={(event) => setCollection(event.target.value)}><option value="">全部合集</option>
+            {options(paperData.flatMap((paper) => organizationOf(paper).collections)).map((value) => <option key={value}>{value}</option>)}
+          </select></label>
+        </div>
+        <button className="text-button" onClick={() => { setFavorite(false); setReadingStatus(''); setTag(''); setCollection(''); setYear(''); setQueued(false); }}>清除筛选</button>
+      </details>}
       <div className="list-meta">
         <span>
           {filtered.length} {type === 'paper' ? '篇文献' : '条笔记'}
@@ -699,6 +891,11 @@ function EntityList({
                       {data.year ? ` · ${data.year}` : ''}
                     </span>
                     {data.publication && <span className="entity-source">{data.publication}</span>}
+                    {data.organization && <span className="paper-organization">
+                      {data.organization.favorite ? '★ 收藏 · ' : ''}{readingStatusLabels[data.organization.readingStatus]}
+                      {data.organization.queueRank !== null ? ' · 队列中' : ''}
+                      {data.organization.tags.length ? ` · ${data.organization.tags.join(' / ')}` : ''}
+                    </span>}
                     {data.abstractText && (
                       <span className="paper-excerpt">{data.abstractText}</span>
                     )}

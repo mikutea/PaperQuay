@@ -3,6 +3,8 @@ import {
   validatePushResponse,
   validateSyncOperation,
   validateSyncRecord,
+  SYNC_FEATURE_HEADER,
+  PAPER_ORGANIZATION_FEATURE,
   type EntityType,
   type PullResponse,
   type PushRequest,
@@ -15,6 +17,7 @@ import {
 } from '../../../packages/sync-core/src/index.ts';
 import { normalizeServiceUrl } from './config.ts';
 import { ClientError, errorFromResponse } from './errors.ts';
+import { getPlatformCapabilities } from './platform.ts';
 
 export interface DeviceSession {
   id: string;
@@ -90,6 +93,7 @@ function identity(value: unknown): AccountIdentity {
   if (!isObject(value)) throw new ClientError('INVALID_RESPONSE');
   return { accountId: uuid(value.accountId), device: device(value.device) };
 }
+export const parseAccountIdentity = identity;
 function syncRecord(value: unknown): SyncRecord | null {
   if (value === null) return null;
   const parsed = validateSyncRecord(value);
@@ -130,12 +134,15 @@ async function boundedJson(response: Response): Promise<unknown> {
 }
 
 export class SyncApi {
+  supportsPaperOrganization = false;
   private readonly baseUrl: string;
   private readonly getToken: () => Promise<string>;
   private readonly fetcher: typeof fetch;
-  constructor(baseUrl: string, getToken: () => Promise<string>, fetcher?: typeof fetch) {
+  private readonly getIdentityKey?: () => string | null;
+  constructor(baseUrl: string, getToken: () => Promise<string>, fetcher?: typeof fetch, getIdentityKey?: () => string | null) {
     this.baseUrl = normalizeServiceUrl(baseUrl);
     this.getToken = getToken;
+    this.getIdentityKey = getIdentityKey;
     // Native Window.fetch requires its Window receiver in some browsers.
     this.fetcher = fetcher ?? ((input, init) => globalThis.fetch(input, init));
   }
@@ -147,19 +154,25 @@ export class SyncApi {
     data?: unknown,
   ): Promise<unknown> {
     if (signal.aborted) throw new ClientError('ACCOUNT_CHANGED');
+    const identityKey = this.getIdentityKey?.();
+    const checkIdentity = () => {
+      if (signal.aborted || this.getIdentityKey?.() !== identityKey)
+        throw new ClientError('ACCOUNT_CHANGED');
+    };
     const controller = new AbortController();
     const onAbort = () => controller.abort();
     signal.addEventListener('abort', onAbort, { once: true });
     const timeout = setTimeout(() => controller.abort('timeout'), 30_000);
     try {
       const token = await this.getToken();
-      if (signal.aborted) throw new ClientError('ACCOUNT_CHANGED');
+      checkIdentity();
       const response = await this.fetcher(`${this.baseUrl}${path}`, {
         method,
         body: data === undefined ? undefined : JSON.stringify(data),
         headers: {
           Authorization: `Bearer ${token}`,
           Accept: 'application/json',
+          ...(this.supportsPaperOrganization ? { [SYNC_FEATURE_HEADER]: PAPER_ORGANIZATION_FEATURE } : {}),
           ...(data === undefined ? {} : { 'Content-Type': 'application/json' }),
         },
         redirect: 'error',
@@ -168,6 +181,7 @@ export class SyncApi {
         referrerPolicy: 'no-referrer',
         signal: controller.signal,
       });
+      checkIdentity();
       let body: unknown;
       try {
         body = await boundedJson(response);
@@ -176,6 +190,7 @@ export class SyncApi {
           throw errorFromResponse(response.status);
         throw error;
       }
+      checkIdentity();
       if (!response.ok) {
         const code =
           isObject(body) && isObject(body.error) && typeof body.error.code === 'string'
@@ -185,7 +200,7 @@ export class SyncApi {
       }
       return body;
     } catch (error) {
-      if (signal.aborted) throw new ClientError('ACCOUNT_CHANGED');
+      checkIdentity();
       if (controller.signal.reason === 'timeout') throw new ClientError('REQUEST_TIMEOUT', true);
       if (error instanceof ClientError) throw error;
       throw new ClientError('NETWORK_UNAVAILABLE', true);
@@ -195,11 +210,19 @@ export class SyncApi {
     }
   }
 
+  async capabilities(signal: AbortSignal): Promise<{ paperOrganization: boolean }> {
+    const body = await this.request('/v1/capabilities', signal);
+    if (!isObject(body) || body.protocolVersion !== 1) throw new ClientError('INVALID_RESPONSE');
+    this.supportsPaperOrganization = isObject(body.features) && body.features.paperOrganization === 1;
+    return { paperOrganization: this.supportsPaperOrganization };
+  }
+
   async register(name: string, signal: AbortSignal): Promise<AccountIdentity> {
+    const platform = getPlatformCapabilities().platform;
     return identity(
       await this.request('/v1/devices', signal, 'POST', {
         name: name.trim().slice(0, 80) || 'Web 浏览器',
-        platform: 'web',
+        platform: platform === 'ios' || platform === 'android' ? platform : 'web',
       }),
     );
   }

@@ -20,6 +20,22 @@ const identity = {
 const json = (value: unknown, status = 200) =>
   new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
 
+test('feature opt-in is sent only after successful capability negotiation and can be disabled again', async () => {
+  const sent: Headers[] = [];
+  let enabled = true;
+  const api = new SyncApi('https://sync.example.test', async () => 'opaque-test-token', async (url, options) => {
+    sent.push(new Headers(options?.headers));
+    return json(String(url).endsWith('/v1/capabilities') ? { protocolVersion: 1, ...(enabled ? { features: { paperOrganization: 1 } } : {}) } : identity);
+  });
+  const signal = new AbortController().signal;
+  await api.capabilities(signal); await api.me(signal);
+  assert.equal(sent[0].get('X-PaperQuay-Features'), null);
+  assert.equal(sent[1].get('X-PaperQuay-Features'), 'paper-organization-v1');
+  enabled = false; await api.capabilities(signal); await api.me(signal);
+  assert.equal(api.supportsPaperOrganization, false);
+  assert.equal(sent.at(-1)?.get('X-PaperQuay-Features'), null);
+});
+
 test('default transport preserves the browser fetch receiver', async (context) => {
   context.mock.method(globalThis, 'fetch', function (this: typeof globalThis) {
     assert.equal(this, globalThis);

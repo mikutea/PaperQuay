@@ -6,6 +6,7 @@ import { buildApp } from '../../src/app.ts';
 import { ApiError } from '../../src/errors.ts';
 import type { SyncRepository } from '../../src/types.ts';
 import { identity, operation, paper, testConfig } from '../fixtures.ts';
+import { PAPER_ORGANIZATION_FEATURE, SYNC_FEATURE_HEADER, type SyncRecord } from '../../../packages/sync-core/src/index.ts';
 
 function fakeRepository() {
   const deviceId = randomUUID(); const accountId = randomUUID();
@@ -24,6 +25,53 @@ function fakeRepository() {
   };
   return { repository, session, pushed: () => pushed };
 }
+
+test('organization metadata is negotiated consistently for pull, push and every conflict view', async (t) => {
+  const fake = fakeRepository();
+  const organization = { favorite: true, readingStatus: 'reading' as const, tags: ['fieldwork'], collections: ['thesis'], queueRank: 3 };
+  const op = operation('paper', { ...paper(), organization });
+  const record: SyncRecord<'paper'> = { entityType: 'paper', entityId: op.entityId, schemaVersion: 1, revision: 1,
+    deletedAt: null, updatedAt: new Date().toISOString(), modifiedByDeviceId: fake.session.device.id, data: op.data };
+  const result = { opId: op.opId, status: 'applied' as const, replayed: false, record };
+  const conflictId = randomUUID();
+  fake.repository.pull = async () => ({ protocolVersion: 1, records: [record], nextCursor: 'current', hasMore: false });
+  fake.repository.push = async () => ({ protocolVersion: 1, results: [result] });
+  fake.repository.listConflicts = async () => ({ conflicts: [{ conflictId, entityType: 'paper', entityId: op.entityId,
+    createdAt: record.updatedAt, attemptedOperation: op, observedRecord: record, currentRecord: record }], nextCursor: 'current', hasMore: false });
+  fake.repository.resolveConflict = async () => result;
+  const app = await buildApp({ config: testConfig(), repository: fake.repository, verifyToken: async () => identity(), rateLimitEnabled: false });
+  t.after(() => app.close());
+  assert.deepEqual((await app.inject({ method: 'GET', url: '/v1/capabilities' })).json().features, { paperOrganization: 1 });
+  for (const enabled of [false, true]) {
+    const headers = enabled ? { [SYNC_FEATURE_HEADER]: `unknown, ${PAPER_ORGANIZATION_FEATURE}` } : {};
+    const pull = (await app.inject({ method: 'GET', url: '/v1/sync/pull', headers })).json();
+    const pushed = (await app.inject({ method: 'POST', url: '/v1/sync/push', headers,
+      payload: { protocolVersion: 1, deviceId: fake.session.device.id, operations: [op] } })).json();
+    const conflict = (await app.inject({ method: 'GET', url: '/v1/conflicts', headers })).json().conflicts[0];
+    const resolved = (await app.inject({ method: 'POST', url: `/v1/conflicts/${conflictId}/resolve`, headers,
+      payload: { opId: op.opId, expectedRevision: 1, choice: 'current' } })).json();
+    for (const row of [pull.records[0], pushed.results[0].record, conflict.attemptedOperation, conflict.observedRecord, conflict.currentRecord, resolved.record]) {
+      assert.deepEqual(row.data.organization, enabled ? organization : undefined);
+      assert.equal(row.data.title, paper().title);
+    }
+  }
+  assert.deepEqual(record.data?.organization, organization, 'legacy views cannot mutate retained records');
+});
+
+test('native origins and feature preflight require an explicit exact origin allowlist', async (t) => {
+  const fake = fakeRepository();
+  const app = await buildApp({ config: testConfig({ PAPERQUAY_ALLOWED_ORIGINS: 'capacitor://localhost,https://localhost' }),
+    repository: fake.repository, verifyToken: async () => identity(), rateLimitEnabled: false });
+  t.after(() => app.close());
+  for (const origin of ['capacitor://localhost', 'https://localhost', 'capacitor://evil.test', 'capacitor://localhost.evil.test']) {
+    const response = await app.inject({ method: 'OPTIONS', url: '/v1/sync/push', headers: { origin,
+      'access-control-request-method': 'POST', 'access-control-request-headers': `authorization,content-type,${SYNC_FEATURE_HEADER}` } });
+    if (['capacitor://localhost', 'https://localhost'].includes(origin)) {
+      assert.equal(response.headers['access-control-allow-origin'], origin);
+      assert.match(String(response.headers['access-control-allow-headers']).toLowerCase(), /x-paperquay-features/);
+    } else assert.equal(response.headers['access-control-allow-origin'], undefined);
+  }
+});
 
 test('HTTP authenticates first and rejects private fields, oversized batches, unsupported schema, and malformed pagination', async (t) => {
   const fake = fakeRepository();
