@@ -149,9 +149,17 @@ export function queueLocalEdit(state: AccountSyncState, edit: LocalEdit, identit
   assertState(state);
   if (!validateJsonSchema(identitySchema, identity).ok) fail('INVALID_EDIT_IDENTITY');
   if (!validateJsonSchema(editSchema, edit).ok) fail('INVALID_EDIT');
-  const candidate = { ...edit, ...identity } as PendingEdit;
+  let candidate = { ...edit, ...identity } as PendingEdit;
   if (!validatePending(candidate).ok) fail('INVALID_EDIT');
   const key = operationKey(candidate);
+  const pending = state.outbox.find((item) => operationKey(item.operation) === key);
+  // Editing an unsent restoration changes its content, not the explicit intent to restore.
+  // Normalize repeats of that same local edit too, so idempotency checks still compare
+  // the effective operation after it has been prepared or sent.
+  if (candidate.mutation === 'put' && pending?.operation.mutation === 'restore'
+    && ((pending.status === 'queued' && pending.attempts === 0) || pending.operation.opId === candidate.opId)) {
+    candidate = { ...candidate, mutation: 'restore' } as PendingEdit;
+  }
   const duplicate = [...state.outbox.map((entry) => entry.operation), ...Object.values(state.overlays), ...Object.values(state.conflicts).map((conflict) => conflict.attempted)].find((operation) => operation.opId === identity.opId);
   if (duplicate) return sameIntent(duplicate, candidate) ? state : fail('OP_ID_REUSED');
   const next = copy(state);
@@ -302,6 +310,7 @@ export function rebindDevice(state: AccountSyncState, deviceId: string): Account
   return next;
 }
 
+/** Acknowledgement of this client's explicit, durably saved resolution request. */
 export function applyConflictResolution(state: AccountSyncState, context: SyncContext, resolution: { conflictId: string; record: SyncRecord | null; consumedOverlayOpId?: string }): AccountSyncState {
   assertContext(state, context);
   if (!validateJsonSchema(uuidSchema, resolution.conflictId).ok || (resolution.record !== null && !validateRecord(resolution.record).ok) || (resolution.consumedOverlayOpId !== undefined && !validateJsonSchema(uuidSchema, resolution.consumedOverlayOpId).ok)) fail('INVALID_CONFLICT_RESOLUTION');
@@ -316,6 +325,30 @@ export function applyConflictResolution(state: AccountSyncState, context: SyncCo
   if (key && blocked) {
     if (next.overlays[key]?.opId === resolution.consumedOverlayOpId) delete next.overlays[key];
     promoteOverlay(next, key, resolution.record?.revision ?? 0, blocked.originDeviceId);
+  }
+  return next;
+}
+
+/** Reconcile a conflict authoritatively closed elsewhere without rebasing this client's later edits. */
+export function applyRemoteConflictResolution(state: AccountSyncState, context: SyncContext, resolution: { conflictId: string; record: SyncRecord | null }): AccountSyncState {
+  assertContext(state, context);
+  if (!validateJsonSchema(uuidSchema, resolution.conflictId).ok || (resolution.record !== null && !validateRecord(resolution.record).ok)) fail('INVALID_CONFLICT_RESOLUTION');
+  const next = copy(state);
+  const conflict = next.conflicts[resolution.conflictId];
+  const key = conflict ? operationKey(conflict.attempted) : resolution.record ? operationKey(resolution.record) : null;
+  if (conflict && resolution.record && operationKey(resolution.record) !== key) fail('MISMATCHED_CONFLICT_RESOLUTION');
+  if (resolution.record) storeServerRecord(next, resolution.record);
+  delete next.conflicts[resolution.conflictId];
+  const blocked = next.outbox.find((entry) => entry.conflictId === resolution.conflictId);
+  if (blocked) next.outbox = next.outbox.filter((entry) => entry !== blocked);
+  if (key && blocked) {
+    const pending = next.overlays[key];
+    // These edits did not participate in the remote decision. A fresh operation with the
+    // old CAS basis creates a real server conflict instead of overwriting that decision.
+    // Restore cannot use revision zero. Revision one precedes every server tombstone:
+    // entities are created live at revision one and deletion always advances revision.
+    const baseRevision = pending?.mutation === 'restore' ? Math.max(1, blocked.operation.baseRevision) : blocked.operation.baseRevision;
+    promoteOverlay(next, key, baseRevision, blocked.originDeviceId);
   }
   return next;
 }

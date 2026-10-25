@@ -2,6 +2,7 @@ import {
   applyConflictResolution,
   applyPullPage,
   applyPushResults,
+  applyRemoteConflictResolution,
   createAccountState,
   entityKey,
   getSyncContext,
@@ -336,21 +337,66 @@ export class WorkspaceController {
     try {
       for (const conflictId of Object.keys(this.snapshot.workspace!.pendingResolutions))
         await this.sendResolution(epoch, conflictId, signal);
+      // Retry missing dependencies only after another write succeeds. Other retryable
+      // rejections wait for the next sync trigger, without blocking independent edits.
+      const deferred = new Map<string, number | null>();
+      let progress = 0;
       for (let sent = 0; sent < 100; sent += 1) {
         let prepared: PreparedPush | undefined;
         await this.update(epoch, (value) => {
-          prepared = preparePush(value.sync, context, 1);
+          const index = value.sync.outbox.findIndex((entry) => {
+            if (entry.status !== 'queued' && entry.status !== 'uncertain') return false;
+            const afterProgress = deferred.get(entry.operation.opId);
+            return (
+              afterProgress === undefined || (afterProgress !== null && progress > afterProgress)
+            );
+          });
+          if (index < 0) return value;
+          // Reorder whole entries only; attempted operation identities and payloads
+          // remain immutable, including requests whose acknowledgements were lost.
+          const ordered =
+            index === 0
+              ? value.sync
+              : {
+                  ...value.sync,
+                  outbox: [
+                    value.sync.outbox[index],
+                    ...value.sync.outbox.slice(0, index),
+                    ...value.sync.outbox.slice(index + 1),
+                  ],
+                };
+          prepared = preparePush(ordered, context, 1);
           return { ...value, sync: prepared.state };
         });
-        if (!prepared!.opIds.length) break;
+        if (!prepared?.opIds.length) break;
         try {
           const response = await this.api.push(prepared!.request, signal);
-          await this.update(epoch, (value) => ({
-            ...value,
-            sync: applyPushResults(value.sync, context, response, prepared!.opIds),
-          }));
-          if (response.results.some((result) => result.status === 'rejected' && result.retryable))
-            throw new ClientError('SYNC_FAILED', true);
+          await this.update(epoch, (value) => {
+            const sync = applyPushResults(value.sync, context, response, prepared!.opIds);
+            const retryableIds = new Set(
+              response.results
+                .filter((result) => result.status === 'rejected' && result.retryable)
+                .map((result) => result.opId),
+            );
+            // Keep deferred work behind the rest even if this run reaches its limit.
+            return {
+              ...value,
+              sync: retryableIds.size
+                ? {
+                    ...sync,
+                    outbox: [
+                      ...sync.outbox.filter((entry) => !retryableIds.has(entry.operation.opId)),
+                      ...sync.outbox.filter((entry) => retryableIds.has(entry.operation.opId)),
+                    ],
+                  }
+                : sync,
+            };
+          });
+          for (const result of response.results) {
+            if (result.status === 'applied') progress += 1;
+            else if (result.status === 'rejected' && result.retryable)
+              deferred.set(result.opId, result.code === 'DEPENDENCY_NOT_READY' ? progress : null);
+          }
         } catch (error) {
           if (epoch === this.epoch)
             await this.update(epoch, (value) => ({
@@ -377,7 +423,7 @@ export class WorkspaceController {
         let sync = value.sync;
         for (const conflict of Object.values(sync.conflicts)) {
           if (!open.has(conflict.conflictId) && !value.pendingResolutions[conflict.conflictId]) {
-            sync = applyConflictResolution(sync, context, {
+            sync = applyRemoteConflictResolution(sync, context, {
               conflictId: conflict.conflictId,
               record:
                 sync.serverRecords[
@@ -388,8 +434,17 @@ export class WorkspaceController {
         }
         return { ...value, sync };
       });
-      if (this.current(epoch))
-        this.publish({ conflicts, devices, lastSyncedAt: this.now(), error: null });
+      if (this.current(epoch)) {
+        const retryPending = this.snapshot.workspace!.sync.outbox.some(
+          (entry) => entry.status === 'queued' && deferred.has(entry.operation.opId),
+        );
+        this.publish({
+          conflicts,
+          devices,
+          ...(retryPending ? {} : { lastSyncedAt: this.now() }),
+          error: retryPending ? new ClientError('SYNC_FAILED', true) : null,
+        });
+      }
     } catch (error) {
       if (epoch !== this.epoch) return;
       const safe = safeError(error);

@@ -4,6 +4,7 @@ import { IDBFactory } from 'fake-indexeddb';
 import {
   getVisibleEntity,
   type NoteData,
+  type PaperData,
   type PushRequest,
   type PushResult,
   type SyncRecord,
@@ -21,6 +22,7 @@ const A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const DEVICE = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
 const NOTE = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+const PAPER = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
 const CONFLICT = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 const NOW = '2026-10-23T12:00:00.000Z';
 const note = (body: string): NoteData => ({
@@ -34,6 +36,20 @@ const edit = (body: string) => ({
   entityId: NOTE,
   mutation: 'put' as const,
   data: note(body),
+});
+const paperEdit = (entityId = PAPER) => ({
+  entityType: 'paper' as const,
+  entityId,
+  mutation: 'put' as const,
+  data: {
+    title: 'Offline paper',
+    doi: null,
+    year: null,
+    publication: null,
+    abstractText: null,
+    authors: [],
+    keywords: [],
+  } satisfies PaperData,
 });
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -95,7 +111,61 @@ class FakeApi {
       const previous = this.receipts.get(key);
       if (previous) return { ...previous, replayed: true };
       const rows = this.records.get(account) ?? [];
-      const current = rows.at(-1);
+      const current = [...rows]
+        .reverse()
+        .find(
+          (row) => row.entityType === operation.entityType && row.entityId === operation.entityId,
+        );
+      const reject = (code: string): PushResult => {
+        const result: PushResult = {
+          opId: operation.opId,
+          status: 'rejected',
+          replayed: false,
+          code,
+          retryable: false,
+        };
+        this.receipts.set(key, result);
+        return result;
+      };
+      if (!current && (operation.baseRevision !== 0 || operation.mutation !== 'put'))
+        return reject('ENTITY_NOT_FOUND');
+      if (current && operation.baseRevision !== current.revision) {
+        const conflictId = crypto.randomUUID();
+        const result: PushResult = {
+          opId: operation.opId,
+          status: 'conflict',
+          replayed: false,
+          conflictId,
+          record: current,
+        };
+        this.openConflicts.push({
+          conflictId,
+          entityType: operation.entityType,
+          entityId: operation.entityId,
+          createdAt: NOW,
+          attemptedOperation: structuredClone(operation),
+          observedRecord: current,
+          currentRecord: current,
+        });
+        this.receipts.set(key, result);
+        return result;
+      }
+      if (current?.deletedAt && operation.mutation === 'put') return reject('RESTORE_REQUIRED');
+      if (current && !current.deletedAt && operation.mutation === 'restore')
+        return reject('ENTITY_NOT_DELETED');
+      if (
+        operation.entityType === 'note' &&
+        operation.data?.paperId &&
+        !rows.some((row) => row.entityType === 'paper' && row.entityId === operation.data!.paperId)
+      ) {
+        return {
+          opId: operation.opId,
+          status: 'rejected',
+          replayed: false,
+          code: 'DEPENDENCY_NOT_READY',
+          retryable: true,
+        };
+      }
       const record = {
         entityType: operation.entityType,
         entityId: operation.entityId,
@@ -238,6 +308,27 @@ async function setupConflictWithOverlay() {
   return { ...env, overlay };
 }
 
+async function setupTombstone() {
+  const env = setup();
+  await env.controller.bind('A');
+  const deleted: SyncRecord<'note'> = {
+    entityType: 'note',
+    entityId: NOTE,
+    schemaVersion: 1,
+    revision: 2,
+    deletedAt: NOW,
+    updatedAt: NOW,
+    modifiedByDeviceId: DEVICE,
+    data: null,
+  };
+  env.api.records.set(A, [deleted]);
+  env.controller.setOnline(true);
+  await env.controller.syncNow();
+  assert.equal(env.controller.getSnapshot().error, null);
+  env.controller.setOnline(false);
+  return env;
+}
+
 test('confirmed local save survives restart and sends the same operation identity', async () => {
   const first = setup();
   await first.controller.bind('First');
@@ -280,6 +371,161 @@ test('server commit followed by lost acknowledgement is retried without a second
   assert.equal(first.api.requests[0].operations[0].opId, first.api.requests[1].operations[0].opId);
   assert.equal(next.controller.getSnapshot().workspace!.sync.outbox.length, 0);
   await next.store.close();
+});
+
+test('an offline note linked to a later queued paper sends N, P, then the unchanged N operation', async () => {
+  const env = setup();
+  await env.controller.bind('A');
+  await env.controller.save(edit('independent offline note'));
+  await env.controller.save(paperEdit());
+  await env.controller.save({
+    ...edit('linked offline note'),
+    data: { ...note('linked offline note'), paperId: PAPER },
+  });
+  const queuedNote = structuredClone(
+    env.controller.getSnapshot().workspace!.sync.outbox[0].operation,
+  );
+
+  env.controller.setOnline(true);
+  await env.controller.syncNow();
+
+  assert.deepEqual(
+    env.api.requests.map((request) => request.operations[0].entityType),
+    ['note', 'paper', 'note'],
+  );
+  assert.deepEqual(env.api.requests[0].operations[0], queuedNote);
+  assert.deepEqual(env.api.requests[2].operations[0], queuedNote);
+  assert.equal(env.api.writeCount, 2);
+  assert.equal(env.controller.getSnapshot().workspace!.sync.outbox.length, 0);
+  assert.equal(env.controller.getSnapshot().error, null);
+  assert.equal(env.controller.getSnapshot().lastSyncedAt, NOW);
+  const savedNote = env.api.records.get(A)!.find((row) => row.entityType === 'note')!;
+  assert.equal((savedNote.data as NoteData).paperId, PAPER);
+  await env.store.close();
+});
+
+test('a permanently missing dependency remains durable after bounded retries while unrelated work progresses', async () => {
+  const env = setup();
+  await env.controller.bind('A');
+  await env.controller.save({
+    ...edit('waiting for missing paper'),
+    data: { ...note('waiting for missing paper'), paperId: PAPER },
+  });
+  await env.controller.save(paperEdit('11111111-1111-4111-8111-111111111111'));
+  const queuedNote = structuredClone(
+    env.controller.getSnapshot().workspace!.sync.outbox[0].operation,
+  );
+
+  env.controller.setOnline(true);
+  await env.controller.syncNow();
+  await new Promise<void>((resolve) => setTimeout(resolve, 20));
+
+  assert.deepEqual(
+    env.api.requests.map((request) => request.operations[0].entityType),
+    ['note', 'paper', 'note'],
+  );
+  assert.equal(env.api.writeCount, 1);
+  const pending = env.controller.getSnapshot().workspace!.sync.outbox;
+  assert.equal(pending.length, 1);
+  assert.deepEqual(pending[0].operation, queuedNote);
+  assert.equal(pending[0].status, 'queued');
+  assert.equal(pending[0].errorCode, 'DEPENDENCY_NOT_READY');
+  assert.equal(env.controller.getSnapshot().syncing, false);
+  assert.equal(env.controller.getSnapshot().error?.code, 'SYNC_FAILED');
+  await env.store.close();
+});
+
+test('a general retryable rejection is deferred for the run without preventing independent operations', async () => {
+  const env = setup();
+  await env.controller.bind('A');
+  await env.controller.save(edit('temporarily rejected'));
+  await env.controller.save(paperEdit());
+  const normalPush = env.api.push.bind(env.api);
+  env.api.push = async (request) => {
+    if (request.operations[0].entityType !== 'note') return normalPush(request);
+    env.api.requests.push(structuredClone(request));
+    return {
+      protocolVersion: 1,
+      results: [
+        {
+          opId: request.operations[0].opId,
+          status: 'rejected',
+          replayed: false,
+          code: 'TEMPORARY_FAILURE',
+          retryable: true,
+        },
+      ],
+    };
+  };
+
+  env.controller.setOnline(true);
+  await env.controller.syncNow();
+  await new Promise<void>((resolve) => setTimeout(resolve, 20));
+
+  assert.deepEqual(
+    env.api.requests.map((request) => request.operations[0].entityType),
+    ['note', 'paper'],
+  );
+  assert.equal(env.api.writeCount, 1);
+  assert.equal(
+    env.controller.getSnapshot().workspace!.sync.outbox[0].errorCode,
+    'TEMPORARY_FAILURE',
+  );
+  assert.equal(env.controller.getSnapshot().syncing, false);
+  assert.equal(env.controller.getSnapshot().error?.code, 'SYNC_FAILED');
+  await env.store.close();
+});
+
+test('editing an unsent offline restore keeps the explicit restore intent and succeeds against the tombstone', async () => {
+  const env = await setupTombstone();
+  await env.controller.save({ ...edit('restored locally'), mutation: 'restore' }, 2);
+  await env.controller.save(edit('edited before restore was sent'), 2);
+
+  env.controller.setOnline(true);
+  await env.controller.syncNow();
+
+  assert.equal(env.api.requests.length, 1);
+  assert.equal(env.api.requests[0].operations[0].mutation, 'restore');
+  assert.equal(
+    (env.api.requests[0].operations[0].data as NoteData).body,
+    'edited before restore was sent',
+  );
+  assert.equal(env.api.records.get(A)!.at(-1)!.revision, 3);
+  assert.equal(env.api.records.get(A)!.at(-1)!.deletedAt, null);
+  assert.equal(env.controller.getSnapshot().workspace!.sync.outbox.length, 0);
+  await env.store.close();
+});
+
+test('an edit during a restore request preserves that request and syncs afterward as a put overlay', async () => {
+  const env = await setupTombstone();
+  await env.controller.save({ ...edit('explicit restore body'), mutation: 'restore' }, 2);
+  const original = structuredClone(
+    env.controller.getSnapshot().workspace!.sync.outbox[0].operation,
+  );
+  const pause = { entered: deferred<void>(), release: deferred<void>() };
+  env.api.pausePush = pause;
+  env.controller.setOnline(true);
+  const running = env.controller.syncNow();
+  await pause.entered.promise;
+  await env.controller.save(edit('edited after restore was sent'), 2);
+  const overlay = env.controller.getSnapshot().workspace!.sync.overlays[`note:${NOTE}`];
+  assert.deepEqual(env.controller.getSnapshot().workspace!.sync.outbox[0].operation, original);
+
+  pause.release.resolve();
+  await running;
+
+  assert.equal(env.api.requests.length, 2);
+  assert.deepEqual(env.api.requests[0].operations[0], original);
+  assert.equal(env.api.requests[1].operations[0].opId, overlay.opId);
+  assert.equal(env.api.requests[1].operations[0].mutation, 'put');
+  assert.equal(env.api.requests[1].operations[0].baseRevision, 3);
+  assert.equal(env.api.records.get(A)!.at(-1)!.revision, 4);
+  assert.equal(
+    (env.api.records.get(A)!.at(-1)!.data as NoteData).body,
+    'edited after restore was sent',
+  );
+  assert.equal(env.controller.getSnapshot().workspace!.sync.outbox.length, 0);
+  await env.store.close();
 });
 
 test('an edit made while acknowledgement is in flight remains visible and syncs as a successor', async () => {
@@ -510,6 +756,51 @@ test('a reviewed overlay is consumed after a merged resolution, including acknow
   assert.equal(next.controller.getSnapshot().workspace!.sync.outbox.length, 0);
   assert.deepEqual(next.controller.getSnapshot().workspace!.sync.overlays, {});
   await next.store.close();
+});
+
+test('a successor unseen by the resolving device keeps its old base and conflicts with a newer remote revision', async () => {
+  const env = await setupConflictWithOverlay();
+  env.controller.setOnline(false);
+  const blocked = env.controller.getSnapshot().workspace!.sync.outbox[0].operation;
+  const previous = env.api.records.get(A)!.at(-1)! as SyncRecord<'note'>;
+  const resolved: SyncRecord<'note'> = {
+    ...previous,
+    revision: 3,
+    data: note('device B resolved as D'),
+  };
+  const newest: SyncRecord<'note'> = {
+    ...resolved,
+    revision: 4,
+    data: note('device B edited D again'),
+  };
+  env.api.records.get(A)!.push(resolved, newest);
+  env.api.openConflicts = [];
+
+  env.controller.setOnline(true);
+  await env.controller.syncNow();
+  // Reconciliation releases the successor; the controller schedules its next push.
+  await env.controller.syncNow();
+
+  assert.equal(env.api.records.get(A)!.at(-1)!.revision, 4);
+  assert.equal((env.api.records.get(A)!.at(-1)!.data as NoteData).body, 'device B edited D again');
+  const request = env.api.requests.at(-1)!.operations[0];
+  assert.equal(request.opId, env.overlay.opId);
+  assert.equal(request.baseRevision, blocked.baseRevision);
+  assert.equal((request.data as NoteData).body, 'saved successor C');
+  const snapshot = env.controller.getSnapshot();
+  assert.equal(snapshot.workspace!.sync.outbox[0].status, 'conflict');
+  assert.notEqual(snapshot.workspace!.sync.outbox[0].conflictId, CONFLICT);
+  assert.equal(snapshot.conflicts.length, 1);
+  assert.equal(snapshot.conflicts[0].currentRecord!.revision, 4);
+  assert.equal(
+    (snapshot.conflicts[0].attemptedOperation.data as NoteData).body,
+    'saved successor C',
+  );
+  assert.equal(
+    (getVisibleEntity(snapshot.workspace!.sync, 'note', NOTE)!.data as NoteData).body,
+    'saved successor C',
+  );
+  await env.store.close();
 });
 
 test('an edit saved after a resolution decision is preserved instead of being consumed with the reviewed overlay', async () => {

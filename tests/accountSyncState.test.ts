@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  applyConflictResolution, applyPullPage, applyPushResults, canonicalJson, createAccountState,
+  applyConflictResolution, applyRemoteConflictResolution, applyPullPage, applyPushResults, canonicalJson, createAccountState,
   entityKey, getSyncContext, getVisibleEntity, listVisibleEntities, markPushUncertain,
   preparePush, queueLocalEdit, rebindDevice, resumeAfterRestart, validateClientState,
 } from '../packages/sync-core/src/index.ts';
@@ -149,6 +149,79 @@ test('resolving a conflict with no server record preserves a newer independently
   assert.equal(visibleBody(resolved), 'newer-local');
 });
 
+test('remote resolution queues later local content against its original base and produces a real new conflict', () => {
+  let state = queueLocalEdit(conflicted(), edit('local-after-conflict'), identity(21));
+  state = receive(state, [record(3, 'remote-merge')], 'cursor-3');
+  const before = freeze(state);
+  state = applyRemoteConflictResolution(before, getSyncContext(before), { conflictId, record: record(3, 'remote-merge') });
+  assert.equal(before.outbox[0].status, 'conflict');
+  assert.equal(before.overlays[entityKey('note', noteId)].opId, id(21));
+  assert.deepEqual(state.conflicts, {});
+  assert.deepEqual(state.overlays, {});
+  assert.equal(state.outbox[0].status, 'queued');
+  assert.equal(state.outbox[0].operation.opId, id(21));
+  assert.equal(state.outbox[0].operation.baseRevision, 1);
+  assert.equal(visibleBody(state), 'local-after-conflict');
+  assert.deepEqual(applyRemoteConflictResolution(state, getSyncContext(state), { conflictId, record: record(3, 'remote-merge') }), state);
+
+  // An additional remote update after closure still cannot be adopted as this edit's CAS basis.
+  state = receive(state, [record(4, 'another-remote-edit')], 'cursor-4');
+  const pending = send(state);
+  assert.equal(pending.request.operations[0].baseRevision, 1);
+  assert.equal((pending.request.operations[0].data as NoteData).body, 'local-after-conflict');
+  state = queueLocalEdit(pending.state, edit('typed-during-retry'), identity(22));
+  state = reply(state, { opId: id(21), status: 'conflict', replayed: false, conflictId: id(6), record: record(4, 'another-remote-edit') });
+  assert.equal(state.outbox[0].status, 'conflict');
+  assert.equal(state.outbox[0].conflictId, id(6));
+  assert.equal((state.conflicts[id(6)].attempted.data as NoteData).body, 'local-after-conflict');
+  assert.equal((state.conflicts[id(6)].current?.data as NoteData).body, 'another-remote-edit');
+  assert.equal(visibleBody(state), 'typed-during-retry');
+  assert.equal(send(state).opIds.length, 0);
+  assert.equal(validateClientState(state).ok, true);
+});
+
+test('remote closure without a later local edit clears normally and preserves a newer pulled mirror', () => {
+  const state = receive(conflicted(), [record(4, 'newer-than-resolution')], 'cursor-4');
+  const closed = applyRemoteConflictResolution(state, getSyncContext(state), { conflictId, record: record(3, 'remote-merge') });
+  assert.equal(closed.outbox.length, 0);
+  assert.deepEqual(closed.conflicts, {});
+  assert.equal(visibleBody(closed), 'newer-than-resolution');
+  assert.equal(closed.cursor, 'cursor-4');
+  const absent = applyRemoteConflictResolution(state, getSyncContext(state), { conflictId, record: null });
+  assert.equal(absent.outbox.length, 0);
+  assert.equal(visibleBody(absent), 'newer-than-resolution');
+  assert.throws(() => applyRemoteConflictResolution(state, getSyncContext(state), { conflictId, record: record(3, 'wrong-entity', id(99)) }), /MISMATCHED_CONFLICT_RESOLUTION/);
+});
+
+test('remote keep-current preserves delete intent without silently rebasing it onto the retained record', () => {
+  const deletion: LocalEdit = { entityType: 'note', entityId: noteId, mutation: 'delete', data: null };
+  const state = queueLocalEdit(conflicted(), deletion, identity(21));
+  const closed = applyRemoteConflictResolution(state, getSyncContext(state), { conflictId, record: record(2, 'other-device') });
+  assert.equal(closed.outbox[0].operation.mutation, 'delete');
+  assert.equal(closed.outbox[0].operation.baseRevision, 1);
+  assert.equal(getVisibleEntity(closed, 'note', noteId)?.deleted, true);
+  const pending = send(closed);
+  const retained = reply(pending.state, { opId: id(21), status: 'conflict', replayed: false, conflictId: id(6), record: record(2, 'other-device') });
+  assert.equal(retained.outbox[0].conflictId, id(6));
+  assert.equal(retained.serverRecords[entityKey('note', noteId)].deletedAt, null);
+});
+
+test('remote closure preserves restore overlays after a create collision without an invalid zero restore revision', () => {
+  const tombstone: SyncRecord<'note'> = { ...record(2), deletedAt: at, data: null };
+  const prepared = send(queueLocalEdit(initial(), edit('colliding-create'), identity(20)));
+  let state = reply(prepared.state, { opId: id(20), status: 'conflict', replayed: false, conflictId, record: tombstone });
+  state = queueLocalEdit(state, { ...edit('explicit-local-restore'), mutation: 'restore' }, identity(21));
+  const closed = applyRemoteConflictResolution(state, getSyncContext(state), { conflictId, record: tombstone });
+  assert.equal(closed.outbox[0].operation.mutation, 'restore');
+  assert.equal(closed.outbox[0].operation.baseRevision, 1);
+  assert.equal(validateClientState(closed).ok, true);
+  const pending = send(closed);
+  const conflict = reply(pending.state, { opId: id(21), status: 'conflict', replayed: false, conflictId: id(6), record: tombstone });
+  assert.equal(conflict.outbox[0].status, 'conflict');
+  assert.equal(visibleBody(conflict), 'explicit-local-restore');
+  assert.equal(conflict.serverRecords[entityKey('note', noteId)].deletedAt, at);
+});
+
 test('invalid pull pages leave mirror and cursor unchanged and stale pages cannot rewind progress', () => {
   const state = freeze(receive(initial(), [record(1)], 'cursor-1'));
   const before = canonicalJson(state);
@@ -219,6 +292,71 @@ test('tombstones require explicit restore and keep old offline edits pending for
   offline = receive(offline, [tombstone], 'cursor-2');
   assert.equal(offline.outbox[0].operation.baseRevision, 1);
   assert.equal(visibleBody(offline), 'offline-edit');
+});
+
+test('ordinary edits coalesced into an unsent restore retain its explicit restoration intent and latest content', () => {
+  const tombstone: SyncRecord<'note'> = { ...record(2), deletedAt: at, data: null };
+  const restored = freeze(queueLocalEdit(receive(initial(), [tombstone]), { ...edit('restore-draft'), mutation: 'restore' }, identity(20)));
+  const updated = queueLocalEdit(restored, edit('edited-before-sync'), identity(21));
+  assert.equal(updated.outbox[0].operation.mutation, 'restore');
+  assert.equal(updated.outbox[0].operation.baseRevision, 2);
+  assert.equal(updated.outbox[0].operation.opId, id(21));
+  assert.equal((updated.outbox[0].operation.data as NoteData).body, 'edited-before-sync');
+  assert.equal((restored.outbox[0].operation.data as NoteData).body, 'restore-draft');
+  assert.deepEqual(queueLocalEdit(updated, edit('edited-before-sync'), identity(21)), updated);
+  assert.throws(() => queueLocalEdit(updated, edit('changed-with-same-id'), identity(21)), /OP_ID_REUSED/);
+  const pending = send(updated);
+  assert.equal(pending.request.operations[0].mutation, 'restore');
+  assert.deepEqual(queueLocalEdit(pending.state, edit('edited-before-sync'), identity(21)), pending.state);
+  const saved = reply(pending.state, { opId: id(21), status: 'applied', replayed: false, record: record(3, 'edited-before-sync') });
+  assert.equal(saved.outbox.length, 0);
+  assert.equal(visibleBody(saved), 'edited-before-sync');
+  assert.equal(getVisibleEntity(saved, 'note', noteId)?.deleted, false);
+  assert.equal(validateClientState(saved).ok, true);
+});
+
+test('deleting an edited unsent restore keeps the server tombstone instead of restoring it', () => {
+  const tombstone: SyncRecord<'note'> = { ...record(2), deletedAt: at, data: null };
+  let state = queueLocalEdit(receive(initial(), [tombstone]), { ...edit('restore-draft'), mutation: 'restore' }, identity(20));
+  state = queueLocalEdit(state, edit('edited-before-delete'), identity(21));
+  state = queueLocalEdit(state, { entityType: 'note', entityId: noteId, mutation: 'delete', data: null }, identity(22));
+  const pending = send(state);
+  assert.equal(pending.request.operations[0].mutation, 'delete');
+  assert.equal(pending.request.operations[0].baseRevision, 2);
+  assert.equal(pending.request.operations[0].opId, id(22));
+  const saved = reply(pending.state, { opId: id(22), status: 'applied', replayed: false, record: tombstone });
+  assert.equal(saved.outbox.length, 0);
+  assert.equal(getVisibleEntity(saved, 'note', noteId)?.deleted, true);
+  assert.equal(saved.serverRecords[entityKey('note', noteId)].revision, 2);
+});
+
+test('edits after any restore send attempt stay overlays and never change the original operation identity or payload', () => {
+  const tombstone: SyncRecord<'note'> = { ...record(2), deletedAt: at, data: null };
+  const original = send(queueLocalEdit(receive(initial(), [tombstone]), { ...edit('sent-restore'), mutation: 'restore' }, identity(20)));
+  const originalOperation = canonicalJson(original.request.operations[0]);
+  const variants = [
+    original.state,
+    markPushUncertain(original.state, original.context, original.opIds),
+    reply(original.state, { opId: id(20), status: 'rejected', replayed: false, code: 'SERVICE_TEMPORARILY_UNAVAILABLE', retryable: true }),
+  ];
+  for (const state of variants) {
+    let later = queueLocalEdit(state, edit('typed-after-attempt'), identity(21));
+    assert.equal(canonicalJson(later.outbox[0].operation), originalOperation);
+    assert.equal(later.overlays[entityKey('note', noteId)].mutation, 'put');
+    assert.equal(visibleBody(later), 'typed-after-attempt');
+    later = resumeAfterRestart(later);
+    const replay = send(later);
+    assert.equal(canonicalJson(replay.request.operations[0]), originalOperation);
+    const restored = reply(replay.state, { opId: id(20), status: 'applied', replayed: true, record: record(3, 'sent-restore') });
+    assert.equal(restored.outbox[0].operation.mutation, 'put');
+    assert.equal(restored.outbox[0].operation.baseRevision, 3);
+    assert.equal(restored.outbox[0].operation.opId, id(21));
+    assert.equal(visibleBody(restored), 'typed-after-attempt');
+    const pending = send(restored);
+    const saved = reply(pending.state, { opId: id(21), status: 'applied', replayed: false, record: record(4, 'typed-after-attempt') });
+    assert.equal(saved.outbox.length, 0);
+    assert.equal(visibleBody(saved), 'typed-after-attempt');
+  }
 });
 
 test('a repeated delete accepts only a compatible same-revision tombstone acknowledgement', () => {
