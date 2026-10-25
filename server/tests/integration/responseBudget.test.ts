@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import test, { after, before } from 'node:test';
 import pg from 'pg';
 import type { PoolClient } from 'pg';
 import { PostgresSyncStore } from '../../src/store.ts';
 import { SERVER_LIMITS } from '../../src/config.ts';
 import type { VerifiedIdentity } from '../../src/auth.ts';
-import type { SessionView } from '../../src/types.ts';
-import type { NoteData, PushResponse, SyncOperation } from '../../../packages/sync-core/src/index.ts';
+import type { ResolveRequest, SessionView } from '../../src/types.ts';
+import type { NoteData, PushResponse, PushResult, SyncOperation } from '../../../packages/sync-core/src/index.ts';
 import { identity, operation } from '../fixtures.ts';
 
 const databaseUrl = process.env.PAPERQUAY_DATABASE_URL;
@@ -14,9 +15,12 @@ if (!databaseUrl || process.env.PAPERQUAY_TEST_ALLOW_DATABASE_WRITES !== '1') {
   throw new Error('Set PAPERQUAY_DATABASE_URL to an isolated migrated database and PAPERQUAY_TEST_ALLOW_DATABASE_WRITES=1.');
 }
 const pool = new pg.Pool({ connectionString: databaseUrl, max: 4 });
+// The boundary matrix deliberately shares one pool across multiple isolated store limits.
+pool.setMaxListeners(32);
 interface SqlCounts {
   transactions: number; entityReads: number; receiptReads: number;
-  entities: number; changes: number; receipts: number; conflicts: number; sequenceUpdates: number;
+  entities: number; changes: number; receipts: number; conflicts: number; conflictUpdates: number;
+  sequenceUpdates: number; parameterBytes: number;
 }
 let activeTrace: SqlCounts | undefined;
 
@@ -37,7 +41,15 @@ pool.on('connect', (client: PoolClient) => {
       if (/^insert into paperquay\.changes\b/.test(sql)) activeTrace.changes++;
       if (/^insert into paperquay\.operation_receipts\b/.test(sql)) activeTrace.receipts++;
       if (/^insert into paperquay\.conflicts\b/.test(sql)) activeTrace.conflicts++;
+      if (/^update paperquay\.conflicts\b/.test(sql)) activeTrace.conflictUpdates++;
       if (/^update paperquay\.accounts set last_(?:conflict_)?seq\b/.test(sql)) activeTrace.sequenceUpdates++;
+      const values: unknown[] = Array.isArray(args[1]) ? args[1]
+        : first && typeof first === 'object' && 'values' in first && Array.isArray(first.values) ? first.values : [];
+      // Aggregate sizes only: no parameter values survive this query wrapper.
+      for (const value of values) {
+        activeTrace.parameterBytes += Buffer.isBuffer(value) ? value.length
+          : Buffer.byteLength(typeof value === 'string' || typeof value === 'bigint' ? String(value) : JSON.stringify(value) ?? '', 'utf8');
+      }
     }
     return Reflect.apply(originalQuery, this, args);
   } as typeof client.query;
@@ -63,7 +75,7 @@ function push(fixture: Fixture, operations: SyncOperation[], target = store): Pr
 async function traced<T>(action: () => Promise<T>): Promise<{ result: T; sql: SqlCounts }> {
   assert.equal(activeTrace, undefined);
   const sql: SqlCounts = { transactions: 0, entityReads: 0, receiptReads: 0,
-    entities: 0, changes: 0, receipts: 0, conflicts: 0, sequenceUpdates: 0 };
+    entities: 0, changes: 0, receipts: 0, conflicts: 0, conflictUpdates: 0, sequenceUpdates: 0, parameterBytes: 0 };
   activeTrace = sql;
   try { return { result: await action(), sql }; }
   finally { activeTrace = undefined; }
@@ -129,6 +141,7 @@ function noRetainedWrites(sql: SqlCounts): void {
   assert.equal(sql.changes, 0);
   assert.equal(sql.receipts, 0);
   assert.equal(sql.conflicts, 0);
+  assert.equal(sql.conflictUpdates, 0);
   assert.equal(sql.sequenceUpdates, 0);
 }
 
@@ -273,4 +286,277 @@ test('an individually oversized response leaves no retained write or receipt and
   assert.equal(recovered.results[0].status, 'applied');
   assert.equal(recovered.results[0].replayed, false);
   assert.equal((await ledger(fixture)).receipts.rows, 1);
+});
+
+async function lastReceiptByteQuota() {
+  const body = '额'.repeat(262144);
+  const calibration = await session();
+  const calibratedInitial = operation('note', note(body));
+  assert.equal((await push(calibration, [calibratedInitial])).results[0].status, 'applied');
+  const beforeCalibration = await ledger(calibration);
+  const calibratedConflict = operation('note', null, { entityId: calibratedInitial.entityId, mutation: 'delete' });
+  assert.equal((await push(calibration, [calibratedConflict])).results[0].status, 'conflict');
+  const afterCalibration = await ledger(calibration);
+  const delta = BigInt(afterCalibration.retained) - BigInt(beforeCalibration.retained);
+  const conflictCopy = BigInt(afterCalibration.conflicts.bytes) - BigInt(beforeCalibration.conflicts.bytes);
+  const receiptCopy = BigInt(afterCalibration.receipts.bytes) - BigInt(beforeCalibration.receipts.bytes);
+  assert.equal(delta, conflictCopy + receiptCopy);
+  assert.ok(receiptCopy > 1n);
+
+  const fixture = await session();
+  const initial = operation('note', note(body));
+  const original = (await push(fixture, [initial])).results[0];
+  assert.equal(original.status, 'applied');
+  const saved = await ledger(fixture);
+  assert.equal(saved.retained, beforeCalibration.retained, 'UUIDs and timestamps have fixed widths in the independently calibrated copies.');
+  const limit = Number(BigInt(saved.retained) + delta - 1n);
+  assert.ok(BigInt(limit) >= BigInt(saved.retained) + conflictCopy, 'The conflict snapshot fits; only its final receipt byte exceeds the limit.');
+  return { fixture, initial, original, saved,
+    target: new PostgresSyncStore({ pool, cursorSecret, maxAccountRetainedBytes: limit }) };
+}
+
+function storageDeferred(result: PushResult, opId: string): void {
+  assert.deepEqual(result, { opId, status: 'rejected', replayed: false, code: 'ACCOUNT_STORAGE_LIMIT', retryable: true });
+}
+
+function onlyFirstQuotaRead(sql: SqlCounts): void {
+  assert.deepEqual({ entityReads: sql.entityReads, conflicts: sql.conflicts, receipts: sql.receipts,
+    sequenceUpdates: sql.sequenceUpdates, entities: sql.entities, changes: sql.changes, conflictUpdates: sql.conflictUpdates },
+  { entityReads: 1, conflicts: 0, receipts: 0, sequenceUpdates: 0, entities: 0, changes: 0, conflictUpdates: 0 },
+  'Only the first quota candidate may load its snapshot; insufficient total retained bytes must prevent all content writes, including rolled-back INSERTs.');
+}
+
+test('retained-byte exhaustion stops the 100-operation snapshot retry amplification before any retained write', async () => {
+  const { fixture, initial, saved, target } = await lastReceiptByteQuota();
+  const operations = Array.from({ length: 100 }, () => operation('note', null, { entityId: initial.entityId, mutation: 'delete' }));
+  assert.ok(Buffer.byteLength(JSON.stringify(operations), 'utf8') < 32768);
+  const batch = await traced(() => push(fixture, operations, target));
+  bounded(batch.result, operations);
+  batch.result.results.forEach((result, index) => storageDeferred(result, operations[index].opId));
+  onlyFirstQuotaRead(batch.sql);
+  assert.deepEqual(await ledger(fixture), saved, 'Rejected conflict, sequence and receipt writes must leave the byte ledger unchanged.');
+
+  // Both the attempted operation and an untouched tail operation retain their original retry identity.
+  const retryOperations = [operations[0], operations.at(-1)!];
+  const recovered = await push(fixture, retryOperations);
+  bounded(recovered, retryOperations);
+  assert.ok(recovered.results.every((result) => result.status === 'conflict' && !result.replayed));
+  assert.equal((await ledger(fixture)).conflicts.rows, 2);
+});
+
+test('quota response deferral preserves old receipt replays and resets for a later small request', async () => {
+  const { fixture, initial, original, saved, target } = await lastReceiptByteQuota();
+  const failing = operation('note', null, { entityId: initial.entityId, mutation: 'delete' });
+  const small = operation('note', note('Fits the remaining bytes in a separate request.'));
+  const tail = operation('note', null, { entityId: initial.entityId, mutation: 'delete' });
+  const operations = [failing, initial, small, tail];
+  const batch = await traced(() => push(fixture, operations, target));
+  bounded(batch.result, operations);
+  storageDeferred(batch.result.results[0], failing.opId);
+  assert.deepEqual(batch.result.results[1], { ...original, replayed: true }, 'A saved large receipt must remain replayable after a preceding quota failure.');
+  storageDeferred(batch.result.results[2], small.opId);
+  storageDeferred(batch.result.results[3], tail.opId);
+  onlyFirstQuotaRead(batch.sql);
+  assert.equal(batch.sql.receiptReads, operations.length, 'Receipt lookup remains available for every operation without reading new entity bodies.');
+  assert.deepEqual(await ledger(fixture), saved);
+
+  const later = await push(fixture, [small], target);
+  assert.equal(later.results[0].status, 'applied', 'The prior request must not poison new requests whose small payload still fits.');
+  assert.equal(later.results[0].replayed, false, 'The earlier deferred attempt must not have created a permanent receipt.');
+  const afterSmall = await ledger(fixture);
+  assert.equal(afterSmall.entities.rows, saved.entities.rows + 1);
+  assert.equal(afterSmall.receipts.rows, saved.receipts.rows + 1);
+  assert.equal(afterSmall.conflicts.rows, 0);
+
+  // The ordinary store simulates a later administrator budget increase, without changing database rows or permissions.
+  const retryOperations = [failing, tail];
+  const recovered = await push(fixture, retryOperations);
+  assert.ok(recovered.results.every((result) => result.status === 'conflict' && !result.replayed));
+  const complete = await ledger(fixture);
+  const replay = await traced(() => push(fixture, retryOperations));
+  assert.deepEqual(replay.result.results, recovered.results.map((result) => ({ ...result, replayed: true })));
+  noRetainedWrites(replay.sql);
+  assert.deepEqual(await ledger(fixture), complete);
+});
+
+for (const mutation of ['replace', 'delete', 'conflict'] as const) {
+  test(`complete ${mutation} retained cost is checked before writes at the exact UTF-8 byte boundary`, async () => {
+    const initialBody = '原'.repeat(262144);
+    const nextBody = '改'.repeat(131072);
+    const create = async () => {
+      const fixture = await session();
+      const initial = operation('note', note(initialBody));
+      assert.equal((await push(fixture, [initial])).results[0].status, 'applied');
+      return { fixture, initial };
+    };
+    const nextOperation = (entityId: string) => mutation === 'replace'
+      ? operation('note', note(nextBody), { entityId, baseRevision: 1 })
+      : operation('note', null, { entityId, mutation: 'delete', baseRevision: mutation === 'delete' ? 1 : 0 });
+
+    // Derive the full cost from actual PostgreSQL rows, not from the production preflight formula.
+    const calibration = await create();
+    const beforeCalibration = await ledger(calibration.fixture);
+    const calibrated = (await push(calibration.fixture, [nextOperation(calibration.initial.entityId)])).results[0];
+    assert.equal(calibrated.status, mutation === 'conflict' ? 'conflict' : 'applied');
+    const afterCalibration = await ledger(calibration.fixture);
+    const entityDelta = BigInt(afterCalibration.entities.bytes) - BigInt(beforeCalibration.entities.bytes);
+    const changeDelta = BigInt(afterCalibration.changes.bytes) - BigInt(beforeCalibration.changes.bytes);
+    const receiptDelta = BigInt(afterCalibration.receipts.bytes) - BigInt(beforeCalibration.receipts.bytes);
+    const conflictDelta = BigInt(afterCalibration.conflicts.bytes) - BigInt(beforeCalibration.conflicts.bytes);
+    const completeDelta = BigInt(afterCalibration.retained) - BigInt(beforeCalibration.retained);
+    assert.equal(completeDelta, entityDelta + changeDelta + receiptDelta + conflictDelta);
+    assert.ok(completeDelta > 0n && receiptDelta > 1n);
+    if (mutation === 'replace') {
+      assert.equal(entityDelta, BigInt(Buffer.byteLength(nextBody, 'utf8') - Buffer.byteLength(initialBody, 'utf8')));
+      assert.ok(entityDelta < 0n, 'The complete plan must retain a negative replacement delta rather than charging the current body twice.');
+      assert.ok(changeDelta > BigInt(Buffer.byteLength(nextBody, 'utf8')));
+    } else {
+      assert.equal(entityDelta, 0n, 'Deleting or conflicting with a note retains its original entity body.');
+    }
+    if (mutation === 'conflict') assert.equal(changeDelta, 0n);
+    else assert.equal(conflictDelta, 0n);
+
+    const { fixture, initial } = await create();
+    const saved = await ledger(fixture);
+    assert.equal(saved.retained, beforeCalibration.retained);
+    const pending = nextOperation(initial.entityId);
+    const exactLimit = Number(BigInt(saved.retained) + completeDelta);
+    const below = new PostgresSyncStore({ pool, cursorSecret, maxAccountRetainedBytes: exactLimit - 1 });
+    const denied = await traced(() => push(fixture, [pending], below));
+    storageDeferred(denied.result.results[0], pending.opId);
+    if (mutation === 'delete') assert.ok(denied.sql.parameterBytes < 32768,
+      'Checking a current delete must not send the retained 786432-byte body back to PostgreSQL.');
+    noRetainedWrites(denied.sql);
+    assert.equal(denied.sql.entityReads, 1);
+    assert.deepEqual(await ledger(fixture), saved);
+
+    const exact = new PostgresSyncStore({ pool, cursorSecret, maxAccountRetainedBytes: exactLimit });
+    const accepted = await traced(() => push(fixture, [pending], exact));
+    assert.equal(accepted.result.results[0].status, mutation === 'conflict' ? 'conflict' : 'applied');
+    assert.equal(accepted.result.results[0].replayed, false, 'The rejected original opId must still be available at the exact limit.');
+    assert.equal(accepted.sql.receipts, 1);
+    assert.equal(accepted.sql.sequenceUpdates, 1);
+    assert.equal(accepted.sql.entities, mutation === 'conflict' ? 0 : 1);
+    assert.equal(accepted.sql.changes, mutation === 'conflict' ? 0 : 1);
+    assert.equal(accepted.sql.conflicts, mutation === 'conflict' ? 1 : 0);
+    const completed = await ledger(fixture);
+    assert.equal(completed.retained, String(exactLimit));
+    const replay = await traced(() => push(fixture, [pending], exact));
+    assert.deepEqual(replay.result.results, accepted.result.results.map((result) => ({ ...result, replayed: true })));
+    noRetainedWrites(replay.sql);
+    assert.equal(replay.sql.entityReads, 0);
+    assert.deepEqual(await ledger(fixture), completed);
+  });
+}
+
+test('keep-current resolution checks its change and receipt cost before writes without retransmitting the current body', async () => {
+  const createConflict = async () => {
+    const fixture = await session();
+    const initial = operation('note', note('留'.repeat(262144)));
+    assert.equal((await push(fixture, [initial])).results[0].status, 'applied');
+    const stale = operation('note', null, { entityId: initial.entityId, mutation: 'delete' });
+    const conflict = (await push(fixture, [stale])).results[0];
+    assert.equal(conflict.status, 'conflict');
+    assert.ok(conflict.conflictId);
+    return { fixture, conflictId: conflict.conflictId };
+  };
+  const calibration = await createConflict();
+  const beforeCalibration = await ledger(calibration.fixture);
+  assert.equal((await store.resolveConflict(calibration.fixture.who, calibration.conflictId,
+    { opId: randomUUID(), expectedRevision: 1, choice: 'current' })).status, 'applied');
+  const afterCalibration = await ledger(calibration.fixture);
+  const delta = BigInt(afterCalibration.retained) - BigInt(beforeCalibration.retained);
+  const changeDelta = BigInt(afterCalibration.changes.bytes) - BigInt(beforeCalibration.changes.bytes);
+  const receiptDelta = BigInt(afterCalibration.receipts.bytes) - BigInt(beforeCalibration.receipts.bytes);
+  assert.equal(delta, changeDelta + receiptDelta);
+  assert.ok(changeDelta > 786432n && receiptDelta > 786432n);
+
+  const { fixture, conflictId } = await createConflict();
+  const saved = await ledger(fixture);
+  assert.equal(saved.retained, beforeCalibration.retained);
+  const request: ResolveRequest = { opId: randomUUID(), expectedRevision: 1, choice: 'current' };
+  const exactLimit = Number(BigInt(saved.retained) + delta);
+  const below = new PostgresSyncStore({ pool, cursorSecret, maxAccountRetainedBytes: exactLimit - 1 });
+  const denied = await traced(() => below.resolveConflict(fixture.who, conflictId, request));
+  storageDeferred(denied.result, request.opId);
+  noRetainedWrites(denied.sql);
+  assert.ok(denied.sql.parameterBytes < 32768, 'The preflight can measure the saved current JSONB directly without sending its body back as a query parameter.');
+  assert.deepEqual(await ledger(fixture), saved, 'Quota denial must leave the conflict open and the feed cursor unchanged.');
+
+  const exact = new PostgresSyncStore({ pool, cursorSecret, maxAccountRetainedBytes: exactLimit });
+  const accepted = await traced(() => exact.resolveConflict(fixture.who, conflictId, request));
+  assert.equal(accepted.result.status, 'applied');
+  assert.equal(accepted.result.replayed, false);
+  assert.equal(accepted.result.record?.revision, 1);
+  assert.equal(accepted.sql.entities, 0);
+  assert.equal(accepted.sql.changes, 1);
+  assert.equal(accepted.sql.receipts, 1);
+  assert.equal(accepted.sql.sequenceUpdates, 1);
+  assert.equal(accepted.sql.conflictUpdates, 1);
+  const completed = await ledger(fixture);
+  assert.equal(completed.retained, String(exactLimit));
+  assert.equal(completed.entities.digest, saved.entities.digest);
+});
+
+test('no-op delete resolution preflights its receipt before closing a large retained conflict', async () => {
+  const createConflict = async () => {
+    const fixture = await session();
+    const initial = operation('note', note('删'.repeat(262144)));
+    assert.equal((await push(fixture, [initial])).results[0].status, 'applied');
+    const stale = operation('note', null, { entityId: initial.entityId, mutation: 'delete' });
+    const conflict = (await push(fixture, [stale])).results[0];
+    assert.equal(conflict.status, 'conflict');
+    assert.ok(conflict.conflictId);
+    const deleted = operation('note', null, { entityId: initial.entityId, baseRevision: 1, mutation: 'delete' });
+    const tombstone = (await push(fixture, [deleted])).results[0];
+    assert.equal(tombstone.status, 'applied');
+    assert.equal(tombstone.record?.revision, 2);
+    assert.ok(tombstone.record?.deletedAt);
+    return { fixture, conflictId: conflict.conflictId };
+  };
+  const calibration = await createConflict();
+  const beforeCalibration = await ledger(calibration.fixture);
+  const calibrated = await store.resolveConflict(calibration.fixture.who, calibration.conflictId,
+    { opId: randomUUID(), expectedRevision: 2, choice: 'attempted' });
+  assert.equal(calibrated.status, 'applied');
+  assert.equal(calibrated.record?.revision, 2);
+  const afterCalibration = await ledger(calibration.fixture);
+  const delta = BigInt(afterCalibration.retained) - BigInt(beforeCalibration.retained);
+  assert.equal(delta, BigInt(afterCalibration.receipts.bytes) - BigInt(beforeCalibration.receipts.bytes));
+  assert.ok(delta > 1n);
+  assert.equal(afterCalibration.entities.digest, beforeCalibration.entities.digest);
+  assert.equal(afterCalibration.changes.digest, beforeCalibration.changes.digest);
+  assert.equal(afterCalibration.conflicts.bytes, beforeCalibration.conflicts.bytes);
+
+  const { fixture, conflictId } = await createConflict();
+  const saved = await ledger(fixture);
+  assert.equal(saved.retained, beforeCalibration.retained);
+  const request: ResolveRequest = { opId: randomUUID(), expectedRevision: 2, choice: 'attempted' };
+  const exactLimit = Number(BigInt(saved.retained) + delta);
+  const below = new PostgresSyncStore({ pool, cursorSecret, maxAccountRetainedBytes: exactLimit - 1 });
+  const denied = await traced(() => below.resolveConflict(fixture.who, conflictId, request));
+  storageDeferred(denied.result, request.opId);
+  noRetainedWrites(denied.sql);
+  assert.ok(denied.sql.parameterBytes < 32768);
+  assert.deepEqual(await ledger(fixture), saved);
+  assert.equal((await store.listConflicts(fixture.who, undefined, 100)).conflicts.length, 1);
+
+  const exact = new PostgresSyncStore({ pool, cursorSecret, maxAccountRetainedBytes: exactLimit });
+  const accepted = await traced(() => exact.resolveConflict(fixture.who, conflictId, request));
+  assert.equal(accepted.result.status, 'applied');
+  assert.equal(accepted.result.replayed, false);
+  assert.equal(accepted.result.record?.revision, 2);
+  assert.ok(accepted.result.record?.deletedAt);
+  assert.equal(accepted.sql.entities, 0);
+  assert.equal(accepted.sql.changes, 0);
+  assert.equal(accepted.sql.sequenceUpdates, 0);
+  assert.equal(accepted.sql.conflicts, 0);
+  assert.equal(accepted.sql.conflictUpdates, 1);
+  assert.equal(accepted.sql.receipts, 1);
+  const completed = await ledger(fixture);
+  assert.equal(completed.retained, String(exactLimit));
+  assert.equal(completed.entities.digest, saved.entities.digest);
+  assert.equal(completed.changes.digest, saved.changes.digest);
+  assert.equal(completed.conflicts.rows, 1);
+  assert.equal((await store.listConflicts(fixture.who, undefined, 100)).conflicts.length, 0);
 });

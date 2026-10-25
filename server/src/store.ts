@@ -30,8 +30,12 @@ interface ConflictRow {
   attempted_operation: SyncOperation; observed_record: SyncRecord;
   created_at: Date; resolved_at: Date | null;
 }
-interface TransactionContext { client: PoolClient; account: AccountRow; device: DeviceRow }
+interface TransactionContext {
+  client: PoolClient; account: AccountRow; device: DeviceRow;
+  preflightedReceiptOpId?: string;
+}
 type ResponsePreflight = (result: PushResult) => void;
+type RetainedWriteKind = 'entity' | 'conflict' | 'change' | 'receipt';
 interface StoreHooks {
   /** Fault/concurrency injection for isolated integration tests, never configured from HTTP or environment. */
   beforeCommit?: (event: { kind: 'push' | 'resolve' | 'revoke'; opId?: string; accountId: string; deviceId: string }) => Promise<void>;
@@ -229,13 +233,70 @@ export class PostgresSyncStore implements SyncRepository {
     if (BigInt(context.account.retained_bytes) >= BigInt(this.maxAccountRetainedBytes)) {
       throw new AccountStorageLimitExceeded();
     }
-    // BEFORE-row triggers reserve the exact remaining copies atomically. If a
-    // later copy (including the receipt) does not fit, withAccount rolls all back.
+    // The write-plan preflight checks every retained copy before content writes.
+    // BEFORE-row triggers remain the final enforcement and rollback boundary.
+  }
+
+  private async checkRetainedWritePlan(context: TransactionContext, result: PushResult,
+    kind: RetainedWriteKind, operation?: SyncOperation): Promise<void> {
+    // Every plan includes the final receipt. PostgreSQL measures the same JSONB
+    // representation as migration 003; this SELECT never reserves or charges bytes.
+    // Existing record bodies stay in PostgreSQL rather than crossing the wire again.
+    const record = result.record;
+    const storedRecord = kind !== 'entity' && record !== undefined;
+    const hydrateRecord = storedRecord && record.deletedAt === null;
+    const candidate = storedRecord ? { ...result, record: { ...record, data: null } } : result;
+    const measured = await context.client.query<{ used_bytes: string; byte_delta: string | null; has_stored_entity: boolean }>(`
+      WITH stored_entity AS MATERIALIZED (
+        SELECT data FROM paperquay.entities
+        WHERE account_id = $1 AND entity_type = $2 AND entity_id = $3
+          AND (($4::text = 'entity' AND $5::text <> 'delete') OR $6::boolean)
+      ), input AS (
+        SELECT $7::jsonb AS result, $8::jsonb AS attempted_operation,
+          (SELECT data FROM stored_entity) AS stored_data
+      ), complete AS (
+        SELECT CASE WHEN $6::boolean AND result #>> '{record,deletedAt}' IS NULL
+          THEN jsonb_set(result, '{record,data}', stored_data) ELSE result END AS result,
+          attempted_operation, stored_data FROM input
+      ), cost AS (
+        SELECT
+          CASE WHEN $4::text = 'entity' AND $5::text <> 'delete' THEN
+            CASE WHEN stored_data IS NULL THEN 512::bigint ELSE 0::bigint END
+            + octet_length(convert_to((result -> 'record' -> 'data')::text, 'UTF8'))
+            - coalesce(octet_length(convert_to(stored_data::text, 'UTF8')), 0)
+          ELSE 0::bigint END
+          + CASE WHEN $4::text IN ('entity', 'change') THEN
+            512::bigint + octet_length(convert_to((result -> 'record')::text, 'UTF8'))
+          ELSE 0::bigint END
+          + CASE WHEN $4::text = 'conflict' THEN
+            512::bigint + octet_length(convert_to(attempted_operation::text, 'UTF8'))
+            + octet_length(convert_to((result -> 'record')::text, 'UTF8'))
+          ELSE 0::bigint END
+          + 512::bigint + octet_length(convert_to(result::text, 'UTF8')) AS byte_delta,
+          stored_data IS NOT NULL AS has_stored_entity
+        FROM complete
+      ) SELECT account.retained_bytes::text AS used_bytes, cost.byte_delta::text AS byte_delta,
+          cost.has_stored_entity
+        FROM paperquay.accounts AS account CROSS JOIN cost WHERE account.id = $1`,
+    [context.account.id, record?.entityType ?? null, record?.entityId ?? null, kind,
+      operation?.mutation ?? null, hydrateRecord, JSON.stringify(candidate),
+      kind === 'conflict' ? JSON.stringify(operation) : null]);
+    const bytes = measured.rows[0];
+    if (!bytes || bytes.byte_delta === null || (hydrateRecord && !bytes.has_stored_entity)) {
+      throw new ApiError('STORAGE_INVARIANT_FAILED', 500);
+    }
+    // A shrinking replacement can free bytes before its change and receipt are
+    // written. Preserve that signed delta and compare against the live ledger.
+    if (BigInt(bytes.used_bytes) + BigInt(bytes.byte_delta) > BigInt(this.maxAccountRetainedBytes)) {
+      throw new AccountStorageLimitExceeded();
+    }
+    context.preflightedReceiptOpId = result.opId;
   }
 
   private async remember(context: TransactionContext, hash: string, result: PushResult): Promise<PushResult> {
     if (result.status !== 'rejected' || !result.retryable) {
       if (context.account.receipt_count >= SERVER_LIMITS.maxAccountReceipts) throw new ApiError('ACCOUNT_RECEIPT_LIMIT', 409);
+      if (context.preflightedReceiptOpId !== result.opId) await this.checkRetainedWritePlan(context, result, 'receipt');
       await context.client.query('INSERT INTO paperquay.operation_receipts(account_id,op_id,request_hash,result) VALUES ($1,$2,$3,$4::jsonb)',
         [context.account.id, result.opId, hash, JSON.stringify(result)]);
       // The database trigger increments the durable counter atomically, including
@@ -258,7 +319,7 @@ export class PostgresSyncStore implements SyncRepository {
     const updatedAt = new Date().toISOString();
     // Use the same revision, timestamps and device as the row below. A rejected
     // response must not first write the entity or its full change-feed copy.
-    preflight?.({
+    const candidate: PushResult = {
       opId: operation.opId, status: 'applied', replayed: false,
       record: toRecord({
         entity_type: operation.entityType, entity_id: operation.entityId, schema_version: 1,
@@ -266,7 +327,9 @@ export class PostgresSyncStore implements SyncRepository {
         updated_at: new Date(updatedAt), created_by_device_id: existing?.created_by_device_id ?? context.device.id,
         modified_by_device_id: context.device.id,
       }),
-    });
+    };
+    preflight?.(candidate);
+    await this.checkRetainedWritePlan(context, candidate, 'entity', operation);
     const result = await context.client.query<EntityRow>(`INSERT INTO paperquay.entities
       (account_id,entity_type,entity_id,schema_version,revision,data,deleted_at,updated_at,created_by_device_id,modified_by_device_id)
       VALUES ($1,$2,$3,1,$4,$5::jsonb,$6,$7,$8,$9)
@@ -293,6 +356,7 @@ export class PostgresSyncStore implements SyncRepository {
     // Check the complete snapshot before advancing the sequence or inserting
     // either retained copy. Rollback cannot undo the database work itself.
     preflight?.(result);
+    await this.checkRetainedWritePlan(context, result, 'conflict', operation);
     const incremented = await context.client.query<{ last_conflict_seq: string }>(`UPDATE paperquay.accounts
       SET last_conflict_seq = last_conflict_seq + 1 WHERE id = $1 RETURNING last_conflict_seq`, [context.account.id]);
     context.account.last_conflict_seq = incremented.rows[0].last_conflict_seq;
@@ -389,6 +453,7 @@ export class PostgresSyncStore implements SyncRepository {
     const recordBudget = this.responseLimitBytes - 1024 - request.operations.length * 256;
     let responseBytes = 0;
     let responseBudgetExhausted = false;
+    let storageLimited = false;
     const checkResponseBudget: ResponsePreflight = (result) => {
       if (responseBytes + Buffer.byteLength(JSON.stringify(result)) > recordBudget) throw new ResponseBudgetExceeded();
     };
@@ -404,13 +469,17 @@ export class PostgresSyncStore implements SyncRepository {
           if (context.device.id !== request.deviceId) throw new ApiError('DEVICE_SESSION_MISMATCH', 403);
           const hash = operationHash({ kind: 'push', operation });
           const previous = await this.receipt(context, operation.opId, hash);
-          if (!previous && context.account.receipt_count >= SERVER_LIMITS.maxAccountReceipts) {
+          if (!previous && !storageLimited && context.account.receipt_count >= SERVER_LIMITS.maxAccountReceipts) {
             const result = rejected(operation.opId, 'ACCOUNT_RECEIPT_LIMIT');
             checkResponseBudget(result);
             return result;
           }
-          if (!previous) this.requireStorageHeadroom(context);
-          const result = previous ?? await this.applyMutation(context, operation, checkResponseBudget);
+          if (!previous && !storageLimited) this.requireStorageHeadroom(context);
+          // After one quota failure, only replay existing receipts in this batch.
+          // New operations must not repeat large reads or rolled-back writes.
+          const result = previous ?? (storageLimited
+            ? rejected(operation.opId, 'ACCOUNT_STORAGE_LIMIT', true)
+            : await this.applyMutation(context, operation, checkResponseBudget));
           // Replays and small rejections also need a check. For mutations this
           // rechecks the actual database result against the same budget.
           checkResponseBudget(result);
@@ -421,7 +490,10 @@ export class PostgresSyncStore implements SyncRepository {
         responseBytes += Buffer.byteLength(JSON.stringify(result));
         results.push(result);
       } catch (error) {
-        if (isAccountStorageLimit(error)) results.push(rejected(operation.opId, 'ACCOUNT_STORAGE_LIMIT', true));
+        if (isAccountStorageLimit(error)) {
+          storageLimited = true;
+          results.push(rejected(operation.opId, 'ACCOUNT_STORAGE_LIMIT', true));
+        }
         else if (error instanceof ResponseBudgetExceeded) {
           responseBudgetExhausted = true;
           results.push(rejected(operation.opId, 'RESPONSE_LIMIT_REACHED', true));
@@ -532,8 +604,9 @@ export class PostgresSyncStore implements SyncRepository {
           const record = toRecord(current);
           // An explicit keep-current decision records a feed receipt without editing another
           // device's checkpoint or resurrecting a tombstone. Its entity revision stays unchanged.
-          await this.appendChange(context, record);
           result = { opId: request.opId, status: 'applied', replayed: false, record };
+          await this.checkRetainedWritePlan(context, result, 'change');
+          await this.appendChange(context, record);
         } else {
           const operation = {
             ...conflict.attempted_operation, opId: request.opId, baseRevision: request.expectedRevision,
@@ -544,6 +617,11 @@ export class PostgresSyncStore implements SyncRepository {
           result = await this.applyMutation(context, operation);
         }
         if (result.status === 'applied') {
+          // An already-deleted no-op still closes the conflict and needs its
+          // receipt budget checked before that row's UPDATE trigger runs.
+          if (context.preflightedReceiptOpId !== result.opId) {
+            await this.checkRetainedWritePlan(context, result, 'receipt');
+          }
           await context.client.query('UPDATE paperquay.conflicts SET resolved_at = clock_timestamp(), resolution_op_id = $3 WHERE account_id = $1 AND id = $2',
             [context.account.id, conflictId, request.opId]);
         }
