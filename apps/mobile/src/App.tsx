@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import {
   entityKey,
   listVisibleEntities,
@@ -460,6 +468,12 @@ function ConnectedApp({
             controller={controller}
             onBack={() => navigate('account')}
             onDirty={dirtyChanged}
+            onRecovered={(id) => {
+              setDirty(false);
+              setSection('notes');
+              setSelection({ type: 'note', id });
+              setUiError(null);
+            }}
           />
         )}
       </main>
@@ -890,18 +904,20 @@ function AccountView({
   );
 }
 
-function ConflictsView({
+export function ConflictsView({
   state,
   controller,
   onBack,
   onDirty,
+  onRecovered,
 }: {
   state: WorkspaceSnapshot;
-  controller: WorkspaceController;
+  controller: Pick<WorkspaceController, 'resolve' | 'save' | 'getSnapshot' | 'syncNow'>;
   onBack: () => void;
   onDirty: (dirty: boolean) => void;
+  onRecovered: (noteId: string) => void;
 }) {
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<ServerConflict | null>(null);
   const [mergedTitle, setMergedTitle] = useState('');
   const [mergedBody, setMergedBody] = useState('');
   const [reviewedRevision, setReviewedRevision] = useState<number | null>(null);
@@ -909,23 +925,48 @@ function ConflictsView({
   const [mergeDirty, setMergeDirty] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const draftSession = useRef<object | null>(null);
   const conflict =
-    state.conflicts.find((entry) => entry.conflictId === selected) ?? state.conflicts[0];
+    state.conflicts.find((entry) => entry.conflictId === selected?.conflictId) ??
+    selected ??
+    state.conflicts[0];
+  const closed = Boolean(
+    conflict && !state.conflicts.some((entry) => entry.conflictId === conflict.conflictId),
+  );
   const latestOverlay = conflict
     ? (state.workspace?.sync.overlays[entityKey(conflict.entityType, conflict.entityId)] ?? null)
     : null;
   useEffect(() => {
+    // Keep the selected conflict snapshot when a remote refresh removes its ID.
+    // Only an explicit selection or completed local decision may replace this draft.
+    if (conflict && !closed) setSelected(conflict);
+  }, [conflict, closed]);
+  useLayoutEffect(() => {
+    // Invalidate during commit before an old request can affect a replacement draft or page.
+    const session = {};
+    draftSession.current = session;
     const data = latestOverlay?.data ?? conflict?.attemptedOperation.data;
     setMergedTitle(data && 'title' in data ? data.title : '');
     setMergedBody(data && 'body' in data ? data.body : '');
     setReviewedRevision(conflict?.currentRecord?.revision ?? 0);
     setReviewedOverlay(latestOverlay);
     setMergeDirty(false);
+    setBusy(false);
     onDirty(false);
     setError(null);
-  }, [conflict?.conflictId]);
+    return () => {
+      if (draftSession.current === session) draftSession.current = null;
+    };
+  }, [conflict?.conflictId, controller]);
   async function resolve(choice: 'current' | 'attempted' | 'merged' | 'restore') {
-    if (!conflict) return;
+    const session = draftSession.current;
+    if (!session || !conflict || closed) return;
+    if (
+      !controller.getSnapshot().conflicts.some((entry) => entry.conflictId === conflict.conflictId)
+    ) {
+      setError('此冲突已在服务端关闭。合并草稿仍保留。');
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -949,28 +990,32 @@ function ConflictsView({
           reviewed,
         );
       }
+      if (draftSession.current !== session) return;
       const after = controller.getSnapshot();
       if (
-        after.workspace?.pendingResolutions[conflict.conflictId] ||
+        !after.error &&
+        !after.workspace?.pendingResolutions[conflict.conflictId] &&
         !after.conflicts.some((entry) => entry.conflictId === conflict.conflictId)
       ) {
         setMergeDirty(false);
         onDirty(false);
+        setSelected(null);
       }
     } catch (problem) {
-      setError(describeError(problem));
+      if (draftSession.current === session) setError(describeError(problem));
     } finally {
-      setBusy(false);
+      if (draftSession.current === session) setBusy(false);
     }
   }
   const pending = conflict && state.workspace?.pendingResolutions[conflict.conflictId];
   const changedSinceReview =
-    Boolean(conflict) && reviewedRevision !== (conflict?.currentRecord?.revision ?? 0);
-  const localChangedSinceReview = latestOverlay?.opId !== reviewedOverlay?.opId;
+    !closed && Boolean(conflict) && reviewedRevision !== (conflict?.currentRecord?.revision ?? 0);
+  const localChangedSinceReview = !closed && latestOverlay?.opId !== reviewedOverlay?.opId;
   const myVersion = reviewedOverlay ?? conflict?.attemptedOperation;
   const tombstone = Boolean(conflict?.currentRecord?.deletedAt);
   const note = myVersion?.entityType === 'note' && myVersion.data?.format === 'markdown';
   const blocked =
+    closed ||
     busy ||
     Boolean(pending) ||
     state.needsLogin ||
@@ -981,6 +1026,38 @@ function ConflictsView({
     setMergeDirty(true);
     onDirty(true);
   };
+  async function recoverDraft() {
+    const session = draftSession.current;
+    if (
+      !session ||
+      !closed ||
+      busy ||
+      pending ||
+      !note ||
+      !myVersion?.data ||
+      !('body' in myVersion.data)
+    )
+      return;
+    setBusy(true);
+    setError(null);
+    try {
+      const id = crypto.randomUUID();
+      await controller.save({
+        entityType: 'note',
+        entityId: id,
+        mutation: 'put',
+        data: { ...myVersion.data, title: mergedTitle, body: mergedBody },
+      });
+      if (draftSession.current !== session) return;
+      setMergeDirty(false);
+      onDirty(false);
+      onRecovered(id);
+    } catch (problem) {
+      if (draftSession.current === session) setError(describeError(problem));
+    } finally {
+      if (draftSession.current === session) setBusy(false);
+    }
+  }
   return (
     <div className="conflicts-page">
       <header className="page-heading">
@@ -1011,16 +1088,20 @@ function ConflictsView({
         </div>
       ) : (
         <>
-          {state.conflicts.length > 1 && (
+          {(state.conflicts.length > 1 || (closed && state.conflicts.length > 0)) && (
             <label className="field">
               选择冲突
               <select
                 value={conflict.conflictId}
                 onChange={(event) => {
                   if (!mergeDirty || window.confirm('放弃尚未保存的合并草稿，查看另一项冲突？'))
-                    setSelected(event.target.value);
+                    setSelected(
+                      state.conflicts.find((entry) => entry.conflictId === event.target.value) ??
+                        selected,
+                    );
                 }}
               >
+                {closed && <option value={conflict.conflictId}>已关闭 · 当前合并草稿</option>}
                 {state.conflicts.map((entry) => (
                   <option value={entry.conflictId} key={entry.conflictId}>
                     {entry.attemptedOperation.data && 'title' in entry.attemptedOperation.data
@@ -1031,9 +1112,26 @@ function ConflictsView({
               </select>
             </label>
           )}
+          {closed && (
+            <div className="draft-review" role="status">
+              <p>
+                此冲突已在服务端关闭。
+                {note ? '合并草稿仍保留，可继续编辑并另存为新笔记。' : '下方保留关闭前的比较内容。'}
+              </p>
+              {note && (
+                <button
+                  className="secondary"
+                  disabled={busy || Boolean(pending)}
+                  onClick={() => void recoverDraft()}
+                >
+                  另存为新笔记
+                </button>
+              )}
+            </div>
+          )}
           <div className="conflict-columns">
             <section>
-              <h2>当前版本</h2>
+              <h2>{closed ? '关闭前比较的版本' : '当前版本'}</h2>
               <p className="muted">版本 {conflict.currentRecord?.revision ?? 0}</p>
               <ContentPreview data={conflict.currentRecord?.data ?? null} deleted={tombstone} />
               <button
@@ -1096,7 +1194,7 @@ function ConflictsView({
           )}
           {note && (
             <section className="merge-editor">
-              <h2>{tombstone ? '明确恢复此笔记' : '合并双方内容'}</h2>
+              <h2>{closed ? '保留的合并草稿' : tombstone ? '明确恢复此笔记' : '合并双方内容'}</h2>
               <label className="field">
                 笔记标题
                 <input
