@@ -31,6 +31,7 @@ interface ConflictRow {
   created_at: Date; resolved_at: Date | null;
 }
 interface TransactionContext { client: PoolClient; account: AccountRow; device: DeviceRow }
+type ResponsePreflight = (result: PushResult) => void;
 interface StoreHooks {
   /** Fault/concurrency injection for isolated integration tests, never configured from HTTP or environment. */
   beforeCommit?: (event: { kind: 'push' | 'resolve' | 'revoke'; opId?: string; accountId: string; deviceId: string }) => Promise<void>;
@@ -252,9 +253,20 @@ export class PostgresSyncStore implements SyncRepository {
   }
 
   private async saveEntity(context: TransactionContext, operation: SyncOperation, existing: EntityRow | undefined,
-    data: EntityData, deletedAt: string | null): Promise<SyncRecord> {
+    data: EntityData, deletedAt: string | null, preflight?: ResponsePreflight): Promise<SyncRecord> {
     const revision = existing ? Number(existing.revision) + 1 : 1;
     const updatedAt = new Date().toISOString();
+    // Use the same revision, timestamps and device as the row below. A rejected
+    // response must not first write the entity or its full change-feed copy.
+    preflight?.({
+      opId: operation.opId, status: 'applied', replayed: false,
+      record: toRecord({
+        entity_type: operation.entityType, entity_id: operation.entityId, schema_version: 1,
+        revision: String(revision), data, deleted_at: deletedAt ? new Date(deletedAt) : null,
+        updated_at: new Date(updatedAt), created_by_device_id: existing?.created_by_device_id ?? context.device.id,
+        modified_by_device_id: context.device.id,
+      }),
+    });
     const result = await context.client.query<EntityRow>(`INSERT INTO paperquay.entities
       (account_id,entity_type,entity_id,schema_version,revision,data,deleted_at,updated_at,created_by_device_id,modified_by_device_id)
       VALUES ($1,$2,$3,1,$4,$5::jsonb,$6,$7,$8,$9)
@@ -272,19 +284,24 @@ export class PostgresSyncStore implements SyncRepository {
     return record;
   }
 
-  private async makeConflict(context: TransactionContext, operation: SyncOperation, existing: EntityRow): Promise<PushResult> {
+  private async makeConflict(context: TransactionContext, operation: SyncOperation, existing: EntityRow,
+    preflight?: ResponsePreflight): Promise<PushResult> {
     if (BigInt(context.account.last_conflict_seq) >= BigInt(SERVER_LIMITS.maxAccountConflicts)) return rejected(operation.opId, 'ACCOUNT_CONFLICT_LIMIT');
+    const conflictId = randomUUID();
+    const record = toRecord(existing);
+    const result: PushResult = { opId: operation.opId, status: 'conflict', replayed: false, conflictId, record };
+    // Check the complete snapshot before advancing the sequence or inserting
+    // either retained copy. Rollback cannot undo the database work itself.
+    preflight?.(result);
     const incremented = await context.client.query<{ last_conflict_seq: string }>(`UPDATE paperquay.accounts
       SET last_conflict_seq = last_conflict_seq + 1 WHERE id = $1 RETURNING last_conflict_seq`, [context.account.id]);
     context.account.last_conflict_seq = incremented.rows[0].last_conflict_seq;
-    const conflictId = randomUUID();
-    const record = toRecord(existing);
     await context.client.query(`INSERT INTO paperquay.conflicts
       (account_id,id,seq,entity_type,entity_id,attempted_operation,observed_record,created_by_device_id)
       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8)`, [context.account.id, conflictId,
       context.account.last_conflict_seq, operation.entityType, operation.entityId,
       JSON.stringify(operation), JSON.stringify(record), context.device.id]);
-    return { opId: operation.opId, status: 'conflict', replayed: false, conflictId, record };
+    return result;
   }
 
   private async validateReferences(context: TransactionContext, operation: SyncOperation): Promise<PushResult | undefined> {
@@ -315,13 +332,13 @@ export class PostgresSyncStore implements SyncRepository {
     return undefined;
   }
 
-  private async applyMutation(context: TransactionContext, operation: SyncOperation): Promise<PushResult> {
+  private async applyMutation(context: TransactionContext, operation: SyncOperation, preflight?: ResponsePreflight): Promise<PushResult> {
     const existing = await this.entity(context, operation.entityType, operation.entityId);
     if (existing && operation.entityType === 'readingPosition' && existing.created_by_device_id !== context.device.id) {
       return rejected(operation.opId, 'CHECKPOINT_DEVICE_MISMATCH');
     }
     if (!existing && (operation.baseRevision !== 0 || operation.mutation !== 'put')) return rejected(operation.opId, 'ENTITY_NOT_FOUND');
-    if (existing && operation.baseRevision !== Number(existing.revision)) return this.makeConflict(context, operation, existing);
+    if (existing && operation.baseRevision !== Number(existing.revision)) return this.makeConflict(context, operation, existing, preflight);
     if (existing?.deleted_at && operation.mutation === 'put') return rejected(operation.opId, 'RESTORE_REQUIRED');
     if (existing && !existing.deleted_at && operation.mutation === 'restore') return rejected(operation.opId, 'ENTITY_NOT_DELETED');
     if (operation.data && Buffer.byteLength(JSON.stringify(operation.data)) > SERVER_LIMITS.entityLimitBytes) return rejected(operation.opId, 'ENTITY_TOO_LARGE');
@@ -358,7 +375,8 @@ export class PostgresSyncStore implements SyncRepository {
       return { opId: operation.opId, status: 'applied', replayed: false, record: toRecord(existing) };
     }
     const data = operation.mutation === 'delete' ? existing!.data : operation.data!;
-    const record = await this.saveEntity(context, operation, existing, data, operation.mutation === 'delete' ? new Date().toISOString() : null);
+    const record = await this.saveEntity(context, operation, existing, data,
+      operation.mutation === 'delete' ? new Date().toISOString() : null, preflight);
     return { opId: operation.opId, status: 'applied', replayed: false, record };
   }
 
@@ -370,16 +388,32 @@ export class PostgresSyncStore implements SyncRepository {
     // current documents as conflict snapshots.
     const recordBudget = this.responseLimitBytes - 1024 - request.operations.length * 256;
     let responseBytes = 0;
+    let responseBudgetExhausted = false;
+    const checkResponseBudget: ResponsePreflight = (result) => {
+      if (responseBytes + Buffer.byteLength(JSON.stringify(result)) > recordBudget) throw new ResponseBudgetExceeded();
+    };
     for (const operation of request.operations) {
+      if (responseBudgetExhausted) {
+        // Preserve every opId in order without another transaction or snapshot
+        // read after the first result that cannot fit this response.
+        results.push(rejected(operation.opId, 'RESPONSE_LIMIT_REACHED', true));
+        continue;
+      }
       try {
         const result = await this.withAccount(identity, false, async (context) => {
           if (context.device.id !== request.deviceId) throw new ApiError('DEVICE_SESSION_MISMATCH', 403);
           const hash = operationHash({ kind: 'push', operation });
           const previous = await this.receipt(context, operation.opId, hash);
-          if (!previous && context.account.receipt_count >= SERVER_LIMITS.maxAccountReceipts) return rejected(operation.opId, 'ACCOUNT_RECEIPT_LIMIT');
+          if (!previous && context.account.receipt_count >= SERVER_LIMITS.maxAccountReceipts) {
+            const result = rejected(operation.opId, 'ACCOUNT_RECEIPT_LIMIT');
+            checkResponseBudget(result);
+            return result;
+          }
           if (!previous) this.requireStorageHeadroom(context);
-          const result = previous ?? await this.applyMutation(context, operation);
-          if (responseBytes + Buffer.byteLength(JSON.stringify(result)) > recordBudget) throw new ResponseBudgetExceeded();
+          const result = previous ?? await this.applyMutation(context, operation, checkResponseBudget);
+          // Replays and small rejections also need a check. For mutations this
+          // rechecks the actual database result against the same budget.
+          checkResponseBudget(result);
           if (!previous) await this.remember(context, hash, result);
           await this.hooks.beforeCommit?.({ kind: 'push', opId: operation.opId, accountId: context.account.id, deviceId: context.device.id });
           return result;
@@ -388,7 +422,10 @@ export class PostgresSyncStore implements SyncRepository {
         results.push(result);
       } catch (error) {
         if (isAccountStorageLimit(error)) results.push(rejected(operation.opId, 'ACCOUNT_STORAGE_LIMIT', true));
-        else if (error instanceof ResponseBudgetExceeded) results.push(rejected(operation.opId, 'RESPONSE_LIMIT_REACHED', true));
+        else if (error instanceof ResponseBudgetExceeded) {
+          responseBudgetExhausted = true;
+          results.push(rejected(operation.opId, 'RESPONSE_LIMIT_REACHED', true));
+        }
         else if (isTransientDatabaseError(error)) results.push(rejected(operation.opId, 'SERVICE_TEMPORARILY_UNAVAILABLE', true));
         else throw error;
       }
