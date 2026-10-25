@@ -64,6 +64,7 @@ class FakeApi {
   records = new Map<string, SyncRecord[]>();
   receipts = new Map<string, PushResult>();
   requests: PushRequest[] = [];
+  pullRequests: (string | null)[] = [];
   writeCount = 0;
   failAckOnce = false;
   pausePush: {
@@ -194,6 +195,7 @@ class FakeApi {
     return { protocolVersion: 1 as const, results };
   }
   async pull(cursor: string | null) {
+    this.pullRequests.push(cursor);
     const rows = this.records.get(this.account) ?? [];
     return {
       protocolVersion: 1 as const,
@@ -215,6 +217,23 @@ class FakeApi {
     if (!this.resolutionReceipt) {
       const conflict = this.openConflicts[0];
       const base = conflict.currentRecord!;
+      const data = request.choice === 'merged' ? request.data : conflict.attemptedOperation.data;
+      const paperId = data && 'paperId' in data ? data.paperId : null;
+      if (
+        request.choice !== 'current' &&
+        conflict.entityType === 'note' &&
+        paperId &&
+        !(this.records.get(this.account) ?? []).some(
+          (row) => row.entityType === 'paper' && row.entityId === paperId,
+        )
+      )
+        return {
+          opId: request.opId,
+          status: 'rejected',
+          replayed: false,
+          code: 'DEPENDENCY_NOT_READY',
+          retryable: true,
+        };
       const mutation =
         request.choice === 'merged' ? request.mutation : conflict.attemptedOperation.mutation;
       const record =
@@ -306,6 +325,27 @@ async function setupConflictWithOverlay() {
   env.controller.setOnline(true);
   await env.controller.syncNow();
   return { ...env, overlay };
+}
+
+async function queuePaperAfterInterruptedPush(env: ReturnType<typeof setup>, entityId = PAPER) {
+  env.controller.setOnline(false);
+  await env.controller.save(paperEdit(entityId));
+  const normalPush = env.api.push.bind(env.api);
+  env.api.push = async (request) => {
+    env.api.requests.push(structuredClone(request));
+    throw new ClientError('NETWORK_UNAVAILABLE', true);
+  };
+  env.controller.setOnline(true);
+  await env.controller.syncNow();
+  assert.equal(
+    env.controller.getSnapshot().workspace!.sync.outbox.find(
+      (entry) => entry.operation.entityId === entityId,
+    )!.status,
+    'uncertain',
+  );
+  const paperRequest = structuredClone(env.api.requests.at(-1)!);
+  env.api.push = normalPush;
+  return paperRequest;
 }
 
 async function setupTombstone() {
@@ -653,6 +693,404 @@ test('conflict resolution acknowledgement loss persists the exact request and re
   assert.equal(next.controller.getSnapshot().conflicts.length, 0);
   await next.store.close();
 });
+
+test('a pending resolution lets its queued paper upload before retrying the unchanged request', async () => {
+  const env = await setupConflictWithOverlay();
+  const paperRequest = await queuePaperAfterInterruptedPush(env);
+  const pullsBefore = env.api.pullRequests.length;
+
+  await env.controller.resolve(
+    env.controller.getSnapshot().conflicts[0],
+    { choice: 'merged', mutation: 'put', data: { ...note('merged with paper'), paperId: PAPER } },
+    { consumedOverlayOpId: env.overlay.opId },
+  );
+
+  assert.equal(env.api.resolutionRequests.length, 2);
+  assert.deepEqual(env.api.resolutionRequests[0], env.api.resolutionRequests[1]);
+  assert.deepEqual(env.api.requests.at(-1), paperRequest);
+  assert.equal(env.api.writeCount, 1);
+  const snapshot = env.controller.getSnapshot();
+  assert.deepEqual(snapshot.workspace!.pendingResolutions, {});
+  assert.equal(snapshot.workspace!.sync.outbox.length, 0);
+  assert.deepEqual(snapshot.workspace!.sync.overlays, {});
+  assert.equal(snapshot.error, null);
+  assert.ok(env.api.pullRequests.length > pullsBefore);
+  assert.equal(
+    (getVisibleEntity(snapshot.workspace!.sync, 'note', NOTE)!.data as NoteData).paperId,
+    PAPER,
+  );
+  await env.store.close();
+});
+
+test('a resolution with a permanently missing dependency permits unrelated work and pull, then survives restart unchanged', async () => {
+  const env = await setupConflictWithOverlay();
+  await queuePaperAfterInterruptedPush(env, '11111111-1111-4111-8111-111111111111');
+  const pullsBefore = env.api.pullRequests.length;
+  await env.controller.resolve(
+    env.controller.getSnapshot().conflicts[0],
+    { choice: 'merged', mutation: 'put', data: { ...note('waiting for paper'), paperId: PAPER } },
+    { consumedOverlayOpId: env.overlay.opId },
+  );
+  await new Promise<void>((resolve) => setTimeout(resolve, 20));
+
+  assert.equal(env.api.resolutionRequests.length, 2);
+  assert.equal(env.api.writeCount, 1);
+  assert.ok(env.api.pullRequests.length > pullsBefore);
+  const snapshot = env.controller.getSnapshot();
+  const pending = structuredClone(snapshot.workspace!.pendingResolutions[CONFLICT]);
+  assert.deepEqual(pending.request, env.api.resolutionRequests[0]);
+  assert.deepEqual(pending.request, env.api.resolutionRequests[1]);
+  assert.equal(pending.consumedOverlayOpId, env.overlay.opId);
+  assert.equal(snapshot.syncing, false);
+  assert.equal(snapshot.error?.code, 'SYNC_FAILED');
+  assert.equal(snapshot.workspace!.sync.outbox.length, 1);
+  assert.equal(snapshot.workspace!.sync.outbox[0].status, 'conflict');
+  assert.equal(snapshot.workspace!.sync.overlays[`note:${NOTE}`].opId, env.overlay.opId);
+
+  env.controller.deactivate();
+  await env.store.close();
+  const next = setup(env.api, env.factory, env.databaseName);
+  await next.controller.bind('Reopened');
+  assert.deepEqual(next.controller.getSnapshot().workspace!.pendingResolutions[CONFLICT], pending);
+  await next.controller.save(paperEdit());
+  next.controller.setOnline(true);
+  await next.controller.syncNow();
+  assert.equal(env.api.resolutionRequests.length, 4);
+  for (const request of env.api.resolutionRequests) assert.deepEqual(request, pending.request);
+  assert.deepEqual(next.controller.getSnapshot().workspace!.pendingResolutions, {});
+  assert.equal(next.controller.getSnapshot().workspace!.sync.outbox.length, 0);
+  assert.deepEqual(next.controller.getSnapshot().workspace!.sync.overlays, {});
+  assert.equal(next.controller.getSnapshot().error, null);
+  await next.store.close();
+});
+
+test('a general retryable resolution is attempted once per run while independent writes and pull continue', async () => {
+  const env = await setupConflictWithOverlay();
+  await queuePaperAfterInterruptedPush(env);
+  const normalResolve = env.api.resolveConflict.bind(env.api);
+  env.api.resolveConflict = async (_conflictId, request) => {
+    env.api.resolutionRequests.push(structuredClone(request));
+    return {
+      opId: request.opId,
+      status: 'rejected',
+      replayed: false,
+      code: 'SERVICE_TEMPORARILY_UNAVAILABLE',
+      retryable: true,
+    };
+  };
+  const pullsBefore = env.api.pullRequests.length;
+  await env.controller.resolve(
+    env.controller.getSnapshot().conflicts[0],
+    { choice: 'merged', mutation: 'put', data: note('merged after temporary failure') },
+    { consumedOverlayOpId: env.overlay.opId },
+  );
+  await new Promise<void>((resolve) => setTimeout(resolve, 20));
+
+  assert.equal(env.api.resolutionRequests.length, 1);
+  assert.equal(env.api.writeCount, 1);
+  assert.ok(env.api.pullRequests.length > pullsBefore);
+  const pending = structuredClone(
+    env.controller.getSnapshot().workspace!.pendingResolutions[CONFLICT],
+  );
+  assert.deepEqual(pending.request, env.api.resolutionRequests[0]);
+  assert.equal(pending.consumedOverlayOpId, env.overlay.opId);
+  assert.equal(env.controller.getSnapshot().error?.code, 'SYNC_FAILED');
+  assert.equal(
+    env.controller.getSnapshot().workspace!.sync.overlays[`note:${NOTE}`].opId,
+    env.overlay.opId,
+  );
+
+  env.api.resolveConflict = normalResolve;
+  await env.controller.syncNow();
+  assert.equal(env.api.resolutionRequests.length, 2);
+  assert.deepEqual(env.api.resolutionRequests[1], pending.request);
+  assert.deepEqual(env.controller.getSnapshot().workspace!.pendingResolutions, {});
+  assert.equal(env.controller.getSnapshot().error, null);
+  await env.store.close();
+});
+
+test('a dependency retry keeps the reviewed revision when another device edits before the paper arrives', async () => {
+  const env = await setupConflictWithOverlay();
+  await queuePaperAfterInterruptedPush(env);
+  const normalPush = env.api.push.bind(env.api);
+  const normalResolve = env.api.resolveConflict.bind(env.api);
+  let concurrent: SyncRecord<'note'> | null = null;
+  env.api.push = async (request) => {
+    const response = await normalPush(request);
+    concurrent = {
+      ...(env.api.openConflicts[0].currentRecord as SyncRecord<'note'>),
+      revision: 3,
+      data: note('new remote edit while dependency uploaded'),
+    };
+    env.api.records.get(A)!.push(concurrent);
+    env.api.openConflicts[0].currentRecord = concurrent;
+    return response;
+  };
+  env.api.resolveConflict = async (conflictId, request) => {
+    if (!concurrent) return normalResolve(conflictId, request);
+    env.api.resolutionRequests.push(structuredClone(request));
+    assert.equal(request.expectedRevision, 2);
+    return {
+      opId: request.opId,
+      status: 'conflict',
+      replayed: false,
+      conflictId: crypto.randomUUID(),
+      record: concurrent,
+    };
+  };
+  await env.controller.resolve(
+    env.controller.getSnapshot().conflicts[0],
+    { choice: 'merged', mutation: 'put', data: { ...note('reviewed merge'), paperId: PAPER } },
+    { consumedOverlayOpId: env.overlay.opId },
+  );
+
+  assert.equal(env.api.resolutionRequests.length, 2);
+  assert.deepEqual(env.api.resolutionRequests[1], env.api.resolutionRequests[0]);
+  assert.equal(env.api.records.get(A)!.at(-1)!.revision, 3);
+  assert.equal(
+    (env.api.records.get(A)!.at(-1)!.data as NoteData).body,
+    'new remote edit while dependency uploaded',
+  );
+  const snapshot = env.controller.getSnapshot();
+  assert.equal(snapshot.error?.code, 'CONFLICT_CHANGED');
+  assert.deepEqual(snapshot.workspace!.pendingResolutions, {});
+  assert.equal(snapshot.workspace!.sync.outbox[0].status, 'conflict');
+  assert.equal(snapshot.workspace!.sync.overlays[`note:${NOTE}`].opId, env.overlay.opId);
+  await env.store.close();
+});
+
+test('a full resolution budget still permits outbox and pull and rotates unattempted requests to the next run', async () => {
+  const env = setup();
+  await env.controller.bind('A');
+  await env.controller.save(paperEdit());
+  env.controller.deactivate();
+  const pendingResolutions = Object.fromEntries(
+    Array.from({ length: 101 }, () => [
+      crypto.randomUUID(),
+      {
+        entityType: 'note' as const,
+        entityId: NOTE,
+        request: { choice: 'current' as const, opId: crypto.randomUUID(), expectedRevision: 2 },
+      },
+    ]),
+  );
+  await env.store.update({ apiBaseUrl: 'https://sync.example.test', accountId: A }, (value) => ({
+    ...value!,
+    pendingResolutions,
+  }));
+  await env.controller.bind('Reopened with pending requests');
+  env.api.resolveConflict = async (_conflictId, request) => {
+    env.api.resolutionRequests.push(structuredClone(request));
+    return {
+      opId: request.opId,
+      status: 'rejected',
+      replayed: false,
+      code: 'SERVICE_TEMPORARILY_UNAVAILABLE',
+      retryable: true,
+    };
+  };
+  env.controller.setOnline(true);
+  await env.controller.syncNow();
+  await new Promise<void>((resolve) => setTimeout(resolve, 20));
+
+  assert.equal(env.api.resolutionRequests.length, 100);
+  assert.equal(env.api.writeCount, 1);
+  assert.equal(env.api.pullRequests.length, 1);
+  assert.equal(env.controller.getSnapshot().lastSyncedAt, null);
+  assert.equal(env.controller.getSnapshot().error?.code, 'SYNC_FAILED');
+  const original = Object.values(pendingResolutions).map((pending) => pending.request);
+  assert.deepEqual(env.api.resolutionRequests, original.slice(0, 100));
+  env.controller.deactivate();
+  await env.store.close();
+
+  const next = setup(env.api, env.factory, env.databaseName);
+  await next.controller.bind('Restarted after bounded run');
+  next.controller.setOnline(true);
+  await next.controller.syncNow();
+  assert.equal(env.api.resolutionRequests.length, 200);
+  assert.deepEqual(env.api.resolutionRequests[100], original[100]);
+  assert.equal(new Set(env.api.resolutionRequests.map((request) => request.opId)).size, 101);
+  assert.equal(env.api.pullRequests.length, 2);
+  assert.equal(next.controller.getSnapshot().error?.code, 'SYNC_FAILED');
+  assert.deepEqual(next.controller.getSnapshot().workspace!.pendingResolutions, pendingResolutions);
+  await next.store.close();
+});
+
+test('successful resolutions beyond one run budget remain visibly pending without a queued outbox', async () => {
+  const env = setup();
+  await env.controller.bind('A');
+  env.controller.deactivate();
+  const pendingResolutions = Object.fromEntries(
+    Array.from({ length: 101 }, () => [
+      crypto.randomUUID(),
+      {
+        entityType: 'note' as const,
+        entityId: NOTE,
+        request: { choice: 'current' as const, opId: crypto.randomUUID(), expectedRevision: 2 },
+      },
+    ]),
+  );
+  await env.store.update({ apiBaseUrl: 'https://sync.example.test', accountId: A }, (value) => ({
+    ...value!,
+    pendingResolutions,
+  }));
+  const record: SyncRecord<'note'> = {
+    entityType: 'note',
+    entityId: NOTE,
+    schemaVersion: 1,
+    revision: 2,
+    deletedAt: null,
+    updatedAt: NOW,
+    modifiedByDeviceId: DEVICE,
+    data: note('current version'),
+  };
+  env.api.records.set(A, [record]);
+  env.api.resolveConflict = async (_conflictId, request) => {
+    env.api.resolutionRequests.push(structuredClone(request));
+    return { opId: request.opId, status: 'applied', replayed: false, record };
+  };
+  await env.controller.bind('Reopened with successful pending requests');
+  env.controller.setOnline(true);
+  await env.controller.syncNow();
+  await new Promise<void>((resolve) => setTimeout(resolve, 20));
+
+  const snapshot = env.controller.getSnapshot();
+  assert.equal(env.api.resolutionRequests.length, 100);
+  assert.equal(env.api.requests.length, 0);
+  assert.equal(env.api.pullRequests.length, 1);
+  assert.equal(Object.keys(snapshot.workspace!.pendingResolutions).length, 1);
+  assert.equal(snapshot.workspace!.sync.outbox.length, 0);
+  assert.equal(snapshot.syncing, false);
+  assert.equal(snapshot.lastSyncedAt, null);
+  assert.equal(snapshot.error?.code, 'SYNC_FAILED');
+
+  await env.controller.syncNow();
+  assert.equal(env.api.resolutionRequests.length, 101);
+  assert.equal(env.api.pullRequests.length, 2);
+  assert.deepEqual(env.controller.getSnapshot().workspace!.pendingResolutions, {});
+  assert.equal(env.controller.getSnapshot().error, null);
+  assert.equal(env.controller.getSnapshot().lastSyncedAt, NOW);
+  await env.store.close();
+});
+
+test('a lost resolution acknowledgement permits independent work but remains pending after pull observes its closure', async () => {
+  const env = await setupConflictWithOverlay();
+  await queuePaperAfterInterruptedPush(env);
+  const pullsBefore = env.api.pullRequests.length;
+  env.api.failResolutionAck = true;
+  await env.controller.resolve(
+    env.controller.getSnapshot().conflicts[0],
+    { choice: 'merged', mutation: 'put', data: note('merged before lost acknowledgement') },
+    { consumedOverlayOpId: env.overlay.opId },
+  );
+  await new Promise<void>((resolve) => setTimeout(resolve, 20));
+
+  assert.equal(env.api.resolutionRequests.length, 1);
+  assert.equal(env.api.writeCount, 1);
+  assert.ok(env.api.pullRequests.length > pullsBefore);
+  const snapshot = env.controller.getSnapshot();
+  const pending = structuredClone(snapshot.workspace!.pendingResolutions[CONFLICT]);
+  assert.deepEqual(snapshot.conflicts, []);
+  assert.equal(snapshot.workspace!.sync.conflicts[CONFLICT].conflictId, CONFLICT);
+  assert.equal(snapshot.workspace!.sync.outbox[0].status, 'conflict');
+  assert.equal(snapshot.workspace!.sync.overlays[`note:${NOTE}`].opId, env.overlay.opId);
+  assert.equal(snapshot.error?.code, 'NETWORK_UNAVAILABLE');
+  const recordsAfterCommit = env.api.records.get(A)!.length;
+
+  env.controller.deactivate();
+  await env.store.close();
+  const next = setup(env.api, env.factory, env.databaseName);
+  await next.controller.bind('Reopened');
+  assert.deepEqual(next.controller.getSnapshot().workspace!.pendingResolutions[CONFLICT], pending);
+  next.controller.setOnline(true);
+  await next.controller.syncNow();
+  assert.equal(env.api.resolutionRequests.length, 2);
+  assert.deepEqual(env.api.resolutionRequests[1], pending.request);
+  assert.equal(env.api.records.get(A)!.length, recordsAfterCommit);
+  assert.deepEqual(next.controller.getSnapshot().workspace!.pendingResolutions, {});
+  assert.deepEqual(next.controller.getSnapshot().workspace!.sync.overlays, {});
+  assert.equal(next.controller.getSnapshot().workspace!.sync.outbox.length, 0);
+  assert.equal(next.controller.getSnapshot().error, null);
+  await next.store.close();
+});
+
+for (const code of ['AUTH_REQUIRED', 'SESSION_REVOKED', 'INVALID_RESPONSE'] as const) {
+  test(`a resolution ${code} fails immediately without sending queued writes or pulling`, async () => {
+    const env = await setupConflictWithOverlay();
+    await queuePaperAfterInterruptedPush(env);
+    const pushesBefore = env.api.requests.length;
+    const pullsBefore = env.api.pullRequests.length;
+    env.api.resolveConflict = async (_conflictId, request) => {
+      env.api.resolutionRequests.push(structuredClone(request));
+      throw new ClientError(code);
+    };
+    await env.controller.resolve(
+      env.controller.getSnapshot().conflicts[0],
+      { choice: 'merged', mutation: 'put', data: note('keep after error') },
+      { consumedOverlayOpId: env.overlay.opId },
+    );
+
+    const snapshot = env.controller.getSnapshot();
+    assert.equal(env.api.resolutionRequests.length, 1);
+    assert.equal(env.api.requests.length, pushesBefore);
+    assert.equal(env.api.pullRequests.length, pullsBefore);
+    assert.equal(snapshot.error?.code, code);
+    assert.equal(snapshot.needsLogin, code !== 'INVALID_RESPONSE');
+    assert.deepEqual(
+      snapshot.workspace!.pendingResolutions[CONFLICT].request,
+      env.api.resolutionRequests[0],
+    );
+    assert.equal(snapshot.workspace!.sync.overlays[`note:${NOTE}`].opId, env.overlay.opId);
+    await env.store.close();
+  });
+}
+
+for (const status of ['conflict', 'rejected'] as const) {
+  test(`a list refresh failure after a terminal resolution ${status} does not require login or recreate pending work`, async () => {
+    const env = await setupConflictWithOverlay();
+    const current = env.api.openConflicts[0].currentRecord!;
+    const normalConflicts = env.api.conflicts.bind(env.api);
+    env.api.resolveConflict = async (_conflictId, request) => {
+      env.api.resolutionRequests.push(structuredClone(request));
+      return status === 'conflict'
+        ? {
+            opId: request.opId,
+            status,
+            replayed: false,
+            conflictId: crypto.randomUUID(),
+            record: current,
+          }
+        : {
+            opId: request.opId,
+            status,
+            replayed: false,
+            code: 'RESTORE_REQUIRED',
+            retryable: false,
+          };
+    };
+    env.api.conflicts = async () => {
+      throw new ClientError('NETWORK_UNAVAILABLE', true);
+    };
+    await env.controller.resolve(
+      env.controller.getSnapshot().conflicts[0],
+      { choice: 'merged', mutation: 'put', data: note('keep after terminal result') },
+      { consumedOverlayOpId: env.overlay.opId },
+    );
+
+    const snapshot = env.controller.getSnapshot();
+    assert.equal(snapshot.error?.code, 'NETWORK_UNAVAILABLE');
+    assert.equal(snapshot.needsLogin, false);
+    assert.deepEqual(snapshot.workspace!.pendingResolutions, {});
+    assert.equal(snapshot.workspace!.sync.outbox[0].status, 'conflict');
+    assert.equal(snapshot.workspace!.sync.overlays[`note:${NOTE}`].opId, env.overlay.opId);
+    env.api.conflicts = normalConflicts;
+    await env.controller.syncNow();
+    assert.equal(env.api.resolutionRequests.length, 1);
+    assert.equal(env.controller.getSnapshot().error, null);
+    assert.equal(env.controller.getSnapshot().needsLogin, false);
+    await env.store.close();
+  });
+}
 
 test('revoking this session preserves local edits and requires a new login', async () => {
   const env = setup();

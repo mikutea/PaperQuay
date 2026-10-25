@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type {
   EntityData,
   LocalEdit,
@@ -36,7 +36,7 @@ export function EntityEditor({
   entityId: string;
   entity?: VisibleEntity | null;
   papers: VisibleEntity[];
-  controller: WorkspaceController;
+  controller: Pick<WorkspaceController, 'save' | 'getSnapshot'>;
   hasConflict: boolean;
   onBack: () => void;
   onDirty: (dirty: boolean) => void;
@@ -50,9 +50,25 @@ export function EntityEditor({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const editorSession = useRef<object | null>(null);
   const remoteSignature = JSON.stringify(entity?.data ?? null);
   const changedWhileEditing = dirty && (entity?.revision ?? 0) !== baseRevision;
 
+  useLayoutEffect(() => {
+    // Persistence may finish after navigation. Retire the old editor before its
+    // callbacks can clear a replacement draft or navigate away from it.
+    const session = {};
+    editorSession.current = session;
+    setData((entity?.data as PaperData | NoteData) ?? (type === 'paper' ? emptyPaper() : emptyNote()));
+    setBaseRevision(entity?.revision ?? 0);
+    setDirty(false);
+    setSaving(false);
+    setError(null);
+    setSaved(false);
+    return () => {
+      if (editorSession.current === session) editorSession.current = null;
+    };
+  }, [type, entityId, controller]);
   useEffect(() => {
     onDirty(dirty);
   }, [dirty, onDirty]);
@@ -70,6 +86,8 @@ export function EntityEditor({
   }
 
   async function save(revision = baseRevision, mutation: 'put' | 'restore' = 'put') {
+    const session = editorSession.current;
+    if (!session) return;
     if (!data.title.trim()) {
       setError('请填写标题。');
       return;
@@ -90,6 +108,7 @@ export function EntityEditor({
         { entityType: type, entityId, mutation, data: normalized } as LocalEdit,
         revision,
       );
+      if (editorSession.current !== session) return;
       setDirty(false);
       onDirty(false);
       setSaved(true);
@@ -98,29 +117,35 @@ export function EntityEditor({
           revision,
       );
     } catch (problem) {
-      setError(describeError(problem));
+      if (editorSession.current === session) setError(describeError(problem));
     } finally {
-      setSaving(false);
+      if (editorSession.current === session) setSaving(false);
     }
   }
   async function remove() {
+    const session = editorSession.current;
+    if (!session) return;
     if (!window.confirm('将这条内容标记为已删除？同步后会影响此账号的其他设备。')) return;
+    if (editorSession.current !== session) return;
     setSaving(true);
     try {
       await controller.save(
         { entityType: type, entityId, mutation: 'delete', data: null } as LocalEdit,
         entity?.revision ?? 0,
       );
+      if (editorSession.current !== session) return;
       setDirty(false);
       onDirty(false);
       onBack();
     } catch (problem) {
-      setError(describeError(problem));
+      if (editorSession.current === session) setError(describeError(problem));
     } finally {
-      setSaving(false);
+      if (editorSession.current === session) setSaving(false);
     }
   }
   async function restore() {
+    const session = editorSession.current;
+    if (!session) return;
     if (!entity?.data) {
       setError('没有可恢复的内容。请从冲突中保留的版本恢复。');
       return;
@@ -131,11 +156,12 @@ export function EntityEditor({
         { entityType: type, entityId, mutation: 'restore', data: entity.data } as LocalEdit,
         entity.revision,
       );
+      if (editorSession.current !== session) return;
       setError(null);
     } catch (problem) {
-      setError(describeError(problem));
+      if (editorSession.current === session) setError(describeError(problem));
     } finally {
-      setSaving(false);
+      if (editorSession.current === session) setSaving(false);
     }
   }
 

@@ -19,6 +19,7 @@ import {
   type EntityType,
   type LocalEdit,
   type PreparedPush,
+  type PushResult,
   type SyncContext,
   type SyncMutation,
 } from '../../../../packages/sync-core/src/index.ts';
@@ -335,21 +336,66 @@ export class WorkspaceController {
     const context = this.context!;
     this.publish({ syncing: true, error: null });
     try {
-      for (const conflictId of Object.keys(this.snapshot.workspace!.pendingResolutions))
-        await this.sendResolution(epoch, conflictId, signal);
       // Retry missing dependencies only after another write succeeds. Other retryable
       // rejections wait for the next sync trigger, without blocking independent edits.
       const deferred = new Map<string, number | null>();
+      const resolutionErrors = new Map<string, ClientError>();
       let progress = 0;
+      let budgetExhausted = false;
+      const canAttempt = (opId: string): boolean => {
+        const afterProgress = deferred.get(opId);
+        return afterProgress === undefined || (afterProgress !== null && progress > afterProgress);
+      };
       for (let sent = 0; sent < 100; sent += 1) {
+        const resolution = Object.entries(this.snapshot.workspace!.pendingResolutions).find(
+          ([, pending]) => canAttempt(pending.request.opId),
+        );
+        if (resolution) {
+          const [conflictId, pending] = resolution;
+          try {
+            const result = await this.sendResolution(epoch, conflictId, signal);
+            if (result?.status === 'applied') {
+              progress += 1;
+              deferred.delete(result.opId);
+              resolutionErrors.delete(result.opId);
+            } else if (result?.status === 'rejected' && result.retryable) {
+              deferred.set(result.opId, result.code === 'DEPENDENCY_NOT_READY' ? progress : null);
+              resolutionErrors.set(result.opId, new ClientError('SYNC_FAILED', true));
+            }
+          } catch (error) {
+            const safe = safeError(error);
+            if (
+              !safe.retryable ||
+              !['NETWORK_UNAVAILABLE', 'REQUEST_TIMEOUT', 'SYNC_FAILED'].includes(safe.code)
+            )
+              throw error;
+            if (
+              this.snapshot.workspace?.pendingResolutions[conflictId]?.request.opId !==
+              pending.request.opId
+            )
+              throw error;
+            // A lost response can hide a committed resolution. Retain its exact
+            // request and wait for another sync trigger before replaying it.
+            deferred.set(pending.request.opId, null);
+            resolutionErrors.set(pending.request.opId, safe);
+          }
+          if (resolutionErrors.has(pending.request.opId))
+            await this.update(epoch, (value) => {
+              const resolutions = { ...value.pendingResolutions };
+              const current = resolutions[conflictId];
+              if (current?.request.opId !== pending.request.opId)
+                throw new ClientError('ACCOUNT_CHANGED');
+              // Rotate whole requests so a bounded run also gives later pending
+              // resolutions a turn after the next trigger or a restart.
+              delete resolutions[conflictId];
+              return { ...value, pendingResolutions: { ...resolutions, [conflictId]: current } };
+            });
+        }
         let prepared: PreparedPush | undefined;
         await this.update(epoch, (value) => {
           const index = value.sync.outbox.findIndex((entry) => {
             if (entry.status !== 'queued' && entry.status !== 'uncertain') return false;
-            const afterProgress = deferred.get(entry.operation.opId);
-            return (
-              afterProgress === undefined || (afterProgress !== null && progress > afterProgress)
-            );
+            return canAttempt(entry.operation.opId);
           });
           if (index < 0) return value;
           // Reorder whole entries only; attempted operation identities and payloads
@@ -368,7 +414,13 @@ export class WorkspaceController {
           prepared = preparePush(ordered, context, 1);
           return { ...value, sync: prepared.state };
         });
-        if (!prepared?.opIds.length) break;
+        if (!prepared?.opIds.length) {
+          if (resolution) {
+            if (sent === 99) budgetExhausted = true;
+            continue;
+          }
+          break;
+        }
         try {
           const response = await this.api.push(prepared!.request, signal);
           await this.update(epoch, (value) => {
@@ -405,7 +457,7 @@ export class WorkspaceController {
             }));
           throw error;
         }
-        if (sent === 99) throw new ClientError('SYNC_FAILED', true);
+        if (sent === 99) budgetExhausted = true;
       }
       await this.pullToCurrent(epoch, context, signal);
       const conflicts = await this.fetchConflicts(signal);
@@ -435,14 +487,27 @@ export class WorkspaceController {
         return { ...value, sync };
       });
       if (this.current(epoch)) {
-        const retryPending = this.snapshot.workspace!.sync.outbox.some(
-          (entry) => entry.status === 'queued' && deferred.has(entry.operation.opId),
+        const pendingResolution = Object.values(this.snapshot.workspace!.pendingResolutions).find(
+          (pending) => resolutionErrors.has(pending.request.opId),
         );
+        const retryPending =
+          Boolean(pendingResolution) ||
+          this.snapshot.workspace!.sync.outbox.some(
+            (entry) => entry.status === 'queued' && deferred.has(entry.operation.opId),
+          ) ||
+          (budgetExhausted &&
+            (Object.keys(this.snapshot.workspace!.pendingResolutions).length > 0 ||
+              this.snapshot.workspace!.sync.outbox.some(
+                (entry) => entry.status === 'queued' || entry.status === 'uncertain',
+              )));
         this.publish({
           conflicts,
           devices,
           ...(retryPending ? {} : { lastSyncedAt: this.now() }),
-          error: retryPending ? new ClientError('SYNC_FAILED', true) : null,
+          error: retryPending
+            ? (pendingResolution && resolutionErrors.get(pendingResolution.request.opId)) ||
+              new ClientError('SYNC_FAILED', true)
+            : null,
         });
       }
     } catch (error) {
@@ -532,7 +597,7 @@ export class WorkspaceController {
     epoch: number,
     conflictId: string,
     signal: AbortSignal,
-  ): Promise<void> {
+  ): Promise<PushResult | undefined> {
     const pending = this.snapshot.workspace!.pendingResolutions[conflictId];
     if (!pending) return;
     const result = await this.api.resolveConflict(conflictId, pending.request, signal);
@@ -543,8 +608,7 @@ export class WorkspaceController {
           result.record.entityId !== pending.entityId))
     )
       throw new ClientError('INVALID_RESPONSE');
-    if (result.status === 'rejected' && result.retryable)
-      throw new ClientError('SYNC_FAILED', true);
+    if (result.status === 'rejected' && result.retryable) return result;
     await this.update(epoch, (value) => {
       const resolutions = { ...value.pendingResolutions };
       if (resolutions[conflictId]?.request.opId !== pending.request.opId)
@@ -567,6 +631,7 @@ export class WorkspaceController {
       if (this.current(epoch)) this.publish({ conflicts });
       throw new ClientError(result.status === 'conflict' ? 'CONFLICT_CHANGED' : 'SYNC_FAILED');
     }
+    return result;
   }
 
   async revokeDevice(deviceId: string): Promise<boolean> {
