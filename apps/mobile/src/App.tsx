@@ -144,7 +144,7 @@ function ErrorMessage({ message }: { message: string }) {
   );
 }
 
-function ConnectedApp({
+export function ConnectedApp({
   runtime,
   configInput,
   onConfigure,
@@ -225,6 +225,7 @@ function ConnectedApp({
     setUiError(null);
   }
   function select(type: 'paper' | 'note', id: string) {
+    if (selection?.type === type && selection.id === id) return;
     if (!canLeave()) return;
     setSelection({ type, id });
     setDirty(false);
