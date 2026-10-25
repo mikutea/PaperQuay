@@ -1,0 +1,113 @@
+name: Mobile and account sync
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-sync-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integration:
+    name: PostgreSQL, OIDC and mobile foundation
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18.6
+        env:
+          # This credential is confined to a fresh, disposable CI service.
+          POSTGRES_PASSWORD: paperquay-ci-bootstrap-only
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      PAPERQUAY_TEST_ADMIN_DATABASE_URL: postgresql://postgres:paperquay-ci-bootstrap-only@127.0.0.1:5432/postgres
+      PAPERQUAY_OIDC_ISSUER: http://127.0.0.1:18081/realms/paperquay-local
+      PAPERQUAY_OIDC_AUDIENCE: paperquay-sync
+      PAPERQUAY_OIDC_CLIENT_IDS: paperquay-mobile,paperquay-integration
+      PAPERQUAY_ALLOWED_ORIGINS: http://127.0.0.1:4317,http://127.0.0.1:4318
+      PAPERQUAY_TEST_USERNAME: qa-reader
+      PAPERQUAY_TEST_OTHER_USERNAME: qa-other
+      PAPERQUAY_TEST_ALLOW_DATABASE_WRITES: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            server/package-lock.json
+            apps/mobile/package-lock.json
+      - name: Install service and mobile dependencies
+        run: |
+          npm ci --prefix server
+          npm ci --prefix apps/mobile
+      - name: Generate disposable test settings
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { randomBytes } from 'node:crypto';
+          import { appendFileSync } from 'node:fs';
+          const password = randomBytes(24).toString('hex');
+          const cursorSecret = randomBytes(48).toString('base64');
+          console.log(`::add-mask::${password}`);
+          console.log(`::add-mask::${cursorSecret}`);
+          const settings = {
+            PAPERQUAY_TEST_PASSWORD: password,
+            PAPERQUAY_CURSOR_SECRET: cursorSecret,
+            PAPERQUAY_MIGRATION_DATABASE_URL: `postgresql://paperquay_migrate:${password}@127.0.0.1:5432/paperquay_sync_test`,
+            PAPERQUAY_DATABASE_URL: `postgresql://paperquay_runtime:${password}@127.0.0.1:5432/paperquay_sync_test`,
+          };
+          for (const [key, value] of Object.entries(settings)) appendFileSync(process.env.GITHUB_ENV, `${key}=${value}\n`);
+          NODE
+      - name: Prepare isolated PostgreSQL database
+        run: |
+          node .github/scripts/prepare-sync-test-database.mjs
+          npm run migrate --prefix server
+          node server/scripts/grant-runtime.ts
+      - name: Start the disposable identity provider
+        run: |
+          node .github/scripts/create-sync-test-realm.mjs "$RUNNER_TEMP/paperquay-keycloak/paperquay-local-realm.json"
+          # The container uses a different UID; these are disposable test users.
+          chmod a+r "$RUNNER_TEMP/paperquay-keycloak/paperquay-local-realm.json"
+          docker run --detach --name paperquay-test-idp \
+            --publish 127.0.0.1:18081:8080 \
+            --volume "$RUNNER_TEMP/paperquay-keycloak:/opt/keycloak/data/import:ro" \
+            quay.io/keycloak/keycloak:26.8.1 \
+            start-dev --import-realm --http-host=0.0.0.0 --http-port=8080 \
+            --hostname=http://127.0.0.1:18081
+          ready=0
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent --output /dev/null "$PAPERQUAY_OIDC_ISSUER/.well-known/openid-configuration"; then
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+          test "$ready" = 1
+      - name: Check shared synchronization core
+        run: node --test "tests/accountSync*.test.ts"
+      - name: Check service types, protocol and live integrations
+        run: |
+          npm run typecheck --prefix server
+          npm test --prefix server
+          npm run test:integration --prefix server
+      - name: Check mobile persistence, recovery and production build
+        env:
+          VITE_API_BASE_URL: http://127.0.0.1:4311
+          VITE_OIDC_AUTHORITY: http://127.0.0.1:18081/realms/paperquay-local
+          VITE_OIDC_CLIENT_ID: paperquay-mobile
+        run: |
+          npm test --prefix apps/mobile
+          npm run build --prefix apps/mobile
+      - name: Stop the disposable identity provider
+        if: always()
+        run: docker rm --force paperquay-test-idp || true
