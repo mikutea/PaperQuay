@@ -11,6 +11,7 @@ export type ClientErrorCode =
   | 'STORAGE_FAILED'
   | 'STORAGE_CORRUPT'
   | 'ACCOUNT_CHANGED'
+  | 'ACCOUNT_STORAGE_LIMIT'
   | 'SYNC_FAILED'
   | 'NATIVE_NOT_READY'
   | 'CONFLICT_CHANGED'
@@ -29,6 +30,7 @@ const messages: Record<ClientErrorCode, string> = {
   STORAGE_FAILED: '未能保存到此设备，请检查存储空间后重试。',
   STORAGE_CORRUPT: '此设备的缓存格式无法读取。请保留本地数据并联系维护者。',
   ACCOUNT_CHANGED: '账号已切换，本次同步已停止。',
+  ACCOUNT_STORAGE_LIMIT: '账号同步存储额度已满。改动仍保存在此设备，请联系服务管理员处理额度后重试。',
   SYNC_FAILED: '同步未完成，请重试或查看待处理操作。',
   NATIVE_NOT_READY: '当前阶段仅支持 Web 验证，原生登录和安全存储尚未接入。',
   CONFLICT_CHANGED: '这条记录又有更新，请重新查看双方内容后解决冲突。',

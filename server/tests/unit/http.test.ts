@@ -70,6 +70,18 @@ test('unexpected SQL errors and request content are absent from HTTP errors', as
   assert.match(response.json().error.requestId, /^[0-9a-f-]{36}$/);
 });
 
+test('capabilities publish the configured retained-byte budget and its row reserve', async (t) => {
+  const fake = fakeRepository();
+  const app = await buildApp({ config: testConfig({ PAPERQUAY_MAX_ACCOUNT_RETAINED_BYTES: '1048576' }),
+    repository: fake.repository, verifyToken: async () => identity(), rateLimitEnabled: false });
+  t.after(() => app.close());
+  const response = await app.inject({ method: 'GET', url: '/v1/capabilities' });
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().limits.maxAccountRetainedBytes, 1048576);
+  assert.equal(response.json().limits.retainedRowOverheadBytes, 512);
+  assert.equal(response.headers['cache-control'], 'no-store');
+});
+
 test('request size, origin allowlist and direct-IP rate limits are enforced', async (t) => {
   const fake = fakeRepository();
   const config = { ...testConfig(), bodyLimitBytes: 1024, requestsPerMinute: 2 };

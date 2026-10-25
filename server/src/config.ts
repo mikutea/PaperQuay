@@ -13,6 +13,7 @@ export interface ServerConfig {
   bodyLimitBytes: number;
   responseLimitBytes: number;
   entityLimitBytes: number;
+  maxAccountRetainedBytes: number;
   requestsPerMinute: number;
 }
 
@@ -24,12 +25,22 @@ export const SERVER_LIMITS = Object.freeze({
   maxAccountChanges: 1000000,
   maxAccountConflicts: 100000,
   maxAccountReceipts: 2000000,
+  maxAccountRetainedBytes: 256 * 1024 * 1024,
+  maxConfiguredAccountRetainedBytes: 10 * 1024 * 1024 * 1024,
+  retainedRowOverheadBytes: 512,
   maxDevices: 100,
   maxRetainedDeviceSessions: 1000,
   maxPullRecords: 1000,
   maxConflictRecords: 100,
   maxCursorLength: 4096,
 });
+
+export function checkedRetainedByteLimit(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 1 || value > SERVER_LIMITS.maxConfiguredAccountRetainedBytes) {
+    throw new ApiError('CONFIGURATION_INVALID', 500);
+  }
+  return value;
+}
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
   const value = env[name]?.trim();
@@ -90,6 +101,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     bodyLimitBytes: SERVER_LIMITS.bodyLimitBytes,
     responseLimitBytes: SERVER_LIMITS.responseLimitBytes,
     entityLimitBytes: SERVER_LIMITS.entityLimitBytes,
+    maxAccountRetainedBytes: checkedRetainedByteLimit(Number(env.PAPERQUAY_MAX_ACCOUNT_RETAINED_BYTES ?? SERVER_LIMITS.maxAccountRetainedBytes)),
     requestsPerMinute,
   };
 }

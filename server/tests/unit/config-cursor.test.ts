@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
-import { checkedHttpUrl, loadConfig } from '../../src/config.ts';
+import { checkedHttpUrl, loadConfig, SERVER_LIMITS } from '../../src/config.ts';
 import { CursorCodec } from '../../src/cursor.ts';
-import { operationHash } from '../../src/store.ts';
+import { operationHash, PostgresSyncStore } from '../../src/store.ts';
 import { isTransientDatabaseError } from '../../src/errors.ts';
 import { testConfig } from '../fixtures.ts';
 
@@ -14,6 +14,20 @@ test('listener is loopback by default and remote HTTP origins/issuers are reject
     assert.throws(() => checkedHttpUrl(url, true), { code: 'CONFIGURATION_INVALID' });
   }
   assert.equal(checkedHttpUrl('http://127.0.0.1:18081/realms/test', true).hostname, '127.0.0.1');
+});
+
+test('retained-byte quota defaults to 256 MiB and rejects invalid or unbounded configuration before opening a pool', () => {
+  assert.equal(testConfig().maxAccountRetainedBytes, 256 * 1024 * 1024);
+  for (const limit of [1, 4096, SERVER_LIMITS.maxConfiguredAccountRetainedBytes]) {
+    assert.equal(testConfig({ PAPERQUAY_MAX_ACCOUNT_RETAINED_BYTES: String(limit) }).maxAccountRetainedBytes, limit);
+  }
+  for (const value of ['', '0', '-1', '1.5', 'NaN', 'Infinity', 'unlimited', String(SERVER_LIMITS.maxConfiguredAccountRetainedBytes + 1)]) {
+    assert.throws(() => testConfig({ PAPERQUAY_MAX_ACCOUNT_RETAINED_BYTES: value }), { code: 'CONFIGURATION_INVALID' });
+  }
+  for (const value of [0, -1, 0.5, NaN, Infinity, SERVER_LIMITS.maxConfiguredAccountRetainedBytes + 1]) {
+    assert.throws(() => new PostgresSyncStore({ connectionString: 'never-connect', cursorSecret: Buffer.alloc(32),
+      maxAccountRetainedBytes: value }), { code: 'CONFIGURATION_INVALID' });
+  }
 });
 
 test('opaque cursors reject tampering, another account/feed, and reset epochs', () => {

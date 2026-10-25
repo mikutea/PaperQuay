@@ -162,6 +162,8 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       maxAccountChanges: SERVER_LIMITS.maxAccountChanges,
       maxAccountConflicts: SERVER_LIMITS.maxAccountConflicts,
       maxAccountReceipts: SERVER_LIMITS.maxAccountReceipts,
+      maxAccountRetainedBytes: config.maxAccountRetainedBytes,
+      retainedRowOverheadBytes: SERVER_LIMITS.retainedRowOverheadBytes,
       maxActiveDeviceSessions: SERVER_LIMITS.maxDevices,
       maxRetainedDeviceSessions: SERVER_LIMITS.maxRetainedDeviceSessions,
     },

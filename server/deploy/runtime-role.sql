@@ -15,4 +15,7 @@ GRANT SELECT, INSERT, UPDATE ON paperquay.conflicts TO paperquay_runtime;
 -- Row security is defense in depth. The trusted API establishes transaction-
 -- local issuer, subject, and account settings from validated OIDC claims.
 -- Database credentials and direct SQL access must never be given to clients.
+-- Retained-byte triggers use these existing privileges as SECURITY INVOKER.
+-- Their transaction-local quota is supplied only by trusted API configuration;
+-- do not grant schema ownership, trigger management, or history deletion.
 -- This reference does not establish that a production deployment was audited.

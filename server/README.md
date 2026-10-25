@@ -31,8 +31,13 @@ node src/main.ts
 | `PAPERQUAY_CURSOR_SECRET` | 32–128 字节随机密钥的规范 Base64；重启时保留同一值 |
 | `PAPERQUAY_HOST` / `PAPERQUAY_PORT` | 默认 `127.0.0.1` / `4311` |
 | `PAPERQUAY_REQUESTS_PER_MINUTE` | 每个直连 IP 的内存限流，默认 120 |
+| `PAPERQUAY_MAX_ACCOUNT_RETAINED_BYTES` | 每账号保留内容预算，默认 `268435456`（256 MiB）；必须为 1–10737418240 的整数字节数，最高 10 GiB |
 
 数据库迁移只管理 `paperquay` schema。所有文件在一个事务中执行，以 advisory lock 排斥并发迁移，并记录文件校验和；已应用迁移改写或出现未知版本会失败。`deploy/runtime-role.sql` 仅向已经存在的 `paperquay_runtime` 角色授予所需表权限，不创建账号或改密码。`002_receipt_quota.sql` 在同一个锁定事务内回填回执计数，并恢复 FORCE RLS；触发器使旧进程在升级窗口内的回执写入也计入配额。
+
+`003_retained_bytes_quota.sql` 锁定账号及四类内容表，按现存内容回填 `accounts.retained_bytes`。回填期间只有 migration owner 在事务内临时解除 FORCE RLS，提交前全部恢复；失败则整体回滚。迁移保留所有历史，即使旧账号已经超出新预算也允许升级，随后保持可读并阻止新增写入。数据量较大时应预留维护窗口，迁移不获取锁会按现有 10 秒 lock timeout 失败，不能把超时当作已完成。
+
+字节触发器使用调用者权限和账号行锁，runtime 角色继续保持非 owner、NOBYPASSRLS，不增加 schema CREATE、历史表 UPDATE/DELETE 或禁用触发器权限。配额值由可信 API 配置写入事务局部设置，不接受请求参数；没有设置值的旧进程按 256 MiB 默认值执行数据库限制。所有 API 副本应部署同一个配置值，升级后再启动新进程；自定义预算的混合配置不构成一致的配额策略。
 
 ## 可选的本机容器参考
 
@@ -79,7 +84,7 @@ node src/main.ts
 
 每个操作在数据库事务中锁定账号行，然后检查当前会话是否撤销，最后进行 CAS、实体写入、账号序列分配、变更事件和幂等回执提交。同一账号的事务串行提交，因此 pull 不会越过尚未提交的较小序列。不同账号独立加锁。
 
-`opId` 在账号内唯一，请求内容使用稳定哈希校验；同 opId + 同内容返回原回执，同 opId + 不同内容返回 `IDEMPOTENCY_MISMATCH`。每个 batch 允许部分操作先提交；遇到中途断线或撤销后，可依靠原 opId 确认已提交部分，不能为重试生成新 opId。数据库事务失败、缺失依赖以及响应预算不足不保存永久拒绝回执。
+`opId` 在账号内唯一，请求内容使用稳定哈希校验；同 opId + 同内容返回原回执，同 opId + 不同内容返回 `IDEMPOTENCY_MISMATCH`。每个 batch 允许部分操作先提交；遇到中途断线或撤销后，可依靠原 opId 确认已提交部分，不能为重试生成新 opId。数据库事务失败、缺失依赖、响应预算不足及保留字节预算不足不保存永久拒绝回执。
 
 账号对象使用复合主键/外键和 FORCE RLS。身份与账号设置只存在于事务内，连接归还池后不保留租户上下文。RLS 是可信 API 的额外隔离层；不能把数据库凭据或任意 SQL 能力交给客户端。附件版本的哈希、大小、文献与附件绑定不可修改；批注和阅读位置必须引用同账号精确版本。阅读位置只允许创建它的登录会话更新，最后位置可回退，furthest 进度不可回退。
 
@@ -95,9 +100,16 @@ node src/main.ts
 | pull / conflict page | 1000 / 100 条，另受字节预算限制 |
 | 每账号实体 / change / conflict | 100,000 / 1,000,000 / 100,000 |
 | 每账号永久回执 | 2,000,000 |
+| 每账号保留内容预算 | 默认 256 MiB，可配置，最高 10 GiB |
 | 每账号活跃 / 保留会话 | 100 / 1000 |
 
-M1 不清理 tombstone、历史变更、回执或已撤销会话，因此触及保留配额后明确拒绝新增内容，已有内容仍可读取和重放。生产的归档/压缩/epoch 重建需要后续设计和验证。达到响应预算时，未提交操作返回 `RESPONSE_LIMIT_REACHED` 且 `retryable:true`，客户端可在已处理操作退出队列后重试剩余项。异常的单记录分页超限返回显式错误，不返回一个永远无法推进的空页。
+保留内容预算同时计算 `entities.data`（包括 tombstone 后保留的数据）、每条 `changes.record`、每份 `operation_receipts.result`，以及每条冲突的 `attempted_operation` 和 `observed_record`。按 PostgreSQL JSONB 文本的 UTF-8 字节数计费，每个保留行另加 512 字节固定保留额；历史中的重复正文逐份计算。更新当前实体按新旧字节差计费，UPSERT 不重复计费。`GET /v1/capabilities` 公布当前配置值和每行保留额。
+
+账号锁和数据库 BEFORE 触发器在写入每份内容前原子预留预算。如果后续历史、冲突或回执超额，整个操作的实体、序列、冲突状态、回执和计费都回滚。push 中该操作返回 HTTP 200 的标准 `PushResult`：`status:'rejected', code:'ACCOUNT_STORAGE_LIMIT', retryable:true`；resolve 使用同一结果格式。客户端应保留原 opId，待管理员调整容量后手动重试；同批已经提交的操作仍有正常回执。已提交操作的回执查找在配额检查之前，满额账号的幂等重放不会重复计费。
+
+M1 不清理 tombstone、历史变更、回执、已解决冲突或已撤销会话，达到预算后已有内容、游标和回执仍然保留。删除内容也会保留历史，不能用删除操作释放这项预算。生产的归档/压缩/epoch 重建需要后续设计和验证。这是保留应用内容的逻辑预算，不等同于 PostgreSQL 数据文件、索引、TOAST、WAL、膨胀或备份的实际磁盘用量；这些仍需单独容量管理。
+
+达到响应预算时，未提交操作返回 `RESPONSE_LIMIT_REACHED` 且 `retryable:true`，客户端可在已处理操作退出队列后重试剩余项。异常的单记录分页超限返回显式错误，不返回一个永远无法推进的空页。
 
 ## 验证
 
@@ -115,6 +127,6 @@ node --test tests/unit/*.test.ts
 node --test --test-concurrency=1 tests/integration/*.test.ts
 ```
 
-集成测试必须使用隔离库。缺少 `PAPERQUAY_DATABASE_URL`、`PAPERQUAY_TEST_ALLOW_DATABASE_WRITES=1` 或 OIDC 必需配置时直接失败，不跳过。真实 IdP 测试另需 `PAPERQUAY_TEST_PASSWORD`，默认客户端 `paperquay-integration`、用户 `qa-reader`/`qa-other`，可由 `.env.example` 中相应变量覆盖。测试只新建合成账号/文献；不会清空数据库或连接用户桌面库。
+集成测试必须使用隔离库。缺少 `PAPERQUAY_DATABASE_URL`、`PAPERQUAY_TEST_ALLOW_DATABASE_WRITES=1` 或 OIDC 必需配置时直接失败，不跳过。迁移回归另需 `PAPERQUAY_MIGRATION_DATABASE_URL`，在独立命名 schema 的事务内构造旧数据、执行历史迁移，最后 ROLLBACK，不改写现有 schema 的版本或校验和。真实 IdP 测试另需 `PAPERQUAY_TEST_PASSWORD`，默认客户端 `paperquay-integration`、用户 `qa-reader`/`qa-other`，可由 `.env.example` 中相应变量覆盖。测试只使用合成账号/文献；不会清空数据库或连接用户桌面库。
 
-当前本机验证覆盖真实 PostgreSQL 非 owner/NOBYPASSRLS 角色、并发 CAS 和回执、事务回滚重试、账号隔离、撤销与等待写入的锁顺序、精确版本绑定、冲突保留/显式恢复、分页响应预算与新连接恢复，以及真实 Keycloak discovery/JWKS/访问令牌/刷新/两个账号隔离。新连接恢复证明数据库状态可重读；操作系统级重启、备份恢复、正式公网部署和真实移动设备仍需各自验收。
+当前本机验证覆盖真实 PostgreSQL 非 owner/NOBYPASSRLS 角色、并发 CAS 和回执、事务回滚重试、账号隔离、撤销与等待写入的锁顺序、精确版本绑定、冲突保留/显式恢复、分页响应预算与新连接恢复，以及真实 Keycloak discovery/JWKS/访问令牌/刷新/两个账号隔离。保留字节回归覆盖 UTF-8 精确临界、四类内容的独立 SQL 汇总、并发争用、回执最后一字节超限导致全回滚、满额幂等重放、各类 resolve 分支，以及旧账号超过默认 256 MiB 后的完整迁移与 RLS 恢复。新连接恢复证明数据库状态可重读；操作系统级重启、备份恢复、正式公网部署和真实移动设备仍需各自验收。

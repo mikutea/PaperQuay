@@ -360,7 +360,13 @@ export class WorkspaceController {
               resolutionErrors.delete(result.opId);
             } else if (result?.status === 'rejected' && result.retryable) {
               deferred.set(result.opId, result.code === 'DEPENDENCY_NOT_READY' ? progress : null);
-              resolutionErrors.set(result.opId, new ClientError('SYNC_FAILED', true));
+              resolutionErrors.set(
+                result.opId,
+                new ClientError(
+                  result.code === 'ACCOUNT_STORAGE_LIMIT' ? 'ACCOUNT_STORAGE_LIMIT' : 'SYNC_FAILED',
+                  true,
+                ),
+              );
             }
           } catch (error) {
             const safe = safeError(error);
@@ -490,11 +496,12 @@ export class WorkspaceController {
         const pendingResolution = Object.values(this.snapshot.workspace!.pendingResolutions).find(
           (pending) => resolutionErrors.has(pending.request.opId),
         );
+        const pendingPush = this.snapshot.workspace!.sync.outbox.find(
+          (entry) => entry.status === 'queued' && deferred.has(entry.operation.opId),
+        );
         const retryPending =
           Boolean(pendingResolution) ||
-          this.snapshot.workspace!.sync.outbox.some(
-            (entry) => entry.status === 'queued' && deferred.has(entry.operation.opId),
-          ) ||
+          Boolean(pendingPush) ||
           (budgetExhausted &&
             (Object.keys(this.snapshot.workspace!.pendingResolutions).length > 0 ||
               this.snapshot.workspace!.sync.outbox.some(
@@ -506,7 +513,12 @@ export class WorkspaceController {
           ...(retryPending ? {} : { lastSyncedAt: this.now() }),
           error: retryPending
             ? (pendingResolution && resolutionErrors.get(pendingResolution.request.opId)) ||
-              new ClientError('SYNC_FAILED', true)
+              new ClientError(
+                pendingPush?.errorCode === 'ACCOUNT_STORAGE_LIMIT'
+                  ? 'ACCOUNT_STORAGE_LIMIT'
+                  : 'SYNC_FAILED',
+                true,
+              )
             : null,
         });
       }

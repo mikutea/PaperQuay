@@ -9,8 +9,13 @@ import {
   type PushResult,
   type SyncRecord,
 } from '../../../packages/sync-core/src/index.ts';
-import type { AccountIdentity, ConflictResolution, ServerConflict } from '../src/api.ts';
-import { ClientError } from '../src/errors.ts';
+import {
+  SyncApi,
+  type AccountIdentity,
+  type ConflictResolution,
+  type ServerConflict,
+} from '../src/api.ts';
+import { ClientError, describeError } from '../src/errors.ts';
 import { AccountStore } from '../src/storage/accountStore.ts';
 import {
   decodeWorkspace,
@@ -514,6 +519,163 @@ test('a general retryable rejection is deferred for the run without preventing i
   assert.equal(env.controller.getSnapshot().syncing, false);
   assert.equal(env.controller.getSnapshot().error?.code, 'SYNC_FAILED');
   await env.store.close();
+});
+
+test('a storage quota push preserves its original request and successor across restart without automatic retries', async () => {
+  const env = setup();
+  await env.controller.bind('A');
+  await env.controller.save(edit('original before quota rejection'));
+  const original = structuredClone(
+    env.controller.getSnapshot().workspace!.sync.outbox[0].operation,
+  );
+  const requests: PushRequest[] = [];
+  const quotaApi = new SyncApi(
+    'https://sync.example.test',
+    async () => 'test-token',
+    async (_url, init) => {
+      const request = JSON.parse(String(init?.body)) as PushRequest;
+      requests.push(request);
+      return new Response(JSON.stringify({
+        protocolVersion: 1,
+        results: [{
+          opId: request.operations[0].opId,
+          status: 'rejected',
+          replayed: false,
+          code: 'ACCOUNT_STORAGE_LIMIT',
+          retryable: true,
+        }],
+      }), { headers: { 'content-type': 'application/json' } });
+    },
+  );
+  const normalPush = env.api.push.bind(env.api);
+  env.api.push = (request) => quotaApi.push(request, new AbortController().signal);
+  env.controller.setOnline(true);
+  await env.controller.syncNow();
+  await new Promise<void>((resolve) => setTimeout(resolve, 20));
+  assert.equal(requests.length, 1);
+  assert.deepEqual(requests[0].operations[0], original);
+  assert.equal(env.controller.getSnapshot().error?.code, 'ACCOUNT_STORAGE_LIMIT');
+  assert.match(describeError(env.controller.getSnapshot().error), /额度/);
+  assert.match(describeError(env.controller.getSnapshot().error), /保存在此设备/);
+  assert.equal(env.controller.getSnapshot().needsLogin, false);
+  assert.equal(env.controller.getSnapshot().lastSyncedAt, null);
+  assert.equal(env.controller.getSnapshot().workspace!.sync.outbox[0].status, 'queued');
+
+  env.controller.setOnline(false);
+  await env.controller.save(edit('successor saved while quota is full'));
+  const overlay = structuredClone(
+    env.controller.getSnapshot().workspace!.sync.overlays[`note:${NOTE}`],
+  );
+  env.controller.deactivate();
+  await env.store.close();
+  const next = setup(env.api, env.factory, env.databaseName);
+  await next.controller.bind('Reopened');
+  next.controller.setOnline(true);
+  await next.controller.syncNow();
+  await new Promise<void>((resolve) => setTimeout(resolve, 20));
+  const waiting = next.controller.getSnapshot();
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[1], requests[0]);
+  assert.deepEqual(waiting.workspace!.sync.outbox[0].operation, original);
+  assert.deepEqual(waiting.workspace!.sync.overlays[`note:${NOTE}`], overlay);
+  assert.equal(
+    (getVisibleEntity(waiting.workspace!.sync, 'note', NOTE)!.data as NoteData).body,
+    'successor saved while quota is full',
+  );
+  assert.equal(waiting.error?.code, 'ACCOUNT_STORAGE_LIMIT');
+  assert.equal(waiting.lastSyncedAt, null);
+
+  env.api.push = normalPush;
+  await next.controller.syncNow();
+  assert.deepEqual(env.api.requests[0].operations[0], original);
+  assert.equal(env.api.requests[1].operations[0].opId, overlay.opId);
+  assert.equal(
+    (env.api.records.get(A)!.at(-1)!.data as NoteData).body,
+    'successor saved while quota is full',
+  );
+  assert.equal(next.controller.getSnapshot().workspace!.sync.outbox.length, 0);
+  assert.deepEqual(next.controller.getSnapshot().workspace!.sync.overlays, {});
+  assert.equal(next.controller.getSnapshot().error, null);
+  await next.store.close();
+});
+
+test('a storage quota resolution preserves its decision and later overlay until an exact retry succeeds', async () => {
+  const env = await setupConflictWithOverlay();
+  const requests: ConflictResolution[] = [];
+  const quotaApi = new SyncApi(
+    'https://sync.example.test',
+    async () => 'test-token',
+    async (_url, init) => {
+      const request = JSON.parse(String(init?.body)) as ConflictResolution;
+      requests.push(request);
+      return new Response(JSON.stringify({
+        opId: request.opId,
+        status: 'rejected',
+        replayed: false,
+        code: 'ACCOUNT_STORAGE_LIMIT',
+        retryable: true,
+      }), { headers: { 'content-type': 'application/json' } });
+    },
+  );
+  const normalResolve = env.api.resolveConflict.bind(env.api);
+  env.api.resolveConflict = (id, request) =>
+    quotaApi.resolveConflict(id, request, new AbortController().signal);
+  await env.controller.resolve(
+    env.controller.getSnapshot().conflicts[0],
+    { choice: 'merged', mutation: 'put', data: note('reviewed merge before quota rejection') },
+    { consumedOverlayOpId: env.overlay.opId },
+  );
+  await new Promise<void>((resolve) => setTimeout(resolve, 20));
+  const pending = structuredClone(
+    env.controller.getSnapshot().workspace!.pendingResolutions[CONFLICT],
+  );
+  assert.equal(requests.length, 1);
+  assert.deepEqual(pending.request, requests[0]);
+  assert.equal(pending.consumedOverlayOpId, env.overlay.opId);
+  assert.equal(env.controller.getSnapshot().error?.code, 'ACCOUNT_STORAGE_LIMIT');
+  assert.match(describeError(env.controller.getSnapshot().error), /额度/);
+  assert.equal(env.controller.getSnapshot().needsLogin, false);
+  assert.deepEqual(
+    env.controller.getSnapshot().workspace!.sync.overlays[`note:${NOTE}`],
+    env.overlay,
+  );
+
+  env.controller.setOnline(false);
+  await env.controller.save(edit('new successor after quota decision'));
+  const successor = structuredClone(
+    env.controller.getSnapshot().workspace!.sync.overlays[`note:${NOTE}`],
+  );
+  assert.notEqual(successor.opId, env.overlay.opId);
+  env.controller.deactivate();
+  await env.store.close();
+  const next = setup(env.api, env.factory, env.databaseName);
+  await next.controller.bind('Reopened');
+  next.controller.setOnline(true);
+  await next.controller.syncNow();
+  await new Promise<void>((resolve) => setTimeout(resolve, 20));
+  const waiting = next.controller.getSnapshot();
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[1], requests[0]);
+  assert.deepEqual(waiting.workspace!.pendingResolutions[CONFLICT], pending);
+  assert.deepEqual(waiting.workspace!.sync.overlays[`note:${NOTE}`], successor);
+  assert.equal(waiting.error?.code, 'ACCOUNT_STORAGE_LIMIT');
+  assert.equal(waiting.lastSyncedAt, null);
+  assert.equal(waiting.workspace!.sync.outbox[0].status, 'conflict');
+
+  env.api.resolveConflict = normalResolve;
+  await next.controller.syncNow();
+  assert.deepEqual(env.api.resolutionRequests[0], pending.request);
+  assert.equal(env.api.requests.at(-1)!.operations[0].opId, successor.opId);
+  assert.equal(env.api.records.get(A)!.at(-1)!.revision, 4);
+  assert.equal(
+    (env.api.records.get(A)!.at(-1)!.data as NoteData).body,
+    'new successor after quota decision',
+  );
+  assert.deepEqual(next.controller.getSnapshot().workspace!.pendingResolutions, {});
+  assert.deepEqual(next.controller.getSnapshot().workspace!.sync.overlays, {});
+  assert.equal(next.controller.getSnapshot().workspace!.sync.outbox.length, 0);
+  assert.equal(next.controller.getSnapshot().error, null);
+  await next.store.close();
 });
 
 test('editing an unsent offline restore keeps the explicit restore intent and succeeds against the tombstone', async () => {

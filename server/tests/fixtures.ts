@@ -30,12 +30,13 @@ export function checkpoint(paperId: string, attachmentVersionId: string, pageInd
     deviceSequence: 1, observedAt: new Date().toISOString() };
 }
 
-export function testConfig() {
+export function testConfig(overrides: NodeJS.ProcessEnv = {}) {
   return loadConfig({
     PAPERQUAY_DATABASE_URL: 'postgresql://runtime@127.0.0.1:5432/isolated_test',
     PAPERQUAY_OIDC_ISSUER: fixtureIssuer,
     PAPERQUAY_OIDC_AUDIENCE: 'paperquay-sync', PAPERQUAY_OIDC_CLIENT_IDS: 'paperquay-test',
     PAPERQUAY_CURSOR_SECRET: Buffer.alloc(32, 71).toString('base64'),
     PAPERQUAY_ALLOWED_ORIGINS: 'http://127.0.0.1:5174',
+    ...overrides,
   });
 }

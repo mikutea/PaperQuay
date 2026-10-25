@@ -11,11 +11,11 @@ import type {
 import type { VerifiedIdentity } from './auth.ts';
 import { CursorCodec } from './cursor.ts';
 import { ApiError, isTransientDatabaseError } from './errors.ts';
-import { SERVER_LIMITS } from './config.ts';
+import { checkedRetainedByteLimit, SERVER_LIMITS } from './config.ts';
 import type { ConflictPage, Device, DevicePlatform, DeviceRegistration, ResolveRequest, SessionView, SyncRepository } from './types.ts';
 
 interface AccountRow {
-  id: string; epoch: string; last_seq: string; last_conflict_seq: string; entity_count: number; receipt_count: number;
+  id: string; epoch: string; last_seq: string; last_conflict_seq: string; entity_count: number; receipt_count: number; retained_bytes: string;
 }
 interface DeviceRow {
   id: string; name: string; platform: DevicePlatform; created_at: Date; last_seen_at: Date; revoked_at: Date | null;
@@ -41,9 +41,17 @@ interface StoreOptions {
   cursorSecret: Uint8Array;
   hooks?: StoreHooks;
   responseLimitBytes?: number;
+  maxAccountRetainedBytes?: number;
 }
 
 class ResponseBudgetExceeded extends Error {}
+class AccountStorageLimitExceeded extends Error {}
+
+function isAccountStorageLimit(error: unknown): boolean {
+  if (error instanceof AccountStorageLimitExceeded) return true;
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === '23514'
+    && 'constraint' in error && error.constraint === 'paperquay_account_retained_bytes_limit';
+}
 
 const entityColumns = 'entity_type, entity_id, schema_version, revision, data, deleted_at, updated_at, created_by_device_id, modified_by_device_id';
 const deviceColumns = 'id, name, platform, created_at, last_seen_at, revoked_at';
@@ -88,9 +96,11 @@ export class PostgresSyncStore implements SyncRepository {
   readonly cursors: CursorCodec;
   readonly hooks: StoreHooks;
   readonly responseLimitBytes: number;
+  readonly maxAccountRetainedBytes: number;
   private readonly ownsPool: boolean;
 
   constructor(options: StoreOptions) {
+    this.maxAccountRetainedBytes = checkedRetainedByteLimit(options.maxAccountRetainedBytes ?? SERVER_LIMITS.maxAccountRetainedBytes);
     this.ownsPool = !options.pool;
     const poolOptions: PoolConfig = {
       connectionString: options.connectionString, max: 10, connectionTimeoutMillis: 10000,
@@ -109,7 +119,7 @@ export class PostgresSyncStore implements SyncRepository {
   async ready(): Promise<boolean> {
     try {
       const result = await this.pool.query<{ version: string }>('SELECT version FROM paperquay.schema_migrations ORDER BY version');
-      return result.rows.map((row) => row.version).join(',') === '001_initial.sql,002_receipt_quota.sql';
+      return result.rows.map((row) => row.version).join(',') === '001_initial.sql,002_receipt_quota.sql,003_retained_bytes_quota.sql';
     } catch { return false; }
   }
 
@@ -121,11 +131,12 @@ export class PostgresSyncStore implements SyncRepository {
       await client.query("SET LOCAL statement_timeout = '15s'");
       await client.query("SET LOCAL lock_timeout = '10s'");
       await client.query("SELECT set_config('paperquay.issuer', $1, true), set_config('paperquay.subject', $2, true)", [identity.issuer, identity.subject]);
+      await client.query("SELECT set_config('paperquay.retained_byte_limit', $1, true)", [String(this.maxAccountRetainedBytes)]);
       if (create) {
         await client.query(`INSERT INTO paperquay.accounts(id, issuer, subject, epoch)
           VALUES ($1,$2,$3,$4) ON CONFLICT (issuer, subject) DO NOTHING`, [randomUUID(), identity.issuer, identity.subject, randomUUID()]);
       }
-      const accounts = await client.query<AccountRow>(`SELECT id, epoch, last_seq, last_conflict_seq, entity_count, receipt_count
+      const accounts = await client.query<AccountRow>(`SELECT id, epoch, last_seq, last_conflict_seq, entity_count, receipt_count, retained_bytes
         FROM paperquay.accounts WHERE issuer = $1 AND subject = $2 FOR UPDATE`, [identity.issuer, identity.subject]);
       const account = accounts.rows[0];
       if (!account) throw new ApiError('DEVICE_NOT_REGISTERED', 403);
@@ -209,6 +220,16 @@ export class PostgresSyncStore implements SyncRepository {
     if (!result.rows[0]) return undefined;
     if (result.rows[0].request_hash !== hash) return rejected(opId, 'IDEMPOTENCY_MISMATCH');
     return { ...result.rows[0].result, replayed: true };
+  }
+
+  private requireStorageHeadroom(context: TransactionContext): void {
+    // Replays are looked up before this check. A full/legacy-over-limit account
+    // remains readable, but must not start another mutation or rejection receipt.
+    if (BigInt(context.account.retained_bytes) >= BigInt(this.maxAccountRetainedBytes)) {
+      throw new AccountStorageLimitExceeded();
+    }
+    // BEFORE-row triggers reserve the exact remaining copies atomically. If a
+    // later copy (including the receipt) does not fit, withAccount rolls all back.
   }
 
   private async remember(context: TransactionContext, hash: string, result: PushResult): Promise<PushResult> {
@@ -356,6 +377,7 @@ export class PostgresSyncStore implements SyncRepository {
           const hash = operationHash({ kind: 'push', operation });
           const previous = await this.receipt(context, operation.opId, hash);
           if (!previous && context.account.receipt_count >= SERVER_LIMITS.maxAccountReceipts) return rejected(operation.opId, 'ACCOUNT_RECEIPT_LIMIT');
+          if (!previous) this.requireStorageHeadroom(context);
           const result = previous ?? await this.applyMutation(context, operation);
           if (responseBytes + Buffer.byteLength(JSON.stringify(result)) > recordBudget) throw new ResponseBudgetExceeded();
           if (!previous) await this.remember(context, hash, result);
@@ -365,7 +387,8 @@ export class PostgresSyncStore implements SyncRepository {
         responseBytes += Buffer.byteLength(JSON.stringify(result));
         results.push(result);
       } catch (error) {
-        if (error instanceof ResponseBudgetExceeded) results.push(rejected(operation.opId, 'RESPONSE_LIMIT_REACHED', true));
+        if (isAccountStorageLimit(error)) results.push(rejected(operation.opId, 'ACCOUNT_STORAGE_LIMIT', true));
+        else if (error instanceof ResponseBudgetExceeded) results.push(rejected(operation.opId, 'RESPONSE_LIMIT_REACHED', true));
         else if (isTransientDatabaseError(error)) results.push(rejected(operation.opId, 'SERVICE_TEMPORARILY_UNAVAILABLE', true));
         else throw error;
       }
@@ -454,6 +477,7 @@ export class PostgresSyncStore implements SyncRepository {
         const previous = await this.receipt(context, request.opId, hash);
         if (previous) return previous;
         if (context.account.receipt_count >= SERVER_LIMITS.maxAccountReceipts) return rejected(request.opId, 'ACCOUNT_RECEIPT_LIMIT');
+        this.requireStorageHeadroom(context);
         const found = await context.client.query<ConflictRow>(`SELECT id,seq,entity_type,entity_id,attempted_operation,observed_record,created_at,resolved_at
           FROM paperquay.conflicts WHERE account_id = $1 AND id = $2`, [context.account.id, conflictId]);
         const conflict = found.rows[0];
@@ -491,6 +515,7 @@ export class PostgresSyncStore implements SyncRepository {
         return result;
       });
     } catch (error) {
+      if (isAccountStorageLimit(error)) return rejected(request.opId, 'ACCOUNT_STORAGE_LIMIT', true);
       if (isTransientDatabaseError(error)) return rejected(request.opId, 'SERVICE_TEMPORARILY_UNAVAILABLE', true);
       throw error;
     }

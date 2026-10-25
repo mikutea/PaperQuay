@@ -7,7 +7,8 @@ import { ApiError } from './errors.ts';
 let store: PostgresSyncStore | undefined;
 try {
   const config = loadConfig();
-  store = new PostgresSyncStore({ connectionString: config.databaseUrl, cursorSecret: config.cursorSecret });
+  store = new PostgresSyncStore({ connectionString: config.databaseUrl, cursorSecret: config.cursorSecret,
+    maxAccountRetainedBytes: config.maxAccountRetainedBytes });
   const verifyToken = await createOidcVerifier({ issuer: config.oidcIssuer, audience: config.oidcAudience, clientIds: config.oidcClientIds });
   const app = await buildApp({ config, repository: store, verifyToken, logger: {
     level: 'info', redact: ['req.headers.authorization', 'req.headers.cookie', 'res.headers.set-cookie'],
