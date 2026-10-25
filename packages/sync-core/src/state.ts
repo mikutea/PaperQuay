@@ -144,6 +144,13 @@ function sameIntent(operation: SyncOperation | PendingEdit, pending: PendingEdit
   return canonicalJson({ entityType: operation.entityType, entityId: operation.entityId, mutation: operation.mutation, data: operation.data, opId: operation.opId, clientCreatedAt: operation.clientCreatedAt }) === canonicalJson(pending);
 }
 
+function hasPendingLinkedNote(state: AccountSyncState, paperId: string): boolean {
+  const references = (pending: SyncOperation | PendingEdit): boolean => pending.entityType === 'note' && pending.data?.paperId === paperId;
+  // An attempted note must finish with its original payload before an unlink
+  // overlay can run, so both the original operation and its successor matter.
+  return state.outbox.some((entry) => references(entry.operation)) || Object.values(state.overlays).some(references);
+}
+
 /** Persist the returned state before showing "saved". This function performs no I/O. */
 export function queueLocalEdit(state: AccountSyncState, edit: LocalEdit, identity: EditIdentity): AccountSyncState {
   assertState(state);
@@ -170,11 +177,18 @@ export function queueLocalEdit(state: AccountSyncState, edit: LocalEdit, identit
   if (edit.mutation === 'restore' && !current?.deletedAt) fail('NO_TOMBSTONE');
   if (entry && entry.attempts === 0 && entry.status === 'queued') {
     if (edit.mutation === 'delete' && entry.operation.baseRevision === 0 && !current) {
-      next.outbox = next.outbox.filter((item) => item !== entry);
-      delete next.overlays[key];
+      if (edit.entityType === 'paper' && hasPendingLinkedNote(next, edit.entityId)) {
+        // Notes may reference a paper tombstone, but not a paper that never existed.
+        // Keep the creation and let its acknowledgement give this deletion a CAS base.
+        next.overlays[key] = copy(candidate);
+      } else {
+        next.outbox = next.outbox.filter((item) => item !== entry);
+        delete next.overlays[key];
+      }
     } else {
       const base = edit.mutation === 'restore' ? current!.revision : entry.operation.baseRevision;
       entry.operation = pendingAsOperation(candidate, base);
+      delete next.overlays[key];
     }
   } else if (entry) {
     next.overlays[key] = copy(candidate);

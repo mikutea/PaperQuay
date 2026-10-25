@@ -1,8 +1,9 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { isIP } from 'node:net';
 import Fastify, { LogController } from 'fastify';
-import type { FastifyInstance, FastifyRequest, FastifyServerOptions } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest, FastifyServerOptions } from 'fastify';
 import cors from '@fastify/cors';
-import rateLimit from '@fastify/rate-limit';
+import rateLimit, { normalizeIP } from '@fastify/rate-limit';
 import {
   ENTITY_TYPES, ENTITY_DATA_SCHEMAS, ISO_TIMESTAMP_PATTERN, UUID_PATTERN,
   PUSH_REQUEST_SCHEMA, PUSH_RESPONSE_SCHEMA, PUSH_RESULT_SCHEMA, PULL_RESPONSE_SCHEMA,
@@ -90,6 +91,20 @@ function pageLimit(value: string | undefined, maximum: number): number {
   return number;
 }
 
+function rateLimitKey(request: FastifyRequest): string {
+  if (request.identity) {
+    // Only verified issuer/sub claims define the shared business budget. Sessions,
+    // request bodies, routes, forwarding headers and source IPs cannot reset it.
+    return 'account:' + createHash('sha256').update(JSON.stringify([
+      request.identity.issuer, request.identity.subject,
+    ])).digest('hex');
+  }
+  const address = isIP(request.ip) ? request.ip : request.raw.socket.remoteAddress ?? 'unknown';
+  const client = normalizeIP(address, 128);
+  const route = request.routeOptions.url;
+  return (route === '/health/live' || route === '/health/ready' ? 'health:' : 'public:') + client;
+}
+
 export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   const { config, repository, verifyToken } = options;
   const app = Fastify({
@@ -101,7 +116,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     requestTimeout: 45000,
     connectionTimeout: 15000,
     keepAliveTimeout: 5000,
-    trustProxy: false,
+    trustProxy: config.trustedProxyIps.length ? config.trustedProxyIps : false,
     ajv: { customOptions: { removeAdditional: false, coerceTypes: false, allErrors: false } },
   });
   app.decorateRequest('identity', null);
@@ -112,14 +127,25 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   });
   if (options.rateLimitEnabled !== false) {
     await app.register(rateLimit, {
+      global: false,
       max: config.requestsPerMinute, timeWindow: 60000,
       errorResponseBuilder: () => new ApiError('RATE_LIMITED', 429),
-      // The direct remote address is trusted; user-supplied forwarding headers are not.
-      keyGenerator: (request) => request.ip,
+      keyGenerator: rateLimitKey,
     });
   }
-  const authenticate = async (request: FastifyRequest) => {
-    request.identity = await verifyToken(request.headers.authorization);
+  // Reuse the same limiter/store across routes. Per-route plugin options create
+  // separate child stores and would let callers multiply their business budget.
+  const enforceRateLimit = options.rateLimitEnabled === false
+    ? async (_request: FastifyRequest, _reply: FastifyReply) => undefined
+    : app.rateLimit();
+  const authenticate = async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      request.identity = await verifyToken(request.headers.authorization);
+    } catch (error) {
+      await enforceRateLimit.call(app, request, reply);
+      throw error;
+    }
+    await enforceRateLimit.call(app, request, reply);
   };
   app.setErrorHandler((error, request, reply) => {
     const raw = error as { statusCode?: number; validation?: unknown; code?: string };
@@ -135,19 +161,20 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     if (statusCode === 401) reply.header('WWW-Authenticate', 'Bearer realm="paperquay"');
     reply.code(statusCode).send({ error: { code, requestId: request.id } });
   });
-  app.setNotFoundHandler((request, reply) => reply.code(404).send({ error: { code: 'NOT_FOUND', requestId: request.id } }));
+  app.setNotFoundHandler({ preHandler: enforceRateLimit },
+    (request, reply) => reply.code(404).send({ error: { code: 'NOT_FOUND', requestId: request.id } }));
   app.addHook('onSend', async (_request, reply) => {
     reply.header('Cache-Control', 'no-store');
     reply.header('X-Content-Type-Options', 'nosniff');
     reply.header('Referrer-Policy', 'no-referrer');
   });
 
-  app.get('/health/live', async () => ({ status: 'ok' }));
-  app.get('/health/ready', async (_request, reply) => {
+  app.get('/health/live', { onRequest: enforceRateLimit }, async () => ({ status: 'ok' }));
+  app.get('/health/ready', { onRequest: enforceRateLimit }, async (_request, reply) => {
     const ready = await repository.ready();
     return reply.code(ready ? 200 : 503).send({ status: ready ? 'ready' : 'not_ready' });
   });
-  app.get('/v1/capabilities', async () => ({
+  app.get('/v1/capabilities', { onRequest: enforceRateLimit }, async () => ({
     protocolVersion: 1,
     entitySchemas: Object.fromEntries(ENTITY_TYPES.map((type) => [type, [1]])),
     deviceBinding: 'oidc-session',

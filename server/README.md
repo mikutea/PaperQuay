@@ -18,7 +18,7 @@ node src/main.ts
 
 这些命令从进程环境读取配置。也可以把本机合成测试配置写入被 Git 忽略的 `.env`，逐条使用 `node --env-file=.env ...`。`.env.example` 只有占位值，不能直接用于启动。真实运行进程只注入 runtime 数据库凭据；migration/admin 凭据只给独立维护命令。
 
-默认 API 监听 `127.0.0.1:4311`。非回环监听必须显式设置 `PAPERQUAY_ALLOW_NON_LOOPBACK=1`；HTTP issuer 和前端 origin 只允许回环地址，其余必须为 HTTPS。代理头不参与可信客户端地址判断。多副本/公网代理所需的共享限流、TLS、代理信任和身份服务运营需要单独验证。
+默认 API 监听 `127.0.0.1:4311`。非回环监听必须显式设置 `PAPERQUAY_ALLOW_NON_LOOPBACK=1`；HTTP issuer 和前端 origin 只允许回环地址，其余必须为 HTTPS。默认不信任转发头；反向代理必须通过下列配置明确指定可信来源。多副本共享限流、TLS 和身份服务运营仍需单独验证。
 
 | 配置 | 用途 |
 | --- | --- |
@@ -30,8 +30,19 @@ node src/main.ts
 | `PAPERQUAY_ALLOWED_ORIGINS` | 明确的前端 origin 列表，空值禁用跨域授权 |
 | `PAPERQUAY_CURSOR_SECRET` | 32–128 字节随机密钥的规范 Base64；重启时保留同一值 |
 | `PAPERQUAY_HOST` / `PAPERQUAY_PORT` | 默认 `127.0.0.1` / `4311` |
-| `PAPERQUAY_REQUESTS_PER_MINUTE` | 每个直连 IP 的内存限流，默认 120 |
+| `PAPERQUAY_TRUSTED_PROXY_IPS` | 逗号分隔的可信代理 IPv4/IPv6 地址，最多 32 项；默认空，不接受主机名、CIDR、通配或未指定地址 |
+| `PAPERQUAY_REQUESTS_PER_MINUTE` | 每个分桶每 60 秒的请求额度，默认 120；业务按账号，健康和公开请求分别按实际来源地址 |
 | `PAPERQUAY_MAX_ACCOUNT_RETAINED_BYTES` | 每账号保留内容预算，默认 `268435456`（256 MiB）；必须为 1–10737418240 的整数字节数，最高 10 GiB |
+
+来源地址默认取连接的 socket IP。配置可信代理后，Fastify 从直连端开始校验代理链，停在最近的不可信来源；直接连接的不可信客户端不能借伪造 `X-Forwarded-For` 更换身份。代理应规范化转发头，且实际代理链和后端访问边界需要按部署核验。配置依据见 [Fastify trustProxy](https://fastify.dev/docs/latest/Reference/Server/#trustproxy)。
+
+| 内存限流分桶 | 识别依据与共享范围 |
+| --- | --- |
+| 健康检查 | 实际来源 IP；`/health/live` 与 `/health/ready` 共享额度 |
+| 公开请求及认证失败 | 实际来源 IP；capabilities、404 与验证失败的请求共享额度 |
+| 已认证业务 | 验证后的 `(issuer, sub)`；所有业务路由、登录会话和来源 IP 共享同一账号额度 |
+
+三个分桶互相隔离，匿名健康调用不会消耗业务额度。业务在令牌验证成功后才计入账号桶；请求中的账号字段、未验证令牌和转发头不能选择账号桶。复用同一个 limiter，避免每个业务路由得到一份新的额度。该实现使用已安装的 [Fastify rate-limit](https://github.com/fastify/fastify-rate-limit) 单进程内存缓存；进程重启或 LRU 淘汰会重置相应计数，多实例也不共享计数。它不是连接数、网络带宽或令牌验证成本的总量保护，边缘代理限流与正式多实例容量仍需独立配置和验收。本轮 HTTP 测试模拟了可信与不可信代理来源，没有执行生产 TLS 反代部署。
 
 数据库迁移只管理 `paperquay` schema。所有文件在一个事务中执行，以 advisory lock 排斥并发迁移，并记录文件校验和；已应用迁移改写或出现未知版本会失败。`deploy/runtime-role.sql` 仅向已经存在的 `paperquay_runtime` 角色授予所需表权限，不创建账号或改密码。`002_receipt_quota.sql` 在同一个锁定事务内回填回执计数，并恢复 FORCE RLS；触发器使旧进程在升级窗口内的回执写入也计入配额。
 

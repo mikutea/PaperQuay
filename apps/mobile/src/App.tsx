@@ -972,14 +972,21 @@ export function ConflictsView({
     try {
       const reviewed = { consumedOverlayOpId: reviewedOverlay?.opId };
       if (choice === 'current') await controller.resolve(conflict, { choice }, reviewed);
-      else if (choice === 'attempted' && reviewedOverlay)
-        await controller.resolve(
-          conflict,
-          { choice: 'merged', mutation: reviewedOverlay.mutation, data: reviewedOverlay.data },
-          reviewed,
-        );
-      else if (choice === 'attempted') await controller.resolve(conflict, { choice }, reviewed);
-      else {
+      else if (choice === 'attempted') {
+        const version = reviewedOverlay ?? conflict.attemptedOperation;
+        // A concurrent restore may already have made the reviewed record live.
+        const mutation =
+          version.mutation === 'restore' && conflict.currentRecord?.deletedAt === null
+            ? 'put'
+            : version.mutation;
+        if (reviewedOverlay || mutation !== version.mutation)
+          await controller.resolve(
+            conflict,
+            { choice: 'merged', mutation, data: version.data },
+            reviewed,
+          );
+        else await controller.resolve(conflict, { choice }, reviewed);
+      } else {
         const source = reviewedOverlay ? reviewedOverlay.data : conflict.attemptedOperation.data;
         if (!source) throw new ClientError('CONFLICT_CHANGED');
         const data: EntityData =

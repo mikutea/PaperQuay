@@ -30,6 +30,18 @@ test('retained-byte quota defaults to 256 MiB and rejects invalid or unbounded c
   }
 });
 
+test('forwarded client addresses require an explicit bounded list of individual proxy IPs', () => {
+  assert.deepEqual(testConfig().trustedProxyIps, []);
+  assert.deepEqual(testConfig({ PAPERQUAY_TRUSTED_PROXY_IPS: '  ' }).trustedProxyIps, []);
+  assert.deepEqual(testConfig({ PAPERQUAY_TRUSTED_PROXY_IPS: '127.0.0.1, ::1,192.0.2.10,2001:db8::a,127.0.0.1' }).trustedProxyIps,
+    ['127.0.0.1', '::1', '192.0.2.10', '2001:db8::a']);
+  for (const value of ['true', 'false', '*', '1', 'localhost', 'loopback', '0.0.0.0', '::', '0::0', '::ffff:0.0.0.0',
+    '127.0.0.1/32', '198.51.100.0/24', '::1/128', '127.0.0.1,', ',127.0.0.1', 'fe80::1%eth0',
+    Array.from({ length: 33 }, (_, index) => '192.0.2.' + (index + 1)).join(',')]) {
+    assert.throws(() => testConfig({ PAPERQUAY_TRUSTED_PROXY_IPS: value }), { code: 'CONFIGURATION_INVALID' });
+  }
+});
+
 test('opaque cursors reject tampering, another account/feed, and reset epochs', () => {
   const codec = new CursorCodec(Buffer.alloc(32, 18));
   const account = randomUUID(); const epoch = randomUUID();

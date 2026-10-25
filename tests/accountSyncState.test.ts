@@ -5,7 +5,7 @@ import {
   entityKey, getSyncContext, getVisibleEntity, listVisibleEntities, markPushUncertain,
   preparePush, queueLocalEdit, rebindDevice, resumeAfterRestart, validateClientState,
 } from '../packages/sync-core/src/index.ts';
-import type { AccountSyncState, LocalEdit, NoteData, PushResult, ReadingPositionData, SyncRecord } from '../packages/sync-core/src/index.ts';
+import type { AccountSyncState, LocalEdit, NoteData, PaperData, PushResult, ReadingPositionData, SyncRecord } from '../packages/sync-core/src/index.ts';
 
 const id = (n: number) => `00000000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
 const at = '2026-10-24T06:00:00.000Z';
@@ -15,6 +15,13 @@ const edit = (body: string, entityId = noteId): LocalEdit => ({ entityType: 'not
 const identity = (n: number) => ({ opId: id(n), clientCreatedAt: at });
 const record = (revision: number, body = `remote-${revision}`, entityId = noteId): SyncRecord<'note'> => ({ entityType: 'note', entityId, schemaVersion: 1, revision, deletedAt: null, updatedAt: at, modifiedByDeviceId: device, data: note(body) });
 const reading: ReadingPositionData = { paperId: id(7), attachmentVersionId: id(8), pageIndex: 2, offsetRatio: 0.2, furthestPageIndex: 2, furthestOffsetRatio: 0.2, sessionId: id(9), deviceSequence: 1, observedAt: at };
+const paperId = id(7);
+const paper = (title = 'Offline paper'): PaperData => ({ title, doi: null, year: null, publication: null, abstractText: null, authors: [], keywords: [] });
+const paperEdit = (title = 'Offline paper'): LocalEdit => ({ entityType: 'paper', entityId: paperId, mutation: 'put', data: paper(title) });
+const paperDelete: LocalEdit = { entityType: 'paper', entityId: paperId, mutation: 'delete', data: null };
+const paperRecord = (revision: number, deleted = false): SyncRecord<'paper'> => ({ entityType: 'paper', entityId: paperId,
+  schemaVersion: 1, revision, deletedAt: deleted ? at : null, updatedAt: at, modifiedByDeviceId: device, data: deleted ? null : paper() });
+const linkedEdit = (body: string, entityId = noteId): LocalEdit => ({ entityType: 'note', entityId, mutation: 'put', data: { ...note(body), paperId } });
 const initial = () => createAccountState(account, device);
 function receive(state: AccountSyncState, records: SyncRecord[], cursor = 'cursor-1'): AccountSyncState {
   return applyPullPage(state, getSyncContext(state), { fromCursor: state.cursor, response: { protocolVersion: 1, records, nextCursor: cursor, hasMore: false } });
@@ -23,6 +30,11 @@ function reply(state: AccountSyncState, result: PushResult): AccountSyncState {
   return applyPushResults(state, getSyncContext(state), { protocolVersion: 1, results: [result] }, [result.opId]);
 }
 function send(state: AccountSyncState) { return preparePush(state, getSyncContext(state)); }
+function sendOne(state: AccountSyncState, opId: string) {
+  const entry = state.outbox.find((candidate) => candidate.operation.opId === opId);
+  assert.ok(entry, 'The expected pending operation must remain available to send.');
+  return preparePush({ ...state, outbox: [entry, ...state.outbox.filter((candidate) => candidate !== entry)] }, getSyncContext(state), 1);
+}
 function visibleBody(state: AccountSyncState): string | undefined { return (getVisibleEntity(state, 'note', noteId)?.data as NoteData | null)?.body; }
 function freeze<T>(value: T): T {
   if (value !== null && typeof value === 'object') { Object.values(value).forEach(freeze); Object.freeze(value); }
@@ -48,6 +60,124 @@ test('unsent edits coalesce immutably and an unsent create-delete cancels withou
   assert.equal(canceled.outbox.length, 0);
   assert.equal(getVisibleEntity(canceled, 'note', noteId), null);
   assert.equal(empty.outbox.length, 0);
+});
+
+test('deleting an unsent paper retains its creation and tombstone while multiple linked notes finish syncing', () => {
+  let state = queueLocalEdit(initial(), paperEdit(), identity(20));
+  state = queueLocalEdit(state, linkedEdit('First note'), identity(21));
+  state = freeze(queueLocalEdit(state, linkedEdit('Second note', id(50)), identity(22)));
+  const before = canonicalJson(state);
+  const originalCreate = canonicalJson(state.outbox[0].operation);
+  let deleted = queueLocalEdit(state, paperDelete, identity(23));
+  assert.deepEqual(deleted.outbox.map((entry) => entry.operation.opId), [id(20), id(21), id(22)]);
+  assert.equal(canonicalJson(deleted.outbox[0].operation), originalCreate);
+  assert.equal(deleted.overlays[entityKey('paper', paperId)].opId, id(23));
+  assert.equal(getVisibleEntity(deleted, 'paper', paperId)?.deleted, true);
+  assert.equal(visibleBody(deleted), 'First note');
+  assert.equal(canonicalJson(state), before);
+  assert.deepEqual(queueLocalEdit(deleted, paperDelete, identity(23)), deleted);
+  deleted = resumeAfterRestart(JSON.parse(JSON.stringify(deleted)) as AccountSyncState);
+
+  let prepared = sendOne(deleted, id(20));
+  let synced = reply(prepared.state, { opId: id(20), status: 'applied', replayed: false, record: paperRecord(1) });
+  const removal = synced.outbox.find((entry) => entry.operation.opId === id(23))!;
+  assert.equal(removal.operation.mutation, 'delete');
+  assert.equal(removal.operation.baseRevision, 1);
+  // Notes deliberately remain valid even if the paper tombstone reaches the service first.
+  prepared = sendOne(synced, id(23));
+  synced = reply(prepared.state, { opId: id(23), status: 'applied', replayed: false, record: paperRecord(2, true) });
+  for (const [opNumber, entityId, body] of [[21, noteId, 'First note'], [22, id(50), 'Second note']] as const) {
+    prepared = sendOne(synced, id(opNumber));
+    synced = reply(prepared.state, { opId: id(opNumber), status: 'applied', replayed: false,
+      record: { ...record(1, body, entityId), data: { ...note(body), paperId } } });
+    assert.equal((getVisibleEntity(synced, 'note', entityId)?.data as NoteData).body, body);
+  }
+  assert.equal(synced.outbox.length, 0);
+  assert.equal(getVisibleEntity(synced, 'paper', paperId)?.deleted, true);
+  assert.equal(validateClientState(synced).ok, true);
+});
+
+test('a tried linked note retains its original dependency despite unlink overlays, paper deletion and restarts', () => {
+  for (const deleteBeforeAttempt of [false, true]) {
+    let state = queueLocalEdit(initial(), linkedEdit('Already attempted'), identity(21));
+    state = queueLocalEdit(state, paperEdit(), identity(20));
+    if (deleteBeforeAttempt) state = queueLocalEdit(state, paperDelete, identity(23));
+    const attempted = sendOne(state, id(21));
+    const originalOperation = canonicalJson(attempted.request.operations[0]);
+    const variants = [
+      attempted.state,
+      markPushUncertain(attempted.state, attempted.context, attempted.opIds),
+      reply(attempted.state, { opId: id(21), status: 'rejected', replayed: false, code: 'DEPENDENCY_NOT_READY', retryable: true }),
+    ];
+    for (const variant of variants) {
+      let local = queueLocalEdit(variant, edit('Unlinked newer draft'), identity(22));
+      local = queueLocalEdit(freeze(local), paperDelete, identity(23));
+      assert.ok(local.outbox.some((entry) => entry.operation.opId === id(20)), 'The original attempted note still needs this paper even when its latest overlay is unlinked.');
+      assert.equal(canonicalJson(local.outbox.find((entry) => entry.operation.opId === id(21))!.operation), originalOperation);
+      assert.equal((local.overlays[entityKey('note', noteId)].data as NoteData).paperId, null);
+      local = resumeAfterRestart(JSON.parse(JSON.stringify(local)) as AccountSyncState);
+      local = queueLocalEdit(local, edit('Newest draft after restart'), identity(24));
+
+      let prepared = sendOne(local, id(20));
+      local = reply(prepared.state, { opId: id(20), status: 'applied', replayed: false, record: paperRecord(1) });
+      prepared = sendOne(local, id(23));
+      local = reply(prepared.state, { opId: id(23), status: 'applied', replayed: false, record: paperRecord(2, true) });
+      prepared = sendOne(local, id(21));
+      assert.equal(canonicalJson(prepared.request.operations[0]), originalOperation);
+      local = reply(prepared.state, { opId: id(21), status: 'applied', replayed: false,
+        record: { ...record(1, 'Already attempted'), data: { ...note('Already attempted'), paperId } } });
+      assert.equal(local.outbox[0].operation.opId, id(24));
+      assert.equal(local.outbox[0].operation.baseRevision, 1);
+      assert.equal((local.outbox[0].operation.data as NoteData).paperId, null);
+      assert.equal(visibleBody(local), 'Newest draft after restart');
+      prepared = sendOne(local, id(24));
+      local = reply(prepared.state, { opId: id(24), status: 'applied', replayed: false, record: record(2, 'Newest draft after restart') });
+      assert.equal(local.outbox.length, 0);
+      assert.equal(visibleBody(local), 'Newest draft after restart');
+      assert.equal(validateClientState(local).ok, true);
+    }
+  }
+});
+
+test('a linked note overlay alone keeps its unsent paper dependency and uses the original note acknowledgement revision', () => {
+  let state = queueLocalEdit(receive(initial(), [record(1, 'Unlinked server note')]), edit('Unlinked in-flight edit'), identity(21));
+  state = sendOne(state, id(21)).state;
+  state = queueLocalEdit(state, paperEdit(), identity(20));
+  state = queueLocalEdit(state, linkedEdit('New linked draft'), identity(22));
+  state = queueLocalEdit(state, paperDelete, identity(23));
+  assert.ok(state.outbox.some((entry) => entry.operation.opId === id(20)));
+  assert.equal((state.overlays[entityKey('note', noteId)].data as NoteData).paperId, paperId);
+  state = receive(state, [record(3, 'Newer remote note')], 'cursor-3');
+  state = reply(state, { opId: id(21), status: 'applied', replayed: false, record: record(2, 'Unlinked in-flight edit') });
+  const linked = state.outbox.find((entry) => entry.operation.opId === id(22))!;
+  assert.equal(linked.operation.baseRevision, 2, 'The dependent overlay must not be silently rebased to a newer pull.');
+  assert.equal((linked.operation.data as NoteData).paperId, paperId);
+  assert.equal(state.serverRecords[entityKey('note', noteId)].revision, 3);
+  assert.equal(visibleBody(state), 'New linked draft');
+  assert.equal(validateClientState(state).ok, true);
+});
+
+test('new edits supersede a retained unsent create-delete sequence and unused paper creations still cancel', () => {
+  const unreferenced = queueLocalEdit(queueLocalEdit(initial(), paperEdit(), identity(20)), paperDelete, identity(23));
+  assert.equal(unreferenced.outbox.length, 0);
+  assert.equal(getVisibleEntity(unreferenced, 'paper', paperId), null);
+  let state = queueLocalEdit(initial(), paperEdit(), identity(20));
+  state = queueLocalEdit(state, linkedEdit('Linked draft'), identity(21));
+  state = queueLocalEdit(state, paperDelete, identity(23));
+  assert.equal(getVisibleEntity(state, 'paper', paperId)?.deleted, true);
+  state = queueLocalEdit(state, paperEdit('Kept and edited before sync'), identity(24));
+  assert.equal(getVisibleEntity(state, 'paper', paperId)?.deleted, false);
+  assert.equal(state.overlays[entityKey('paper', paperId)], undefined);
+  assert.equal(state.outbox.find((entry) => entry.operation.entityType === 'paper')!.operation.opId, id(24));
+  state = queueLocalEdit(state, paperDelete, identity(25));
+  assert.equal(state.overlays[entityKey('paper', paperId)].opId, id(25));
+  state = queueLocalEdit(state, edit('Unlinked before either attempt'), identity(26));
+  state = queueLocalEdit(state, paperDelete, identity(27));
+  assert.deepEqual(state.outbox.map((entry) => entry.operation.opId), [id(26)]);
+  assert.equal(state.overlays[entityKey('paper', paperId)], undefined);
+  assert.equal(visibleBody(state), 'Unlinked before either attempt');
+  assert.equal(getVisibleEntity(state, 'paper', paperId), null);
+  assert.equal(validateClientState(state).ok, true);
 });
 
 test('an acknowledgement never overwrites the edit made while its request was in flight', () => {

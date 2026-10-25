@@ -15,6 +15,7 @@ export interface ServerConfig {
   entityLimitBytes: number;
   maxAccountRetainedBytes: number;
   requestsPerMinute: number;
+  trustedProxyIps: string[];
 }
 
 export const SERVER_LIMITS = Object.freeze({
@@ -40,6 +41,20 @@ export function checkedRetainedByteLimit(value: number): number {
     throw new ApiError('CONFIGURATION_INVALID', 500);
   }
   return value;
+}
+
+function trustedProxyIps(value: string | undefined): string[] {
+  if (!value?.trim()) return [];
+  const addresses = value.split(',').map((item) => item.trim());
+  if (addresses.length > 32 || addresses.some((address) => {
+    const family = isIP(address);
+    if (!family || address.includes('%')) return true;
+    const canonical = family === 6 ? new URL('http://[' + address + ']/').hostname : address;
+    return ['0.0.0.0', '[::]', '[::ffff:0:0]'].includes(canonical);
+  })) {
+    throw new ApiError('CONFIGURATION_INVALID', 500);
+  }
+  return [...new Set(addresses)];
 }
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
@@ -102,6 +117,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     responseLimitBytes: SERVER_LIMITS.responseLimitBytes,
     entityLimitBytes: SERVER_LIMITS.entityLimitBytes,
     maxAccountRetainedBytes: checkedRetainedByteLimit(Number(env.PAPERQUAY_MAX_ACCOUNT_RETAINED_BYTES ?? SERVER_LIMITS.maxAccountRetainedBytes)),
-    requestsPerMinute,
+    requestsPerMinute, trustedProxyIps: trustedProxyIps(env.PAPERQUAY_TRUSTED_PROXY_IPS),
   };
 }

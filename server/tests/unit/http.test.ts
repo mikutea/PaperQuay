@@ -101,6 +101,96 @@ test('request size, origin allowlist and direct-IP rate limits are enforced', as
   assert.equal(limited.json().error.code, 'RATE_LIMITED');
 });
 
+test('anonymous health floods cannot spend public or authenticated business budgets', async (t) => {
+  const fake = fakeRepository(); const account = identity();
+  const app = await buildApp({ config: { ...testConfig(), requestsPerMinute: 2 }, repository: fake.repository,
+    verifyToken: async (token) => { if (token !== 'Bearer valid') throw new ApiError('AUTHENTICATION_REQUIRED', 401); return account; } });
+  t.after(() => app.close());
+  const source = { remoteAddress: '192.0.2.20' };
+  for (let index = 0; index < 2; index++) {
+    assert.equal((await app.inject({ method: 'GET', url: '/health/live', ...source })).statusCode, 200);
+  }
+  for (let index = 0; index < 5; index++) {
+    assert.equal((await app.inject({ method: 'GET', url: index % 2 ? '/health/live' : '/health/ready', ...source })).statusCode, 429);
+  }
+  assert.equal((await app.inject({ method: 'GET', url: '/v1/capabilities', ...source })).statusCode, 200);
+  assert.equal((await app.inject({ method: 'GET', url: '/missing-route', ...source })).statusCode, 404);
+  assert.equal((await app.inject({ method: 'GET', url: '/v1/capabilities', ...source })).statusCode, 429);
+  for (const url of ['/v1/me', '/v1/devices']) {
+    assert.equal((await app.inject({ method: 'GET', url, ...source, headers: { authorization: 'Bearer valid' } })).statusCode, 200);
+  }
+  const limited = await app.inject({ method: 'GET', url: '/v1/sync/pull', ...source, headers: { authorization: 'Bearer valid' } });
+  assert.equal(limited.statusCode, 429);
+  assert.equal(limited.json().error.code, 'RATE_LIMITED');
+  assert.ok(Number(limited.headers['retry-after']) > 0);
+});
+
+test('trusted proxies isolate actual anonymous clients and business accounts share one budget across routes, IPs and sessions', async (t) => {
+  const fake = fakeRepository(); const first = identity();
+  const refreshed = { ...first, sessionId: randomUUID(), clientId: 'second-allowed-client' };
+  const other = { ...first, issuer: 'https://another-identity.example.test' };
+  const tokens = new Map([['Bearer first', first], ['Bearer refreshed', refreshed], ['Bearer other', other]]);
+  const app = await buildApp({ config: { ...testConfig({ PAPERQUAY_TRUSTED_PROXY_IPS: '127.0.0.10' }), requestsPerMinute: 2 },
+    repository: fake.repository, verifyToken: async (token) => {
+      const verified = tokens.get(token ?? '');
+      if (!verified) throw new ApiError('AUTHENTICATION_REQUIRED', 401);
+      return verified;
+    } });
+  t.after(() => app.close());
+  const request = (url: string, client: string, token?: string) => app.inject({ method: 'GET', url,
+    remoteAddress: '127.0.0.10', headers: { 'x-forwarded-for': client, ...(token ? { authorization: token } : {}) } });
+  assert.equal((await request('/v1/capabilities', '198.51.100.1')).statusCode, 200);
+  assert.equal((await request('/v1/capabilities', '198.51.100.1')).statusCode, 200);
+  assert.equal((await request('/v1/capabilities', '198.51.100.1')).statusCode, 429);
+  assert.equal((await request('/v1/capabilities', '198.51.100.2')).statusCode, 200);
+  assert.equal((await request('/v1/me', '198.51.100.1', 'Bearer first')).statusCode, 200);
+  assert.equal((await request('/v1/devices', '198.51.100.2', 'Bearer refreshed')).statusCode, 200);
+  assert.equal((await request('/v1/sync/pull', '198.51.100.3', 'Bearer first')).statusCode, 429);
+  assert.equal((await request('/v1/me', '198.51.100.1', 'Bearer other')).statusCode, 200,
+    'The same sub under a different verified issuer is a separate account even behind the same proxy/client.');
+});
+
+test('untrusted direct peers cannot forge XFF, and a trusted chain stops at its nearest untrusted client', async (t) => {
+  const fake = fakeRepository();
+  const app = await buildApp({ config: { ...testConfig({ PAPERQUAY_TRUSTED_PROXY_IPS: '127.0.0.10,192.0.2.10' }), requestsPerMinute: 2 },
+    repository: fake.repository, verifyToken: async () => identity() });
+  t.after(() => app.close());
+  for (let index = 0; index < 3; index++) {
+    const response = await app.inject({ method: 'GET', url: '/v1/capabilities', remoteAddress: '127.0.0.11',
+      headers: { 'x-forwarded-for': '198.51.100.' + (index + 1) } });
+    assert.equal(response.statusCode, index < 2 ? 200 : 429);
+  }
+  for (let index = 0; index < 3; index++) {
+    const response = await app.inject({ method: 'GET', url: '/v1/capabilities', remoteAddress: '127.0.0.10',
+      headers: { 'x-forwarded-for': `203.0.113.${index + 1},198.51.100.20,192.0.2.10` } });
+    assert.equal(response.statusCode, index < 2 ? 200 : 429, 'An untrusted client cannot reset its bucket with a forged leftmost address.');
+  }
+  assert.equal((await app.inject({ method: 'GET', url: '/v1/capabilities', remoteAddress: '127.0.0.10',
+    headers: { 'x-forwarded-for': '203.0.113.1,198.51.100.21,192.0.2.10' } })).statusCode, 200);
+});
+
+test('failed authentication uses the public client budget without claiming or exhausting an account budget', async (t) => {
+  const fake = fakeRepository(); const account = identity(); const other = identity();
+  const app = await buildApp({ config: { ...testConfig(), requestsPerMinute: 1 }, repository: fake.repository,
+    verifyToken: async (token) => {
+      if (token === 'Bearer valid') return account;
+      if (token === 'Bearer other') return other;
+      throw new ApiError('AUTHENTICATION_REQUIRED', 401);
+    } });
+  t.after(() => app.close());
+  const source = { remoteAddress: '192.0.2.40' };
+  assert.equal((await app.inject({ method: 'GET', url: '/v1/me', ...source,
+    headers: { authorization: 'Bearer unverified-account-claims' } })).statusCode, 401);
+  assert.equal((await app.inject({ method: 'GET', url: '/v1/devices', ...source,
+    headers: { authorization: 'Bearer different-invalid-token' } })).statusCode, 429);
+  assert.equal((await app.inject({ method: 'GET', url: '/v1/me', ...source,
+    headers: { authorization: 'Bearer valid' } })).statusCode, 200);
+  assert.equal((await app.inject({ method: 'GET', url: '/v1/me', ...source,
+    headers: { authorization: 'Bearer other' } })).statusCode, 200);
+  assert.equal((await app.inject({ method: 'GET', url: '/v1/devices', remoteAddress: '192.0.2.41',
+    headers: { authorization: 'Bearer valid' } })).statusCode, 429);
+});
+
 test('application logs keep only safe error codes/request IDs, excluding headers, query strings, payloads and SQL', async (t) => {
   const fake = fakeRepository(); const lines: string[] = [];
   const stream = new Writable({ write(chunk, _encoding, callback) { lines.push(String(chunk)); callback(); } });
