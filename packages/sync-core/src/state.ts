@@ -201,6 +201,48 @@ export function queueLocalEdit(state: AccountSyncState, edit: LocalEdit, identit
   return next;
 }
 
+/** Atomically prepare new entities without repeatedly cloning and validating the whole library. */
+export function queueLocalCreates(state: AccountSyncState, edits: readonly LocalEdit[], identities: readonly EditIdentity[]): AccountSyncState {
+  assertState(state);
+  if (!Array.isArray(edits) || !Array.isArray(identities) || edits.length !== identities.length) fail('INVALID_CREATE_BATCH');
+  if (state.outbox.length + edits.length > SYNC_LIMITS.maxLocalOperations) fail('LOCAL_CAPACITY_EXCEEDED');
+  const keys = new Set(Object.keys(state.serverRecords));
+  const opIds = new Set<string>();
+  for (const operation of [
+    ...state.outbox.map((entry) => entry.operation),
+    ...Object.values(state.overlays),
+    ...Object.values(state.conflicts).map((conflict) => conflict.attempted),
+  ]) {
+    keys.add(operationKey(operation));
+    opIds.add(operation.opId);
+  }
+  for (const conflict of Object.values(state.conflicts)) {
+    if (conflict.current) keys.add(operationKey(conflict.current));
+  }
+  const operations: SyncOperation[] = [];
+  for (let index = 0; index < edits.length; index += 1) {
+    const edit = edits[index];
+    const identity = identities[index];
+    if (!validateJsonSchema(identitySchema, identity).ok) fail('INVALID_EDIT_IDENTITY');
+    if (!validateJsonSchema(editSchema, edit).ok || edit.mutation !== 'put') fail('INVALID_EDIT');
+    const operation = { ...edit, ...identity, schemaVersion: 1, baseRevision: 0 } as SyncOperation;
+    if (!validateOperation(operation).ok) fail('INVALID_EDIT');
+    const key = operationKey(operation);
+    // Include tombstones, invisible pending work, and retained conflicts. A batch
+    // can only create new IDs; it never coalesces, restores, or reuses an opId.
+    if (keys.has(key)) fail('ENTITY_ALREADY_EXISTS');
+    if (opIds.has(identity.opId)) fail('OP_ID_REUSED');
+    keys.add(key);
+    opIds.add(identity.opId);
+    operations.push(operation);
+  }
+  if (keys.size > SYNC_LIMITS.maxLocalEntities) fail('LOCAL_CAPACITY_EXCEEDED');
+  if (!operations.length) return state;
+  const next = copy({ ...state, outbox: [...state.outbox, ...operations.map((operation) => newEntry(operation, state.deviceId))] });
+  assertState(next);
+  return next;
+}
+
 /** Commit state first; send request only when opIds is non-empty. */
 export function preparePush(state: AccountSyncState, context: SyncContext, limit: number = SYNC_LIMITS.maxBatchOperations): PreparedPush {
   assertContext(state, context);

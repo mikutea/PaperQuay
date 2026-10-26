@@ -68,5 +68,6 @@ Android 工程使用 JDK 21、Android SDK 36 和 Gradle wrapper 8.14.3；从 `an
 - [Secure Storage 的 Cap 8 支持与系统存储](https://github.com/aparajita/capacitor-secure-storage)
 - [Capacitor Community SQLite](https://github.com/capacitor-community/sqlite)
 - [Filesystem 隐私清单要求](https://capacitorjs.com/docs/apis/filesystem)
+- [Capacitor Share 文件分享](https://capacitorjs.com/docs/apis/share)：使用应用缓存 URI，只在用户导出时打开系统分享面板；接收应用与取消行为仍需实机验证。
 
 CLI 的 `xcode` 间接依赖通过限定 override 使用 `uuid@11.1.1`，避免旧版本公告问题；该组合已用于生成和解析本仓库 Xcode 工程。

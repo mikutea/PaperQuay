@@ -45,6 +45,7 @@ type Section = 'library' | 'notes' | 'account' | 'conflicts';
 const PaperReader = lazy(() => import('./components/PaperReader.tsx').then((module) => ({ default: module.PaperReader })));
 const ReaderSheet = lazy(() => import('./components/ReaderSheet.tsx').then((module) => ({ default: module.ReaderSheet })));
 const AiWorkspace = lazy(() => import('./components/AiWorkspace.tsx').then((module) => ({ default: module.AiWorkspace })));
+const LibraryTransferPanel = lazy(() => import('./components/LibraryTransferPanel.tsx').then((module) => ({ default: module.LibraryTransferPanel })));
 const COMPACT_READER_QUERY = '(max-width: 900px)';
 function compactReaderSnapshot() {
   return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
@@ -220,6 +221,9 @@ export function ConnectedApp({
   const liveAiContext = useRef<PdfAiContext | null>(null);
   const [citationTarget, setCitationTarget] = useState<PdfCitationTarget | null>(null);
   const [aiSettings, setAiSettings] = useState(false);
+  const [transferOpen, setTransferOpen] = useState(false);
+  const transferScope = state.status === 'ready' && state.workspace
+    ? JSON.stringify([state.workspace.sync.accountId, state.workspace.sync.deviceId, state.workspace.sync.generation]) : null;
   const [dirty, setDirty] = useState(false);
   const [readerDirty, setReaderDirty] = useState(false);
   const editorUnsaved = useRef(false);
@@ -249,6 +253,7 @@ export function ConnectedApp({
   }, []);
   const closeReadingPanel = useCallback(() => setReadingPanel(null), []);
   useLayoutEffect(() => { liveAiContext.current = aiContext; }, [aiContext]);
+  useEffect(() => { setTransferOpen(false); }, [transferScope, authSubjectKey]);
 
   useEffect(() => {
     let current = true;
@@ -322,6 +327,7 @@ export function ConnectedApp({
   function navigate(next: Section) {
     if (!canLeave()) return;
     setSection(next);
+    setTransferOpen(false);
     setSelection(null);
     setReadingId(null);
     readerDirtyChanged(false);
@@ -526,6 +532,7 @@ export function ConnectedApp({
               conflicts={conflictCount}
               onSelect={select}
               onCreate={(type) => select(type, crypto.randomUUID())}
+              onTransfer={() => setTransferOpen(true)}
               onSync={() => void controller.syncNow()}
               onConflicts={() => navigate('conflicts')}
             />
@@ -695,6 +702,11 @@ export function ConnectedApp({
           />
         )}
       </main>
+      {transferOpen && transferScope && <Suspense fallback={<p className="loading-message" role="status">正在打开导入与导出…</p>}>
+        <LibraryTransferPanel key={transferScope} entities={entities} controller={controller} scopeKey={transferScope}
+          accountCurrent={() => JSON.stringify(auth.getSubject?.() ?? null) === authSubjectKey}
+          onClose={() => setTransferOpen(false)} />
+      </Suspense>}
       <nav className="bottom-nav app-glass" aria-label="主导航">
         {nav}
       </nav>
@@ -795,6 +807,7 @@ function EntityList({
   conflicts,
   onSelect,
   onCreate,
+  onTransfer,
   onSync,
   onConflicts,
 }: {
@@ -805,6 +818,7 @@ function EntityList({
   conflicts: number;
   onSelect: (type: 'paper' | 'note', id: string) => void;
   onCreate: (type: 'paper' | 'note') => void;
+  onTransfer: () => void;
   onSync: () => void;
   onConflicts: () => void;
 }) {
@@ -845,10 +859,14 @@ function EntityList({
     <section className="list-pane" aria-label={type === 'paper' ? '文库' : '笔记列表'}>
       <div className="list-heading">
         <h1>{type === 'paper' ? '文库' : '笔记'}</h1>
-        <button className="add-button" onClick={() => onCreate(type)}>
-          <span className="add-button-icon app-glass"><Icon name="plus" /></span>
-          <span>{type === 'paper' ? '添加文献' : '新建笔记'}</span>
-        </button>
+        <div className="library-list-actions">
+          <button className="transfer-button app-glass" aria-label="导入与导出" onClick={onTransfer}>
+            <Icon name="transfer" /></button>
+          <button className="add-button" onClick={() => onCreate(type)}>
+            <span className="add-button-icon app-glass"><Icon name="plus" /></span>
+            <span>{type === 'paper' ? '添加文献' : '新建笔记'}</span>
+          </button>
+        </div>
       </div>
       <SyncStatus state={state} conflicts={conflicts} onSync={onSync} onConflicts={onConflicts} />
       <label className="search-box">

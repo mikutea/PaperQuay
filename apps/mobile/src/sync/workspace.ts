@@ -7,13 +7,16 @@ import {
   entityKey,
   getSyncContext,
   getVisibleEntity,
+  listVisibleEntities,
   markPushUncertain,
   preparePush,
+  queueLocalCreates,
   queueLocalEdit,
   rebindDevice,
   resumeAfterRestart,
   validateClientState,
   validateOperation,
+  SyncStateError,
   type AccountSyncState,
   type EntityData,
   type EntityType,
@@ -31,6 +34,12 @@ import type {
   SyncApi,
 } from '../api.ts';
 import { ClientError } from '../errors.ts';
+import {
+  materializeLibraryImport,
+  planLibraryImport,
+  type LibraryArchive,
+  type LibraryImportSummary,
+} from '../library/libraryTransfer.ts';
 import type { AccountStorage, AccountScope } from '../storage/accountStore.ts';
 
 interface PendingResolution {
@@ -141,6 +150,7 @@ export class WorkspaceController {
     remove?: () => Promise<void>;
   };
   private readonly supportsPaperOrganization: () => boolean;
+  private confirmedPaperOrganization: boolean | undefined;
   private scope: AccountScope | null = null;
   private context: SyncContext | null = null;
   private activeBindingKey: string | null | undefined;
@@ -223,6 +233,7 @@ export class WorkspaceController {
     this.scope = null;
     this.context = null;
     this.activeBindingKey = undefined;
+    this.confirmedPaperOrganization = undefined;
     this.publish({
       status: 'signed-out',
       identity: null,
@@ -342,6 +353,7 @@ export class WorkspaceController {
         guard,
       );
       if (!guard()) throw new ClientError('ACCOUNT_CHANGED');
+      if (!offline) this.confirmedPaperOrganization = organization;
       this.scope = scope;
       this.context = getSyncContext(workspace.sync);
       this.publish({ status: 'ready', identity, workspace, syncing: false, needsLogin: offline, error: null });
@@ -393,6 +405,56 @@ export class WorkspaceController {
       this.assertBinding(epoch);
       const safe = safeError(error);
       if (epoch === this.epoch) this.publish({ error: safe });
+      throw safe;
+    }
+  }
+
+  async importLibrary(
+    archive: LibraryArchive,
+    selection: readonly string[] | undefined,
+    reviewedSignature: string,
+  ): Promise<LibraryImportSummary> {
+    const epoch = this.epoch;
+    let summary: LibraryImportSummary | undefined;
+    try {
+      await this.update(epoch, (value) => {
+        try {
+          const plan = planLibraryImport(archive, listVisibleEntities(value.sync), selection);
+          if (typeof reviewedSignature !== 'string' || plan.signature !== reviewedSignature)
+            throw new ClientError('IMPORT_CHANGED');
+          const organizationSupported = this.supportsPaperOrganization() || (
+            this.confirmedPaperOrganization !== false &&
+            (!this.snapshot.online || this.snapshot.needsLogin) &&
+            value.paperOrganizationVersion === 1
+          );
+          if (plan.requiresPaperOrganization && !organizationSupported)
+            throw new ClientError('IMPORT_UNSUPPORTED');
+          const imported = materializeLibraryImport(plan, this.makeId);
+          const sync = queueLocalCreates(value.sync, imported.edits, imported.edits.map(() => ({
+            opId: this.makeId(), clientCreatedAt: this.now(),
+          })));
+          this.assertBinding(epoch);
+          summary = imported.summary;
+          return { ...value, sync };
+        } catch (error) {
+          // AccountStore deliberately hides arbitrary reducer failures. Preserve
+          // import-specific, input-free errors before that storage boundary.
+          if (error instanceof ClientError) throw error;
+          if (error instanceof SyncStateError && error.code === 'LOCAL_CAPACITY_EXCEEDED')
+            throw new ClientError('IMPORT_CAPACITY');
+          throw new ClientError('IMPORT_INVALID');
+        }
+      });
+      // Publishing and synchronization both happen only after the entire batch commits.
+      this.assertBinding(epoch);
+      if (this.snapshot.error?.code.startsWith('IMPORT_') || this.snapshot.error?.code === 'STORAGE_FAILED')
+        this.publish({ error: null });
+      if (!this.snapshot.needsLogin) void this.syncNow();
+      return summary!;
+    } catch (error) {
+      this.assertBinding(epoch);
+      const safe = error instanceof ClientError ? error : new ClientError('STORAGE_FAILED');
+      this.publish({ error: safe });
       throw safe;
     }
   }

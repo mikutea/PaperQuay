@@ -15,7 +15,11 @@ export type ClientErrorCode =
   | 'SYNC_FAILED'
   | 'NATIVE_NOT_READY'
   | 'CONFLICT_CHANGED'
-  | 'EDIT_CHANGED';
+  | 'EDIT_CHANGED'
+  | 'IMPORT_CHANGED'
+  | 'IMPORT_INVALID'
+  | 'IMPORT_UNSUPPORTED'
+  | 'IMPORT_CAPACITY';
 
 const messages: Record<ClientErrorCode, string> = {
   CONFIG_MISSING: '请先配置账号服务地址和客户端标识。',
@@ -35,6 +39,10 @@ const messages: Record<ClientErrorCode, string> = {
   NATIVE_NOT_READY: '此安装包缺少所需原生组件，请使用完整构建的应用。',
   CONFLICT_CHANGED: '这条记录又有更新，请重新查看双方内容后解决冲突。',
   EDIT_CHANGED: '编辑期间收到新版本。你的草稿仍在，请查看当前版本后再保存。',
+  IMPORT_CHANGED: '文库或导入选择已有变化，请重新预览并确认后导入。',
+  IMPORT_INVALID: '导入内容或文献关联无效，本次没有保存任何条目。请检查文件后重试。',
+  IMPORT_UNSUPPORTED: '当前无法确认文献分类可完整同步，本次没有保存任何条目。请连接支持分类的账号服务后重试。',
+  IMPORT_CAPACITY: '本地文库或待同步队列容量不足，本次没有保存任何条目。请先同步或减少导入数量。',
 };
 
 export class ClientError extends Error {

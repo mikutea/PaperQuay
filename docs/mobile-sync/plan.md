@@ -1,6 +1,6 @@
 # 开发计划
 
-截至 2026-10-26：M0 已完成；M1 已通过 [PR #34](https://github.com/mikutea/PaperQuay/pull/34) 合入 `main`，真实 OIDC/PostgreSQL、独立客户端同步及故障证据见 [M1 验收记录](qa/README.md)。M2 的原生工程、阅读、笔记、分类与独立 AI 已实现，正在完成自动化与当前提交审查，详见 [M2 检查点](m2-checkpoint.md) 和 [M2 验证记录](qa/m2.md)。用户明确本轮暂不接实机，M2 阶段门槛仍未关闭；M3–M5 尚未执行。
+截至 2026-10-26：M0 已完成；M1 已通过 [PR #34](https://github.com/mikutea/PaperQuay/pull/34) 合入 `main`，真实 OIDC/PostgreSQL、独立客户端同步及故障证据见 [M1 验收记录](qa/README.md)。M2 的原生工程、阅读、笔记、分类与独立 AI 已实现，正在补齐自动化与当前提交审查，详见 [M2 检查点](m2-checkpoint.md) 和 [M2 验证记录](qa/m2.md)。用户明确本轮暂不接实机，M2 阶段门槛仍未关闭；M3 已开始文库 JSON / Markdown 导入导出，格式与边界见 [文件交换说明](library-transfer.md)，其余 M3 能力及 M4–M5 尚未完成。
 
 ## 实施顺序
 

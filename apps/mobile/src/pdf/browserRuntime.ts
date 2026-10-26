@@ -1,7 +1,10 @@
 import * as library from 'pdfjs-dist/legacy/build/pdf.mjs';
 import workerSource from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?raw';
+import openjpegFallback from 'pdfjs-dist/wasm/openjpeg_nowasm_fallback.js?raw';
+import jbig2Fallback from 'pdfjs-dist/wasm/jbig2_nowasm_fallback.js?raw';
 import type { PdfRuntime } from './engine.ts';
 import { bundledPdfResources } from './bundledResources.ts';
+import { createBundledImageDecoderUrl } from './bundledImageDecoders.ts';
 import { createOwnedPdfWorker } from './ownedWorker.ts';
 
 // The lazy reader chunk includes this finite, version-matched resource set. Later pages and
@@ -16,9 +19,15 @@ const resources = import.meta.glob([
 // One Blob URL per loaded app page, not one per document. The module retains its source for
 // every reopen; each PDF still owns and destroys its own worker rather than sharing PDF state.
 let workerUrl: string | undefined;
+let decoderUrl: string | undefined;
 
 export function browserPdfRuntime(): PdfRuntime {
   const bundled = bundledPdfResources(resources);
+  // These three module URLs also live for the loaded app page, including offline reopens.
+  decoderUrl ??= createBundledImageDecoderUrl({
+    'openjpeg_nowasm_fallback.js': openjpegFallback,
+    'jbig2_nowasm_fallback.js': jbig2Fallback,
+  });
   return {
     library,
     createWorker() {
@@ -27,6 +36,7 @@ export function browserPdfRuntime(): PdfRuntime {
     },
     resourceError: bundled.error,
     options: { useWorkerFetch: false, BinaryDataFactory: bundled.BinaryDataFactory,
+      wasmUrl: decoderUrl, useWasm: typeof WebAssembly !== 'undefined',
       cMapPacked: true, useSystemFonts: true },
   };
 }

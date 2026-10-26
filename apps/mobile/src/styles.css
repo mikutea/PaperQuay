@@ -1,5 +1,8 @@
 @import './components/glass.css';
 
+.library-list-actions { display: flex; align-items: center; gap: 6px; }
+.library-list-actions > .transfer-button { width: 44px; height: 44px; display: grid; place-items: center; flex: none; border-radius: 50%; color: var(--accent-dark); }
+
 :root {
   font-family:
     Inter,

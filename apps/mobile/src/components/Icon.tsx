@@ -12,6 +12,7 @@ type IconName =
   | 'logout'
   | 'trash'
   | 'device'
+  | 'transfer'
   | 'chevron'
   | 'conflict';
 const paths: Record<IconName, React.ReactNode> = {
@@ -44,6 +45,7 @@ const paths: Record<IconName, React.ReactNode> = {
     </>
   ),
   plus: <path d="M12 5v14M5 12h14" />,
+  transfer: <><path d="M8 17V3m-4 4 4-4 4 4M16 7v14m-4-4 4 4 4-4" /></>,
   chevron: <path d="m9 5 7 7-7 7" />,
   check: <path d="m5 12 4 4L19 6" />,
   back: <path d="m14 5-7 7 7 7M7 12h14" />,

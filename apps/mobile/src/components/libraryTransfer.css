@@ -1,0 +1,27 @@
+.library-transfer { padding: 16px 20px 24px; }
+.transfer-tabs { display: flex; gap: 4px; padding: 4px; border-radius: 18px; background: var(--reader-control-fill); margin-bottom: 22px; }
+.transfer-tabs > button { flex: 1; font-weight: 600; }
+.transfer-tabs > button[aria-pressed="true"] { background: var(--theme-surface, #fff); box-shadow: 0 2px 6px rgb(0 0 0 / 8%); }
+.library-transfer h3 { font-size: 1.125rem; margin: 0 0 8px; }
+.library-transfer p { margin-bottom: 12px; }
+.transfer-hint, .transfer-filename { font-size: .875rem; color: var(--muted); line-height: 1.55; }
+.transfer-hint { margin-top: 12px; }
+.transfer-source { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.transfer-source .transfer-filename { margin: 0; min-width: 0; }
+.transfer-source > button { flex: none; }
+.library-transfer .field > label { font-size: .875rem; }
+.transfer-preview, .transfer-export + .transfer-export { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--line); }
+.transfer-selection-actions { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.transfer-rows { list-style: none; padding: 0; margin: 8px 0 16px; }
+.transfer-rows > li + li { border-top: 1px solid var(--line); }
+.transfer-row { display: flex; align-items: flex-start; gap: 12px; padding: 14px 0; cursor: pointer; }
+.transfer-row input { flex: 0 0 22px; width: 22px; min-height: 22px; height: 22px; margin: 6px 0 0; accent-color: var(--accent-dark); }
+.transfer-row > span { min-width: 0; display: grid; gap: 4px; }
+.transfer-row strong { font-weight: 600; font-size: 1rem; line-height: 1.45; }
+.transfer-row-kind, .transfer-row small { font-size: .875rem; color: var(--muted); }
+.transfer-row small.transfer-blocked { color: var(--warning); }
+.transfer-confirm { position: sticky; bottom: -1px; padding: 12px 0; background: var(--theme-surface, #fff); }
+.transfer-confirm > button { width: 100%; }
+.transfer-message { margin-top: 16px; padding: 12px; border: 1px solid currentColor; border-radius: 14px; }
+.transfer-success { color: var(--accent-dark); }
+@media (max-width: 380px) { .library-transfer { padding-inline: 16px; } }

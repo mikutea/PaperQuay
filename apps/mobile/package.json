@@ -22,6 +22,7 @@
     "@capacitor/core": "8.5.3",
     "@capacitor/filesystem": "8.1.5",
     "@capacitor/ios": "8.5.3",
+    "@capacitor/share": "8.0.3",
     "oidc-client-ts": "3.5.0",
     "pdfjs-dist": "6.4.299",
     "react": "18.3.1",
@@ -36,6 +37,7 @@
   },
   "devDependencies": {
     "@capacitor/cli": "8.5.3",
+    "@napi-rs/canvas": "1.0.13",
     "@types/node": "^24.0.0",
     "@types/react": "18.3.12",
     "@types/react-dom": "18.3.1",
