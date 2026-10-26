@@ -1370,10 +1370,12 @@ strong {
 .reading-workspace { display: grid; min-height: 0; height: 100%; overflow: hidden; grid-template-columns: minmax(0, 1fr); }
 .reading-workspace.with-panel { grid-template-columns: minmax(0, 1fr) minmax(300px, 36%); }
 .reading-main { min-height: 0; min-width: 0; display: flex; flex-direction: column; }
+.reading-panel-host { min-height: 0; min-width: 0; overflow: hidden; border-left: 1px solid var(--line); }
+.reading-workspace:not(.with-panel) > .reading-panel-host { display: none; }
 .reading-panel-tabs { flex-shrink: 0; display: flex; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--line); }
 .reading-main > .sync-status { flex-shrink: 0; padding: 0 16px; border-bottom: 1px solid var(--line); }
-.reading-side { min-height: 0; min-width: 0; overflow: auto; border-left: 1px solid var(--line); background: white; display: flex; flex-direction: column; }
-.reading-side-heading { display: flex; gap: 10px; justify-content: space-between; align-items: center; padding: 16px; }
+.reading-side { min-height: 0; min-width: 0; background: var(--theme-surface, white); display: flex; flex-direction: column; }
+.reading-side-heading { display: flex; gap: 10px; justify-content: flex-end; align-items: center; padding: 16px; }
 .reading-side-heading h2 { margin: 0; font-size: 16px; }
 .related-note-list { display: flex; flex-wrap: wrap; padding: 0 16px 8px; gap: 8px; }
 .related-note-list:empty { display: none; }
@@ -1387,10 +1389,19 @@ strong {
 .reading-side .association-field { grid-template-columns: 1fr; }
 .account-ai-settings { padding: 0 32px 32px; max-width: 980px; }
 @media (max-width: 900px) {
-  .reading-workspace, .reading-workspace.with-panel { height: auto; min-height: calc(100dvh - 150px); overflow: visible; grid-template-columns: minmax(0, 1fr); }
-  .reading-side { border-left: 0; border-top: 1px solid var(--line); max-height: none; overflow: visible; }
-  .reading-main { min-height: 65dvh; }
-  .reading-side .editor-form { min-height: 320px; }
+  .app-shell.reading-active { position: fixed; inset: 0; width: 100%; height: 100vh; height: 100dvh; min-height: 0; padding: 0; display: flex; overflow: hidden; }
+  .reading-active > .sidebar, .reading-active > .mobile-header, .reading-active > .bottom-nav { display: none; }
+  .reading-active > .main-content { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; width: 100%; height: 100%; overflow: hidden; }
+  .reading-active > .main-content > .global-message { flex-shrink: 0; max-height: 25%; overflow: auto; padding: calc(12px + env(safe-area-inset-top)) max(18px, env(safe-area-inset-right)) 12px max(18px, env(safe-area-inset-left)); }
+  .reading-active > .main-content > .global-message + .reading-workspace { --reader-safe-top: 0px; }
+  .reading-workspace, .reading-workspace.with-panel { flex: 1; height: 100%; min-height: 0; overflow: hidden; grid-template-columns: minmax(0, 1fr); }
+  .reading-panel-tabs, .reading-main > .sync-status { display: none; }
+  .reading-panel-host, .reading-workspace:not(.with-panel) > .reading-panel-host { display: contents; }
+  .reading-main { min-height: 0; }
+  .reading-side .editor-form { min-height: 0; }
   .reading-side .mobile-back { display: inline-flex; }
+  .reading-side .title-input { font-size: max(1.125rem, 16px); }
+  .reading-side .markdown-input { font-size: max(1rem, 16px); }
+  .reading-side .association-field select { font-size: max(1rem, 16px); }
   .account-ai-settings { padding: 0 24px 32px; }
 }

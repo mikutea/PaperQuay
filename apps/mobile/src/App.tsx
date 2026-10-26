@@ -43,7 +43,19 @@ const CONFIG_KEY = 'paperquay.mobile.public-config.v1';
 const DEVICE_NAME_KEY = 'paperquay.mobile.device-name.v1';
 type Section = 'library' | 'notes' | 'account' | 'conflicts';
 const PaperReader = lazy(() => import('./components/PaperReader.tsx').then((module) => ({ default: module.PaperReader })));
+const ReaderSheet = lazy(() => import('./components/ReaderSheet.tsx').then((module) => ({ default: module.ReaderSheet })));
 const AiWorkspace = lazy(() => import('./components/AiWorkspace.tsx').then((module) => ({ default: module.AiWorkspace })));
+const COMPACT_READER_QUERY = '(max-width: 900px)';
+function compactReaderSnapshot() {
+  return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    && window.matchMedia(COMPACT_READER_QUERY).matches;
+}
+function subscribeCompactReader(listener: () => void) {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return () => {};
+  const query = window.matchMedia(COMPACT_READER_QUERY);
+  query.addEventListener('change', listener);
+  return () => query.removeEventListener('change', listener);
+}
 interface Runtime {
   config: AppConfig;
   auth: AuthSession;
@@ -199,7 +211,10 @@ export function ConnectedApp({
   const [section, setSection] = useState<Section>('library');
   const [selection, setSelection] = useState<{ type: 'paper' | 'note'; id: string } | null>(null);
   const [readingId, setReadingId] = useState<string | null>(null);
-  const [readingPanel, setReadingPanel] = useState<'notes' | 'ai' | null>('notes');
+  const [readingPanel, setReadingPanel] = useState<'notes' | 'ai' | null>(null);
+  const [openedReadingPanels, setOpenedReadingPanels] = useState({ notes: false, ai: false });
+  const [readingPanelHost, setReadingPanelHost] = useState<HTMLDivElement | null>(null);
+  const compactReader = useSyncExternalStore(subscribeCompactReader, compactReaderSnapshot, () => false);
   const [readingNoteId, setReadingNoteId] = useState<string | null>(null);
   const [aiContext, setAiContext] = useState<PdfAiContext | null>(null);
   const liveAiContext = useRef<PdfAiContext | null>(null);
@@ -232,6 +247,7 @@ export function ConnectedApp({
   const invalidateAiContext = useCallback(() => {
     liveAiContext.current = null; setAiContext(null); setCitationTarget(null);
   }, []);
+  const closeReadingPanel = useCallback(() => setReadingPanel(null), []);
   useLayoutEffect(() => { liveAiContext.current = aiContext; }, [aiContext]);
 
   useEffect(() => {
@@ -300,8 +316,8 @@ export function ConnectedApp({
     return () => window.removeEventListener('beforeunload', confirmClose);
   }, [dirty, readerDirty]);
 
-  function canLeave(): boolean {
-    return !unsaved.current || window.confirm('当前改动尚未确认保存。离开可能丢失这些改动，仍然离开？');
+  function canLeave(unsavedChanges = unsaved.current): boolean {
+    return !unsavedChanges || window.confirm('当前改动尚未确认保存。离开可能丢失这些改动，仍然离开？');
   }
   function navigate(next: Section) {
     if (!canLeave()) return;
@@ -368,11 +384,21 @@ export function ConnectedApp({
   function openReader(id: string) {
     if (!canLeave()) return;
     setReadingId(id);
+    setReadingPanel(null);
+    setOpenedReadingPanels({ notes: false, ai: false });
     readerDirtyChanged(false);
     setReadingNoteId(null);
     setAiContext(null);
     setCitationTarget(null);
     dirtyChanged(false);
+  }
+  function showReadingPanel(panel: 'notes' | 'ai') {
+    setOpenedReadingPanels((opened) => opened[panel] ? opened : { ...opened, [panel]: true });
+    setReadingPanel(panel);
+  }
+  function toggleReadingPanel(panel: 'notes' | 'ai') {
+    if (readingPanel === panel) setReadingPanel(null);
+    else showReadingPanel(panel);
   }
   const conflictCount = new Set([
     ...state.conflicts.map((conflict) => conflict.conflictId),
@@ -461,7 +487,7 @@ export function ConnectedApp({
     );
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${readingId ? ' reading-active' : ''}`}>
       <aside className="sidebar">
         <Brand />
         <nav aria-label="主导航">{nav}</nav>
@@ -545,12 +571,8 @@ export function ConnectedApp({
         {readingId && readingPaper && scope && <div className={`reading-workspace ${readingPanel ? 'with-panel' : ''}`}>
           <div className="reading-main">
             <div className="reading-panel-tabs" aria-label="阅读工作区">
-              <button className={readingPanel === 'notes' ? 'secondary active' : 'text-button'} onClick={() => {
-                if (canLeave()) { setReadingPanel(readingPanel === 'notes' ? null : 'notes'); dirtyChanged(false); }
-              }}>阅读笔记</button>
-              <button className={readingPanel === 'ai' ? 'secondary active' : 'text-button'} onClick={() => {
-                if (canLeave()) { setReadingPanel(readingPanel === 'ai' ? null : 'ai'); dirtyChanged(false); }
-              }}>AI 助手</button>
+              <button className={readingPanel === 'notes' ? 'secondary active' : 'text-button'} aria-expanded={readingPanel === 'notes'} onClick={() => toggleReadingPanel('notes')}>阅读笔记</button>
+              <button className={readingPanel === 'ai' ? 'secondary active' : 'text-button'} aria-expanded={readingPanel === 'ai'} onClick={() => toggleReadingPanel('ai')}>AI 助手</button>
             </div>
             <SyncStatus state={state} conflicts={conflictCount}
               onSync={() => void controller.syncNow()} onConflicts={() => navigate('conflicts')} />
@@ -560,26 +582,40 @@ export function ConnectedApp({
                 annotations={entities.filter((entity) => entity.entityType === 'annotation')}
                 positions={entities.filter((entity) => entity.entityType === 'readingPosition')}
                 controller={controller} onBack={leaveReader} jumpTo={citationTarget ?? undefined}
+                compact={compactReader}
+                onOpenNotes={() => showReadingPanel('notes')}
+                onOpenAi={() => showReadingPanel('ai')}
+                onMobilePanelOpen={closeReadingPanel}
+                statusContent={<SyncStatus state={state} conflicts={conflictCount}
+                  onSync={() => void controller.syncNow()} onConflicts={() => navigate('conflicts')} />}
                 onDirtyChange={readerDirtyChanged}
                 onContextInvalidated={invalidateAiContext}
-                onAskAi={(context) => { if (canLeave()) { liveAiContext.current = context; setAiContext(context); setReadingPanel('ai'); dirtyChanged(false); } }} />
+                onAskAi={(context) => { liveAiContext.current = context; setAiContext(context); showReadingPanel('ai'); }} />
             </Suspense>
           </div>
-          {readingPanel === 'notes' && <aside className="reading-side" aria-label="阅读笔记">
-            <div className="reading-side-heading"><h2>阅读笔记</h2><button className="secondary" onClick={() => {
-              if (canLeave()) { setReadingNoteId(crypto.randomUUID()); dirtyChanged(false); }
+          <div className="reading-panel-host" ref={setReadingPanelHost}>
+          {readingPanelHost && <Suspense fallback={null}>
+          <ReaderSheet open={readingPanel === 'notes'} title="阅读笔记" onClose={closeReadingPanel}
+            keepMounted modal={compactReader} portalTarget={readingPanelHost} className="reading-notes-sheet">
+          {openedReadingPanels.notes && <aside className="reading-side" aria-label="阅读笔记内容">
+            <div className="reading-side-heading"><button className="secondary" onClick={() => {
+              if (canLeave(editorUnsaved.current)) { setReadingNoteId(crypto.randomUUID()); dirtyChanged(false); }
             }}>新建笔记</button></div>
             <div className="related-note-list">{notes.filter((note) => !note.deleted && (note.data as NoteData).paperId === readingId).map((note) =>
               <button key={note.entityId} className={note.entityId === readingNoteId ? 'secondary active' : 'text-button'} onClick={() => {
-                if (canLeave()) { setReadingNoteId(note.entityId); dirtyChanged(false); }
+                if (note.entityId === readingNoteId) return;
+                if (canLeave(editorUnsaved.current)) { setReadingNoteId(note.entityId); dirtyChanged(false); }
               }}>{(note.data as NoteData).title}</button>)}</div>
             {readingNoteId ? <EntityEditor key={`reading-note:${readingNoteId}`} type="note" entityId={readingNoteId}
               entity={notes.find((note) => note.entityId === readingNoteId)} defaultPaperId={readingId}
               papers={papers} controller={controller} hasConflict={hasEntityConflict(state.workspace!.sync, { entityType: 'note', entityId: readingNoteId })}
-              onBack={() => { if (canLeave()) { setReadingNoteId(null); dirtyChanged(false); } }} onDirty={dirtyChanged}
+              onBack={() => { if (canLeave(editorUnsaved.current)) { setReadingNoteId(null); dirtyChanged(false); } }} onDirty={dirtyChanged}
               onConflicts={() => navigate('conflicts')} /> : <p className="muted reading-hint">选择一条关联笔记，或新建笔记。输入后会自动保存到此设备。</p>}
           </aside>}
-          {readingPanel === 'ai' && runtime.secretStore && <aside className="reading-side" aria-label="阅读 AI 助手">
+          </ReaderSheet>
+          <ReaderSheet open={readingPanel === 'ai'} title="AI 助手" onClose={closeReadingPanel}
+            keepMounted modal={compactReader} portalTarget={readingPanelHost} className="reading-ai-sheet">
+          {openedReadingPanels.ai && runtime.secretStore && <aside className="reading-side" aria-label="阅读 AI 助手内容">
             <Suspense fallback={<p role="status">正在打开 AI 助手…</p>}><AiWorkspace accountScope={scope} context={aiContext}
               secretStore={runtime.secretStore} onSaveNote={async (note, source) => {
                 assertAiNoteTarget(controller.getSnapshot(), runtime.config.apiBaseUrl, liveAiContext.current, source, note);
@@ -590,8 +626,12 @@ export function ConnectedApp({
                   setUiError('引用对应的 PDF 版本当前不可用。'); return;
                 }
                 setCitationTarget({ ...target, requestId: crypto.randomUUID() });
+                if (compactReader) setReadingPanel(null);
               }} /></Suspense>
           </aside>}
+          </ReaderSheet>
+          </Suspense>}
+          </div>
         </div>}
         {readingId && !readingPaper && <div className="empty-state"><p>这篇文献已删除或当前不可用。</p><button className="secondary" onClick={leaveReader}>返回文库</button></div>}
         {section === 'account' && (

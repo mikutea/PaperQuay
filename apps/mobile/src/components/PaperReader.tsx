@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type PointerEvent, type ReactNode } from 'react';
 import {
   getVisibleEntity, type AnnotationAnchor, type AnnotationData, type AttachmentVersionData,
   type PaperData, type ReadingPositionData, type VisibleEntity,
@@ -6,6 +6,9 @@ import {
 import { accountScopeKey } from '../storage/accountStore.ts';
 import { describeError } from '../errors.ts';
 import { Icon } from './Icon.tsx';
+import { ReaderSheet } from './ReaderSheet.tsx';
+import { ReaderTapGesture, captureReaderZoomAnchor, restoreReaderZoomAnchor,
+  type ReaderPointer, type ReaderTapPoint, type ReaderZoomAnchor } from './readerGestures.ts';
 import { getPdfCache } from '../pdf/cache.ts';
 import { registerPdfTask } from '../pdf/tasks.ts';
 import { InitialPdfOpening, useInitialPdfRestore } from '../pdf/opening.ts';
@@ -19,13 +22,23 @@ import { ownReadingPosition, positionOwner, readerIdentity, ReadingCheckpointWri
   type PositionStatus, type ReaderIdentity, type ReadingPoint } from '../pdf/position.ts';
 import { PDF_LIMITS, type PaperReaderProps, type PdfAiContext, type PdfCacheEntry, type PdfCitationTarget, type PdfVersion } from '../pdf/types.ts';
 
-type Panel = 'source' | 'contents' | 'search' | 'annotations' | 'cache' | null;
+type Panel = 'source' | 'contents' | 'search' | 'annotations' | 'cache' | 'more' | 'page' | 'ask' | null;
 interface Loaded { pdf: VerifiedPdf; version: PdfVersion; runtime: PdfRuntime }
 interface Task { epoch: number; signal: AbortSignal; identity: ReaderIdentity; check: () => void }
 interface CommentDraft { entityId: string; revision: number; data: AnnotationData; comment: string; saved: string }
 const byteLabel = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 const errorMessage = (error: unknown) => error instanceof PdfError ? error.message : describeError(error);
 const labelForKind = (kind: AnnotationData['kind']) => kind === 'highlight' ? '高亮' : kind === 'underline' ? '下划线' : '区域';
+const panelTitles: Record<NonNullable<Panel>, string> = { source: 'PDF 文件', contents: '目录与阅读接续', search: '搜索原文',
+  annotations: '批注', cache: '本机缓存', more: '阅读选项', page: '跳转页面', ask: '阅读 AI' };
+
+function ReaderPanel({ compact, title, onClose, children }: { compact: boolean; title: string; onClose: () => void; children: ReactNode }) {
+  if (compact) return <ReaderSheet open title={title} onClose={onClose} className="pr-reader-sheet">{children}</ReaderSheet>;
+  return <aside className="pr-panel" aria-label={title}>
+    <div className="pr-panel-heading"><h3>{title}</h3><button type="button" aria-label="关闭面板" onClick={onClose}>×</button></div>
+    {children}
+  </aside>;
+}
 
 function versionsFor(paperId: string, records: VisibleEntity[]): PdfVersion[] {
   return records.filter((record) => record.entityType === 'attachmentVersion' && !record.deleted && record.data
@@ -33,13 +46,48 @@ function versionsFor(paperId: string, records: VisibleEntity[]): PdfVersion[] {
     .map((record) => ({ entityId: record.entityId, data: record.data as AttachmentVersionData }));
 }
 
+interface ReaderFocusViewport {
+  focus: PdfCitationTarget | null;
+  pdf: VerifiedPdf | null;
+  pageIndex: number;
+  fitWidth: number;
+  zoom: number;
+  rotation: number;
+  continuous: boolean;
+  offsets: number[];
+  scroll: { readonly current: HTMLDivElement | null };
+}
+
+/** A citation scrolls once; its highlight can remain through later user zooms and resizes. */
+export function useReaderFocusPosition({ focus, pdf, pageIndex, fitWidth, zoom, rotation, continuous, offsets, scroll }: ReaderFocusViewport) {
+  const positioned = useRef<{ pdf: VerifiedPdf; requestId: string } | null>(null);
+  useEffect(() => {
+    if (!pdf) { positioned.current = null; return; }
+    const container = scroll.current;
+    if (!focus || focus.pageIndex !== pageIndex || !focus.quads?.length || !container
+      || (positioned.current?.pdf === pdf && positioned.current.requestId === focus.requestId)) return;
+    let active = true;
+    void pdf.page(pageIndex).then((page) => {
+      if (!active || scroll.current !== container) return;
+      const size = pageDisplaySize(pdf, pageIndex, fitWidth, zoom, rotation);
+      const viewport = page.getViewport({ scale: size.scale, rotation: (page.rotate + rotation) % 360 });
+      const bounds = quadBounds(focus.quads![0], pdf.pages[pageIndex].cropBox, viewport);
+      container.scrollTop = (continuous ? offsets[pageIndex] : 0) + Math.max(0, bounds.top - 48);
+      // Failed, replaced or interrupted page loads must not consume the navigation request.
+      positioned.current = { pdf, requestId: focus.requestId };
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [focus, pdf, pageIndex, fitWidth, zoom, rotation, continuous, offsets, scroll]);
+}
+
 export function PaperReader(props: PaperReaderProps) {
-  const { scope, paper, controller, onAskAi, jumpTo } = props;
+  const { scope, paper, controller, onAskAi, jumpTo, compact = false } = props;
   const scopeKey = accountScopeKey(scope);
   const versions = useMemo(() => versionsFor(paper.entityId, props.attachmentVersions), [paper.entityId, props.attachmentVersions]);
   const [selectedVersionId, setSelectedVersionId] = useState(() => versions[0]?.entityId ?? '');
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [panel, setPanel] = useState<Panel>('source');
+  const [toolsVisible, setToolsVisible] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [progress, setProgress] = useState<{ loaded: number; total: number | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -67,6 +115,10 @@ export function PaperReader(props: PaperReaderProps) {
   const [commentStatus, setCommentStatus] = useState<PositionStatus>('idle');
   const [focus, setFocus] = useState<PdfCitationTarget | null>(null);
   const scroll = useRef<HTMLDivElement>(null);
+  const pendingZoom = useRef<ReaderZoomAnchor | null>(null);
+  const positionedDocument = useRef<VerifiedPdf | null>(null);
+  const measuredWidth = useRef(640);
+  const gestures = useRef(new ReaderTapGesture({ allowed: () => false, tap: () => undefined, doubleTap: () => undefined }));
   const fileInput = useRef<HTMLInputElement>(null);
   const mounted = useRef(true);
   const liveScope = useRef(scopeKey); liveScope.current = scopeKey;
@@ -75,6 +127,8 @@ export function PaperReader(props: PaperReaderProps) {
   const documentAbort = useRef<AbortController | null>(null);
   const releaseDocumentTask = useRef<(() => void) | null>(null);
   const invalidateContext = useRef(props.onContextInvalidated); invalidateContext.current = props.onContextInvalidated;
+  const mobilePanelOpen = useRef(props.onMobilePanelOpen); mobilePanelOpen.current = props.onMobilePanelOpen;
+  const compactView = useRef(compact); compactView.current = compact;
   const current = useRef<Loaded | null>(null);
   const activeBytes = useRef<Uint8Array | null>(null);
   const writer = useRef<ReadingCheckpointWriter | null>(null);
@@ -107,6 +161,7 @@ export function PaperReader(props: PaperReaderProps) {
     documentAbort.current?.abort(); documentAbort.current = null;
     releaseDocumentTask.current?.(); releaseDocumentTask.current = null;
     writer.current?.stop(); writer.current = null; activeBytes.current = null;
+    pendingZoom.current = null; positionedDocument.current = null;
     void current.current?.pdf.close(); current.current = null;
     setLoaded(null); setSelection(null); setFocus(null); setOutline([]); setSearchResults([]); setSearched(false);
     setAreaMode(false); updatePositionStatus('idle');
@@ -211,7 +266,7 @@ export function PaperReader(props: PaperReaderProps) {
         onStatus: (status) => { if (mounted.current && current.current === result && sameReaderIdentity(controller, task.identity)) updatePositionStatus(status); },
       });
       currentPoint.current = point; setPageIndex(point.pageIndex); setLoaded(result); setSelectedVersionId(version.entityId);
-      setPanel(null); setSelection(null); updateCommentDraft(null); setCommentStatus('idle');
+      setPanel(null); setSelection(null); setToolsVisible(true); updateCommentDraft(null); setCommentStatus('idle');
       writer.current.record(point);
       void pdf.outline(abort.signal).then((items) => { if (current.current === result && mounted.current) setOutline(items); }).catch(() => undefined);
       await refreshCache().catch(() => undefined);
@@ -269,22 +324,54 @@ export function PaperReader(props: PaperReaderProps) {
     return () => { document.removeEventListener('visibilitychange', persist); window.removeEventListener('pagehide', pagehide); window.removeEventListener('beforeunload', beforeunload); };
   }, [dirty, finishPending]);
 
+  const captureZoom = (point?: ReaderTapPoint) => {
+    const container = scroll.current;
+    const index = point?.pageIndex ?? currentPoint.current.pageIndex;
+    const page = container?.querySelector<HTMLElement>(`.pr-page[data-page-index="${index}"]`);
+    if (!container || !page) return null;
+    return captureReaderZoomAnchor(index, page.getBoundingClientRect(), container.getBoundingClientRect(), point);
+  };
+  const changeZoom = (value: number, point?: ReaderTapPoint) => {
+    if (value === zoom) return;
+    pendingZoom.current = captureZoom(point); setSelection(null); setZoom(value);
+  };
+  const hasNativeSelection = () => { const value = globalThis.getSelection?.(); return Boolean(value && !value.isCollapsed && value.toString()); };
+  gestures.current.update({
+    allowed: () => compact && Boolean(loaded) && !panel && !areaMode && !selection && !hasNativeSelection(),
+    tap: () => setToolsVisible((value) => !value),
+    doubleTap: (point) => changeZoom(zoom > 1 ? 1 : 2, point),
+  });
+  useEffect(() => {
+    const selected = () => { if (hasNativeSelection()) gestures.current.interrupt(); };
+    document.addEventListener('selectionchange', selected);
+    return () => { document.removeEventListener('selectionchange', selected); gestures.current.dispose(); };
+  }, []);
+  useEffect(() => { gestures.current.interrupt(); }, [compact, panel, loaded]);
+  useLayoutEffect(() => { if (compact && panel) mobilePanelOpen.current?.(); }, [compact, panel]);
+
+  const pagePadding = compact ? 8 : 32;
+  const pageGap = compact ? 12 : 24;
   useLayoutEffect(() => {
     if (!scroll.current || !loaded) return;
     const element = scroll.current;
-    const measure = () => setFitWidth(Math.max(160, element.clientWidth - 32));
+    const measure = () => {
+      const width = Math.max(160, element.clientWidth - pagePadding);
+      if (width === measuredWidth.current) return;
+      if (positionedDocument.current === loaded.pdf) pendingZoom.current ??= captureZoom();
+      measuredWidth.current = width; setFitWidth(width);
+    };
     measure(); const observer = new ResizeObserver(measure); observer.observe(element);
     return () => observer.disconnect();
-  }, [loaded, panel]);
+  }, [loaded, panel, pagePadding]);
 
   const layout = useMemo(() => {
     const offsets: number[] = []; const heights: number[] = []; let total = 0;
     if (loaded) for (let index = 0; index < loaded.pdf.pageCount; index++) {
       offsets.push(total); const height = pageDisplaySize(loaded.pdf, index, fitWidth, zoom, rotation).height;
-      heights.push(height); total += height + 24;
+      heights.push(height); total += height + pageGap;
     }
-    return { offsets, heights, total: Math.max(0, total - 24) };
-  }, [loaded, fitWidth, zoom, rotation]);
+    return { offsets, heights, total: Math.max(0, total - pageGap) };
+  }, [loaded, fitWidth, zoom, rotation, pageGap]);
 
   const goTo = useCallback((index: number, offsetRatio = 0) => {
     if (!loaded || !Number.isInteger(index) || index < 0 || index >= loaded.pdf.pageCount) return;
@@ -295,8 +382,19 @@ export function PaperReader(props: PaperReaderProps) {
 
   useLayoutEffect(() => {
     if (!loaded || !scroll.current) return;
+    const anchor = pendingZoom.current;
+    const page = anchor && scroll.current.querySelector<HTMLElement>(`.pr-page[data-page-index="${anchor.pageIndex}"]`);
+    if (anchor && page) {
+      pendingZoom.current = null;
+      const bounds = page.getBoundingClientRect(); const viewport = scroll.current.getBoundingClientRect();
+      const restored = restoreReaderZoomAnchor(anchor, { left: bounds.left - viewport.left + scroll.current.scrollLeft,
+        top: bounds.top - viewport.top + scroll.current.scrollTop, width: bounds.width, height: bounds.height });
+      scroll.current.scrollLeft = restored.left; scroll.current.scrollTop = restored.top;
+      positionedDocument.current = loaded.pdf; onScroll(); return;
+    }
     const point = currentPoint.current;
     scroll.current.scrollTop = (continuous ? layout.offsets[point.pageIndex] : 0) + point.offsetRatio * layout.heights[point.pageIndex];
+    positionedDocument.current = loaded.pdf;
   }, [loaded, layout, continuous, pageIndex]);
   useEffect(() => setPageInput(String(pageIndex + 1)), [pageIndex]);
 
@@ -314,21 +412,11 @@ export function PaperReader(props: PaperReaderProps) {
     else { pendingJump.current = jumpTo; setSelectedVersionId(version.entityId); void loadCached(version); }
   }, [jumpTo, versions, loaded, goTo, loadCached]);
 
-  useEffect(() => {
-    if (!focus || !loaded || focus.pageIndex !== pageIndex || !focus.quads?.length || !scroll.current) return;
-    let active = true;
-    void loaded.pdf.page(pageIndex).then((page) => {
-      if (!active || !scroll.current) return;
-      const size = pageDisplaySize(loaded.pdf, pageIndex, fitWidth, zoom, rotation);
-      const viewport = page.getViewport({ scale: size.scale, rotation: (page.rotate + rotation) % 360 });
-      const bounds = quadBounds(focus.quads![0], loaded.pdf.pages[pageIndex].cropBox, viewport);
-      const offset = Math.max(0, bounds.top - 48);
-      scroll.current.scrollTop = (continuous ? layout.offsets[pageIndex] : 0) + offset;
-    }).catch(() => undefined);
-    return () => { active = false; };
-  }, [focus, loaded, pageIndex, fitWidth, zoom, rotation, continuous, layout]);
+  useReaderFocusPosition({ focus, pdf: loaded?.pdf ?? null, pageIndex, fitWidth, zoom, rotation,
+    continuous, offsets: layout.offsets, scroll });
 
   const onScroll = () => {
+    gestures.current.interrupt();
     if (!loaded || !scroll.current) return;
     const top = Math.max(0, scroll.current.scrollTop);
     let index = pageIndex;
@@ -431,6 +519,7 @@ export function PaperReader(props: PaperReaderProps) {
   const ask = (kind: PdfAiContext['scope']) => {
     if (!loaded || !onAskAi) return;
     const reading = loaded; const anchor = selection;
+    if (compact) setPanel(null);
     void runTask('正在准备原文', async (task) => {
       let pages: PdfAiContext['pages'];
       if (kind === 'selection') {
@@ -442,9 +531,12 @@ export function PaperReader(props: PaperReaderProps) {
       } else pages = await reading.pdf.documentText(task.signal);
       task.check();
       if (current.current !== reading) throw new PdfError('VERSION_MISMATCH');
+      // Preparing a long document can outlive a newly opened tool sheet.
+      if (compactView.current) setPanel(null);
       onAskAi({ paperId: paper.entityId, attachmentVersionId: reading.version.entityId, sha256: reading.version.data.sha256,
         scope: kind, totalPages: reading.pdf.pageCount, pages, complete: true,
         label: kind === 'document' ? `${reading.version.data.fileName} · 全文` : `第 ${(kind === 'selection' ? anchor!.pageIndex : pageIndex) + 1} 页${kind === 'selection' ? '选段' : ''}` });
+      props.onOpenAi?.();
     });
   };
 
@@ -493,44 +585,85 @@ export function PaperReader(props: PaperReaderProps) {
     && (record.data as ReadingPositionData).paperId === paper.entityId) : [];
   const state = controller.getSnapshot().workspace?.sync;
   const title = (paper.data as PaperData | null)?.title || '文献阅读';
-
-  return <section className="pr-reader" aria-label="PDF 阅读器" onKeyDown={(event) => {
+  const positionMessage = positionStatus === 'saving' ? '正在保存位置…' : positionStatus === 'saved' ? '位置已保存'
+    : positionStatus === 'error' ? '位置尚未保存' : '阅读位置保存在此设备';
+  const pointer = (event: PointerEvent<HTMLDivElement>): { point: ReaderPointer; eligible: boolean } => {
     const target = event.target as HTMLElement;
-    if (target.closest('input,textarea,select,button') || event.altKey || event.ctrlKey || event.metaKey) return;
+    const page = target.closest<HTMLElement>('.pr-page[data-page-index]');
+    return { point: { pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, time: event.timeStamp,
+      pageIndex: Number(page?.dataset.pageIndex ?? -1), onText: Boolean(target.closest('.pr-text-layer span,.pr-text-layer br')) },
+    eligible: compact && Boolean(page) && event.isPrimary !== false && event.button === 0
+      && !target.closest('button,a,input,textarea,select,summary,[role="button"],[contenteditable="true"],.pr-area-input,.pr-annotation-overlay,[data-reader-no-tap]') };
+  };
+  const zoomControl = <label className="pr-control"><span className={compact ? '' : 'pr-sr-only'}>缩放</span>
+    <select aria-label="缩放" value={zoom} onChange={(event) => changeZoom(Number(event.target.value))}>
+      <option value={0.75}>75%</option><option value={1}>适合宽度</option><option value={1.25}>125%</option>
+      <option value={1.5}>150%</option><option value={2}>200%</option><option value={3}>300%</option>
+    </select></label>;
+  const modeControl = <label className="pr-control"><span className={compact ? '' : 'pr-sr-only'}>阅读模式</span>
+    <select aria-label="阅读模式" value={continuous ? 'continuous' : 'single'} onChange={(event) => setContinuous(event.target.value === 'continuous')}>
+      <option value="continuous">连续</option><option value="single">分页</option></select></label>;
+  const pageControls = loaded && <div className="pr-page-controls"><button type="button" aria-label="上一页" disabled={pageIndex === 0} onClick={() => goTo(pageIndex - 1)}>‹</button>
+    <label><span className="pr-sr-only">页码</span><input inputMode="numeric" value={pageInput} aria-label="页码"
+      onChange={(event) => setPageInput(event.target.value.replace(/\D/g, '').slice(0, 5))}
+      onBlur={() => { goTo(Number(pageInput) - 1); setPageInput(String(currentPoint.current.pageIndex + 1)); }}
+      onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); goTo(Number(pageInput) - 1); event.currentTarget.blur(); if (compact) setPanel(null); } }} /></label>
+    <span>/ {loaded.pdf.pageCount}</span><button type="button" aria-label="下一页" disabled={pageIndex + 1 >= loaded.pdf.pageCount} onClick={() => goTo(pageIndex + 1)}>›</button></div>;
+  const feedback = (error || notice || busy) && <div className={`pr-feedback ${error ? 'pr-feedback-error' : ''}`} role={error ? 'alert' : 'status'}>
+    <span>{busy ?? error ?? notice}{busy && progress ? ` · ${byteLabel(progress.loaded)}${progress.total !== null ? ` / ${byteLabel(progress.total)}` : ''}` : ''}</span>
+    {busy ? <button type="button" onClick={() => taskAbort.current?.abort()}>取消</button>
+      : <button type="button" aria-label="关闭提示" onClick={() => { setError(null); setNotice(null); }}>×</button>}
+  </div>;
+
+  return <section className={`pr-reader${compact ? ' pr-reader--compact' : ''}${compact && !toolsVisible ? ' pr-reader--immersive' : ''}`}
+    aria-label="PDF 阅读器" data-tools-visible={toolsVisible} onKeyDown={(event) => {
+    const target = event.target as HTMLElement;
+    if (target.closest('input,textarea,select,button,summary,[contenteditable="true"],[role="dialog"]')
+      || event.nativeEvent.isComposing || event.altKey || event.ctrlKey || event.metaKey) return;
     if (event.key === 'PageDown') { event.preventDefault(); goTo(pageIndex + 1); }
     if (event.key === 'PageUp') { event.preventDefault(); goTo(pageIndex - 1); }
   }}>
-    <header className="pr-heading">
+    {(!compact || toolsVisible || !loaded) && <header className="pr-heading">
       <button type="button" className="pr-icon-button" aria-label="返回文库" onClick={() => void back()}><Icon name="back" /></button>
-      <div className="pr-title"><h2 title={title}>{title}</h2><p>{loaded ? `${loaded.pdf.pageCount} 页 · ${byteLabel(loaded.version.data.sizeBytes)}` : '选择 PDF 开始阅读'}</p></div>
-      <button type="button" onClick={() => setPanel(panel === 'source' ? null : 'source')}>文件</button>
-    </header>
-    {loaded && <div className="pr-toolbar" role="toolbar" aria-label="阅读工具">
-      <div className="pr-page-controls"><button type="button" aria-label="上一页" disabled={pageIndex === 0} onClick={() => goTo(pageIndex - 1)}>‹</button>
-        <label><span className="pr-sr-only">页码</span><input inputMode="numeric" value={pageInput} aria-label="页码"
-          onChange={(event) => setPageInput(event.target.value.replace(/\D/g, '').slice(0, 5))}
-          onBlur={() => { goTo(Number(pageInput) - 1); setPageInput(String(currentPoint.current.pageIndex + 1)); }}
-          onKeyDown={(event) => { if (event.key === 'Enter') { goTo(Number(pageInput) - 1); event.currentTarget.blur(); } }} /></label>
-        <span>/ {loaded.pdf.pageCount}</span><button type="button" aria-label="下一页" disabled={pageIndex + 1 >= loaded.pdf.pageCount} onClick={() => goTo(pageIndex + 1)}>›</button></div>
-      <label className="pr-control"><span className="pr-sr-only">缩放</span><select aria-label="缩放" value={zoom} onChange={(event) => setZoom(Number(event.target.value))}>
-        <option value={0.75}>75%</option><option value={1}>适合宽度</option><option value={1.25}>125%</option><option value={1.5}>150%</option><option value={2}>200%</option><option value={3}>300%</option>
-      </select></label>
+      <div className="pr-title"><h2 title={title}>{title}</h2>{!compact && <p>{loaded ? `${loaded.pdf.pageCount} 页 · ${byteLabel(loaded.version.data.sizeBytes)}` : '选择 PDF 开始阅读'}</p>}</div>
+      {compact ? <button type="button" className="pr-more-button" aria-label="更多阅读选项" aria-haspopup="dialog" onClick={() => setPanel('more')}>
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" /></svg></button>
+        : <button type="button" onClick={() => setPanel(panel === 'source' ? null : 'source')}>文件</button>}
+    </header>}
+    {loaded && !compact && <div className="pr-toolbar" role="toolbar" aria-label="阅读工具">
+      {pageControls}{zoomControl}
       <button type="button" onClick={() => { setSelection(null); setRotation((value) => (value + 90) % 360); }} aria-label={`旋转页面，当前 ${rotation} 度`}>旋转</button>
-      <label className="pr-control"><span className="pr-sr-only">阅读模式</span><select aria-label="阅读模式" value={continuous ? 'continuous' : 'single'} onChange={(event) => setContinuous(event.target.value === 'continuous')}>
-        <option value="continuous">连续</option><option value="single">分页</option></select></label>
+      {modeControl}
       <button type="button" aria-pressed={panel === 'contents'} onClick={() => setPanel(panel === 'contents' ? null : 'contents')}>目录</button>
       <button type="button" aria-pressed={panel === 'search'} onClick={() => setPanel(panel === 'search' ? null : 'search')}>搜索</button>
       <button type="button" aria-pressed={panel === 'annotations'} onClick={() => setPanel(panel === 'annotations' ? null : 'annotations')}>批注 {annotationRecords.length || ''}</button>
     </div>}
-    {(error || notice || busy) && <div className={`pr-feedback ${error ? 'pr-feedback-error' : ''}`} role={error ? 'alert' : 'status'}>
-      <span>{busy ?? error ?? notice}{busy && progress ? ` · ${byteLabel(progress.loaded)}${progress.total !== null ? ` / ${byteLabel(progress.total)}` : ''}` : ''}</span>
-      {busy ? <button type="button" onClick={() => taskAbort.current?.abort()}>取消</button>
-        : <button type="button" aria-label="关闭提示" onClick={() => { setError(null); setNotice(null); }}>×</button>}
-    </div>}
+    {(!compact || !panel) && feedback}
     <div className="pr-body">
-      {panel && <aside className="pr-panel" aria-label={panel === 'source' ? 'PDF 文件' : panel === 'contents' ? '目录与阅读接续' : panel === 'search' ? '搜索原文' : panel === 'cache' ? '本机 PDF 缓存' : '批注清单'}>
-        <div className="pr-panel-heading"><h3>{panel === 'source' ? 'PDF 文件' : panel === 'contents' ? '目录与阅读接续' : panel === 'search' ? '搜索原文' : panel === 'cache' ? '本机缓存' : '批注'}</h3>
-          <button type="button" aria-label="关闭面板" onClick={() => setPanel(null)}>×</button></div>
+      {panel && <ReaderPanel compact={compact} title={panelTitles[panel]} onClose={() => setPanel(null)}>
+        {compact && feedback}
+        {panel === 'more' && <div className="pr-panel-content pr-options">
+          {loaded && <section className="pr-option-section" aria-label="阅读显示"><h3>阅读显示</h3>
+            <div className="pr-option-controls">{zoomControl}{modeControl}</div>
+            <button type="button" onClick={() => { setSelection(null); setRotation((value) => (value + 90) % 360); }} aria-label={`旋转页面，当前 ${rotation} 度`}>旋转页面 <span>{rotation}°</span></button>
+            <button type="button" onClick={() => setPanel('annotations')}>批注 <span>{annotationRecords.length}</span></button></section>}
+          <section className="pr-option-section" aria-label="文件与离线"><h3>文件与离线</h3>
+            <button type="button" onClick={() => setPanel('source')}>文件与版本</button>
+            <button type="button" onClick={() => { setPanel('cache'); void refreshCache().catch((failure) => setError(errorMessage(failure))); }}>离线副本与缓存</button></section>
+          {loaded && <div className="pr-option-status"><span role="status">{positionMessage}</span>
+            {positionStatus === 'error' && <button type="button" onClick={() => { void writer.current?.flush().catch((failure) => setError(errorMessage(failure))); }}>重试保存位置</button>}
+            <span>{loaded.pdf.pageCount} 页 · {byteLabel(loaded.version.data.sizeBytes)}</span>
+            <p>轻触空白处收起工具；双击空白处放大或适宽。长按文字可选择原文。</p></div>}
+          {props.statusContent && <div className="pr-account-status">{props.statusContent}</div>}
+        </div>}
+        {panel === 'page' && <div className="pr-panel-content pr-jump-panel">{pageControls}
+          <button type="button" className="pr-primary" onClick={() => { goTo(Number(pageInput) - 1); setPanel(null); }}>跳转</button></div>}
+        {panel === 'ask' && <div className="pr-panel-content">
+          {onAskAi && <><button type="button" disabled={Boolean(busy)} onClick={() => ask('page')}>询问本页</button>
+            <button type="button" disabled={Boolean(busy)} onClick={() => ask('document')}>询问全文</button></>}
+          {props.onOpenAi && <button type="button" onClick={() => { setPanel(null); props.onOpenAi?.(); }}>打开 AI 对话</button>}
+          <p className="pr-muted">也可先选择页面中的文字，再对选段提问。</p>
+        </div>}
         {panel === 'source' && <div className="pr-panel-content">
           <label>附件版本<select value={selectedVersionId} disabled={Boolean(busy)} onChange={(event) => void changeVersion(event.target.value)}>
             {versions.map((version) => <option key={version.entityId} value={version.entityId}>{version.data.fileName} · {version.data.sha256.slice(0, 8)}</option>)}
@@ -592,29 +725,49 @@ export function PaperReader(props: PaperReaderProps) {
               <button type="button" onClick={() => { if (window.confirm(`清理「${entry.fileName}」的本机副本？`)) void changeCache(() => cache.remove(scope, entry.versionId)); }}>清理</button></div></li>)}</ul>
           {cacheEntries.length === 0 && <p>还没有 PDF 缓存。</p>}
         </div>}
-      </aside>}
-      {loaded ? <div ref={scroll} className="pr-scroll" onScroll={onScroll} tabIndex={0} aria-label="PDF 页面">
-        <div className="pr-pages" style={{ width: Math.max(fitWidth + 32, fitWidth * zoom + 32) }}>
+      </ReaderPanel>}
+      {loaded ? <div ref={scroll} className="pr-scroll" onScroll={onScroll} tabIndex={0} aria-label="PDF 页面"
+        onPointerDown={(event) => { const value = pointer(event); gestures.current.down(value.point, value.eligible); }}
+        onPointerMove={(event) => gestures.current.move({ pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY })}
+        onPointerUp={(event) => { const value = pointer(event); gestures.current.up(value.point, value.eligible); }}
+        onPointerCancel={(event) => gestures.current.cancel(event.pointerId)}>
+        <div className="pr-pages" style={{ width: Math.max(fitWidth + pagePadding, fitWidth * zoom + pagePadding) }}>
           {continuous && firstPage > 0 && <div aria-hidden="true" style={{ height: layout.offsets[firstPage] }} />}
-          {renderedPages.map((index) => <div key={`${loaded.version.entityId}:${index}`} className="pr-page-slot" style={{ height: layout.heights[index], marginBottom: index < loaded.pdf.pageCount - 1 && continuous ? 24 : 0 }}>
+          {renderedPages.map((index) => <div key={`${loaded.version.entityId}:${index}`} className="pr-page-slot" style={{ height: layout.heights[index], marginBottom: index < loaded.pdf.pageCount - 1 && continuous ? pageGap : 0 }}>
             <PdfPageView pdf={loaded.pdf} runtime={loaded.runtime} pageIndex={index} fitWidth={fitWidth} zoom={zoom} rotation={rotation}
               annotations={annotationRecords.filter((record) => (record.data as AnnotationData).anchor.pageIndex === index).map((record) => ({ entityId: record.entityId, data: record.data as AnnotationData }))}
               focusQuads={focus?.pageIndex === index ? focus.quads : undefined} areaMode={areaMode}
               onSelection={selectText} onArea={(anchor) => { void addAnnotation('area', anchor); }} onError={pageError} />
           </div>)}
-          {continuous && lastPage < loaded.pdf.pageCount - 1 && <div aria-hidden="true" style={{ height: Math.max(0, layout.total - layout.offsets[lastPage] - layout.heights[lastPage] - 24) }} />}
+          {continuous && lastPage < loaded.pdf.pageCount - 1 && <div aria-hidden="true" style={{ height: Math.max(0, layout.total - layout.offsets[lastPage] - layout.heights[lastPage] - pageGap) }} />}
         </div>
       </div> : <div className="pr-empty"><Icon name="note" /><h3>打开这篇文献的 PDF</h3><p>选择本机文件，或获取公开全文链接。核对完成后即可阅读、批注和继续上次的位置。</p>
         <button type="button" className="pr-primary" onClick={() => setPanel('source')}>选择 PDF</button></div>}
+      {compact && loaded && <>
+        {toolsVisible && <button type="button" className="pr-page-indicator" aria-label={`第 ${pageIndex + 1} 页，共 ${loaded.pdf.pageCount} 页，跳转页面`}
+          aria-haspopup="dialog" onClick={() => setPanel('page')}>{pageIndex + 1} <span>/ {loaded.pdf.pageCount}</span></button>}
+        <button type="button" className="pr-tool-toggle" aria-label={toolsVisible ? '隐藏阅读工具' : '显示阅读工具'}
+          aria-pressed={!toolsVisible} onClick={() => { gestures.current.interrupt(); setToolsVisible((value) => !value); }}>
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
+            <path d={toolsVisible ? 'M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5' : 'M3 8h5V3m13 5h-5V3M8 21v-5H3m13 5v-5h5'} /></svg>
+          <span>{toolsVisible ? '收起' : '工具'}</span></button>
+        {positionStatus === 'error' && <div className="pr-position-alert" role="alert">位置尚未保存
+          <button type="button" onClick={() => { void writer.current?.flush().catch((failure) => setError(errorMessage(failure))); }}>重试</button></div>}
+      </>}
     </div>
-    {loaded && <footer className="pr-footer">
+    {loaded && (!compact || toolsVisible || selection || areaMode) && <footer className={`pr-footer${compact ? ' pr-mobile-footer' : ''}`}>
       {selection ? <div className="pr-selection-tools" onPointerDown={(event) => { if ((event.target as HTMLElement).closest('button')) event.preventDefault(); }}><span>已选 {selection.quote?.exact.length ?? 0} 字</span>
         <button type="button" disabled={annotationSaving} onClick={() => void addAnnotation('highlight')}>高亮</button>
         <button type="button" disabled={annotationSaving} onClick={() => void addAnnotation('underline')}>下划线</button>
         {onAskAi && <button type="button" disabled={Boolean(busy)} onClick={() => ask('selection')}>选段提问</button>}
         <label className="pr-color-label">颜色<input aria-label="批注颜色" type="color" value={annotationColor} onChange={(event) => setAnnotationColor(event.target.value)} /></label>
       </div> : areaMode ? <div className="pr-selection-tools"><span>在页面上拖动框选区域</span><button type="button" onClick={() => setAreaMode(false)}>完成</button></div>
-        : <div className="pr-reading-status"><span role="status">{positionStatus === 'saving' ? '正在保存位置…' : positionStatus === 'saved' ? '位置已保存' : positionStatus === 'error' ? '位置尚未保存' : '阅读位置保存在此设备'}</span>
+        : compact ? <nav className="pr-mobile-actions" aria-label="阅读操作">
+          <button type="button" aria-haspopup="dialog" onClick={() => setPanel('contents')}><Icon name="library" /><span>目录</span></button>
+          <button type="button" aria-haspopup="dialog" onClick={() => setPanel('search')}><Icon name="search" /><span>搜索</span></button>
+          <button type="button" disabled={!props.onOpenNotes} onClick={props.onOpenNotes}><Icon name="note" /><span>笔记</span></button>
+          <button type="button" disabled={!onAskAi && !props.onOpenAi} aria-haspopup="dialog" onClick={() => setPanel('ask')}><span className="pr-ai-mark" aria-hidden="true">AI</span><span>AI</span></button>
+        </nav> : <div className="pr-reading-status"><span role="status">{positionMessage}</span>
           {positionStatus === 'error' && <button type="button" onClick={() => { void writer.current?.flush().catch((failure) => setError(errorMessage(failure))); }}>重试</button>}
           {onAskAi && <div><button type="button" disabled={Boolean(busy)} onClick={() => ask('page')}>询问本页</button><button type="button" disabled={Boolean(busy)} onClick={() => ask('document')}>询问全文</button></div>}
         </div>}

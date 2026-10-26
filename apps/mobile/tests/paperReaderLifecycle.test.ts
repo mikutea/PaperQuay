@@ -12,7 +12,7 @@ async function microtasks(): Promise<void> {
   for (let index = 0; index < 8; index++) await Promise.resolve();
 }
 
-async function fixture() {
+async function fixture(overrides: Partial<PaperReaderProps> = {}) {
   const names = ['window', 'document', 'indexedDB'] as const;
   const originals = new Map(names.map((name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)]));
   const values = {
@@ -44,14 +44,14 @@ async function fixture() {
       onDirtyChange: (dirty) => notifications.push({ account, dirty }),
     };
   }
-  const first = propsFor('first');
+  const first = { ...propsFor('first'), ...overrides };
   let renderer!: ReactTestRenderer;
   await act(async () => {
     renderer = create(createElement(PaperReader, { ...first, key: first.scope.accountId }));
     await getPdfCache().list(first.scope);
   });
   return {
-    renderer, returns, notifications, propsFor,
+    renderer, returns, notifications, propsFor, first,
     back: () => renderer.root.findByProps({ 'aria-label': '返回文库' }).props.onClick(),
     async close() {
       await act(async () => { renderer.unmount(); await new Promise<void>((resolve) => setImmediate(resolve)); });
@@ -99,5 +99,42 @@ test('an account replacement retires the old reader return before passive cleanu
     await act(async () => { await getPdfCache().list(replacement.scope); });
     await act(async () => { env.back(); await microtasks(); });
     assert.deepEqual(env.returns, ['replacement']);
+  } finally { await env.close(); }
+});
+
+test('entering compact mode with an internal panel coordinates a single sheet while retaining its draft', async () => {
+  let opened = 0;
+  const env = await fixture({ onMobilePanelOpen: () => { opened++; } });
+  const render = (compact: boolean) => createElement(PaperReader, { ...env.first, compact, key: env.first.scope.accountId });
+  try {
+    await act(async () => { env.renderer.root.findByProps({ type: 'url' }).props.onChange({ target: { value: 'https://example.invalid/draft.pdf' } }); });
+    assert.equal(opened, 0);
+    await act(async () => env.renderer.update(render(true)));
+    assert.equal(opened, 1);
+    assert.equal(env.renderer.root.findByProps({ type: 'url' }).props.value, 'https://example.invalid/draft.pdf');
+    await act(async () => env.renderer.update(render(true)));
+    assert.equal(opened, 1, 'ordinary rerenders must not close an unrelated external panel');
+    await act(async () => env.renderer.update(render(false)));
+    await act(async () => env.renderer.update(render(true)));
+    assert.equal(opened, 2);
+    assert.equal(env.renderer.root.findByProps({ type: 'url' }).props.value, 'https://example.invalid/draft.pdf');
+  } finally { await env.close(); }
+});
+
+test('compact source failures appear once inside the active sheet and return to the reader when it closes', async () => {
+  const env = await fixture({ compact: true });
+  try {
+    await act(async () => { env.renderer.root.findByProps({ type: 'url' }).props.onChange({ target: { value: 'file:///not-public.pdf' } }); });
+    await act(async () => {
+      env.renderer.root.findAllByType('button').find((button) => button.children.includes('检查链接'))!.props.onClick();
+      await microtasks();
+    });
+    const alerts = env.renderer.root.findAllByProps({ role: 'alert' });
+    assert.equal(alerts.length, 1);
+    assert.equal(alerts[0].parent!.props.className, 'reader-sheet-content');
+    await act(async () => env.renderer.root.findByProps({ 'aria-label': '关闭PDF 文件' }).props.onClick());
+    const remaining = env.renderer.root.findAllByProps({ role: 'alert' });
+    assert.equal(remaining.length, 1);
+    assert.equal(remaining[0].parent!.props['aria-label'], 'PDF 阅读器');
   } finally { await env.close(); }
 });

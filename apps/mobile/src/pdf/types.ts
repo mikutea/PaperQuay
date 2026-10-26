@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import type {
   AnnotationAnchor,
   AttachmentVersionData,
@@ -39,6 +40,11 @@ export interface PaperReaderProps {
   jumpTo?: PdfCitationTarget;
   onDirtyChange?: (dirty: boolean) => void;
   onContextInvalidated?: () => void;
+  compact?: boolean;
+  onOpenNotes?: () => void;
+  onOpenAi?: () => void;
+  onMobilePanelOpen?: () => void;
+  statusContent?: ReactNode;
 }
 
 export interface PdfVersion {
