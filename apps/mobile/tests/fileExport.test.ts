@@ -29,6 +29,19 @@ test('native export shares only its generated cache URI and retains the receiver
     { action: 'share', value: 'file:///cache/paperquay-exports/unique-export/我的笔记.md' },
   ]);
 });
+test('native bibliography exports retain their format extension and exact UTF-8 text', async () => {
+  for (const [extension, mime, text] of [
+    ['bib', 'application/x-bibtex', '@misc{p1, title = {居游共生}}\n'],
+    ['ris', 'application/x-research-info-systems', 'TY  - GEN\r\nTI  - 居游共生\r\nER  - \r\n'],
+  ] as const) {
+    const { platform, calls } = fixture();
+    assert.equal(await exportTextFile({ name: `研究文库.${extension}`, text, mime }, () => true, platform), 'share');
+    assert.deepEqual(calls[0], { action: 'write', value: {
+      path: `paperquay-exports/unique-export/研究文库.${extension}`, text,
+    } });
+    assert.equal(calls[1].value, `file:///cache/paperquay-exports/unique-export/研究文库.${extension}`);
+  }
+});
 test('account change while preparing a native file deletes it without opening Share', async () => {
   let current = true;
   const { platform, calls } = fixture();

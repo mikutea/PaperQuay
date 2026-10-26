@@ -263,7 +263,10 @@ function normalizedDoi(input: string | null): string | null {
 
 function paperFingerprint(data: PaperData): string {
   const doi = normalizedDoi(data.doi);
-  return doi === null ? `data:${canonicalJson(data)}` : `doi:${doi}`;
+  // Personal organization is not bibliographic identity: a standards export
+  // intentionally omits it and must not create a duplicate when re-imported.
+  const { organization: _organization, ...metadata } = data;
+  return doi === null ? `data:${canonicalJson(metadata)}` : `doi:${doi}`;
 }
 const noteFingerprint = (association: string, title: string, body: string) => canonicalJson([association, title, body, 'markdown']);
 const paperKey = (ref: string) => `paper:${ref}`;

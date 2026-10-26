@@ -11,7 +11,7 @@ export class FileExportError extends Error {
 export interface TextFileExport {
   name: string;
   text: string;
-  mime: 'application/json' | 'text/markdown';
+  mime: 'application/json' | 'text/markdown' | 'application/x-bibtex' | 'application/x-research-info-systems';
 }
 export interface ExportRuntime {
   native: boolean;
@@ -24,7 +24,7 @@ export interface ExportRuntime {
   id: () => string;
 }
 
-export function exportFilename(title: string, extension: 'md' | 'json'): string {
+export function exportFilename(title: string, extension: 'md' | 'json' | 'bib' | 'ris'): string {
   const stem = title.normalize('NFC').replace(/[<>:"/\\|?*\u0000-\u001f\u007f]/g, '-')
     .replace(/^\.+|[.\s]+$/g, '').trim().slice(0, 80).replace(/[.\s]+$/g, '') || 'PaperQuay';
   const safeStem = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(stem) ? `PaperQuay-${stem}` : stem;
@@ -70,8 +70,9 @@ export async function exportTextFile(file: TextFileExport, current: () => boolea
   try {
     if (!await platform.canShare()) throw new FileExportError('UNAVAILABLE');
     guard();
-    const extension = file.mime === 'application/json' ? 'json' : 'md';
-    const name = exportFilename(file.name.replace(/\.(json|md)$/i, ''), extension);
+    const extension = ({ 'application/json': 'json', 'text/markdown': 'md',
+      'application/x-bibtex': 'bib', 'application/x-research-info-systems': 'ris' } as const)[file.mime];
+    const name = exportFilename(file.name.replace(/\.(json|md|bib|ris)$/i, ''), extension);
     path = `paperquay-exports/${platform.id()}/${name}`;
     const uri = await platform.write(path, file.text);
     guard();

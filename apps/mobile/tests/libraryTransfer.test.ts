@@ -95,13 +95,62 @@ test('normalized DOI duplicates are skipped and their new notes link only to a u
   assert.equal((result.edits[1].data as NoteData).paperId, null);
 });
 
-test('same title is not an identity and a paper without a DOI requires exact full metadata equality', () => {
+test('same title is not an identity and a paper without a DOI requires exact bibliographic metadata equality', () => {
   const value = archive({ papers: [{ ref: 'p1', data: paper({ doi: null }) },
     { ref: 'p2', data: paper({ doi: null, year: '2025' }) },
     { ref: 'p3', data: paper({ doi: '10.5678/other' }) }], notes: [] });
   const plan = planLibraryImport(value, [visible('paper', id(1), paper({ doi: null }))]);
   assert.deepEqual(plan.rows.map((row) => row.selected), [false, true, true]);
   assert.equal(plan.rows[0].duplicate?.reason, 'exact-paper');
+});
+
+test('identical bibliography without a DOI ignores personal classification but retains it in explicit copies', () => {
+  const existingOrganization = { favorite: true, readingStatus: 'read' as const, tags: ['旧标签'], collections: ['课题'], queueRank: 1 };
+  const incomingOrganization = { favorite: false, readingStatus: 'unread' as const, tags: ['新标签'], collections: [], queueRank: null };
+  const existing = [visible('paper', id(1), paper({ doi: null, organization: existingOrganization }))];
+  const exportedMetadata = archive({ papers: [{ ref: 'p1', data: paper({ doi: null }) }], notes: [] });
+  const plan = planLibraryImport(exportedMetadata, existing);
+  assert.equal(plan.summary.selectedPapers, 0);
+  assert.equal(plan.rows[0].duplicate?.reason, 'exact-paper');
+  const incoming = archive({ papers: [{ ref: 'p1', data: paper({ doi: null, organization: incomingOrganization }) }] });
+  const defaultPlan = planLibraryImport(incoming, existing);
+  assert.equal(defaultPlan.summary.selectedPapers, 0);
+  assert.equal(defaultPlan.rows[1].association?.kind, 'existing-paper');
+  const copied = materializeLibraryImport(planLibraryImport(incoming, existing, ['paper:p1', 'note:n1']), generator());
+  assert.deepEqual((copied.edits[0].data as PaperData).organization, incomingOrganization);
+  assert.equal((copied.edits[1].data as NoteData).paperId, copied.edits[0].entityId);
+  assert.deepEqual((existing[0].data as PaperData).organization, existingOrganization);
+  const changed = structuredClone(existing);
+  (changed[0].data as PaperData).organization!.tags.push('后续编辑');
+  assert.notEqual(planLibraryImport(incoming, changed).signature, defaultPlan.signature);
+});
+
+test('same bibliography with different classification has explicit copy and association choices', () => {
+  const organization = { favorite: false, readingStatus: 'unread' as const, tags: ['第一组'], collections: [], queueRank: null };
+  const first = paper({ doi: null, organization });
+  const second = paper({ doi: null, organization: { ...organization, tags: ['第二组'] } });
+  const input = archive({ papers: [{ ref: 'p1', data: first }, { ref: 'p2', data: second }], notes: [
+    { ref: 'n1', paperRef: 'p1', title: 'Same note', body: 'Same body', format: 'markdown' },
+    { ref: 'n2', paperRef: 'p2', title: 'Same note', body: 'Same body', format: 'markdown' },
+  ] });
+  const defaultPlan = planLibraryImport(input, []);
+  assert.deepEqual(defaultPlan.rows.map((row) => row.selected), [true, false, true, false]);
+  assert.deepEqual(defaultPlan.rows[3].association, { kind: 'new-paper', paperKey: 'paper:p1', paperTitle: first.title });
+  const copies = materializeLibraryImport(planLibraryImport(input, [], allKeys(input)), generator());
+  assert.equal(copies.edits.length, 4);
+  assert.deepEqual((copies.edits[0].data as PaperData).organization, first.organization);
+  assert.deepEqual((copies.edits[1].data as PaperData).organization, second.organization);
+  assert.equal((copies.edits[2].data as NoteData).paperId, copies.edits[0].entityId);
+  assert.equal((copies.edits[3].data as NoteData).paperId, copies.edits[1].entityId);
+
+  const existing = [visible('paper', id(1), first), visible('paper', id(2), second)];
+  const oneSource = archive({ papers: [{ ref: 'p1', data: paper({ doi: null }) }] });
+  const ambiguous = planLibraryImport(oneSource, existing);
+  assert.equal(ambiguous.rows[1].blockedReason, 'AMBIGUOUS_PAPER');
+  assert.equal(ambiguous.rows[1].selected, false);
+  const selected = materializeLibraryImport(planLibraryImport(oneSource, existing, allKeys(oneSource)), generator());
+  assert.equal(selected.edits.length, 2);
+  assert.equal((selected.edits[1].data as NoteData).paperId, selected.edits[0].entityId);
 });
 
 test('duplicate source papers map notes to the single selected source copy', () => {

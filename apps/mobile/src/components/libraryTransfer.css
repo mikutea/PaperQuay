@@ -24,4 +24,22 @@
 .transfer-confirm > button { width: 100%; }
 .transfer-message { margin-top: 16px; padding: 12px; border: 1px solid currentColor; border-radius: 14px; }
 .transfer-success { color: var(--accent-dark); }
+.transfer-source-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
+.transfer-source-tabs button { min-height: 44px; padding: 8px 16px; border: 1px solid var(--line); border-radius: 14px; }
+.transfer-source-tabs button[aria-pressed="true"] { border-color: var(--accent-dark); color: var(--accent-dark); background: var(--reader-control-fill); }
+.transfer-doi-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.transfer-warnings { margin: 16px 0; padding: 12px 14px; border-inline-start: 3px solid var(--warning); background: var(--reader-control-fill); font-size: .875rem; line-height: 1.6; }
+.transfer-warnings p { margin: 0 0 8px; font-weight: 600; }
+.transfer-warnings ul { padding-inline-start: 20px; margin: 0; }
+.transfer-warnings li + li { margin-top: 5px; }
+.transfer-warnings summary, .transfer-metadata summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+.transfer-warnings > details > summary { font-weight: 600; text-decoration: none; }
+.transfer-warnings > details > summary::before { content: '+'; width: 20px; flex: none; }
+.transfer-warnings > details[open] > summary::before { content: '−'; }
+.transfer-metadata { margin: -8px 0 10px 34px; font-size: .875rem; }
+.transfer-metadata dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px 12px; margin: 0 0 16px; }
+.transfer-metadata dt { color: var(--muted); }
+.transfer-metadata dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.transfer-export .field + .field { margin-top: 12px; }
+.transfer-filename { overflow-wrap: anywhere; }
 @media (max-width: 380px) { .library-transfer { padding-inline: 16px; } }

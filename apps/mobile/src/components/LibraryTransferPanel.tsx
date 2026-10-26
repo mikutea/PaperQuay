@@ -1,10 +1,13 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import type { NoteData, VisibleEntity } from '../../../../packages/sync-core/src/index.ts';
+import type { NoteData, PaperData, VisibleEntity } from '../../../../packages/sync-core/src/index.ts';
 import { ClientError, describeError } from '../errors.ts';
 import {
   exportLibraryArchive, LIBRARY_TRANSFER_LIMITS, LibraryTransferError, parseLibraryArchive, planLibraryImport,
   type LibraryArchive, type LibraryImportRow,
 } from '../library/libraryTransfer.ts';
+import { BibliographyTransferError, exportBibliography, parseBibliography,
+  type BibliographyFormat, type BibliographyWarning } from '../library/bibliographyTransfer.ts';
+import { DoiLookupError, lookupDoi, type DoiLookupErrorCode, type DoiLookupWarning } from '../library/doiLookup.ts';
 import { exportFilename, exportTextFile, FileExportError } from '../platform/exportFile.ts';
 import type { WorkspaceController } from '../sync/workspace.ts';
 import { ReaderSheet } from './ReaderSheet.tsx';
@@ -33,11 +36,19 @@ function message(error: unknown): string {
     if (error.code === 'UNAVAILABLE') return '此设备暂不支持文件分享，请使用包含分享组件的完整安装包。';
     return '导出或分享未完成。可以重新导出文件。';
   }
+  if (error instanceof BibliographyTransferError) {
+    const record = error.record ? `第 ${error.record} 条记录：` : '';
+    if (error.code === 'ARCHIVE_TOO_LARGE' || error.code === 'TOO_MANY_RECORDS') return '书目文件最多 4 MB、500 篇文献，请缩小范围后重试。';
+    if (error.code === 'EMPTY_BIBLIOGRAPHY') return '文件中没有可导入的文献。';
+    if (error.code === 'INVALID_RECORD') return `${record}题录缺少标题或字段不符合要求，请检查原文件后重试。`;
+    return `${record}书目文件无法完整解析，请检查格式后重试。尚未导入任何记录。`;
+  }
+  if (error instanceof DoiLookupError) return doiErrorMessage(error.code);
   if (error instanceof LibraryTransferError) {
     if (error.code === 'ARCHIVE_TOO_LARGE') return '文件超出本次导入上限：4 MB、500 篇文献和 500 条笔记。请拆分后重试。';
     if (error.issues.some((issue) => issue.code === 'TOO_MANY_ITEMS')) return '本次文件最多支持 500 篇文献和 500 条笔记。请缩小范围后重试。';
     if (error.code === 'INVALID_JSON') return 'JSON 文件无法读取，请检查文件内容或重新导出。';
-    if (error.code === 'UNSUPPORTED_FORMAT') return '请选择 PaperQuay 文库 JSON 或 Markdown 文件。';
+    if (error.code === 'UNSUPPORTED_FORMAT') return '请选择 PaperQuay JSON、Markdown、BibTeX 或 RIS 文件。';
     if (error.code === 'BLOCKED_ASSOCIATION') return '所选笔记的文献关联尚未确定，请先处理下方提示。';
     if (error.code === 'EMPTY_SELECTION') return '请至少选择一项内容。';
     return '文件内容不符合当前导入格式，请检查记录字段、关联与内容长度。';
@@ -45,9 +56,110 @@ function message(error: unknown): string {
   return '未能读取或处理此文件，请重新选择后重试。';
 }
 
+function doiErrorMessage(code: DoiLookupErrorCode): string {
+  const messages: Record<DoiLookupErrorCode, string> = {
+    INVALID_DOI: '请输入有效 DOI 或 doi.org 链接；不支持普通网页链接。',
+    INVALID_OPTIONS: '查询暂时无法启动，请重新打开面板后重试。',
+    ABORTED: '已取消查询。',
+    TIMEOUT: 'Crossref 查询超时，请稍后重试或改用书目文件。',
+    NETWORK_FAILED: '无法连接 Crossref，请检查网络，或改用书目文件。',
+    NOT_FOUND: 'Crossref 未找到这个 DOI。请核对 DOI，或从出版方导出 BibTeX / RIS。',
+    RATE_LIMITED: 'Crossref 暂时限制了请求，请稍后再试。',
+    SERVICE_UNAVAILABLE: 'Crossref 暂时不可用，请稍后重试或改用书目文件。',
+    HTTP_ERROR: 'Crossref 未能完成查询，请稍后重试。',
+    RESPONSE_TOO_LARGE: '来源返回的内容过大，请改用书目文件。',
+    INVALID_RESPONSE: '来源返回的题录无法安全读取，请改用书目文件。',
+    DOI_MISMATCH: '来源返回的 DOI 与查询不一致，未生成导入预览。',
+    METADATA_LIMIT: '来源题录超过当前字段长度上限，请核对并使用书目文件导入。',
+    MISSING_TITLE: '来源没有提供可用标题，无法导入。可手动新建文献。',
+  };
+  return messages[code];
+}
+
+function doiWarningMessage(warning: DoiLookupWarning): string {
+  const messages: Record<DoiLookupWarning['code'], string> = {
+    TITLE_ALTERNATIVES_OMITTED: '存在多个标题，本次仅保留第一个。',
+    SUBTITLE_OMITTED: '来源副标题未导入。',
+    TEXT_FORMATTING_REMOVED: '来源格式标记已转为纯文本，请核对文字。',
+    AUTHORS_MISSING: '来源未提供作者。',
+    AUTHORS_INCOMPLETE: '部分作者姓名不完整，请核对作者列表。',
+    AFFILIATIONS_OMITTED: '作者所属机构未导入；机构作者名称仍会保留。',
+    YEAR_MISSING: '来源未提供出版年份。',
+    YEAR_INVALID: '来源日期格式无法确定出版年份。',
+    YEAR_FALLBACK: '来源缺少首选出版日期，本次使用其他出版日期中的年份。',
+    YEAR_CONFLICT: '来源的不同出版日期存在年份差异，请核对年份。',
+    PUBLICATION_MISSING: '来源未提供期刊或出版来源名称。',
+    PUBLICATION_ALTERNATIVES_OMITTED: '存在多个出版来源名称，本次仅保留第一个。',
+    ABSTRACT_MISSING: '来源未提供摘要。',
+    ABSTRACT_UNSUPPORTED: '来源摘要包含当前不支持的结构，摘要未导入。',
+    SUBJECTS_AS_KEYWORDS: '来源学科分类已作为关键词导入，请核对。',
+    ADDITIONAL_METADATA_OMITTED: '本次仅保留当前题录字段；文献类型、卷期页、出版商、资源链接等额外出版信息不会导入。',
+  };
+  return messages[warning.code];
+}
+
+function WarningList({ warnings }: { warnings: readonly string[] }) {
+  if (!warnings.length) return null;
+  const unique = [...new Set(warnings)];
+  return <div className="transfer-warnings" role="note" aria-label="字段转换提示">
+    <details><summary>{unique.length} 项字段变化，查看详情</summary>
+      <p>请核对以下字段变化；原文件仍需保留。</p>
+      <ul>{unique.map((warning) => <li key={warning}>{warning}</li>)}</ul>
+    </details>
+  </div>;
+}
+
+const bibliographyFieldNames: Record<string, string> = {
+  volume: '卷', number: '期', issue: '期', pages: '页码', publisher: '出版商', address: '出版地',
+  type: '文献类型', url: '链接', file: '附件路径', 'citation-key': '引用键',
+  author: '作者', title: '标题', abstract: '摘要', year: '年份', keywords: '关键词',
+  journal: '出版来源', booktitle: '图书 / 会议名称', organization: '个人分类',
+  'entry-type': '文献类型', authors: '作者', TY: '文献类型', AU: '作者', A1: '作者',
+  VL: '卷', IS: '期', SP: '起始页', EP: '结束页', UR: '链接', L1: '附件链接',
+};
+const bibliographyWarnings = (warnings: readonly BibliographyWarning[]) => {
+  const grouped = new Map<string, { warning: BibliographyWarning; records: number[] }>();
+  for (const warning of warnings) {
+    const key = JSON.stringify([warning.code, [...warning.fields].sort(), warning.record === null]);
+    const group = grouped.get(key) ?? { warning, records: [] };
+    if (warning.record !== null) group.records.push(warning.record);
+    grouped.set(key, group);
+  }
+  return [...grouped.values()].map(({ warning, records }) => {
+    const ranges: string[] = [];
+    const sorted = [...new Set(records)].sort((a, b) => a - b);
+    for (let index = 0; index < sorted.length; index++) {
+      const start = sorted[index]; let end = start;
+      while (sorted[index + 1] === end + 1) { index++; end++; }
+      ranges.push(start === end ? `${start}` : `${start}–${end}`);
+    }
+    const fields = [...new Set(warning.fields.map((field) => bibliographyFieldNames[field] || field))].join('、');
+    const text = warning.code === 'TYPE_NOT_PRESERVED' ? '文献类型未保留，导出时使用通用类型。'
+      : warning.code === 'AUTHOR_STRUCTURE_FLATTENED' ? '作者保存为显示名称，姓 / 名拆分与机构标记不保留。' : warning.message;
+    return `${ranges.length ? `第 ${ranges.join('、')} 篇：` : ''}${text}${fields ? `（${fields}）` : ''}`;
+  });
+};
+
+function MetadataPreview({ paper }: { paper: PaperData }) {
+  return <details className="transfer-metadata"><summary>查看题录</summary><dl>
+    <dt>作者</dt><dd>{paper.authors.join('；') || '未提供'}</dd>
+    <dt>年份</dt><dd>{paper.year || '未提供'}</dd>
+    <dt>出版来源</dt><dd>{paper.publication || '未提供'}</dd>
+    <dt>DOI</dt><dd>{paper.doi || '未提供'}</dd>
+    {paper.keywords.length > 0 && <><dt>关键词</dt><dd>{paper.keywords.join('；')}</dd></>}
+    {paper.abstractText && <><dt>摘要</dt><dd>{paper.abstractText}</dd></>}
+    {paper.organization && <>
+      <dt>收藏 / 进度</dt><dd>{paper.organization.favorite ? '已收藏' : '未收藏'} · {{ unread: '待读', reading: '在读', read: '已读' }[paper.organization.readingStatus]}</dd>
+      <dt>标签</dt><dd>{paper.organization.tags.join('；') || '无'}</dd>
+      <dt>合集</dt><dd>{paper.organization.collections.join('；') || '无'}</dd>
+    </>}
+  </dl></details>;
+}
+
 function rowDetail(row: LibraryImportRow): string {
   const parts: string[] = [];
-  if (row.duplicate) parts.push(row.duplicate.reason === 'doi' ? '相同 DOI，默认跳过' : '已有相同内容，默认跳过');
+  if (row.duplicate) parts.push(row.duplicate.reason === 'doi' ? '相同 DOI，默认跳过'
+    : row.duplicate.reason === 'exact-paper' ? '相同题录，默认跳过；分类不自动合并' : '已有相同内容，默认跳过');
   if (row.association?.kind === 'new-paper') parts.push(`关联本次文献：${row.association.paperTitle}`);
   if (row.association?.kind === 'existing-paper') parts.push(`关联现有文献：${row.association.paperTitle}`);
   if (row.association?.kind === 'none') parts.push('独立笔记');
@@ -66,12 +178,23 @@ export function LibraryTransferPanel({ entities, controller, scopeKey, accountCu
   const [error, setError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [noteId, setNoteId] = useState('');
+  const [sourceMode, setSourceMode] = useState<'file' | 'doi'>('file');
+  const [doi, setDoi] = useState('');
+  const [warnings, setWarnings] = useState<string[]>([]);
+  const [bibliographyFormat, setBibliographyFormat] = useState<BibliographyFormat>('bibtex');
+  const [paperId, setPaperId] = useState('');
   const alive = useRef(true);
   const operation = useRef(0);
   const busyRef = useRef(false);
   const input = useRef<HTMLInputElement>(null);
   const noteSelectId = useId();
-  useEffect(() => { alive.current = true; return () => { alive.current = false; operation.current++; }; }, []);
+  const paperSelectId = useId();
+  const formatSelectId = useId();
+  const doiInputId = useId();
+  const queryAbort = useRef<AbortController | null>(null);
+  useEffect(() => { alive.current = true; return () => {
+    alive.current = false; operation.current++; queryAbort.current?.abort();
+  }; }, []);
   const current = () => alive.current && accountCurrent() && libraryTransferScope(controller) === scopeKey;
   const planned = useMemo(() => {
     if (!archive) return null;
@@ -92,6 +215,12 @@ export function LibraryTransferPanel({ entities, controller, scopeKey, accountCu
   }, [entities, tab]);
   const notes = entities.filter((entity) => entity.entityType === 'note' && !entity.deleted && entity.data) as (VisibleEntity & { data: NoteData })[];
   const chosenNote = notes.find((note) => note.entityId === noteId);
+  const papers = entities.filter((entity) => entity.entityType === 'paper' && !entity.deleted && entity.data) as (VisibleEntity & { data: PaperData })[];
+  const bibliography = useMemo(() => {
+    if (tab !== 'export') return null;
+    try { return { result: exportBibliography(paperId ? entities.filter((entity) => entity.entityType === 'paper' && entity.entityId === paperId) : entities, bibliographyFormat), error: null }; }
+    catch (cause) { return { result: null, error: message(cause) }; }
+  }, [entities, tab, paperId, bibliographyFormat]);
 
   function changeTab(next: 'import' | 'export') {
     if (busyRef.current) return;
@@ -100,21 +229,51 @@ export function LibraryTransferPanel({ entities, controller, scopeKey, accountCu
   async function readFile(file?: File) {
     if (!file || busyRef.current || !current()) return;
     const request = ++operation.current;
-    busyRef.current = true; setBusy(true); setError(null); setFeedback(null); setArchive(null); setSelection(undefined);
+    busyRef.current = true; setBusy(true); setError(null); setFeedback(null); setArchive(null); setSelection(undefined); setWarnings([]);
     try {
       if (file.size > LIBRARY_TRANSFER_LIMITS.maxBytes) throw new LibraryTransferError('ARCHIVE_TOO_LARGE');
-      const text = await file.text();
+      const buffer = await file.arrayBuffer();
       if (!current() || operation.current !== request) return;
-      const value = /\.(md|markdown)$/i.test(file.name)
+      let text: string;
+      try { text = new TextDecoder('utf-8', { fatal: true }).decode(buffer); }
+      catch { setError('文件不是有效的 UTF-8 文本，请用 UTF-8 编码重新导出后再选择。'); return; }
+      const format = /\.(bib|bibtex)$/i.test(file.name) ? 'bibtex' : /\.ris$/i.test(file.name) ? 'ris' : null;
+      const parsed = format ? parseBibliography(text, format) : null;
+      const value = parsed?.archive ?? (/\.(md|markdown)$/i.test(file.name)
         ? parseLibraryArchive(JSON.stringify({ format: 'paperquay-library', version: 1, papers: [], notes: [
           { ref: 'n1', paperRef: null, title: file.name.replace(/\.(md|markdown)$/i, '').slice(0, 2048) || '导入笔记', body: text, format: 'markdown' },
-        ] })) : parseLibraryArchive(text);
-      setFilename(file.name); setArchive(value);
+        ] })) : parseLibraryArchive(text));
+      setFilename(file.name); setArchive(value); setWarnings(parsed ? bibliographyWarnings(parsed.warnings) : []);
     } catch (cause) { if (current() && operation.current === request) setError(message(cause)); }
     finally {
-      busyRef.current = false;
-      if (alive.current && operation.current === request) setBusy(false);
+      if (operation.current === request) { busyRef.current = false; if (alive.current) setBusy(false); }
     }
+  }
+  async function queryDoi() {
+    if (busyRef.current || !current()) return;
+    const request = ++operation.current;
+    const abort = new AbortController(); queryAbort.current = abort;
+    busyRef.current = true; setBusy(true); setError(null); setFeedback(null); setArchive(null); setSelection(undefined); setWarnings([]);
+    try {
+      const result = await lookupDoi(doi, { signal: abort.signal });
+      if (!current() || operation.current !== request || abort.signal.aborted) return;
+      setFilename(`Crossref · ${result.source.doi}`); setArchive(result.archive);
+      setWarnings(result.warnings.map(doiWarningMessage));
+    } catch (cause) { if (current() && operation.current === request && !abort.signal.aborted) setError(message(cause)); }
+    finally {
+      if (operation.current === request) {
+        queryAbort.current = null; busyRef.current = false; if (alive.current) setBusy(false);
+      }
+    }
+  }
+  function cancelQuery() {
+    if (!queryAbort.current) return;
+    operation.current++; queryAbort.current.abort(); queryAbort.current = null;
+    busyRef.current = false; setBusy(false); setError(null); setFeedback('已取消查询。');
+  }
+  function changeSource(next: 'file' | 'doi') {
+    if (busyRef.current) return;
+    setSourceMode(next); setArchive(null); setSelection(undefined); setWarnings([]); setError(null); setFeedback(null);
   }
   function toggle(row: LibraryImportRow) {
     if (!plan || busyRef.current) return;
@@ -128,19 +287,22 @@ export function LibraryTransferPanel({ entities, controller, scopeKey, accountCu
     try {
       const result = await controller.importLibrary(plan.archive, selection, plan.signature);
       if (!current()) return;
-      setArchive(null); setSelection(undefined);
+      setArchive(null); setSelection(undefined); setWarnings([]);
       setFeedback(`已保存 ${result.selectedPapers} 篇文献、${result.selectedNotes} 条笔记到此设备，联网后继续同步。`);
     } catch (cause) { if (current()) setError(message(cause)); }
     finally { busyRef.current = false; if (alive.current) setBusy(false); }
   }
-  async function saveExport(kind: 'library' | 'note') {
+  async function saveExport(kind: 'library' | 'note' | 'bibliography') {
     if (busyRef.current || !current()) return;
     const result = exported?.result;
-    if ((kind === 'library' && !result) || (kind === 'note' && !chosenNote?.data)) return;
+    if ((kind === 'library' && !result) || (kind === 'note' && !chosenNote?.data) || (kind === 'bibliography' && !bibliography?.result?.summary.papers)) return;
     busyRef.current = true; setBusy(true); setError(null); setFeedback(null);
     try {
       const note = chosenNote?.data as NoteData | undefined;
-      const outcome = await exportTextFile(kind === 'library'
+      const outcome = await exportTextFile(kind === 'bibliography'
+        ? { name: `PaperQuay-bibliography-${new Date().toISOString().slice(0, 10)}.${bibliographyFormat === 'bibtex' ? 'bib' : 'ris'}`,
+          text: bibliography!.result!.text, mime: bibliographyFormat === 'bibtex' ? 'application/x-bibtex' : 'application/x-research-info-systems' }
+        : kind === 'library'
         ? { name: `PaperQuay-library-${new Date().toISOString().slice(0, 10)}.json`, text: result!.json, mime: 'application/json' }
         : { name: exportFilename(note!.title || '未命名笔记', 'md'), text: note!.body, mime: 'text/markdown' }, current);
       if (current()) setFeedback(outcome === 'download' ? '已开始下载，请在浏览器下载列表中查看文件。' : '系统分享面板已关闭；保存结果请在所选应用中确认。');
@@ -156,23 +318,36 @@ export function LibraryTransferPanel({ entities, controller, scopeKey, accountCu
       </div>
       {tab === 'import' ? <>
         <section className="transfer-intro">
-          {!archive && <><h3>将文件加入文库</h3>
-            <p className="muted">选择 PaperQuay 文库 JSON 或 Markdown 笔记，确认预览后保存。</p></>}
-          <input ref={input} type="file" accept=".json,.md,.markdown,application/json,text/markdown" hidden
+          {!archive && <div className="transfer-source-tabs" role="group" aria-label="导入来源">
+            <button type="button" aria-pressed={sourceMode === 'file'} disabled={busy} onClick={() => changeSource('file')}>文件</button>
+            <button type="button" aria-pressed={sourceMode === 'doi'} disabled={busy} onClick={() => changeSource('doi')}>DOI 查询</button>
+          </div>}
+          {!archive && sourceMode === 'file' && <><h3>将文件加入文库</h3>
+            <p className="muted">支持 PaperQuay JSON、Markdown、BibTeX 和 RIS，先预览再保存。</p></>}
+          <input ref={input} type="file" accept=".json,.md,.markdown,.bib,.bibtex,.ris,application/json,text/markdown,application/x-bibtex,application/x-research-info-systems" hidden
             aria-label="选择导入文件" onChange={(event) => {
               const file = event.currentTarget.files?.[0]; event.currentTarget.value = ''; void readFile(file);
             }} />
-          <div className={archive ? 'transfer-source' : undefined}>
+          {(sourceMode === 'file' || archive) && <div className={archive ? 'transfer-source' : undefined}>
             {archive && <p className="transfer-filename">{filename}</p>}
-            <button type="button" className="secondary" disabled={busy} onClick={() => input.current?.click()}>
-              {archive ? '更换文件' : '选择文件'}</button>
-          </div>
-          {!archive && <p className="transfer-hint">每次最多 4 MB、500 篇文献和 500 条笔记。</p>}
+            <button type="button" className="secondary" disabled={busy} onClick={() => sourceMode === 'file' ? input.current?.click() : changeSource('doi')}>
+              {archive ? sourceMode === 'file' ? '更换文件' : '重新查询' : '选择文件'}</button>
+          </div>}
+          {!archive && sourceMode === 'file' && <p className="transfer-hint">UTF-8 文本，每次最多 4 MB、500 篇文献和 500 条笔记。</p>}
+          {!archive && sourceMode === 'doi' && <form className="transfer-doi" onSubmit={(event) => { event.preventDefault(); void queryDoi(); }}>
+            <div className="field"><label htmlFor={doiInputId}>DOI 或 DOI 链接</label>
+              <input id={doiInputId} value={doi} onChange={(event) => setDoi(event.target.value)} maxLength={2048}
+                placeholder="10.… 或 https://doi.org/…" spellCheck={false} autoCapitalize="none" autoComplete="off" disabled={busy} /></div>
+            <p className="transfer-hint">点击查询会将这个 DOI 发送到 Crossref。查询结果需确认后才会加入文库。</p>
+            <div className="transfer-doi-actions"><button type="submit" className="primary" disabled={busy || !doi.trim()}>{busy ? '正在查询…' : '查询 DOI'}</button>
+              {busy && queryAbort.current && <button type="button" className="secondary" onClick={cancelQuery}>取消查询</button>}</div>
+          </form>}
         </section>
         {plan && <section className="transfer-preview" aria-label="导入预览">
           <h3>预览导入</h3>
           <p>选中 {plan.summary.selectedPapers} 篇文献、{plan.summary.selectedNotes} 条笔记；跳过 {plan.summary.skipped} 项。</p>
-          <p className="transfer-hint">重复项默认跳过；勾选后另存副本。现有内容保持不变。</p>
+          <p className="transfer-hint">重复项默认跳过；勾选后另存副本，也会保留文件中的分类。</p>
+          <WarningList warnings={warnings} />
           <div className="transfer-selection-actions">
             <button type="button" className="text-button" disabled={busy} onClick={() => setSelection(undefined)}>使用默认选择</button>
             <button type="button" className="text-button" disabled={busy} onClick={() => setSelection([])}>全部取消</button>
@@ -183,6 +358,7 @@ export function LibraryTransferPanel({ entities, controller, scopeKey, accountCu
                 <strong>{row.title || '未命名笔记'}</strong>
                 {rowDetail(row) && <small className={row.blockedReason ? 'transfer-blocked' : ''}>{rowDetail(row)}</small>}
               </span></label>
+            {row.entityType === 'paper' && <MetadataPreview paper={plan.archive.papers.find((paper) => paper.ref === row.ref)!.data} />}
           </li>)}</ul>
           {plan.summary.selectedBlockedNotes > 0 && <p className="inline-error" role="status">有 {plan.summary.selectedBlockedNotes} 条笔记的关联需要处理。</p>}
           <div className="transfer-confirm">
@@ -191,9 +367,30 @@ export function LibraryTransferPanel({ entities, controller, scopeKey, accountCu
             disabled={busy || selected === 0 || plan.summary.selectedBlockedNotes > 0} onClick={() => void confirmImport()}>
             {busy ? '正在保存…' : `导入所选 ${selected} 项`}</button></div>
         </section>}
-        {busy && !plan && <p role="status">正在读取文件…</p>}
+        {busy && !plan && sourceMode === 'file' && <p role="status">正在读取文件…</p>}
         {planned?.error && <p className="inline-error" role="alert">{planned.error}</p>}
       </> : <>
+        <section className="transfer-export">
+          <h3>书目文件</h3>
+          <p className="muted">导出当前已保存的题录，供 Zotero 等文献工具读取。</p>
+          <div className="field"><label htmlFor={paperSelectId}>选择书目范围</label>
+            <select id={paperSelectId} value={paperId} disabled={busy} onChange={(event) => setPaperId(event.target.value)}>
+              <option value="">全部文献（{papers.length} 篇）</option>
+              {papers.map((paper) => <option key={paper.entityId} value={paper.entityId}>{paper.data.title}</option>)}
+            </select></div>
+          <div className="field"><label htmlFor={formatSelectId}>书目格式</label>
+            <select id={formatSelectId} value={bibliographyFormat} disabled={busy} onChange={(event) => setBibliographyFormat(event.target.value as BibliographyFormat)}>
+              <option value="bibtex">BibTeX (.bib)</option><option value="ris">RIS (.ris)</option>
+            </select></div>
+          {bibliography?.result && <>
+            <WarningList warnings={bibliographyWarnings(bibliography.result.warnings)} />
+            {bibliography.result.summary.conflicted > 0 && <p className="transfer-hint">{bibliography.result.summary.conflicted} 篇仍有同步冲突，将导出本设备显示的已保存题录。</p>}
+            <button type="button" className="primary" disabled={busy || bibliography.result.summary.papers === 0}
+              onClick={() => void saveExport('bibliography')}>导出 {bibliographyFormat === 'bibtex' ? 'BibTeX' : 'RIS'}</button>
+          </>}
+          {bibliography?.error && <p className="inline-error" role="alert">{bibliography.error}</p>}
+          <p className="transfer-hint">仅含题录，不含 PDF、批注、笔记或分类。完整分类与 Markdown 笔记可用下方文库 JSON。</p>
+        </section>
         <section className="transfer-export">
           <h3>文库 JSON</h3>
           <p className="muted">导出已保存的题录、分类与 Markdown 笔记，可在这里重新导入。</p>
