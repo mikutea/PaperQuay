@@ -100,7 +100,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const oidcClientIds = required(env, 'PAPERQUAY_OIDC_CLIENT_IDS').split(',').map((item) => item.trim()).filter(Boolean);
   if (!oidcClientIds.length || oidcClientIds.some((item) => item.length > 255)) throw new ApiError('CONFIGURATION_INVALID', 500);
   const allowedOrigins = (env.PAPERQUAY_ALLOWED_ORIGINS || '').split(',').map((item) => item.trim()).filter(Boolean)
-    .map((item) => checkedHttpUrl(item, false).origin);
+    .map((item) => item === 'capacitor://localhost' ? item : checkedHttpUrl(item, false).origin);
   const secret = required(env, 'PAPERQUAY_CURSOR_SECRET');
   if (!/^[A-Za-z0-9+/]+={0,2}$/.test(secret)) throw new ApiError('CONFIGURATION_INVALID', 500);
   const cursorSecret = Buffer.from(secret, 'base64');

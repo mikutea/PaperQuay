@@ -31,7 +31,7 @@ import type {
   SyncApi,
 } from '../api.ts';
 import { ClientError } from '../errors.ts';
-import { AccountStore, type AccountScope } from '../storage/accountStore.ts';
+import type { AccountStorage, AccountScope } from '../storage/accountStore.ts';
 
 interface PendingResolution {
   request: ConflictResolution;
@@ -42,6 +42,7 @@ interface PendingResolution {
 export interface StoredWorkspace {
   sync: AccountSyncState;
   pendingResolutions: Record<string, PendingResolution>;
+  paperOrganizationVersion?: 1;
 }
 export interface WorkspaceSnapshot {
   status: 'signed-out' | 'binding' | 'ready' | 'error';
@@ -66,7 +67,8 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
 export function decodeWorkspace(value: unknown): StoredWorkspace {
   if (
     !isObject(value) ||
-    Object.keys(value).length !== 2 ||
+    Object.keys(value).length !== (value.paperOrganizationVersion === undefined ? 2 : 3) ||
+    (value.paperOrganizationVersion !== undefined && value.paperOrganizationVersion !== 1) ||
     !isObject(value.pendingResolutions) ||
     !validateClientState(value.sync).ok ||
     Object.keys(value.pendingResolutions).length > 10_000
@@ -128,11 +130,20 @@ function safeError(error: unknown): ClientError {
 export class WorkspaceController {
   private readonly api: Api;
   private readonly apiBaseUrl: string;
-  private readonly store: AccountStore<StoredWorkspace>;
+  private readonly store: AccountStorage<StoredWorkspace>;
   private readonly makeId: () => string;
   private readonly now: () => string;
+  private readonly binding: {
+    key?: () => string | null;
+    prepare?: (signal: AbortSignal) => Promise<unknown>;
+    read?: () => Promise<AccountIdentity | null>;
+    write?: (identity: AccountIdentity) => Promise<void>;
+    remove?: () => Promise<void>;
+  };
+  private readonly supportsPaperOrganization: () => boolean;
   private scope: AccountScope | null = null;
   private context: SyncContext | null = null;
+  private activeBindingKey: string | null | undefined;
   private epoch = 0;
   private abort = new AbortController();
   private running: Promise<void> | null = null;
@@ -142,16 +153,20 @@ export class WorkspaceController {
   constructor(options: {
     api: Api;
     apiBaseUrl: string;
-    store: AccountStore<StoredWorkspace>;
+    store: AccountStorage<StoredWorkspace>;
     online?: boolean;
     makeId?: () => string;
     now?: () => string;
+    supportsPaperOrganization?: () => boolean;
+    binding?: WorkspaceController['binding'];
   }) {
     this.api = options.api;
     this.apiBaseUrl = options.apiBaseUrl;
     this.store = options.store;
     this.makeId = options.makeId ?? (() => crypto.randomUUID());
     this.now = options.now ?? (() => new Date().toISOString());
+    this.binding = options.binding ?? {};
+    this.supportsPaperOrganization = options.supportsPaperOrganization ?? (() => false);
     this.snapshot = {
       status: 'signed-out',
       identity: null,
@@ -176,7 +191,25 @@ export class WorkspaceController {
     for (const listener of this.listeners) listener();
   }
   private current(epoch: number): boolean {
-    return this.epoch === epoch && !this.abort.signal.aborted;
+    return this.sameBinding(epoch) && !this.abort.signal.aborted;
+  }
+  private sameBinding(epoch: number): boolean {
+    return this.epoch === epoch && this.activeBindingKey === this.binding.key?.();
+  }
+  private assertBinding(epoch: number): void {
+    if (this.sameBinding(epoch)) return;
+    if (this.epoch === epoch) {
+      this.deactivate();
+      this.publish({ status: 'error', error: new ClientError('ACCOUNT_CHANGED') });
+    }
+    throw new ClientError('ACCOUNT_CHANGED');
+  }
+  private async request<T>(epoch: number, task: () => Promise<T>): Promise<T> {
+    this.assertBinding(epoch);
+    if (this.abort.signal.aborted) throw new ClientError('ACCOUNT_CHANGED');
+    const result = await task();
+    this.assertBinding(epoch);
+    return result;
   }
   private stop(): void {
     this.epoch += 1;
@@ -189,6 +222,7 @@ export class WorkspaceController {
     this.stop();
     this.scope = null;
     this.context = null;
+    this.activeBindingKey = undefined;
     this.publish({
       status: 'signed-out',
       identity: null,
@@ -213,41 +247,104 @@ export class WorkspaceController {
     });
   }
 
-  async bind(deviceName: string): Promise<void> {
-    this.deactivate();
+  async bind(deviceName: string, retainCurrent = false): Promise<void> {
+    const retainedIdentity = retainCurrent && this.snapshot.status === 'ready' ? this.snapshot.identity : null;
+    const bindingKey = this.binding.key?.();
+    if (retainedIdentity && bindingKey !== this.activeBindingKey) {
+      this.deactivate();
+      this.publish({ status: 'error', error: new ClientError('ACCOUNT_CHANGED') });
+      return;
+    }
+    if (retainedIdentity) this.stop();
+    else this.deactivate();
+    this.activeBindingKey = bindingKey;
     const epoch = this.epoch;
-    this.publish({ status: 'binding' });
+    const guard = () => this.current(epoch) && this.binding.key?.() === bindingKey;
+    const current = () => {
+      if (this.epoch !== epoch || this.abort.signal.aborted) return false;
+      if (!guard()) {
+        this.deactivate();
+        this.publish({ status: 'error', error: new ClientError('ACCOUNT_CHANGED') });
+        return false;
+      }
+      return true;
+    };
+    this.publish(retainedIdentity ? { syncing: true } : { status: 'binding' });
     try {
+      if (!this.snapshot.online && this.binding.read) throw new ClientError('NETWORK_UNAVAILABLE', true);
+      await this.binding.prepare?.(this.abort.signal);
+      if (!current()) return;
       const identity = await this.api.register(deviceName, this.abort.signal);
-      if (!this.current(epoch)) return;
-      const scope = { apiBaseUrl: this.apiBaseUrl, accountId: identity.accountId };
-      const workspace = await this.store.update(
+      if (!current()) return;
+      if (retainedIdentity && retainedIdentity.accountId !== identity.accountId) {
+        this.deactivate();
+        this.publish({ status: 'error', error: new ClientError('ACCOUNT_CHANGED') });
+        return;
+      }
+      await this.activate(identity, epoch, false, guard);
+      if (!current()) return;
+      try { await this.binding.write?.(identity); }
+      catch (error) { if (current()) this.publish({ error: safeError(error) }); }
+    } catch (error) {
+      if (!current()) return;
+      const safe = safeError(error);
+      if (retainedIdentity) {
+        if (safe.code === 'SESSION_REVOKED') await this.binding.remove?.().catch(() => undefined);
+        if (current()) this.publish({ syncing: false, needsLogin: true, error: safe });
+        return;
+      }
+      if (this.binding.read && ['NETWORK_UNAVAILABLE', 'REQUEST_TIMEOUT', 'AUTH_REQUIRED'].includes(safe.code)) {
+        try {
+          const cached = await this.binding.read();
+          if (!current()) return;
+          if (cached) {
+            await this.activate(cached, epoch, true, guard);
+            if (current()) this.publish({ error: safe });
+            return;
+          }
+        } catch (cachedError) {
+          if (current()) this.publish({ status: 'error', error: safeError(cachedError) });
+          return;
+        }
+      }
+      if (safe.code === 'SESSION_REVOKED') await this.binding.remove?.().catch(() => undefined);
+      if (current()) this.publish({ status: 'error', error: safe });
+    }
+  }
+
+  private async activate(identity: AccountIdentity, epoch: number, offline: boolean, guard: () => boolean): Promise<void> {
+    const scope = { apiBaseUrl: this.apiBaseUrl, accountId: identity.accountId };
+    const organization = !offline && this.supportsPaperOrganization();
+    const workspace = await this.store.update(
         scope,
         (previous) => {
-          if (!previous)
+          if (!previous) {
+            if (offline) throw new ClientError('AUTH_REQUIRED');
             return {
               sync: createAccountState(identity.accountId, identity.device.id),
               pendingResolutions: {},
+              ...(organization ? { paperOrganizationVersion: 1 as const } : {}),
             };
+          }
           if (previous.sync.accountId !== identity.accountId)
             throw new ClientError('STORAGE_CORRUPT');
+          const resumed = previous.sync.deviceId === identity.device.id
+            ? resumeAfterRestart(previous.sync) : rebindDevice(previous.sync, identity.device.id);
           return {
             ...previous,
-            sync:
-              previous.sync.deviceId === identity.device.id
-                ? resumeAfterRestart(previous.sync)
-                : rebindDevice(previous.sync, identity.device.id),
+            // Re-read the feed once when opting in. Existing records and all local
+            // operations remain intact while equal-revision metadata is hydrated.
+            sync: organization && !previous.paperOrganizationVersion
+              ? { ...resumed, cursor: null } : resumed,
+            ...(organization ? { paperOrganizationVersion: 1 as const } : {}),
           };
         },
-        () => this.current(epoch),
+        guard,
       );
-      if (!this.current(epoch)) return;
+      if (!guard()) throw new ClientError('ACCOUNT_CHANGED');
       this.scope = scope;
       this.context = getSyncContext(workspace.sync);
-      this.publish({ status: 'ready', identity, workspace, error: null });
-    } catch (error) {
-      if (this.current(epoch)) this.publish({ status: 'error', error: safeError(error) });
-    }
+      this.publish({ status: 'ready', identity, workspace, syncing: false, needsLogin: offline, error: null });
   }
 
   private async update(
@@ -256,7 +353,8 @@ export class WorkspaceController {
   ): Promise<StoredWorkspace> {
     const scope = this.scope;
     const context = this.context;
-    if (!scope || !context || epoch !== this.epoch) throw new ClientError('ACCOUNT_CHANGED');
+    this.assertBinding(epoch);
+    if (!scope || !context) throw new ClientError('ACCOUNT_CHANGED');
     const next = await this.store.update(
       scope,
       (value) => {
@@ -264,9 +362,9 @@ export class WorkspaceController {
           throw new ClientError('ACCOUNT_CHANGED');
         return reducer(value);
       },
-      () => epoch === this.epoch,
+      () => this.sameBinding(epoch),
     );
-    if (epoch !== this.epoch) throw new ClientError('ACCOUNT_CHANGED');
+    this.assertBinding(epoch);
     this.publish({ workspace: next });
     return next;
   }
@@ -292,6 +390,7 @@ export class WorkspaceController {
       // Saving is complete only after the IndexedDB transaction commits.
       if (!this.snapshot.needsLogin) void this.syncNow();
     } catch (error) {
+      this.assertBinding(epoch);
       const safe = safeError(error);
       if (epoch === this.epoch) this.publish({ error: safe });
       throw safe;
@@ -336,6 +435,7 @@ export class WorkspaceController {
     const context = this.context!;
     this.publish({ syncing: true, error: null });
     try {
+      this.assertBinding(epoch);
       // Retry missing dependencies only after another write succeeds. Other retryable
       // rejections wait for the next sync trigger, without blocking independent edits.
       const deferred = new Map<string, number | null>();
@@ -428,7 +528,7 @@ export class WorkspaceController {
           break;
         }
         try {
-          const response = await this.api.push(prepared!.request, signal);
+          const response = await this.request(epoch, () => this.api.push(prepared!.request, signal));
           await this.update(epoch, (value) => {
             const sync = applyPushResults(value.sync, context, response, prepared!.opIds);
             const retryableIds = new Set(
@@ -466,7 +566,7 @@ export class WorkspaceController {
         if (sent === 99) budgetExhausted = true;
       }
       await this.pullToCurrent(epoch, context, signal);
-      const conflicts = await this.fetchConflicts(signal);
+      const conflicts = await this.fetchConflicts(epoch, signal);
       const open = new Set(conflicts.map((conflict) => conflict.conflictId));
       const closedSincePull = Object.keys(this.snapshot.workspace!.sync.conflicts).some(
         (id) => !open.has(id) && !this.snapshot.workspace!.pendingResolutions[id],
@@ -474,7 +574,7 @@ export class WorkspaceController {
       // Another device may resolve a conflict after our first pull but before this list.
       // Observe its committed feed event before releasing the local blocked operation.
       if (closedSincePull) await this.pullToCurrent(epoch, context, signal);
-      const devices = await this.api.devices(signal);
+      const devices = await this.request(epoch, () => this.api.devices(signal));
       if (!this.current(epoch)) return;
       // A complete authoritative list also acknowledges resolutions made on another device.
       await this.update(epoch, (value) => {
@@ -524,6 +624,11 @@ export class WorkspaceController {
       }
     } catch (error) {
       if (epoch !== this.epoch) return;
+      if (!this.sameBinding(epoch)) {
+        this.deactivate();
+        this.publish({ status: 'error', error: new ClientError('ACCOUNT_CHANGED') });
+        return;
+      }
       const safe = safeError(error);
       if (
         safe.code === 'AUTH_REQUIRED' ||
@@ -542,9 +647,9 @@ export class WorkspaceController {
   ): Promise<void> {
     let hasMore = true;
     for (let page = 0; page < 100 && hasMore; page += 1) {
-      if (epoch !== this.epoch) throw new ClientError('ACCOUNT_CHANGED');
+      this.assertBinding(epoch);
       const cursor = this.snapshot.workspace!.sync.cursor;
-      const response = await this.api.pull(cursor, signal);
+      const response = await this.request(epoch, () => this.api.pull(cursor, signal));
       await this.update(epoch, (value) => ({
         ...value,
         sync: applyPullPage(value.sync, context, { fromCursor: cursor, response }),
@@ -554,11 +659,11 @@ export class WorkspaceController {
     if (hasMore) throw new ClientError('SYNC_FAILED', true);
   }
 
-  private async fetchConflicts(signal: AbortSignal): Promise<ServerConflict[]> {
+  private async fetchConflicts(epoch: number, signal: AbortSignal): Promise<ServerConflict[]> {
     const result: ServerConflict[] = [];
     let cursor: string | null = null;
     for (let page = 0; page < 500; page += 1) {
-      const response = await this.api.conflicts(cursor, signal);
+      const response = await this.request(epoch, () => this.api.conflicts(cursor, signal));
       result.push(...response.conflicts);
       if (!response.hasMore) return result;
       if (response.nextCursor === cursor) throw new ClientError('INVALID_RESPONSE');
@@ -612,7 +717,7 @@ export class WorkspaceController {
   ): Promise<PushResult | undefined> {
     const pending = this.snapshot.workspace!.pendingResolutions[conflictId];
     if (!pending) return;
-    const result = await this.api.resolveConflict(conflictId, pending.request, signal);
+    const result = await this.request(epoch, () => this.api.resolveConflict(conflictId, pending.request, signal));
     if (
       result.opId !== pending.request.opId ||
       (result.record &&
@@ -627,6 +732,7 @@ export class WorkspaceController {
         throw new ClientError('ACCOUNT_CHANGED');
       delete resolutions[conflictId];
       return {
+        ...value,
         sync:
           result.status === 'applied'
             ? applyConflictResolution(value.sync, this.context!, {
@@ -639,7 +745,7 @@ export class WorkspaceController {
       };
     });
     if (result.status !== 'applied') {
-      const conflicts = await this.fetchConflicts(signal);
+      const conflicts = await this.fetchConflicts(epoch, signal);
       if (this.current(epoch)) this.publish({ conflicts });
       throw new ClientError(result.status === 'conflict' ? 'CONFLICT_CHANGED' : 'SYNC_FAILED');
     }
@@ -648,33 +754,25 @@ export class WorkspaceController {
 
   async revokeDevice(deviceId: string): Promise<boolean> {
     const epoch = this.epoch;
-    await this.api.revokeDevice(deviceId, this.abort.signal);
+    await this.request(epoch, () => this.api.revokeDevice(deviceId, this.abort.signal));
     if (!this.current(epoch)) throw new ClientError('ACCOUNT_CHANGED');
     const isCurrent = deviceId === this.snapshot.identity?.device.id;
     if (isCurrent) this.requireLogin(new ClientError('SESSION_REVOKED'));
     else {
-      const devices = await this.api.devices(this.abort.signal);
+      const devices = await this.request(epoch, () => this.api.devices(this.abort.signal));
       if (this.current(epoch)) this.publish({ devices });
     }
     return isCurrent;
   }
 
   async clearLocalData(): Promise<void> {
+    this.assertBinding(this.epoch);
     const scope = this.scope;
     const identity = this.snapshot.identity;
     const generation = this.snapshot.workspace?.sync.generation ?? 0;
     if (!scope || !identity) throw new ClientError('ACCOUNT_CHANGED');
     this.stop();
     const epoch = this.epoch;
-    await this.store.remove(scope);
-    if (!this.current(epoch)) return;
-    this.publish({
-      status: 'binding',
-      workspace: null,
-      syncing: false,
-      conflicts: [],
-      lastSyncedAt: null,
-    });
     let workspace: StoredWorkspace;
     try {
       workspace = await this.store.update(
@@ -685,14 +783,16 @@ export class WorkspaceController {
             generation: generation + 1,
           },
           pendingResolutions: {},
+          ...(this.supportsPaperOrganization() ? { paperOrganizationVersion: 1 as const } : {}),
         }),
-        () => this.current(epoch),
+        () => this.sameBinding(epoch),
       );
     } catch (error) {
+      this.assertBinding(epoch);
       if (this.current(epoch)) this.publish({ status: 'error', error: safeError(error) });
       throw safeError(error);
     }
-    if (!this.current(epoch)) return;
+    this.assertBinding(epoch);
     this.context = getSyncContext(workspace.sync);
     this.publish({
       status: 'ready',

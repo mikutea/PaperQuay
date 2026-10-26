@@ -5,7 +5,7 @@ import {
   validateOperation, validatePushRequest,
 } from '../../packages/sync-core/src/index.ts';
 import type {
-  AttachmentVersionData, EntityData, EntityType, PullResponse, PushRequest, PushResponse,
+  AttachmentVersionData, EntityData, EntityType, PaperData, PullResponse, PushRequest, PushResponse,
   PushResult, ReadingPositionData, SyncOperation, SyncRecord,
 } from '../../packages/sync-core/src/index.ts';
 import type { VerifiedIdentity } from './auth.ts';
@@ -405,6 +405,13 @@ export class PostgresSyncStore implements SyncRepository {
     if (existing && operation.baseRevision !== Number(existing.revision)) return this.makeConflict(context, operation, existing, preflight);
     if (existing?.deleted_at && operation.mutation === 'put') return rejected(operation.opId, 'RESTORE_REQUIRED');
     if (existing && !existing.deleted_at && operation.mutation === 'restore') return rejected(operation.opId, 'ENTITY_NOT_DELETED');
+    if (existing && operation.entityType === 'paper' && operation.data
+      && operation.mutation !== 'delete' && operation.data.organization === undefined) {
+      // M1 clients cannot represent organization. Their bibliographic edits
+      // must not erase it; M2 clears it by explicitly sending empty defaults.
+      const organization = (existing.data as PaperData).organization;
+      if (organization) operation = { ...operation, data: { ...operation.data, organization } };
+    }
     if (operation.data && Buffer.byteLength(JSON.stringify(operation.data)) > SERVER_LIMITS.entityLimitBytes) return rejected(operation.opId, 'ENTITY_TOO_LARGE');
     if (BigInt(context.account.last_seq) >= BigInt(SERVER_LIMITS.maxAccountChanges)) return rejected(operation.opId, 'ACCOUNT_CHANGE_LIMIT');
     if (!existing && context.account.entity_count >= SERVER_LIMITS.maxAccountEntities) return rejected(operation.opId, 'ACCOUNT_ENTITY_LIMIT');

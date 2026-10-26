@@ -1,0 +1,75 @@
+.ai-workspace { width: 100%; max-width: 900px; margin: 0 auto; padding: 24px; overflow-wrap: anywhere; }
+.ai-workspace h2 { font-size: clamp(1.35rem, 3vw, 1.8rem); letter-spacing: -.02em; margin: 4px 0 0; }
+.ai-workspace h3 { font-size: 1rem; margin: 0; }
+.ai-heading, .ai-context-top, .ai-result-heading, .ai-key-header { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.ai-heading { margin-bottom: 24px; }
+.ai-eyebrow { color: var(--accent-dark); font-size: .8rem; font-weight: 700; }
+.ai-device-badge { padding: 4px 10px; border: 1px solid var(--line); border-radius: 20px; font-size: .75rem; color: var(--muted); white-space: nowrap; }
+.ai-settings, .ai-context, .ai-result { border: 1px solid var(--line); background: #fff; border-radius: 12px; margin-bottom: 20px; }
+.ai-settings > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 18px; cursor: pointer; font-weight: 650; min-height: 52px; }
+.ai-settings > summary::after { content: '+'; font-size: 1.25rem; color: var(--accent-dark); }
+.ai-settings[open] > summary::after { content: '−'; }
+.ai-settings > summary span { margin-left: auto; font-size: .8rem; color: var(--muted); font-weight: 400; }
+.ai-settings-content { padding: 0 18px 18px; border-top: 1px solid var(--line); }
+.ai-settings-content > .ai-muted:first-child { margin-top: 16px; }
+.ai-workspace label { display: block; margin: 14px 0 6px; font-size: .875rem; font-weight: 600; }
+.ai-muted, .ai-field-help, .ai-send-row p { color: var(--muted); font-size: .8125rem; line-height: 1.6; }
+.ai-field-help { margin: 7px 0 10px; }
+.ai-model-row { display: flex; align-items: flex-end; gap: 12px; }
+.ai-model-row > div { flex: 1; min-width: 0; }
+.ai-model-row > button { flex-shrink: 0; margin-bottom: 0; }
+.ai-key-header { align-items: baseline; }
+.ai-key-header span { color: var(--muted); font-size: .75rem; }
+.ai-key-actions, .ai-citations { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+.ai-key-actions .ai-field-help { margin: 0; }
+.ai-options { display: flex; gap: 8px 20px; flex-wrap: wrap; margin-top: 12px; }
+.ai-options label { display: flex; gap: 8px; align-items: center; min-height: 44px; font-size: .8125rem; margin: 0; font-weight: 400; }
+.ai-options input { width: 18px; min-height: 18px; height: 18px; margin: 0; accent-color: var(--accent-dark); }
+.ai-advanced { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 8px; }
+.ai-advanced summary, .ai-context-preview summary { cursor: pointer; font-size: .8125rem; color: var(--accent-dark); min-height: 44px; display: flex; align-items: center; }
+.ai-advanced summary::before, .ai-context-preview summary::before { content: '›'; font-size: 1.1rem; margin-right: 8px; }
+.ai-advanced[open] summary::before, .ai-context-preview[open] summary::before { transform: rotate(90deg); }
+.ai-context, .ai-result { padding: 18px; }
+.ai-context-top > span { color: var(--accent-dark); font-size: .75rem; background: #f0fdfa; padding: 4px 8px; border-radius: 4px; }
+.ai-context-title { margin: 14px 0 5px; font-weight: 600; }
+.ai-context-facts { display: flex; gap: 6px 16px; flex-wrap: wrap; font-size: .8125rem; color: var(--muted); }
+.ai-context-preview { border-top: 1px solid var(--line); margin-top: 12px; }
+.ai-context-preview > div { max-height: 220px; overflow: auto; border-top: 1px dashed var(--line); padding-top: 10px; }
+.ai-context-preview h4 { font-size: .8rem; color: var(--muted); margin: 0 0 8px; }
+.ai-context-preview pre, .ai-output { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: inherit; }
+.ai-context-preview pre { font-size: .8125rem; line-height: 1.7; }
+.ai-composer { margin-bottom: 20px; }
+.ai-action-picker { display: grid; grid-template-columns: repeat(5, 1fr); border-bottom: 1px solid var(--line); gap: 4px; }
+.ai-action-picker button { min-height: 44px; font-size: .875rem; border-bottom: 2px solid transparent; color: var(--muted); }
+.ai-action-picker button[aria-pressed='true'] { color: var(--accent-dark); font-weight: 700; border-bottom-color: var(--accent); background: #f0fdfa; }
+.ai-send-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-top: 12px; }
+.ai-send-row p { margin: 0; }
+.ai-send-row button { flex-shrink: 0; }
+.ai-error, .ai-warning, .ai-success, .ai-notice { padding: 10px 12px; border-radius: 6px; line-height: 1.65; font-size: .8125rem; margin: 10px 0; }
+.ai-error { color: #991b1b; background: #fef2f2; border: 1px solid #fecaca; }
+.ai-warning { color: #854d0e; background: #fffbeb; border: 1px solid #fde68a; }
+.ai-success, .ai-notice { color: #115e59; background: #f0fdfa; border: 1px solid #99f6e4; }
+.ai-result-heading { margin-bottom: 16px; }
+.ai-result-heading span { color: var(--muted); font-size: .8125rem; }
+.ai-result-source { font-size: .75rem; color: var(--muted); padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.ai-result-switch { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 14px 0 10px; }
+.ai-result-switch button { padding: 8px 12px; border-radius: 6px; font-size: .8125rem; border: 1px solid var(--line); }
+.ai-result-switch button[aria-pressed='true'] { color: var(--accent-dark); background: #f0fdfa; border-color: #5eead4; }
+.ai-result-switch > span { color: var(--muted); font-size: .75rem; }
+.ai-output { line-height: 1.8; font-size: .9375rem; min-height: 3em; }
+.ai-citations { margin-top: 18px; }
+.ai-citations > span { font-size: .8125rem; color: var(--muted); }
+.ai-usage { display: flex; flex-wrap: wrap; gap: 4px 18px; border-top: 1px solid var(--line); padding-top: 12px; margin: 16px 0; color: var(--muted); font-size: .75rem; }
+.ai-workspace button { min-height: 44px; }
+@media (max-width: 600px) {
+  .ai-workspace { padding: 18px 14px; }
+  .ai-heading { gap: 10px; }
+  .ai-device-badge { font-size: .7rem; padding: 3px 8px; }
+  .ai-settings-content, .ai-context, .ai-result { padding: 14px; }
+  .ai-settings > summary { padding: 14px; }
+  .ai-model-row { flex-direction: column; align-items: stretch; gap: 10px; }
+  .ai-send-row { flex-direction: column; align-items: stretch; gap: 10px; }
+  .ai-send-row button { width: 100%; }
+  .ai-context-top { align-items: flex-start; gap: 10px; }
+  .ai-context-top > span { text-align: right; }
+}

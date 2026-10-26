@@ -1,4 +1,5 @@
 import { ENTITY_TYPES } from './types.ts';
+import { isPaperOrganizationHydration } from './features.ts';
 import type { AccountSyncState, EditIdentity, EntityType, LocalEdit, OutboxEntry, PendingEdit, PreparedPush, PullResponse, PushResponse, SyncContext, SyncOperation, SyncRecord, ValidationResult, VisibleEntity } from './types.ts';
 import { ENTITY_DATA_SCHEMAS, ISO_TIMESTAMP_PATTERN, SYNC_LIMITS, SYNC_OPERATION_SCHEMA, SYNC_RECORD_SCHEMA, UUID_PATTERN } from './schema.ts';
 import type { JsonSchema } from './schema.ts';
@@ -230,7 +231,10 @@ function storeServerRecord(state: AccountSyncState, record: SyncRecord): void {
   const current = state.serverRecords[key];
   if (current && current.revision > record.revision) return;
   if (current && current.revision === record.revision) {
-    if (canonicalJson(current) !== canonicalJson(record)) fail('REVISION_COLLISION');
+    if (canonicalJson(current) !== canonicalJson(record)) {
+      if (!isPaperOrganizationHydration(current, record)) fail('REVISION_COLLISION');
+      state.serverRecords[key] = copy(record);
+    }
     return;
   }
   if (!current && Object.keys(state.serverRecords).length >= SYNC_LIMITS.maxLocalEntities) fail('LOCAL_CAPACITY_EXCEEDED');

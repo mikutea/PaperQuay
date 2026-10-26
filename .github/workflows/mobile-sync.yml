@@ -14,6 +14,60 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  android:
+    name: Android debug build and lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/mobile/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install and compile the mobile web bundle
+        run: |
+          npm ci --prefix apps/mobile
+          npm run build --prefix apps/mobile
+      - name: Sync native plugins and verify Android
+        working-directory: apps/mobile
+        run: |
+          npx cap sync android
+          cd android
+          bash gradlew --no-daemon assembleDebug lintDebug
+
+  ios:
+    name: iOS simulator compile
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/mobile/package-lock.json
+      - name: Install and compile the mobile web bundle
+        run: |
+          npm ci --prefix apps/mobile
+          npm run build --prefix apps/mobile
+      - name: Sync native plugins and compile without signing
+        working-directory: apps/mobile
+        run: |
+          xcodebuild -version
+          npx cap sync ios
+          xcodebuild -project ios/App/App.xcodeproj -scheme App \
+            -configuration Debug -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/paperquay-ios-build" \
+            CODE_SIGNING_ALLOWED=NO build
+
   integration:
     name: PostgreSQL, OIDC and mobile foundation
     runs-on: ubuntu-latest

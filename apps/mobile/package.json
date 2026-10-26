@@ -14,13 +14,28 @@
     "test": "node --import tsx --test tests/*.test.ts"
   },
   "dependencies": {
-    "@capacitor/core": "8.4.3",
+    "@aparajita/capacitor-secure-storage": "8.0.1",
+    "@capacitor-community/sqlite": "8.1.1",
+    "@capacitor/android": "8.5.3",
+    "@capacitor/app": "8.1.2",
+    "@capacitor/browser": "8.0.5",
+    "@capacitor/core": "8.5.3",
+    "@capacitor/filesystem": "8.1.5",
+    "@capacitor/ios": "8.5.3",
     "oidc-client-ts": "3.5.0",
+    "pdfjs-dist": "6.4.299",
     "react": "18.3.1",
-    "react-dom": "18.3.1"
+    "react-dom": "18.3.1",
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1"
+  },
+  "overrides": {
+    "xcode": {
+      "uuid": "11.1.1"
+    }
   },
   "devDependencies": {
-    "@capacitor/cli": "8.4.3",
+    "@capacitor/cli": "8.5.3",
     "@types/node": "^24.0.0",
     "@types/react": "18.3.12",
     "@types/react-dom": "18.3.1",

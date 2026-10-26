@@ -8,8 +8,9 @@ import {
   ENTITY_TYPES, ENTITY_DATA_SCHEMAS, ISO_TIMESTAMP_PATTERN, UUID_PATTERN,
   PUSH_REQUEST_SCHEMA, PUSH_RESPONSE_SCHEMA, PUSH_RESULT_SCHEMA, PULL_RESPONSE_SCHEMA,
   SYNC_OPERATION_SCHEMA, SYNC_RECORD_SCHEMA, SYNC_LIMITS,
+  SYNC_FEATURE_HEADER, PAPER_ORGANIZATION_FEATURE, projectLegacyPaper,
 } from '../../packages/sync-core/src/index.ts';
-import type { PushRequest } from '../../packages/sync-core/src/index.ts';
+import type { PushRequest, PushResult } from '../../packages/sync-core/src/index.ts';
 import type { TokenVerifier, VerifiedIdentity } from './auth.ts';
 import { ApiError, isTransientDatabaseError } from './errors.ts';
 import { SERVER_LIMITS } from './config.ts';
@@ -85,6 +86,16 @@ function identity(request: FastifyRequest): VerifiedIdentity {
   return request.identity;
 }
 
+function organizationEnabled(request: FastifyRequest): boolean {
+  const header = request.headers[SYNC_FEATURE_HEADER.toLowerCase()];
+  return typeof header === 'string' && header.split(',').map((value) => value.trim()).includes(PAPER_ORGANIZATION_FEATURE);
+}
+
+function presentResult(request: FastifyRequest, result: PushResult): PushResult {
+  return organizationEnabled(request) || !result.record ? result
+    : { ...result, record: projectLegacyPaper(result.record) };
+}
+
 function pageLimit(value: string | undefined, maximum: number): number {
   const number = value === undefined ? Math.min(100, maximum) : Number(value);
   if (!Number.isInteger(number) || number < 1 || number > maximum) throw new ApiError('VALIDATION_FAILED');
@@ -122,7 +133,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   app.decorateRequest('identity', null);
   await app.register(cors, {
     origin: config.allowedOrigins.length ? config.allowedOrigins : false,
-    methods: ['GET', 'POST', 'DELETE'], allowedHeaders: ['Authorization', 'Content-Type'],
+    methods: ['GET', 'POST', 'DELETE'], allowedHeaders: ['Authorization', 'Content-Type', SYNC_FEATURE_HEADER],
     credentials: false, strictPreflight: true, maxAge: 600,
   });
   if (options.rateLimitEnabled !== false) {
@@ -177,6 +188,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   app.get('/v1/capabilities', { onRequest: enforceRateLimit }, async () => ({
     protocolVersion: 1,
     entitySchemas: Object.fromEntries(ENTITY_TYPES.map((type) => [type, [1]])),
+    features: { paperOrganization: 1 },
     deviceBinding: 'oidc-session',
     limits: {
       maxBatchOperations: SYNC_LIMITS.maxBatchOperations,
@@ -221,10 +233,18 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   }, async (request) => repository.revokeDevice(identity(request), request.params.id));
   app.post<{ Body: PushRequest }>('/v1/sync/push', {
     onRequest: authenticate, schema: { body: PUSH_REQUEST_SCHEMA, response: { 200: PUSH_RESPONSE_SCHEMA } },
-  }, async (request) => repository.push(identity(request), request.body));
+  }, async (request) => {
+    const result = await repository.push(identity(request), request.body);
+    return organizationEnabled(request) ? result
+      : { ...result, results: result.results.map((item) => presentResult(request, item)) };
+  });
   app.get<{ Querystring: { cursor?: string; limit?: string } }>('/v1/sync/pull', {
     onRequest: authenticate, schema: { querystring: paginationSchema, response: { 200: PULL_RESPONSE_SCHEMA } },
-  }, async (request) => repository.pull(identity(request), request.query.cursor, pageLimit(request.query.limit, SERVER_LIMITS.maxPullRecords)));
+  }, async (request) => {
+    const result = await repository.pull(identity(request), request.query.cursor, pageLimit(request.query.limit, SERVER_LIMITS.maxPullRecords));
+    return organizationEnabled(request) ? result
+      : { ...result, records: result.records.map((record) => projectLegacyPaper(record)) };
+  });
   app.get<{ Querystring: { cursor?: string; limit?: string } }>('/v1/conflicts', {
     onRequest: authenticate,
     schema: { querystring: paginationSchema, response: { 200: {
@@ -232,9 +252,17 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
         conflicts: { type: 'array', items: conflictSchema }, nextCursor: { type: 'string' }, hasMore: { type: 'boolean' },
       },
     } } },
-  }, async (request) => repository.listConflicts(identity(request), request.query.cursor, pageLimit(request.query.limit, SERVER_LIMITS.maxConflictRecords)));
+  }, async (request) => {
+    const result = await repository.listConflicts(identity(request), request.query.cursor, pageLimit(request.query.limit, SERVER_LIMITS.maxConflictRecords));
+    return organizationEnabled(request) ? result : { ...result, conflicts: result.conflicts.map((conflict) => ({
+      ...conflict,
+      attemptedOperation: projectLegacyPaper(conflict.attemptedOperation),
+      observedRecord: conflict.observedRecord ? projectLegacyPaper(conflict.observedRecord) : null,
+      currentRecord: conflict.currentRecord ? projectLegacyPaper(conflict.currentRecord) : null,
+    })) };
+  });
   app.post<{ Params: { id: string }; Body: ResolveRequest }>('/v1/conflicts/:id/resolve', {
     onRequest: authenticate, schema: { params: idParams, body: resolveSchema, response: { 200: PUSH_RESULT_SCHEMA } },
-  }, async (request) => repository.resolveConflict(identity(request), request.params.id, request.body));
+  }, async (request) => presentResult(request, await repository.resolveConflict(identity(request), request.params.id, request.body)));
   return app;
 }

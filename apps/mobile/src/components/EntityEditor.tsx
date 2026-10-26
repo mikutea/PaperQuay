@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type {
   EntityData,
   LocalEdit,
@@ -6,10 +6,13 @@ import type {
   PaperData,
   VisibleEntity,
 } from '../../../../packages/sync-core/src/index.ts';
+import { canonicalJson } from '../../../../packages/sync-core/src/index.ts';
 import { ClientError, describeError } from '../errors.ts';
 import type { WorkspaceController } from '../sync/workspace.ts';
 import { Icon } from './Icon.tsx';
 import { entityStatus } from '../viewState.ts';
+import { normalizeOrganization } from '../library/organization.ts';
+import { PaperOrganizationFields } from './PaperOrganizationFields.tsx';
 const emptyPaper = (): PaperData => ({
   title: '',
   authors: [],
@@ -20,6 +23,7 @@ const emptyPaper = (): PaperData => ({
   abstractText: null,
 });
 const emptyNote = (): NoteData => ({ title: '', paperId: null, body: '', format: 'markdown' });
+const MarkdownPreview = lazy(() => import('./MarkdownPreview.tsx').then((module) => ({ default: module.MarkdownPreview })));
 
 export function EntityEditor({
   type,
@@ -31,6 +35,9 @@ export function EntityEditor({
   onBack,
   onDirty,
   onConflicts,
+  organizationEnabled = false,
+  onRead,
+  defaultPaperId = null,
 }: {
   type: 'paper' | 'note';
   entityId: string;
@@ -41,16 +48,25 @@ export function EntityEditor({
   onBack: () => void;
   onDirty: (dirty: boolean) => void;
   onConflicts: () => void;
+  organizationEnabled?: boolean;
+  onRead?: () => void;
+  defaultPaperId?: string | null;
 }) {
   const [data, setData] = useState<PaperData | NoteData>(
-    () => (entity?.data as PaperData | NoteData) ?? (type === 'paper' ? emptyPaper() : emptyNote()),
+    () => (entity?.data as PaperData | NoteData) ?? (type === 'paper' ? emptyPaper() : { ...emptyNote(), paperId: defaultPaperId }),
   );
   const [baseRevision, setBaseRevision] = useState(entity?.revision ?? 0);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [editingBlocked, setEditingBlocked] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [preview, setPreview] = useState(false);
   const editorSession = useRef<object | null>(null);
+  const editSequence = useRef(0);
+  const savingSession = useRef<object | null>(null);
+  const lastSavedData = useRef<string | null>(null);
+  const flushNote = useRef<() => void>(() => {});
   const remoteSignature = JSON.stringify(entity?.data ?? null);
   const changedWhileEditing = dirty && (entity?.revision ?? 0) !== baseRevision;
 
@@ -59,12 +75,17 @@ export function EntityEditor({
     // callbacks can clear a replacement draft or navigate away from it.
     const session = {};
     editorSession.current = session;
-    setData((entity?.data as PaperData | NoteData) ?? (type === 'paper' ? emptyPaper() : emptyNote()));
+    setData((entity?.data as PaperData | NoteData) ?? (type === 'paper' ? emptyPaper() : { ...emptyNote(), paperId: defaultPaperId }));
     setBaseRevision(entity?.revision ?? 0);
     setDirty(false);
     setSaving(false);
+    setEditingBlocked(false);
+    editSequence.current = 0;
+    savingSession.current = null;
+    lastSavedData.current = null;
     setError(null);
     setSaved(false);
+    setPreview(false);
     return () => {
       if (editorSession.current === session) editorSession.current = null;
     };
@@ -76,23 +97,53 @@ export function EntityEditor({
     if (!dirty && entity?.data) {
       setData(entity.data as PaperData | NoteData);
       setBaseRevision(entity.revision);
+    } else if (dirty && lastSavedData.current) {
+      // An acknowledgement of this editor's earlier autosave may advance its
+      // base. A different remote body must still require explicit comparison.
+      const record = controller.getSnapshot().workspace?.sync.serverRecords[`${type}:${entityId}`];
+      if (record?.data && canonicalJson(record.data) === lastSavedData.current)
+        setBaseRevision(record.revision);
     }
   }, [remoteSignature, entity?.revision, dirty]); // A changed remote version never replaces a dirty draft.
+  useEffect(() => {
+    if (type !== 'note' || !dirty || saving || error || changedWhileEditing || entity?.deleted) return;
+    const timer = setTimeout(() => flushNote.current(), 600);
+    return () => clearTimeout(timer);
+  }, [type, dirty, saving, error, changedWhileEditing, entity?.deleted, data]);
+  useEffect(() => {
+    if (type !== 'note') return;
+    const onHidden = () => {
+      if (globalThis.document?.visibilityState === 'hidden') flushNote.current();
+    };
+    const onPageHide = () => flushNote.current();
+    // The local commit is the durability boundary. A pagehide event cannot
+    // promise completion if the OS kills the process before that commit.
+    globalThis.document?.addEventListener?.('visibilitychange', onHidden);
+    globalThis.window?.addEventListener?.('pagehide', onPageHide);
+    return () => {
+      globalThis.document?.removeEventListener?.('visibilitychange', onHidden);
+      globalThis.window?.removeEventListener?.('pagehide', onPageHide);
+    };
+  }, [type]);
   function edit(update: Partial<PaperData & NoteData>) {
+    editSequence.current += 1;
     setData((previous) => ({ ...previous, ...update }));
     setDirty(true);
     setSaved(false);
     setError(null);
   }
 
-  async function save(revision = baseRevision, mutation: 'put' | 'restore' = 'put') {
+  async function save(revision = baseRevision, mutation: 'put' | 'restore' = 'put', automatic = false) {
     const session = editorSession.current;
-    if (!session) return;
-    if (!data.title.trim()) {
+    if (!session || savingSession.current === session) return;
+    if (!data.title.trim() && !(automatic && type === 'note')) {
       setError('请填写标题。');
       return;
     }
+    const sequence = editSequence.current;
+    savingSession.current = session;
     setSaving(true);
+    setEditingBlocked(!automatic);
     setError(null);
     try {
       const normalized =
@@ -102,32 +153,44 @@ export function EntityEditor({
               title: data.title.trim(),
               authors: data.authors.map((author) => author.trim()).filter(Boolean),
               keywords: data.keywords.map((word) => word.trim()).filter(Boolean),
+              ...(data.organization ? { organization: normalizeOrganization(data.organization) } : {}),
             }
-          : { ...data, title: data.title.trim() };
+          : { ...data, title: data.title.trim() || '未命名笔记' };
       await controller.save(
         { entityType: type, entityId, mutation, data: normalized } as LocalEdit,
         revision,
       );
       if (editorSession.current !== session) return;
-      setDirty(false);
-      onDirty(false);
-      setSaved(true);
-      setBaseRevision(
-        controller.getSnapshot().workspace?.sync.serverRecords[`${type}:${entityId}`]?.revision ??
-          revision,
-      );
+      lastSavedData.current = canonicalJson(normalized);
+      if (editSequence.current === sequence) {
+        setDirty(false);
+        onDirty(false);
+        setSaved(true);
+      }
+      const record = controller.getSnapshot().workspace?.sync.serverRecords[`${type}:${entityId}`];
+      if (record?.data && canonicalJson(record.data) === lastSavedData.current)
+        setBaseRevision(record.revision);
     } catch (problem) {
       if (editorSession.current === session) setError(describeError(problem));
     } finally {
-      if (editorSession.current === session) setSaving(false);
+      if (savingSession.current === session) savingSession.current = null;
+      if (editorSession.current === session) {
+        setSaving(false);
+        setEditingBlocked(false);
+      }
     }
   }
+  flushNote.current = () => {
+    if (type === 'note' && dirty && !changedWhileEditing && !entity?.deleted)
+      void save(baseRevision, 'put', true);
+  };
   async function remove() {
     const session = editorSession.current;
     if (!session) return;
     if (!window.confirm('将这条内容标记为已删除？同步后会影响此账号的其他设备。')) return;
     if (editorSession.current !== session) return;
     setSaving(true);
+    setEditingBlocked(true);
     try {
       await controller.save(
         { entityType: type, entityId, mutation: 'delete', data: null } as LocalEdit,
@@ -140,7 +203,10 @@ export function EntityEditor({
     } catch (problem) {
       if (editorSession.current === session) setError(describeError(problem));
     } finally {
-      if (editorSession.current === session) setSaving(false);
+      if (editorSession.current === session) {
+        setSaving(false);
+        setEditingBlocked(false);
+      }
     }
   }
   async function restore() {
@@ -151,6 +217,7 @@ export function EntityEditor({
       return;
     }
     setSaving(true);
+    setEditingBlocked(true);
     try {
       await controller.save(
         { entityType: type, entityId, mutation: 'restore', data: entity.data } as LocalEdit,
@@ -161,7 +228,10 @@ export function EntityEditor({
     } catch (problem) {
       if (editorSession.current === session) setError(describeError(problem));
     } finally {
-      if (editorSession.current === session) setSaving(false);
+      if (editorSession.current === session) {
+        setSaving(false);
+        setEditingBlocked(false);
+      }
     }
   }
 
@@ -175,6 +245,8 @@ export function EntityEditor({
           <Icon name="back" />
         </button>
         <span className="eyebrow">{type === 'note' ? 'Markdown 笔记' : '文献信息'}</span>
+        {type === 'paper' && entity && !entity.deleted && onRead && <button type="button" className="secondary"
+          disabled={saving} onClick={onRead}>打开 PDF</button>}
         {entity && !entity.deleted && (
           <button
             className="icon-button danger-text"
@@ -210,7 +282,7 @@ export function EntityEditor({
             void save();
           }}
         >
-          <fieldset className="editor-fields" disabled={saving}>
+          <fieldset className="editor-fields" disabled={editingBlocked}>
             <label className="sr-only" htmlFor="entity-title">
               {type === 'note' ? '笔记标题' : '文献标题'}
             </label>
@@ -250,7 +322,11 @@ export function EntityEditor({
                 <label className="sr-only" htmlFor="note-body">
                   笔记正文
                 </label>
-                <textarea
+                <div className="note-mode-tabs" aria-label="笔记模式">
+                  <button type="button" aria-pressed={!preview} onClick={() => setPreview(false)}>编辑</button>
+                  <button type="button" aria-pressed={preview} onClick={() => setPreview(true)}>预览</button>
+                </div>
+                {preview ? <Suspense fallback={<p role="status">正在生成预览…</p>}><MarkdownPreview body={(data as NoteData).body} /></Suspense> : <textarea
                   id="note-body"
                   className="markdown-input"
                   value={(data as NoteData).body}
@@ -258,10 +334,12 @@ export function EntityEditor({
                   maxLength={262144}
                   placeholder="开始记录你的想法…支持 Markdown 文本。"
                   spellCheck={false}
-                />
+                />}
               </>
             ) : (
               <div className="metadata-fields">
+                <PaperOrganizationFields paper={data as PaperData} enabled={organizationEnabled}
+                  onChange={(organization) => edit({ organization })} />
                 <label className="field">
                   作者
                   <input
@@ -362,7 +440,7 @@ export function EntityEditor({
               {saving
                 ? '正在保存到此设备…'
                 : dirty
-                  ? '尚未保存'
+                  ? type === 'note' && !changedWhileEditing && !error ? '等待自动保存…' : '尚未保存'
                   : saved || entity
                     ? entityStatus(entity, hasConflict)
                     : '新建内容尚未保存'}

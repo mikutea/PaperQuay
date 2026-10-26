@@ -267,3 +267,17 @@ test('returning to the current App section still confirms before unmounting a di
     assert.equal(env.beforeUnload().blocked, false);
   } finally { await env.close(); }
 });
+
+test('an async navigation callback uses the latest durable save acknowledgement before React commits', async (context) => {
+  const env = await setup(context);
+  try {
+    env.select('Paper A');
+    env.edit('Confirmed saved before async navigation resumes');
+    env.accept(false);
+    const oldSelect = env.renderer.root.findByProps({ className: 'list-pane' }).parent!.props.onSelect;
+    const saved = env.editor().props.onDirty;
+    act(() => { saved(false); oldSelect('paper', SECOND); });
+    assert.equal(env.confirmations.length, 0);
+    assert.equal(env.title(), 'Paper B');
+  } finally { await env.close(); }
+});
