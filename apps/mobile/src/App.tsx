@@ -30,6 +30,7 @@ import { createSecretStore, type SecretStore } from './platform/secretStore.ts';
 import { verifiedBinding } from './storage/verifiedBinding.ts';
 import { filterPapers, organizationOf, readingStatusLabels } from './library/organization.ts';
 import type { PdfAiContext, PdfCitationTarget } from './pdf/types.ts';
+import type { CloudPdfContext } from './pdf/cloudCopies.ts';
 import { assertAiNoteTarget } from './integration/aiNotes.ts';
 import {
   decodeWorkspace,
@@ -46,6 +47,7 @@ const PaperReader = lazy(() => import('./components/PaperReader.tsx').then((modu
 const ReaderSheet = lazy(() => import('./components/ReaderSheet.tsx').then((module) => ({ default: module.ReaderSheet })));
 const AiWorkspace = lazy(() => import('./components/AiWorkspace.tsx').then((module) => ({ default: module.AiWorkspace })));
 const LibraryTransferPanel = lazy(() => import('./components/LibraryTransferPanel.tsx').then((module) => ({ default: module.LibraryTransferPanel })));
+const CloudPdfLibrary = lazy(() => import('./components/CloudPdfPanel.tsx').then((module) => ({ default: module.CloudPdfLibrary })));
 const COMPACT_READER_QUERY = '(max-width: 900px)';
 function compactReaderSnapshot() {
   return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
@@ -62,6 +64,7 @@ interface Runtime {
   auth: AuthSession;
   controller: WorkspaceController;
   secretStore?: SecretStore;
+  cloudPdf?: CloudPdfContext;
   dispose?: () => Promise<void>;
 }
 function initialConfig(): PublicConfigInput {
@@ -106,7 +109,9 @@ async function makeRuntime(input: PublicConfigInput): Promise<Runtime> {
     supportsPaperOrganization: () => api.supportsPaperOrganization,
     binding: { ...binding, prepare: (signal) => api.capabilities(signal) },
   });
-  return { config, auth, controller, secretStore, dispose: async () => {
+  return { config, auth, controller, secretStore,
+    cloudPdf: { apiBaseUrl: config.apiBaseUrl, getAccessToken: auth.getAccessToken, getCloudPdfCapability: () => api.cloudPdfCapability },
+    dispose: async () => {
     controller.deactivate();
     await auth.dispose();
     await store.close();
@@ -222,8 +227,10 @@ export function ConnectedApp({
   const [citationTarget, setCitationTarget] = useState<PdfCitationTarget | null>(null);
   const [aiSettings, setAiSettings] = useState(false);
   const [transferOpen, setTransferOpen] = useState(false);
+  const [cloudOpen, setCloudOpen] = useState(false);
   const transferScope = state.status === 'ready' && state.workspace
     ? JSON.stringify([state.workspace.sync.accountId, state.workspace.sync.deviceId, state.workspace.sync.generation]) : null;
+  useEffect(() => { setCloudOpen(false); }, [transferScope, authSubjectKey]);
   const [dirty, setDirty] = useState(false);
   const [readerDirty, setReaderDirty] = useState(false);
   const editorUnsaved = useRef(false);
@@ -328,6 +335,7 @@ export function ConnectedApp({
     if (!canLeave()) return;
     setSection(next);
     setTransferOpen(false);
+    setCloudOpen(false);
     setSelection(null);
     setReadingId(null);
     readerDirtyChanged(false);
@@ -584,11 +592,13 @@ export function ConnectedApp({
             <SyncStatus state={state} conflicts={conflictCount}
               onSync={() => void controller.syncNow()} onConflicts={() => navigate('conflicts')} />
             <Suspense fallback={<p className="loading-message" role="status">正在打开阅读器…</p>}>
-              <PaperReader key={`${scope.apiBaseUrl}:${scope.accountId}:${state.workspace!.sync.deviceId}:${state.workspace!.sync.generation}:${readingId}`} scope={scope} paper={readingPaper}
+              <PaperReader key={`${scope.apiBaseUrl}:${scope.accountId}:${state.workspace!.sync.deviceId}:${state.workspace!.sync.generation}:${authSubjectKey}:${readingId}`} scope={scope} paper={readingPaper}
                 attachmentVersions={entities.filter((entity) => entity.entityType === 'attachmentVersion')}
                 annotations={entities.filter((entity) => entity.entityType === 'annotation')}
                 positions={entities.filter((entity) => entity.entityType === 'readingPosition')}
                 controller={controller} onBack={leaveReader} jumpTo={citationTarget ?? undefined}
+                cloudPdf={runtime.cloudPdf}
+                accountCurrent={() => JSON.stringify(auth.getSubject?.() ?? null) === authSubjectKey}
                 compact={compactReader}
                 onOpenNotes={() => showReadingPanel('notes')}
                 onOpenAi={() => showReadingPanel('ai')}
@@ -682,6 +692,10 @@ export function ConnectedApp({
             }}
           />
         )}
+        {section === 'account' && scope && runtime.cloudPdf && <section className="account-ai-settings">
+          <button className="secondary" onClick={() => setCloudOpen(true)}>私有云 PDF</button>
+          <p className="muted">查看当前账号的云副本与可用空间。</p>
+        </section>}
         {section === 'account' && scope && runtime.secretStore && <section className="account-ai-settings">
           <button className="secondary" onClick={() => setAiSettings(!aiSettings)}>{aiSettings ? '收起 AI 设置' : 'AI 提供商设置'}</button>
           {aiSettings && <Suspense fallback={<p role="status">正在打开设置…</p>}><AiWorkspace accountScope={scope} context={null}
@@ -702,6 +716,11 @@ export function ConnectedApp({
           />
         )}
       </main>
+      {cloudOpen && transferScope && scope && runtime.cloudPdf && <Suspense fallback={<p className="loading-message" role="status">正在打开云副本…</p>}>
+        <CloudPdfLibrary key={`${transferScope}:${authSubjectKey}`} context={runtime.cloudPdf} scope={scope} controller={controller}
+          accountCurrent={() => JSON.stringify(auth.getSubject?.() ?? null) === authSubjectKey}
+          onClose={() => setCloudOpen(false)} />
+      </Suspense>}
       {transferOpen && transferScope && <Suspense fallback={<p className="loading-message" role="status">正在打开导入与导出…</p>}>
         <LibraryTransferPanel key={transferScope} entities={entities} controller={controller} scopeKey={transferScope}
           accountCurrent={() => JSON.stringify(auth.getSubject?.() ?? null) === authSubjectKey}

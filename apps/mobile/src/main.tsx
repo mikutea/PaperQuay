@@ -2,6 +2,7 @@ import ReactDOM from 'react-dom/client';
 import { App } from './App.tsx';
 import './styles.css';
 import './components/paperReader.css';
+import './components/cloudPdf.css';
 import './components/aiWorkspace.css';
 import './theme.css';
 

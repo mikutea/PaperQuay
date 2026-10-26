@@ -53,6 +53,8 @@ type SyncOperation = {
 | --- | --- |
 | `GET /health/live`、`GET /health/ready` | 无敏感内容的存活/数据库就绪检查 |
 | `GET /v1/capabilities` | 协议/schema/请求上限；不泄露其他账号信息 |
+| `GET /v1/cloud-pdfs`、`GET /v1/cloud-pdfs/:id` | 显式启用的私有 PDF 副本列表、版本状态与独立额度 |
+| `PUT /v1/cloud-pdfs/:id`、`GET /v1/cloud-pdfs/:id/content`、`DELETE /v1/cloud-pdfs/:id` | 逐份保存、核验下载或单独删除云副本；完整契约见 [私有云 PDF](private-cloud-pdf.md) |
 | `POST /v1/devices` | 当前 OIDC 会话注册；body `{name,platform}`；返回当前设备 |
 | `GET /v1/me`、`GET /v1/devices`、`DELETE /v1/devices/:id` | 当前身份、本人设备会话、撤销 |
 | `POST /v1/sync/push` | `{protocolVersion:1,deviceId,operations:SyncOperation[]}` |

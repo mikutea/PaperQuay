@@ -1,0 +1,34 @@
+.cloud-panel, .cloud-library { color: var(--theme-text); font-size: 1rem; line-height: 1.65; }
+.cloud-file { display: flex; flex-direction: column; gap: .25rem; min-width: 0; }
+.cloud-file strong { overflow-wrap: anywhere; font-size: 1rem; line-height: 1.5; }
+.cloud-file > span, .cloud-description, .cloud-quota p { color: var(--muted); font-size: .875rem; }
+.cloud-kicker { letter-spacing: .04em; }
+.cloud-description { margin: 0; }
+.cloud-state { color: var(--accent); font-weight: 650; margin: 0; }
+.cloud-quota { display: grid; gap: .4rem; padding: .8rem 0; }
+.cloud-quota > div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .4rem; font-size: .875rem; }
+.cloud-quota strong { font-weight: 550; }
+.cloud-quota progress { display: block; width: 100%; height: .4rem; appearance: none; border: 0; border-radius: 99px; overflow: hidden; background: var(--line); }
+.cloud-quota progress::-webkit-progress-bar { background: var(--line); }
+.cloud-quota progress::-webkit-progress-value { background: var(--accent); border-radius: 99px; }
+.cloud-quota progress::-moz-progress-bar { background: var(--accent); border-radius: 99px; }
+.cloud-quota p { margin: 0; }
+.cloud-confirm { border: 1px solid var(--line); border-radius: 12px; padding: .8rem; font-size: .875rem; }
+.cloud-confirm p { margin: 0 0 .75rem; }
+.cloud-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+.cloud-actions button { flex: 1 1 8rem; min-height: 44px; }
+.cloud-delete { color: var(--danger, #b23838); background: transparent; border: 1px solid var(--line); border-radius: 10px; padding: .6rem .9rem; min-height: 44px; font: inherit; }
+.cloud-feedback { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; justify-content: space-between; font-size: .875rem; }
+.cloud-error, .cloud-notice { margin: .5rem 0 0; font-size: .875rem; overflow-wrap: anywhere; }
+.cloud-error { color: var(--danger, #b23838); }
+.cloud-notice { color: var(--accent); }
+.cloud-library-sheet { max-width: 600px; }
+.cloud-library-sheet .reader-sheet-content { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 0; }
+.cloud-library { overflow-y: auto; min-height: 0; padding: 1rem 1.25rem; }
+.cloud-library-feedback { flex: 0 0 auto; padding: 0 1.25rem max(1rem, env(safe-area-inset-bottom)); }
+.cloud-copy-list { list-style: none; padding: 0; margin: .5rem 0 1rem; }
+.cloud-copy-list li { padding: 1rem 0; border-top: 1px solid var(--line); }
+.cloud-copy-list .cloud-delete { margin-top: .6rem; }
+.cloud-copy-list .cloud-confirm { margin-top: .6rem; }
+.cloud-unavailable { color: var(--muted); margin: .5rem 0; font-size: .875rem; }
+.cloud-empty { color: var(--muted); margin: 1.5rem 0; font-size: .9375rem; }

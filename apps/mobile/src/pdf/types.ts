@@ -7,6 +7,7 @@ import type {
 } from '../../../../packages/sync-core/src/index.ts';
 import type { AccountScope } from '../storage/accountStore.ts';
 import type { WorkspaceController } from '../sync/workspace.ts';
+import type { CloudPdfContext } from './cloudCopies.ts';
 
 export interface PdfAiContext {
   paperId: string;
@@ -45,6 +46,8 @@ export interface PaperReaderProps {
   onOpenAi?: () => void;
   onMobilePanelOpen?: () => void;
   statusContent?: ReactNode;
+  cloudPdf?: CloudPdfContext;
+  accountCurrent?: () => boolean;
 }
 
 export interface PdfVersion {

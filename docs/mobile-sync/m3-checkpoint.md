@@ -2,7 +2,7 @@
 
 本轮完成文库文件交换的首批实现，并补齐 M2 扫描 PDF 在无 WASM 环境中的离线回退。M3 仍在开发中：此结果不关闭全文来源、中继、私有云、外部库映射、解析视图、完整富文本和远程任务的阶段门槛。实机继续按用户要求暂缓。
 
-同日后续的 BibTeX / RIS、DOI 查询和累计回归见 [M3 书目检查点](m3-bibliography-checkpoint.md)；下表保留首批开发时的验证结果。
+同日后续的 BibTeX / RIS、DOI 查询见 [M3 书目检查点](m3-bibliography-checkpoint.md)，可选私有 PDF 副本及最新回归见 [M3 私有云检查点](m3-cloud-checkpoint.md)；下表保留首批开发时的验证结果。
 
 ## 已实现
 

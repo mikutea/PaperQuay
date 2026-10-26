@@ -11,6 +11,7 @@ GRANT SELECT, INSERT, UPDATE ON paperquay.entities TO paperquay_runtime;
 GRANT SELECT, INSERT ON paperquay.changes TO paperquay_runtime;
 GRANT SELECT, INSERT ON paperquay.operation_receipts TO paperquay_runtime;
 GRANT SELECT, INSERT, UPDATE ON paperquay.conflicts TO paperquay_runtime;
+GRANT SELECT, INSERT, DELETE ON paperquay.cloud_pdfs TO paperquay_runtime;
 
 -- Row security is defense in depth. The trusted API establishes transaction-
 -- local issuer, subject, and account settings from validated OIDC claims.

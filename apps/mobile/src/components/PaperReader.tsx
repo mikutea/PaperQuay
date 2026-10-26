@@ -7,6 +7,8 @@ import { accountScopeKey } from '../storage/accountStore.ts';
 import { describeError } from '../errors.ts';
 import { Icon } from './Icon.tsx';
 import { ReaderSheet } from './ReaderSheet.tsx';
+import { CloudPdfPanel } from './CloudPdfPanel.tsx';
+import { CloudPdfError, describeCloudPdfError, downloadCloudPdfCopy } from '../pdf/cloudCopies.ts';
 import { ReaderTapGesture, captureReaderZoomAnchor, restoreReaderZoomAnchor,
   type ReaderPointer, type ReaderTapPoint, type ReaderZoomAnchor } from './readerGestures.ts';
 import { getPdfCache } from '../pdf/cache.ts';
@@ -22,15 +24,16 @@ import { ownReadingPosition, positionOwner, readerIdentity, ReadingCheckpointWri
   type PositionStatus, type ReaderIdentity, type ReadingPoint } from '../pdf/position.ts';
 import { PDF_LIMITS, type PaperReaderProps, type PdfAiContext, type PdfCacheEntry, type PdfCitationTarget, type PdfVersion } from '../pdf/types.ts';
 
-type Panel = 'source' | 'contents' | 'search' | 'annotations' | 'cache' | 'more' | 'page' | 'ask' | null;
+type Panel = 'source' | 'contents' | 'search' | 'annotations' | 'cache' | 'cloud' | 'more' | 'page' | 'ask' | null;
 interface Loaded { pdf: VerifiedPdf; version: PdfVersion; runtime: PdfRuntime }
 interface Task { epoch: number; signal: AbortSignal; identity: ReaderIdentity; check: () => void }
 interface CommentDraft { entityId: string; revision: number; data: AnnotationData; comment: string; saved: string }
 const byteLabel = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-const errorMessage = (error: unknown) => error instanceof PdfError ? error.message : describeError(error);
+const errorMessage = (error: unknown) => error instanceof CloudPdfError ? describeCloudPdfError(error)
+  : error instanceof PdfError ? error.message : describeError(error);
 const labelForKind = (kind: AnnotationData['kind']) => kind === 'highlight' ? '高亮' : kind === 'underline' ? '下划线' : '区域';
 const panelTitles: Record<NonNullable<Panel>, string> = { source: 'PDF 文件', contents: '目录与阅读接续', search: '搜索原文',
-  annotations: '批注', cache: '本机缓存', more: '阅读选项', page: '跳转页面', ask: '阅读 AI' };
+  annotations: '批注', cache: '本机缓存', cloud: '私有云 PDF', more: '阅读选项', page: '跳转页面', ask: '阅读 AI' };
 
 function ReaderPanel({ compact, title, onClose, children }: { compact: boolean; title: string; onClose: () => void; children: ReactNode }) {
   if (compact) return <ReaderSheet open title={title} onClose={onClose} className="pr-reader-sheet">{children}</ReaderSheet>;
@@ -88,6 +91,8 @@ export function PaperReader(props: PaperReaderProps) {
   const scopeKey = accountScopeKey(scope);
   const versions = useMemo(() => versionsFor(paper.entityId, props.attachmentVersions), [paper.entityId, props.attachmentVersions]);
   const [selectedVersionId, setSelectedVersionId] = useState(() => versions[0]?.entityId ?? '');
+  const cloudVersion = versions.find((version) => version.entityId === selectedVersionId);
+  const cloudVersionRecord = props.attachmentVersions.find((record) => record.entityId === selectedVersionId && !record.deleted);
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [panel, setPanel] = useState<Panel>('source');
   const [toolsVisible, setToolsVisible] = useState(true);
@@ -187,6 +192,7 @@ export function PaperReader(props: PaperReaderProps) {
     const check = () => {
       throwIfAborted(abort.signal);
       if (!mounted.current || liveScope.current !== scopeKey || epoch.current !== taskEpoch
+        || (props.accountCurrent && !props.accountCurrent())
         || !sameReaderIdentity(controller, identity)) throw new PdfError('ACCOUNT_CHANGED');
     };
     setBusy(label); setProgress(null); setError(null); setNotice(null);
@@ -198,7 +204,7 @@ export function PaperReader(props: PaperReaderProps) {
         setBusy(null); setProgress(null); taskAbort.current = null;
       }
     }
-  }, [controller, scope, scopeKey]);
+  }, [controller, scope, scopeKey, props.accountCurrent]);
 
   const saveComment = useCallback(async () => {
     if (commentWork.current) { await commentWork.current; return; }
@@ -298,6 +304,33 @@ export function PaperReader(props: PaperReaderProps) {
       await openBytes(bytes, version.data.fileName, version, source, task);
     });
   }, [cache, closeDocument, finishPending, openBytes, runTask, scope]);
+
+  function readCloudCopy() {
+    const context = props.cloudPdf;
+    const version = cloudVersion;
+    if (!context || !version || busy) return;
+    opening.current.beginExplicitOpen();
+    void runTask('正在下载云副本', async (task) => {
+      const check = () => {
+        task.check();
+        const snapshot = controller.getSnapshot();
+        if (snapshot.status !== 'ready' || snapshot.needsLogin) throw new PdfError('ACCOUNT_CHANGED');
+        const sync = snapshot.workspace?.sync;
+        const livePaper = sync && getVisibleEntity(sync, 'paper', version.data.paperId);
+        const liveVersion = sync && getVisibleEntity(sync, 'attachmentVersion', version.entityId);
+        const data = liveVersion?.data as AttachmentVersionData | null;
+        if (!livePaper?.data || livePaper.deleted || !data || liveVersion?.deleted
+          || data.paperId !== version.data.paperId || data.sha256 !== version.data.sha256 || data.sizeBytes !== version.data.sizeBytes)
+          throw new PdfError('VERSION_MISMATCH');
+      };
+      const bytes = await downloadCloudPdfCopy(context, version, {
+        signal: task.signal, isCurrent: () => { try { check(); return true; } catch { return false; } },
+        onProgress: (downloaded, total) => { check(); setProgress({ loaded: downloaded, total }); },
+      });
+      check();
+      await openBytes(bytes, version.data.fileName, version, undefined, { ...task, check });
+    });
+  }
 
   // Retire this reader during the unmount commit, before queued navigation continuations resume.
   useLayoutEffect(() => {
@@ -677,7 +710,10 @@ export function PaperReader(props: PaperReaderProps) {
     </div>}
     {(!compact || !panel) && feedback}
     <div className="pr-body">
-      {panel && <ReaderPanel compact={compact} title={panelTitles[panel]} onClose={() => setPanel(null)}>
+      {panel && <ReaderPanel compact={compact} title={panelTitles[panel]} onClose={() => {
+        if (panel === 'cloud') taskAbort.current?.abort();
+        setPanel(null);
+      }}>
         {compact && feedback}
         {panel === 'more' && <div className="pr-panel-content pr-options">
           {loaded && <section className="pr-option-section" aria-label="阅读显示"><h3>阅读显示</h3>
@@ -686,6 +722,7 @@ export function PaperReader(props: PaperReaderProps) {
             <button type="button" onClick={() => setPanel('annotations')}>批注 <span>{annotationRecords.length}</span></button></section>}
           <section className="pr-option-section" aria-label="文件与离线"><h3>文件与离线</h3>
             <button type="button" onClick={() => setPanel('source')}>文件与版本</button>
+            {props.cloudPdf && <button type="button" disabled={!cloudVersion} onClick={() => setPanel('cloud')}>私有云 PDF</button>}
             <button type="button" onClick={() => { setPanel('cache'); void refreshCache().catch((failure) => setError(errorMessage(failure))); }}>离线副本与缓存</button></section>
           {loaded && <div className="pr-option-status"><span role="status">{positionMessage}</span>
             {positionStatus === 'error' && <button type="button" onClick={() => { void writer.current?.flush().catch((failure) => setError(errorMessage(failure))); }}>重试保存位置</button>}
@@ -708,6 +745,7 @@ export function PaperReader(props: PaperReaderProps) {
           <p className="pr-muted">{selectedVersionId ? '选择与此版本一致的文件。不同文件可作为新版本添加，批注会分别保留。' : '文件只保留在当前设备。文库会同步版本信息、批注与阅读位置。'}</p>
           <input className="pr-file-input" type="file" accept="application/pdf,.pdf" ref={fileInput} onChange={chooseFile} tabIndex={-1} />
           <button type="button" className="pr-primary" disabled={Boolean(busy)} onClick={() => fileInput.current?.click()}>选择本机 PDF</button>
+          {props.cloudPdf && cloudVersion && <button type="button" disabled={Boolean(busy)} onClick={() => setPanel('cloud')}>查看此版本的云副本</button>}
           <div className="pr-divider" />
           <label>公开 PDF 链接<input type="url" value={sourceUrl} placeholder="https://…/paper.pdf" autoCapitalize="none" autoCorrect="off" spellCheck={false}
             disabled={Boolean(busy)} onChange={(event) => { setSourceUrl(event.target.value); setProbe(null); }} /></label>
@@ -719,6 +757,12 @@ export function PaperReader(props: PaperReaderProps) {
           {loaded && <button type="button" onClick={togglePin}>{cacheEntry?.pinned ? '取消离线保留' : '保留此 PDF 供离线阅读'}</button>}
           <button type="button" onClick={() => { setPanel('cache'); void refreshCache().catch((failure) => setError(errorMessage(failure))); }}>查看与清理缓存</button>
         </div>}
+        {panel === 'cloud' && props.cloudPdf && cloudVersion && <CloudPdfPanel key={`${scopeKey}:${cloudVersion.entityId}`}
+          context={props.cloudPdf} scope={scope} controller={controller} accountCurrent={props.accountCurrent}
+          version={cloudVersion} synced={Boolean(cloudVersionRecord && cloudVersionRecord.revision > 0 && !cloudVersionRecord.pending)}
+          hasBytes={loaded?.version.entityId === cloudVersion.entityId && Boolean(activeBytes.current)}
+          getBytes={() => current.current?.version.entityId === cloudVersion.entityId ? activeBytes.current : null}
+          reading={Boolean(busy)} onRead={readCloudCopy} />}
         {panel === 'contents' && <div className="pr-panel-content">
           {otherPositions.length > 0 && <div className="pr-resume"><h4>从已保存的位置继续</h4>
             {otherPositions.map((record) => { const data = record.data as ReadingPositionData; const owner = state ? positionOwner(state, record.entityId) : null;

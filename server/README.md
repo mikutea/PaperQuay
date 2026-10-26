@@ -1,6 +1,6 @@
-# PaperQuay 账号同步服务 M1
+# PaperQuay 账号同步与可选私有 PDF 服务
 
-本目录提供独立 Fastify API、PostgreSQL 持久层和 OIDC 访问令牌校验。服务只同步文献元数据、附件版本描述、Markdown 笔记、PDF 批注和阅读位置；不接收 PDF 文件、桌面数据库、绝对路径、第三方模型密钥或账号密码。现有桌面库的导出/导入由 `packages/sync-core` 与桌面适配器负责，服务端不连接用户本地库。
+本目录提供独立 Fastify API、PostgreSQL 持久层和 OIDC 访问令牌校验。账号同步包含文献元数据、附件版本描述、Markdown 笔记、PDF 批注和阅读位置。私有 PDF 副本是默认关闭的独立能力，启用后仍需用户对已同步版本明确上传；不接收桌面数据库、绝对路径、第三方模型密钥或账号密码。现有桌面库的导出/导入由 `packages/sync-core` 与桌面适配器负责，服务端不连接用户本地库。
 
 M1 的“设备”是 `(issuer, sub, sid)` 对应的 OIDC 登录会话。服务生成设备 UUID，忽略任何客户端自报的账号归属。刷新令牌仍沿用同一 `sid`；重新登录可以得到新会话。这个设计不证明硬件身份，也不阻止仍有效的 Bearer token 被盗用。原生发布的安全存储、DPoP、正式 IdP/TLS/备份运维属于后续验收。
 
@@ -69,7 +69,7 @@ node src/main.ts
 | --- | --- |
 | `GET /health/live` | 进程活性 |
 | `GET /health/ready` | 数据库可访问且迁移版本与服务一致；不声称 IdP 持续可达 |
-| `GET /v1/capabilities` | 协议/实体 schema、实际配额、`deviceBinding: oidc-session`、`pdfStorage: false` |
+| `GET /v1/capabilities` | 协议/实体 schema、实际配额、`deviceBinding: oidc-session`；私有副本默认 `pdfStorage: false`，启用后另见下节 |
 | `POST /v1/devices` | `{name,platform}`，注册当前 OIDC 会话；返回 `{accountId,device}` |
 | `GET /v1/me` | 返回当前账号和会话设备；尚未注册为 403 |
 | `GET /v1/devices` | 返回当前账号的 `{devices: [...]}` |
@@ -126,6 +126,45 @@ Push 在账号事务锁内构造完整候选结果，并在实体、变更记录
 
 首笔内容写入之前，服务还会在同一账号锁内以只读 PostgreSQL 查询预检完整保留成本，按迁移 003 相同的 JSONB 文本 UTF-8 字节规则计算实体替换差额、变更记录、冲突和最终回执的所有副本。删除保留原实体正文，实体差额为零；已有正文在数据库中参与计算，不会为预检重新发送，新增正文在预检查询中只传入一次。实体缩小带来的负差额按实际值计算，已满额账号仍遵循前述拒绝新写入规则。`resolve` 保留当前内容时也在变更记录写入前检查变更及回执两份成本，其余永久拒绝或无实体变更的结果检查回执成本。预检读取数据库实际计数且不预扣字节，数据库触发器仍是唯一计账及最终校验入口。
 
+## 可选私有 PDF 副本
+
+`PAPERQUAY_CLOUD_PDF_ENABLED=1` 才开放副本接口；默认 `0`，不会自动上传。`PAPERQUAY_CLOUD_PDF_ACCOUNT_BYTES` 默认 `1073741824`（1 GiB），接受 1–10737418240 的整数字节数。单文件固定最多 64 MiB，每账号固定最多 512 份；这些是原始 PDF 字节的逻辑预算，与同步 JSON 的 retained 预算分开，也不等于 PostgreSQL 的 TOAST、索引、WAL、膨胀与备份磁盘用量。多实例应使用一致配置。
+
+启用后 capabilities 保留既有协议与限制字段，增加 `features.privatePdfStorage:1`、`pdfStorage:true` 和 `cloudPdf:{maxFileBytes,maxAccountBytes,maxCopies}`。关闭时后两项中的 `cloudPdf` 对象和 feature 键不出现；已有同步 DTO 不变。
+
+| 方法与路径 | 返回值 |
+| --- | --- |
+| `GET /v1/cloud-pdfs` | `{copies,quota}`，包含全部至多 512 份副本，墓碑副本也可见 |
+| `GET /v1/cloud-pdfs/:id` | `{copy:null或CloudPdfCopy,quota}`；id 是当前账号的附件版本 UUID |
+| `PUT /v1/cloud-pdfs/:id` | `application/pdf` 原始完整 bytes；成功为 `{copy,replayed,quota}` |
+| `GET /v1/cloud-pdfs/:id/content` | 完整 PDF 字节与 `Content-Length`、附件下载头；不支持 Range |
+| `DELETE /v1/cloud-pdfs/:id` | `{attachmentVersionId,deleted,quota}`；只删除云副本 |
+
+所有成功响应均为 HTTP 200。`CloudPdfCopy` 是 `{attachmentVersionId,paperId,sha256,sizeBytes,fileName,createdAt,available}`，保存上传时的必要元数据。`quota` 是 `{usedBytes,maxBytes,usedCopies,maxCopies}`。已删除的 paper 或版本令 `available=false`，副本仍占用额度，可以检查并明确删除。调低预算后可能 `usedBytes>maxBytes`，已有内容仍可读取、重复确认或清理。
+
+所有请求先校验 OIDC 令牌，所有仓库动作再在账号锁内检查已注册、未撤销的会话。上传读 body 前还检查版本、父文献、文件上限和配额；收完后重新取得账号锁并重查会话、版本、SHA-256、完整大小和配额。仅检查 PDF 头与末尾 EOF 标记，不声称完整 PDF 语义、页数或安全性解析；客户端仍需完整校验和阅读器解析。服务不接收来源 URL，也不会代客户端抓取任意路径或链接。
+
+同版本同字节的重试返回 `replayed:true`，不会重复计费；重放仍验证当前授权和实际上传字节。删除即使遇到尚无副本的版本，也推进内部 `cloud_pdf_generation`。删除前获得准入、删除后才提交的旧上传返回 `CLOUD_PDF_CHANGED`，只有之后的明确新请求能重新上传。该字段不改变实体 revision、正文、updatedAt 或 changelog。连接中断可能发生在数据库提交之后，客户端必须刷新状态确认，不自动补删。
+
+迁移 `004_private_cloud_pdfs.sql` 把内容和计费保存在同一 PostgreSQL 事务，使用 bytea、复合账号外键、FORCE RLS、数据库 SHA-256/长度约束和账号锁内的计费触发器。没有临时文件或数据库与文件系统双写恢复窗口。runtime 新增云表 SELECT/INSERT/DELETE，不能更新云内容，也不增加历史表删除权限。数据库提交失败会一起回滚内容、字节计数、份数和内部 generation；显式删除释放云额度，不删除附件元数据、笔记、批注或本地缓存。
+
+整文件 bytea 仍需要有界内存，驱动编码、SQL 和 HTTP 可能产生额外副本。本进程同时最多 2 个传输、每账号最多 1 个；上传收 body 前取槽，下载一直保留到响应 finish/close，数据库动作未结束时也不提前释放。下载按 64 KiB 分块交给 HTTP 流，使套接字背压生效，完整 bytea Buffer 仍驻留内存；分块本身不替代传输槽限制。每个传输有 45 秒绝对截止时间，超时仅关闭该连接；状态、删除和设备撤销不占传输槽。限额属于单 API 进程，不能代替反向代理带宽控制、全局账号数管理和实际部署容量验收。
+
+| 错误码 | HTTP | 含义 |
+| --- | --- | --- |
+| `CLOUD_PDF_STORAGE_DISABLED` | 503 | 管理员未启用此能力 |
+| `NOT_FOUND` | 404 | 版本不存在或不属于当前账号 |
+| `CLOUD_PDF_NOT_FOUND` | 404 | 当前版本没有云副本 |
+| `ATTACHMENT_VERSION_UNAVAILABLE` | 410 | 版本或文献已删除，不能上传或下载 |
+| `PDF_INTEGRITY_MISMATCH` | 422 | 完整字节数或 SHA-256 不匹配 |
+| `INVALID_PDF` | 415 | 缺少规定的 PDF 头或 EOF 标记 |
+| `CLOUD_PDF_QUOTA_EXCEEDED` | 409 | 账号字节或副本数上限不足 |
+| `CLOUD_PDF_CHANGED` | 409 | 上传准入被后续云删除动作取代 |
+| `CLOUD_PDF_TRANSFER_BUSY` | 429 | 当前账号或进程的传输槽已占用，含 Retry-After |
+| `REQUEST_TOO_LARGE` | 413 | 超过 64 MiB 单文件上限 |
+
+认证、撤销、输入格式和服务临时故障仍沿用已有错误码。所有副本响应继续携带 `Cache-Control:no-store`；已开始发送的字节不能追回，撤销提交后的请求与上传提交都会重新拒绝旧会话。
+
 ## 验证
 
 ```sh
@@ -145,3 +184,5 @@ node --test --test-concurrency=1 tests/integration/*.test.ts
 集成测试必须使用隔离库。缺少 `PAPERQUAY_DATABASE_URL`、`PAPERQUAY_TEST_ALLOW_DATABASE_WRITES=1` 或 OIDC 必需配置时直接失败，不跳过。迁移回归另需 `PAPERQUAY_MIGRATION_DATABASE_URL`，在独立命名 schema 的事务内构造旧数据、执行历史迁移，最后 ROLLBACK，不改写现有 schema 的版本或校验和。真实 IdP 测试另需 `PAPERQUAY_TEST_PASSWORD`，默认客户端 `paperquay-integration`、用户 `qa-reader`/`qa-other`，可由 `.env.example` 中相应变量覆盖。测试只使用合成账号/文献；不会清空数据库或连接用户桌面库。
 
 当前本机验证覆盖真实 PostgreSQL 非 owner/NOBYPASSRLS 角色、并发 CAS 和回执、事务回滚重试、账号隔离、撤销与等待写入的锁顺序、精确版本绑定、冲突保留/显式恢复、分页响应预算与新连接恢复，以及真实 Keycloak discovery/JWKS/访问令牌/刷新/两个账号隔离。保留字节回归覆盖 UTF-8 精确临界、四类内容的独立 SQL 汇总、并发争用、回执最后一字节超限导致全回滚、满额幂等重放、各类 resolve 分支，以及旧账号超过默认 256 MiB 后的完整迁移与 RLS 恢复。新连接恢复证明数据库状态可重读；操作系统级重启、备份恢复、正式公网部署和真实移动设备仍需各自验收。
+
+私有副本新增真实数据库回归验证独立配额、512/513 份边界、SHA-256 数据库约束、账号隔离、墓碑、撤销、删除 generation 和故障回滚。真实回环 HTTP 连接验证部分上传期间的删除/撤销、主动中断、准入等待期间断连、绝对截止时间，以及暂停读取 64 MiB 下载时服务器响应确实未 finish、同账号第二下载被拒绝、断开后传输槽可复用。测试使用合成 PDF 标记内容；它们不声称真实论文的完整语义解析。截止时间测试通过仅限 AppOptions 的测试入口缩短等待，普通进程环境仍固定为 45 秒。

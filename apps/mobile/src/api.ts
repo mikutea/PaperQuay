@@ -18,6 +18,7 @@ import {
 import { normalizeServiceUrl } from './config.ts';
 import { ClientError, errorFromResponse } from './errors.ts';
 import { getPlatformCapabilities } from './platform.ts';
+import type { CloudPdfCapability } from './pdf/cloudCopies.ts';
 
 export interface DeviceSession {
   id: string;
@@ -135,6 +136,7 @@ async function boundedJson(response: Response): Promise<unknown> {
 
 export class SyncApi {
   supportsPaperOrganization = false;
+  cloudPdfCapability: CloudPdfCapability | null = null;
   private readonly baseUrl: string;
   private readonly getToken: () => Promise<string>;
   private readonly fetcher: typeof fetch;
@@ -211,9 +213,20 @@ export class SyncApi {
   }
 
   async capabilities(signal: AbortSignal): Promise<{ paperOrganization: boolean }> {
+    this.cloudPdfCapability = null;
     const body = await this.request('/v1/capabilities', signal);
     if (!isObject(body) || body.protocolVersion !== 1) throw new ClientError('INVALID_RESPONSE');
     this.supportsPaperOrganization = isObject(body.features) && body.features.paperOrganization === 1;
+    if (body.pdfStorage === true && isObject(body.features) && body.features.privatePdfStorage === 1) {
+      const limits = body.cloudPdf;
+      if (!isObject(limits) || !Number.isSafeInteger(limits.maxFileBytes) || Number(limits.maxFileBytes) < 1
+        || Number(limits.maxFileBytes) > 64 * 1024 * 1024 || !Number.isSafeInteger(limits.maxAccountBytes)
+        || Number(limits.maxAccountBytes) < 1 || Number(limits.maxAccountBytes) > 10 * 1024 * 1024 * 1024
+        || !Number.isSafeInteger(limits.maxCopies) || Number(limits.maxCopies) < 1 || Number(limits.maxCopies) > 512)
+        throw new ClientError('INVALID_RESPONSE');
+      this.cloudPdfCapability = { maxFileBytes: Number(limits.maxFileBytes), maxAccountBytes: Number(limits.maxAccountBytes),
+        maxCopies: Number(limits.maxCopies) };
+    }
     return { paperOrganization: this.supportsPaperOrganization };
   }
 

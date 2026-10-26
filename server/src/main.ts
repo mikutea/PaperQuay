@@ -8,9 +8,10 @@ let store: PostgresSyncStore | undefined;
 try {
   const config = loadConfig();
   store = new PostgresSyncStore({ connectionString: config.databaseUrl, cursorSecret: config.cursorSecret,
-    maxAccountRetainedBytes: config.maxAccountRetainedBytes });
+    maxAccountRetainedBytes: config.maxAccountRetainedBytes, cloudPdfEnabled: config.cloudPdfEnabled,
+    cloudPdfAccountBytes: config.cloudPdfAccountBytes });
   const verifyToken = await createOidcVerifier({ issuer: config.oidcIssuer, audience: config.oidcAudience, clientIds: config.oidcClientIds });
-  const app = await buildApp({ config, repository: store, verifyToken, logger: {
+  const app = await buildApp({ config, repository: store, cloudPdfRepository: store, verifyToken, logger: {
     level: 'info', redact: ['req.headers.authorization', 'req.headers.cookie', 'res.headers.set-cookie'],
   } });
   app.addHook('onClose', async () => store?.close());

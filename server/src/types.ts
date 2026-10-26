@@ -29,6 +29,26 @@ export type ResolveRequest = {
   mutation: 'put' | 'delete' | 'restore'; data: EntityData | null;
 };
 
+export interface CloudPdfCopy {
+  attachmentVersionId: string;
+  paperId: string;
+  sha256: string;
+  sizeBytes: number;
+  fileName: string;
+  createdAt: string;
+  available: boolean;
+}
+export interface CloudPdfQuota { usedBytes: number; maxBytes: number; usedCopies: number; maxCopies: number }
+export interface CloudPdfStatus { copy: CloudPdfCopy | null; quota: CloudPdfQuota }
+export interface CloudPdfRepository {
+  listCloudPdfs(identity: VerifiedIdentity): Promise<{ copies: CloudPdfCopy[]; quota: CloudPdfQuota }>;
+  getCloudPdf(identity: VerifiedIdentity, attachmentVersionId: string): Promise<CloudPdfStatus>;
+  prepareCloudPdfUpload(identity: VerifiedIdentity, attachmentVersionId: string): Promise<{ accountId: string; sizeBytes: number; generation: string }>;
+  putCloudPdf(identity: VerifiedIdentity, attachmentVersionId: string, content: Buffer, generation: string): Promise<{ copy: CloudPdfCopy; replayed: boolean; quota: CloudPdfQuota }>;
+  downloadCloudPdf(identity: VerifiedIdentity, attachmentVersionId: string): Promise<{ copy: CloudPdfCopy; content: Buffer }>;
+  deleteCloudPdf(identity: VerifiedIdentity, attachmentVersionId: string): Promise<{ attachmentVersionId: string; deleted: boolean; quota: CloudPdfQuota }>;
+}
+
 export interface SyncRepository {
   registerDevice(identity: VerifiedIdentity, registration: DeviceRegistration): Promise<SessionView>;
   me(identity: VerifiedIdentity): Promise<SessionView>;

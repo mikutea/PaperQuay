@@ -11,8 +11,8 @@ import type {
 import type { VerifiedIdentity } from './auth.ts';
 import { CursorCodec } from './cursor.ts';
 import { ApiError, isTransientDatabaseError } from './errors.ts';
-import { checkedRetainedByteLimit, SERVER_LIMITS } from './config.ts';
-import type { ConflictPage, Device, DevicePlatform, DeviceRegistration, ResolveRequest, SessionView, SyncRepository } from './types.ts';
+import { checkedCloudPdfByteLimit, checkedRetainedByteLimit, SERVER_LIMITS } from './config.ts';
+import type { CloudPdfCopy, CloudPdfQuota, CloudPdfRepository, CloudPdfStatus, ConflictPage, Device, DevicePlatform, DeviceRegistration, ResolveRequest, SessionView, SyncRepository } from './types.ts';
 
 interface AccountRow {
   id: string; epoch: string; last_seq: string; last_conflict_seq: string; entity_count: number; receipt_count: number; retained_bytes: string;
@@ -24,6 +24,11 @@ interface EntityRow {
   entity_type: EntityType; entity_id: string; schema_version: 1; revision: string;
   data: EntityData; deleted_at: Date | null; updated_at: Date;
   created_by_device_id: string; modified_by_device_id: string;
+  cloud_pdf_generation: string;
+}
+interface CloudPdfRow {
+  attachment_version_id: string; paper_id: string; sha256: string; size_bytes: number;
+  file_name: string; created_at: Date; available: boolean; content?: Buffer;
 }
 interface ConflictRow {
   id: string; seq: string; entity_type: EntityType; entity_id: string;
@@ -38,7 +43,8 @@ type ResponsePreflight = (result: PushResult) => void;
 type RetainedWriteKind = 'entity' | 'conflict' | 'change' | 'receipt';
 interface StoreHooks {
   /** Fault/concurrency injection for isolated integration tests, never configured from HTTP or environment. */
-  beforeCommit?: (event: { kind: 'push' | 'resolve' | 'revoke'; opId?: string; accountId: string; deviceId: string }) => Promise<void>;
+  beforeCommit?: (event: { kind: 'push' | 'resolve' | 'revoke' | 'cloud-put' | 'cloud-delete'; opId?: string;
+    attachmentVersionId?: string; accountId: string; deviceId: string }) => Promise<void>;
 }
 interface StoreOptions {
   connectionString?: string;
@@ -47,6 +53,8 @@ interface StoreOptions {
   hooks?: StoreHooks;
   responseLimitBytes?: number;
   maxAccountRetainedBytes?: number;
+  cloudPdfEnabled?: boolean;
+  cloudPdfAccountBytes?: number;
 }
 
 class ResponseBudgetExceeded extends Error {}
@@ -58,8 +66,18 @@ function isAccountStorageLimit(error: unknown): boolean {
     && 'constraint' in error && error.constraint === 'paperquay_account_retained_bytes_limit';
 }
 
-const entityColumns = 'entity_type, entity_id, schema_version, revision, data, deleted_at, updated_at, created_by_device_id, modified_by_device_id';
+const entityColumns = 'entity_type, entity_id, schema_version, revision, data, deleted_at, updated_at, created_by_device_id, modified_by_device_id, cloud_pdf_generation';
 const deviceColumns = 'id, name, platform, created_at, last_seen_at, revoked_at';
+const cloudPdfColumns = `c.attachment_version_id, c.paper_id, c.sha256, c.size_bytes, c.file_name, c.created_at,
+  (v.deleted_at IS NULL AND p.deleted_at IS NULL) AS available`;
+const cloudPdfJoins = `JOIN paperquay.entities v ON v.account_id = c.account_id
+    AND v.entity_type = 'attachmentVersion' AND v.entity_id = c.attachment_version_id
+  JOIN paperquay.entities p ON p.account_id = c.account_id AND p.entity_type = 'paper' AND p.entity_id = c.paper_id`;
+
+function toCloudPdf(row: CloudPdfRow): CloudPdfCopy {
+  return { attachmentVersionId: row.attachment_version_id, paperId: row.paper_id, sha256: row.sha256,
+    sizeBytes: row.size_bytes, fileName: row.file_name, createdAt: row.created_at.toISOString(), available: row.available };
+}
 
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']';
@@ -96,16 +114,20 @@ function rejected(opId: string, code: string, retryable = false): PushResult {
 }
 
 /** Every request uses a transaction-local identity; a pooled connection never carries tenant state. */
-export class PostgresSyncStore implements SyncRepository {
+export class PostgresSyncStore implements SyncRepository, CloudPdfRepository {
   readonly pool: pg.Pool;
   readonly cursors: CursorCodec;
   readonly hooks: StoreHooks;
   readonly responseLimitBytes: number;
   readonly maxAccountRetainedBytes: number;
+  readonly cloudPdfEnabled: boolean;
+  readonly cloudPdfAccountBytes: number;
   private readonly ownsPool: boolean;
 
   constructor(options: StoreOptions) {
     this.maxAccountRetainedBytes = checkedRetainedByteLimit(options.maxAccountRetainedBytes ?? SERVER_LIMITS.maxAccountRetainedBytes);
+    this.cloudPdfEnabled = options.cloudPdfEnabled ?? false;
+    this.cloudPdfAccountBytes = checkedCloudPdfByteLimit(options.cloudPdfAccountBytes ?? SERVER_LIMITS.cloudPdfAccountBytes);
     this.ownsPool = !options.pool;
     const poolOptions: PoolConfig = {
       connectionString: options.connectionString, max: 10, connectionTimeoutMillis: 10000,
@@ -124,7 +146,7 @@ export class PostgresSyncStore implements SyncRepository {
   async ready(): Promise<boolean> {
     try {
       const result = await this.pool.query<{ version: string }>('SELECT version FROM paperquay.schema_migrations ORDER BY version');
-      return result.rows.map((row) => row.version).join(',') === '001_initial.sql,002_receipt_quota.sql,003_retained_bytes_quota.sql';
+      return result.rows.map((row) => row.version).join(',') === '001_initial.sql,002_receipt_quota.sql,003_retained_bytes_quota.sql,004_private_cloud_pdfs.sql';
     } catch { return false; }
   }
 
@@ -137,6 +159,7 @@ export class PostgresSyncStore implements SyncRepository {
       await client.query("SET LOCAL lock_timeout = '10s'");
       await client.query("SELECT set_config('paperquay.issuer', $1, true), set_config('paperquay.subject', $2, true)", [identity.issuer, identity.subject]);
       await client.query("SELECT set_config('paperquay.retained_byte_limit', $1, true)", [String(this.maxAccountRetainedBytes)]);
+      await client.query("SELECT set_config('paperquay.cloud_pdf_byte_limit', $1, true)", [String(this.cloudPdfAccountBytes)]);
       if (create) {
         await client.query(`INSERT INTO paperquay.accounts(id, issuer, subject, epoch)
           VALUES ($1,$2,$3,$4) ON CONFLICT (issuer, subject) DO NOTHING`, [randomUUID(), identity.issuer, identity.subject, randomUUID()]);
@@ -217,6 +240,129 @@ export class PostgresSyncStore implements SyncRepository {
     const result = await context.client.query<EntityRow>(`SELECT ${entityColumns} FROM paperquay.entities
       WHERE account_id = $1 AND entity_type = $2 AND entity_id = $3`, [context.account.id, type, id]);
     return result.rows[0];
+  }
+
+  private requireCloudPdfs(): void {
+    if (!this.cloudPdfEnabled) throw new ApiError('CLOUD_PDF_STORAGE_DISABLED', 503);
+  }
+
+  private async cloudPdfQuota(context: TransactionContext): Promise<CloudPdfQuota> {
+    const result = await context.client.query<{ cloud_pdf_bytes: string; cloud_pdf_count: number }>(
+      'SELECT cloud_pdf_bytes, cloud_pdf_count FROM paperquay.accounts WHERE id = $1', [context.account.id]);
+    return { usedBytes: Number(result.rows[0].cloud_pdf_bytes), maxBytes: this.cloudPdfAccountBytes,
+      usedCopies: result.rows[0].cloud_pdf_count, maxCopies: SERVER_LIMITS.cloudPdfMaxCopies };
+  }
+
+  private async cloudPdfVersion(context: TransactionContext, id: string, active: boolean): Promise<EntityRow> {
+    const version = await this.entity(context, 'attachmentVersion', id);
+    if (!version) throw new ApiError('NOT_FOUND', 404);
+    if (active) {
+      const paper = await this.entity(context, 'paper', (version.data as AttachmentVersionData).paperId);
+      if (version.deleted_at || !paper || paper.deleted_at) throw new ApiError('ATTACHMENT_VERSION_UNAVAILABLE', 410);
+    }
+    return version;
+  }
+
+  private async cloudPdfRow(context: TransactionContext, id: string, content = false): Promise<CloudPdfRow | undefined> {
+    const result = await context.client.query<CloudPdfRow>(`SELECT ${cloudPdfColumns}${content ? ', c.content' : ''}
+      FROM paperquay.cloud_pdfs c ${cloudPdfJoins} WHERE c.account_id = $1 AND c.attachment_version_id = $2`, [context.account.id, id]);
+    return result.rows[0];
+  }
+
+  private checkCloudPdfHeadroom(quota: CloudPdfQuota, size: number): void {
+    if (size > SERVER_LIMITS.cloudPdfMaxFileBytes) throw new ApiError('REQUEST_TOO_LARGE', 413);
+    if (quota.usedCopies >= quota.maxCopies || size > quota.maxBytes - quota.usedBytes) {
+      throw new ApiError('CLOUD_PDF_QUOTA_EXCEEDED', 409);
+    }
+  }
+
+  async listCloudPdfs(identity: VerifiedIdentity): Promise<{ copies: CloudPdfCopy[]; quota: CloudPdfQuota }> {
+    this.requireCloudPdfs();
+    return this.withAccount(identity, false, async (context) => {
+      const result = await context.client.query<CloudPdfRow>(`SELECT ${cloudPdfColumns}
+        FROM paperquay.cloud_pdfs c ${cloudPdfJoins} WHERE c.account_id = $1
+        ORDER BY c.created_at, c.attachment_version_id`, [context.account.id]);
+      return { copies: result.rows.map(toCloudPdf), quota: await this.cloudPdfQuota(context) };
+    });
+  }
+
+  async getCloudPdf(identity: VerifiedIdentity, attachmentVersionId: string): Promise<CloudPdfStatus> {
+    this.requireCloudPdfs();
+    return this.withAccount(identity, false, async (context) => {
+      await this.cloudPdfVersion(context, attachmentVersionId, false);
+      const row = await this.cloudPdfRow(context, attachmentVersionId);
+      return { copy: row ? toCloudPdf(row) : null, quota: await this.cloudPdfQuota(context) };
+    });
+  }
+
+  async prepareCloudPdfUpload(identity: VerifiedIdentity, attachmentVersionId: string): Promise<{ accountId: string; sizeBytes: number; generation: string }> {
+    this.requireCloudPdfs();
+    return this.withAccount(identity, false, async (context) => {
+      const version = await this.cloudPdfVersion(context, attachmentVersionId, true);
+      const data = version.data as AttachmentVersionData;
+      if (data.sizeBytes > SERVER_LIMITS.cloudPdfMaxFileBytes) throw new ApiError('REQUEST_TOO_LARGE', 413);
+      const existing = await this.cloudPdfRow(context, attachmentVersionId);
+      if (!existing) this.checkCloudPdfHeadroom(await this.cloudPdfQuota(context), data.sizeBytes);
+      return { accountId: context.account.id, sizeBytes: data.sizeBytes, generation: version.cloud_pdf_generation };
+    });
+  }
+
+  async putCloudPdf(identity: VerifiedIdentity, attachmentVersionId: string, content: Buffer, generation: string): Promise<{ copy: CloudPdfCopy; replayed: boolean; quota: CloudPdfQuota }> {
+    this.requireCloudPdfs();
+    try {
+      return await this.withAccount(identity, false, async (context) => {
+        const version = await this.cloudPdfVersion(context, attachmentVersionId, true);
+        if (generation !== version.cloud_pdf_generation) throw new ApiError('CLOUD_PDF_CHANGED', 409);
+        const data = version.data as AttachmentVersionData;
+        if (!Buffer.isBuffer(content) || content.byteLength !== data.sizeBytes
+          || createHash('sha256').update(content).digest('hex') !== data.sha256) throw new ApiError('PDF_INTEGRITY_MISMATCH', 422);
+        if (content.byteLength > SERVER_LIMITS.cloudPdfMaxFileBytes) throw new ApiError('REQUEST_TOO_LARGE', 413);
+        // Marker checks do not claim complete PDF parsing, page validation or safety.
+        if (content.subarray(0, 5).toString('ascii') !== '%PDF-'
+          || !content.subarray(Math.max(0, content.byteLength - 1024)).includes(Buffer.from('%%EOF'))) {
+          throw new ApiError('INVALID_PDF', 415);
+        }
+        const existing = await this.cloudPdfRow(context, attachmentVersionId);
+        if (existing) return { copy: toCloudPdf(existing), replayed: true, quota: await this.cloudPdfQuota(context) };
+        this.checkCloudPdfHeadroom(await this.cloudPdfQuota(context), content.byteLength);
+        await context.client.query(`INSERT INTO paperquay.cloud_pdfs(account_id,attachment_version_id,paper_id,sha256,size_bytes,file_name,content)
+          VALUES ($1,$2,$3,$4,$5,$6,$7)`, [context.account.id, attachmentVersionId, data.paperId, data.sha256, data.sizeBytes, data.fileName, content]);
+        await this.hooks.beforeCommit?.({ kind: 'cloud-put', attachmentVersionId, accountId: context.account.id, deviceId: context.device.id });
+        return { copy: toCloudPdf((await this.cloudPdfRow(context, attachmentVersionId))!), replayed: false,
+          quota: await this.cloudPdfQuota(context) };
+      });
+    } catch (error) {
+      if (typeof error === 'object' && error !== null && 'constraint' in error && error.constraint === 'paperquay_cloud_pdf_quota') {
+        throw new ApiError('CLOUD_PDF_QUOTA_EXCEEDED', 409);
+      }
+      throw error;
+    }
+  }
+
+  async downloadCloudPdf(identity: VerifiedIdentity, attachmentVersionId: string): Promise<{ copy: CloudPdfCopy; content: Buffer }> {
+    this.requireCloudPdfs();
+    return this.withAccount(identity, false, async (context) => {
+      await this.cloudPdfVersion(context, attachmentVersionId, true);
+      const row = await this.cloudPdfRow(context, attachmentVersionId, true);
+      if (!row) throw new ApiError('CLOUD_PDF_NOT_FOUND', 404);
+      return { copy: toCloudPdf(row), content: row.content! };
+    });
+  }
+
+  async deleteCloudPdf(identity: VerifiedIdentity, attachmentVersionId: string): Promise<{ attachmentVersionId: string; deleted: boolean; quota: CloudPdfQuota }> {
+    this.requireCloudPdfs();
+    return this.withAccount(identity, false, async (context) => {
+      const version = await this.cloudPdfVersion(context, attachmentVersionId, false);
+      if (BigInt(version.cloud_pdf_generation) >= BigInt(Number.MAX_SAFE_INTEGER)) throw new ApiError('CLOUD_PDF_CHANGED', 409);
+      // Even an absent-copy delete invalidates already-admitted uploads. Only an
+      // explicit later request can obtain this new generation and create a copy.
+      await context.client.query(`UPDATE paperquay.entities SET cloud_pdf_generation = cloud_pdf_generation + 1
+        WHERE account_id = $1 AND entity_type = 'attachmentVersion' AND entity_id = $2`, [context.account.id, attachmentVersionId]);
+      const deleted = await context.client.query('DELETE FROM paperquay.cloud_pdfs WHERE account_id = $1 AND attachment_version_id = $2',
+        [context.account.id, attachmentVersionId]);
+      await this.hooks.beforeCommit?.({ kind: 'cloud-delete', attachmentVersionId, accountId: context.account.id, deviceId: context.device.id });
+      return { attachmentVersionId, deleted: deleted.rowCount === 1, quota: await this.cloudPdfQuota(context) };
+    });
   }
 
   private async receipt(context: TransactionContext, opId: string, hash: string): Promise<PushResult | undefined> {
@@ -325,7 +471,7 @@ export class PostgresSyncStore implements SyncRepository {
         entity_type: operation.entityType, entity_id: operation.entityId, schema_version: 1,
         revision: String(revision), data, deleted_at: deletedAt ? new Date(deletedAt) : null,
         updated_at: new Date(updatedAt), created_by_device_id: existing?.created_by_device_id ?? context.device.id,
-        modified_by_device_id: context.device.id,
+        modified_by_device_id: context.device.id, cloud_pdf_generation: existing?.cloud_pdf_generation ?? '0',
       }),
     };
     preflight?.(candidate);

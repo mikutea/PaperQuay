@@ -15,7 +15,8 @@ import type { TokenVerifier, VerifiedIdentity } from './auth.ts';
 import { ApiError, isTransientDatabaseError } from './errors.ts';
 import { SERVER_LIMITS } from './config.ts';
 import type { ServerConfig } from './config.ts';
-import type { DeviceRegistration, ResolveRequest, SyncRepository } from './types.ts';
+import type { CloudPdfRepository, DeviceRegistration, ResolveRequest, SyncRepository } from './types.ts';
+import { registerCloudPdfRoutes } from './cloud-pdf.ts';
 
 declare module 'fastify' {
   interface FastifyRequest { identity: VerifiedIdentity | null }
@@ -24,10 +25,12 @@ declare module 'fastify' {
 interface AppOptions {
   config: ServerConfig;
   repository: SyncRepository;
+  cloudPdfRepository?: CloudPdfRepository;
   verifyToken: TokenVerifier;
   logger?: FastifyServerOptions['logger'];
   /** Used only by isolated tests, never set by process environment. */
   rateLimitEnabled?: boolean;
+  cloudPdfTransferTimeoutMs?: number;
 }
 
 class PrivateLogController extends LogController {
@@ -133,7 +136,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   app.decorateRequest('identity', null);
   await app.register(cors, {
     origin: config.allowedOrigins.length ? config.allowedOrigins : false,
-    methods: ['GET', 'POST', 'DELETE'], allowedHeaders: ['Authorization', 'Content-Type', SYNC_FEATURE_HEADER],
+    methods: ['GET', 'POST', 'PUT', 'DELETE'], allowedHeaders: ['Authorization', 'Content-Type', SYNC_FEATURE_HEADER],
     credentials: false, strictPreflight: true, maxAge: 600,
   });
   if (options.rateLimitEnabled !== false) {
@@ -188,7 +191,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   app.get('/v1/capabilities', { onRequest: enforceRateLimit }, async () => ({
     protocolVersion: 1,
     entitySchemas: Object.fromEntries(ENTITY_TYPES.map((type) => [type, [1]])),
-    features: { paperOrganization: 1 },
+    features: { paperOrganization: 1, ...(config.cloudPdfEnabled ? { privatePdfStorage: 1 } : {}) },
     deviceBinding: 'oidc-session',
     limits: {
       maxBatchOperations: SYNC_LIMITS.maxBatchOperations,
@@ -206,7 +209,9 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       maxActiveDeviceSessions: SERVER_LIMITS.maxDevices,
       maxRetainedDeviceSessions: SERVER_LIMITS.maxRetainedDeviceSessions,
     },
-    pdfStorage: false,
+    pdfStorage: config.cloudPdfEnabled,
+    ...(config.cloudPdfEnabled ? { cloudPdf: { maxFileBytes: SERVER_LIMITS.cloudPdfMaxFileBytes,
+      maxAccountBytes: config.cloudPdfAccountBytes, maxCopies: SERVER_LIMITS.cloudPdfMaxCopies } } : {}),
     tombstoneRetention: 'no-pruning-in-m1',
   }));
   app.post<{ Body: DeviceRegistration }>('/v1/devices', {
@@ -264,5 +269,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   app.post<{ Params: { id: string }; Body: ResolveRequest }>('/v1/conflicts/:id/resolve', {
     onRequest: authenticate, schema: { params: idParams, body: resolveSchema, response: { 200: PUSH_RESULT_SCHEMA } },
   }, async (request) => presentResult(request, await repository.resolveConflict(identity(request), request.params.id, request.body)));
+  await registerCloudPdfRoutes(app, { enabled: config.cloudPdfEnabled, repository: options.cloudPdfRepository,
+    sessions: repository, authenticate, transferTimeoutMs: options.cloudPdfTransferTimeoutMs });
   return app;
 }

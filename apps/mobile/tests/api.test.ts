@@ -166,3 +166,29 @@ test('conflict payloads cannot attach the body of another entity to an otherwise
     code: 'INVALID_RESPONSE',
   });
 });
+
+test('private PDF copies require explicit versioned capability and validated limits; old or disabled servers reset it', async () => {
+  const limits = { maxFileBytes: 64 * 1024 * 1024, maxAccountBytes: 1024 * 1024 * 1024, maxCopies: 512 };
+  let body: unknown;
+  const api = new SyncApi('https://sync.example.test', async () => 'test-token', async () => json(body));
+  const signal = new AbortController().signal;
+  const enabled = { protocolVersion: 1, pdfStorage: true, features: { paperOrganization: 1, privatePdfStorage: 1 }, cloudPdf: limits };
+  for (const disabled of [
+    { protocolVersion: 1 }, { ...enabled, pdfStorage: false },
+    { ...enabled, features: { privatePdfStorage: 2 } }, { ...enabled, features: {} },
+  ]) {
+    body = enabled;
+    assert.deepEqual(await api.capabilities(signal), { paperOrganization: true });
+    assert.deepEqual(api.cloudPdfCapability, limits);
+    body = disabled;
+    await api.capabilities(signal);
+    assert.equal(api.cloudPdfCapability, null);
+  }
+  for (const invalid of [undefined, { ...limits, maxFileBytes: 0 }, { ...limits, maxFileBytes: limits.maxFileBytes + 1 },
+    { ...limits, maxAccountBytes: 11 * 1024 * 1024 * 1024 }, { ...limits, maxCopies: 513 }, { ...limits, maxCopies: '512' }]) {
+    body = enabled; await api.capabilities(signal);
+    body = { ...enabled, cloudPdf: invalid };
+    await assert.rejects(api.capabilities(signal), { code: 'INVALID_RESPONSE' });
+    assert.equal(api.cloudPdfCapability, null);
+  }
+});
