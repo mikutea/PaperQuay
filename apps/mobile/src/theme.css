@@ -1,0 +1,244 @@
+/* Keep the existing light palette; follow the system preference for app chrome. */
+:root {
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    color: #e8eeeb;
+    background: #111817;
+    --theme-background: #111817;
+    --theme-surface: #17211e;
+    --theme-soft: #243730;
+    --theme-selected: #163e34;
+    --theme-text: #e8eeeb;
+    --theme-control-border: #637b70;
+    --theme-disabled: #96aaa0;
+    --accent: #5eead4;
+    --accent-dark: #5eead4;
+    --line: #35483f;
+    --muted: #b8c8c0;
+    --subtle: #a1b4aa;
+    --danger: #fca5a5;
+    --warning: #fcd38d;
+  }
+
+  ::selection {
+    color: #10251d;
+    background: #5eead4;
+  }
+
+  input,
+  textarea,
+  select {
+    color: var(--theme-text);
+    background: var(--theme-surface);
+    border-color: var(--theme-control-border);
+    caret-color: var(--accent);
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--subtle);
+    opacity: 1;
+  }
+
+  .field input,
+  .field textarea,
+  .field select,
+  .markdown-input {
+    color: var(--theme-text);
+  }
+
+  .sidebar,
+  .mobile-header,
+  .bottom-nav,
+  .editor-placeholder,
+  .pr-reader {
+    background: var(--theme-background);
+  }
+
+  .main-content,
+  .list-pane,
+  .editor-pane,
+  .editor-footer,
+  .global-message,
+  .reading-side,
+  .pr-heading,
+  .pr-toolbar,
+  .pr-panel,
+  .pr-footer,
+  .ai-settings,
+  .ai-context,
+  .ai-result {
+    background: var(--theme-surface);
+  }
+
+  .search-box,
+  .association-field select,
+  .markdown-preview pre,
+  .secondary:hover:not(:disabled),
+  .icon-button:hover:not(:disabled),
+  .nav-button:hover,
+  .entity-row:hover,
+  .pr-reader button:hover:not(:disabled) {
+    background: var(--theme-soft);
+  }
+
+  .secondary {
+    background: var(--theme-surface);
+    border-color: var(--theme-control-border);
+  }
+
+  .primary,
+  .pr-reader .pr-primary {
+    color: #10251d;
+    background: var(--accent);
+  }
+
+  .primary:hover:not(:disabled),
+  .pr-reader .pr-primary:hover:not(:disabled) {
+    background: #99f6e4;
+  }
+
+  .brand-mark,
+  .device-badge,
+  .ai-context-top > span,
+  .text-button:hover:not(:disabled),
+  .nav-button.active,
+  .nav-button.active:hover,
+  .entity-row.selected,
+  .ai-action-picker button[aria-pressed='true'],
+  .ai-result-switch button[aria-pressed='true'],
+  .pr-reader button[aria-pressed='true'] {
+    background: var(--theme-selected);
+  }
+
+  .pr-reader button[aria-pressed='true'],
+  .pr-resume button,
+  .pr-results strong,
+  .pr-cache-list button,
+  .pr-empty > .icon,
+  .pr-selection-tools button,
+  .pr-reading-status button {
+    color: var(--accent);
+  }
+
+  .ai-result-switch button[aria-pressed='true'] {
+    border-color: var(--accent);
+  }
+
+  .pending-resolution,
+  .ai-success,
+  .ai-notice,
+  .pr-feedback,
+  .pr-source-result {
+    color: #99f6e4;
+    background: var(--theme-selected);
+    border-color: #438a73;
+  }
+
+  .draft-review,
+  .ai-warning {
+    color: var(--warning);
+    background: #332b1a;
+    border-color: #8d713a;
+  }
+
+  .error-banner,
+  .ai-error,
+  .pr-feedback-error {
+    color: var(--danger);
+    background: #3c2424;
+    border-color: #996060;
+  }
+
+  .row-state::before {
+    background: var(--subtle);
+  }
+
+  .row-state.pending::before {
+    background: var(--warning);
+  }
+
+  .empty-state > .icon,
+  .editor-placeholder > .icon,
+  .pr-title p,
+  .pr-muted,
+  .pr-outline button span,
+  .pr-annotation-kind,
+  .pr-delete-annotation,
+  .pr-comment > span,
+  .pr-cache-list li > span,
+  .pr-empty p,
+  .pr-selection-tools,
+  .pr-reading-status {
+    color: var(--subtle);
+  }
+
+  .pr-results span,
+  .pr-annotation-list small {
+    color: var(--muted);
+  }
+
+  .device-list li,
+  .pr-heading,
+  .pr-toolbar,
+  .pr-panel,
+  .pr-panel-heading,
+  .pr-divider,
+  .pr-outline li,
+  .pr-resume,
+  .pr-results li,
+  .pr-annotation-list li,
+  .pr-cache-list li,
+  .pr-footer {
+    border-color: var(--line);
+  }
+
+  .pr-panel-content > button:not(.pr-primary) {
+    border-color: var(--theme-control-border);
+  }
+
+  button:disabled,
+  .ai-workspace button:disabled,
+  .pr-reader button:disabled {
+    color: var(--theme-disabled);
+    opacity: 1;
+  }
+
+  .primary:disabled,
+  .pr-reader .pr-primary:disabled {
+    color: var(--theme-disabled);
+    background: var(--theme-soft);
+  }
+
+  input:disabled,
+  textarea:disabled,
+  select:disabled {
+    color: var(--theme-disabled);
+    -webkit-text-fill-color: var(--theme-disabled);
+    background-color: var(--theme-soft);
+    opacity: 1;
+  }
+
+  .pr-scroll {
+    background: #0b100e;
+  }
+
+  .pr-scroll:focus-visible {
+    outline-color: var(--accent);
+  }
+
+  /* Document pixels, annotation colors and transparent PDF text keep their own palette. */
+  .pr-page {
+    color-scheme: only light;
+    color: #1c1917;
+  }
+
+  .pr-text-layer ::selection {
+    color: transparent;
+    background: #0d94884d;
+  }
+}

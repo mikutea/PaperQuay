@@ -18,7 +18,7 @@
 | iOS / iPadOS | `capacitor://localhost` |
 | Android | `https://localhost` |
 
-模型流式请求依赖真实 `ReadableStream`、`AbortSignal` 和重定向拒绝；原生容器不会自动消除 CORS 限制。Android release 工程禁止 cleartext 和 mixed content。本文不修改任何实际 IdP 或生产服务配置。
+模型流式请求依赖真实 `ReadableStream`、`AbortSignal` 和重定向拒绝；原生容器不会自动消除 CORS 限制。Android Debug 与 Release 均禁止 cleartext 和 mixed content。本文不修改任何实际 IdP 或生产服务配置。
 
 ## 接入接口
 

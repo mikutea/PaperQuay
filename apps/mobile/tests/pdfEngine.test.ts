@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { PDFDocumentProxy } from 'pdfjs-dist';
-import { openVerifiedPdf, VerifiedPdf } from '../src/pdf/engine.ts';
+import type { PDFDocumentLoadingTask, PDFDocumentProxy, PDFWorker } from 'pdfjs-dist';
+import { openVerifiedPdf, VerifiedPdf, type PdfRuntime } from '../src/pdf/engine.ts';
 import { PdfError } from '../src/pdf/errors.ts';
 import { sha256 } from '../src/pdf/acquisition.ts';
 import { boundedCanvasScale, normalizedPointToViewport, pageWindow, quadBounds, rectToQuad, viewportPointToNormalized } from '../src/pdf/geometry.ts';
@@ -73,6 +73,111 @@ test('abort before opening and after opening never leaves usable document state'
   await assert.rejects(openVerifiedPdf(fixture(), { signal: before.signal }), code('CANCELLED'));
   const after = new AbortController(); const pdf = await openVerifiedPdf(fixture(), { signal: after.signal });
   after.abort(); await assert.rejects(pdf.page(0), code('CANCELLED')); await pdf.close();
+});
+
+test('real PDF.js explicitly owned workers close and reopen without detaching cached bytes', async () => {
+  const library = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const workers: PDFWorker[] = [];
+  const runtime: PdfRuntime = { library, createWorker() {
+    const worker = new library.PDFWorker(); workers.push(worker);
+    return { ready: worker.promise.then(() => worker), dispose: () => worker.destroy() };
+  } };
+  const bytes = fixture(); const expected = await version(bytes);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const abort = new AbortController();
+    const pdf = await openVerifiedPdf(bytes, { expected, runtime, signal: abort.signal });
+    assert.equal((await pdf.documentText()).length, 3);
+    assert.equal(workers[attempt].destroyed, false);
+    if (attempt === 1) abort.abort();
+    await Promise.all([pdf.close(), pdf.close()]);
+    assert.equal(workers[attempt].destroyed, true);
+    assert.equal(await sha256(bytes), expected.data.sha256);
+  }
+  assert.equal(new Set(workers).size, 3);
+});
+
+function deferred<T>() {
+  let resolve!: (value: T) => void; let reject!: (error: Error) => void;
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
+}
+
+test('worker startup failures are reader errors and release explicit worker ownership', async () => {
+  for (const constructorFailure of [false, true]) {
+    let destroyed = 0; let documentRequests = 0;
+    const runtime: PdfRuntime = {
+      library: { getDocument() { documentRequests++; throw new Error('must not parse'); } } as unknown as PdfRuntime['library'],
+      createWorker() {
+        if (constructorFailure) throw new Error('Worker blocked');
+        return { ready: Promise.reject(new Error('Worker unavailable')), dispose() { destroyed++; } };
+      },
+    };
+    await assert.rejects(openVerifiedPdf(fixture(), { runtime }), code('READER_UNAVAILABLE'));
+    assert.equal(documentRequests, 0); assert.equal(destroyed, constructorFailure ? 0 : 1);
+  }
+});
+
+for (const reason of ['cancel', 'timeout'] as const) {
+  test(`${reason} before worker ready releases it once and ignores late readiness`, async (context) => {
+    context.mock.timers.enable({ apis: ['setTimeout'] });
+    const ready = deferred<void>(); const created = deferred<void>();
+    const abort = new AbortController(); let destroyed = 0; let documentRequests = 0;
+    const runtime: PdfRuntime = {
+      library: { getDocument() { documentRequests++; throw new Error('must not parse'); } } as unknown as PdfRuntime['library'],
+      createWorker() {
+        created.resolve();
+        return { ready: ready.promise.then(() => ({} as PDFWorker)), dispose() { destroyed++; } };
+      },
+    };
+    const opening = openVerifiedPdf(fixture(), { runtime, signal: abort.signal });
+    await created.promise;
+    if (reason === 'cancel') abort.abort();
+    else context.mock.timers.tick(PDF_LIMITS.operationTimeoutMs);
+    await assert.rejects(opening, code(reason === 'cancel' ? 'CANCELLED' : 'TIMEOUT'));
+    ready.resolve(); await Promise.resolve();
+    assert.equal(destroyed, 1); assert.equal(documentRequests, 0);
+  });
+}
+
+test('parse failure, resource failure and parse cancellation destroy the task before its explicit worker', async () => {
+  for (const reason of ['parse', 'resource', 'cancel'] as const) {
+    const created = deferred<void>(); const pending = deferred<PDFDocumentProxy>();
+    const events: string[] = []; const abort = new AbortController();
+    const runtime: PdfRuntime = {
+      library: { getDocument() {
+        created.resolve();
+        return { promise: reason === 'cancel' ? pending.promise : Promise.reject(new Error('Failed')),
+          async destroy() { assert.equal(events.length, 0); events.push('task'); await Promise.resolve(); },
+        } as unknown as PDFDocumentLoadingTask;
+      } } as unknown as PdfRuntime['library'],
+      createWorker() { return { ready: Promise.resolve({} as PDFWorker), dispose() { events.push('worker'); } }; },
+      resourceError: () => reason === 'resource' ? new PdfError('READER_RESOURCE') : null,
+    };
+    const opening = openVerifiedPdf(fixture(), { runtime, signal: abort.signal });
+    await created.promise;
+    if (reason === 'cancel') abort.abort();
+    await assert.rejects(opening, code(reason === 'cancel' ? 'CANCELLED' : reason === 'resource' ? 'READER_RESOURCE' : 'INVALID_PDF'));
+    assert.deepEqual(events, ['task', 'worker']);
+  }
+});
+
+test('a worker that cannot acknowledge parse teardown is released after a bounded grace period', async (context) => {
+  context.mock.timers.enable({ apis: ['setTimeout'] });
+  const created = deferred<void>(); const never = new Promise<never>(() => undefined);
+  const events: string[] = []; const abort = new AbortController();
+  const runtime: PdfRuntime = {
+    library: { getDocument() {
+      created.resolve();
+      return { promise: never, destroy() { events.push('task'); return never; } } as unknown as PDFDocumentLoadingTask;
+    } } as unknown as PdfRuntime['library'],
+    createWorker() { return { ready: Promise.resolve({} as PDFWorker), dispose() { events.push('worker'); } }; },
+  };
+  const opening = openVerifiedPdf(fixture(), { runtime, signal: abort.signal });
+  await created.promise; abort.abort();
+  assert.deepEqual(events, ['task']);
+  context.mock.timers.tick(PDF_LIMITS.teardownTimeoutMs);
+  await assert.rejects(opening, code('CANCELLED'));
+  assert.deepEqual(events, ['task', 'worker']);
 });
 
 test('crop-box anchors survive all display rotations, zoom and PDF user units', async () => {

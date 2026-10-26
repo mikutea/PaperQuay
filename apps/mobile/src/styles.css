@@ -1371,6 +1371,7 @@ strong {
 .reading-workspace.with-panel { grid-template-columns: minmax(0, 1fr) minmax(300px, 36%); }
 .reading-main { min-height: 0; min-width: 0; display: flex; flex-direction: column; }
 .reading-panel-tabs { flex-shrink: 0; display: flex; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--line); }
+.reading-main > .sync-status { flex-shrink: 0; padding: 0 16px; border-bottom: 1px solid var(--line); }
 .reading-side { min-height: 0; min-width: 0; overflow: auto; border-left: 1px solid var(--line); background: white; display: flex; flex-direction: column; }
 .reading-side-heading { display: flex; gap: 10px; justify-content: space-between; align-items: center; padding: 16px; }
 .reading-side-heading h2 { margin: 0; font-size: 16px; }

@@ -9,6 +9,7 @@ import { Icon } from './Icon.tsx';
 import { getPdfCache } from '../pdf/cache.ts';
 import { registerPdfTask } from '../pdf/tasks.ts';
 import { InitialPdfOpening, useInitialPdfRestore } from '../pdf/opening.ts';
+import { useReaderDirty } from '../pdf/dirty.ts';
 import { downloadPublicPdf, inspectPublicPdf, readLocalPdf, safePdfName, type PdfSourceProbe } from '../pdf/acquisition.ts';
 import { openVerifiedPdf, type PdfOutlineItem, type PdfRuntime, type PdfSearchMatch, type VerifiedPdf } from '../pdf/engine.ts';
 import { PdfError, throwIfAborted } from '../pdf/errors.ts';
@@ -74,15 +75,22 @@ export function PaperReader(props: PaperReaderProps) {
   const documentAbort = useRef<AbortController | null>(null);
   const releaseDocumentTask = useRef<(() => void) | null>(null);
   const invalidateContext = useRef(props.onContextInvalidated); invalidateContext.current = props.onContextInvalidated;
-  const current = useRef<Loaded | null>(null); current.current = loaded;
+  const current = useRef<Loaded | null>(null);
   const activeBytes = useRef<Uint8Array | null>(null);
   const writer = useRef<ReadingCheckpointWriter | null>(null);
   const currentPoint = useRef<ReadingPoint>({ pageIndex: 0, offsetRatio: 0 });
   const pendingJump = useRef<PdfCitationTarget | null>(null);
   const seenJump = useRef<string | null>(null);
   const opening = useRef(new InitialPdfOpening());
-  const draftRef = useRef<CommentDraft | null>(null); draftRef.current = commentDraft;
+  const draftRef = useRef<CommentDraft | null>(null);
   const commentWork = useRef<Promise<void> | null>(null);
+  const dirty = useReaderDirty(props.onDirtyChange);
+  const updateCommentDraft = useCallback((draft: CommentDraft | null) => {
+    draftRef.current = draft; dirty.setComment(draft); setCommentDraft(draft);
+  }, [dirty]);
+  const updatePositionStatus = useCallback((status: PositionStatus) => {
+    dirty.setPosition(status); setPositionStatus(status);
+  }, [dirty]);
   const cache = useMemo(() => getPdfCache(), []);
   const cacheEntry = cacheEntries.find((entry) => entry.versionId === loaded?.version.entityId);
   const annotationRecords = useMemo(() => props.annotations.filter((record) => record.entityType === 'annotation'
@@ -101,8 +109,8 @@ export function PaperReader(props: PaperReaderProps) {
     writer.current?.stop(); writer.current = null; activeBytes.current = null;
     void current.current?.pdf.close(); current.current = null;
     setLoaded(null); setSelection(null); setFocus(null); setOutline([]); setSearchResults([]); setSearched(false);
-    setAreaMode(false); setPositionStatus('idle');
-  }, []);
+    setAreaMode(false); updatePositionStatus('idle');
+  }, [updatePositionStatus]);
 
   const runTask = useCallback(async (label: string, work: (task: Task) => Promise<void>) => {
     taskAbort.current?.abort();
@@ -130,7 +138,9 @@ export function PaperReader(props: PaperReaderProps) {
 
   const saveComment = useCallback(async () => {
     if (commentWork.current) { await commentWork.current; return; }
+    if (!draftRef.current || draftRef.current.comment === draftRef.current.saved) return;
     const identity = readerIdentity(controller, scope);
+    const finishSave = dirty.beginSave('comment');
     const work = (async () => {
       while (draftRef.current && draftRef.current.comment !== draftRef.current.saved) {
         const draft = draftRef.current;
@@ -144,21 +154,17 @@ export function PaperReader(props: PaperReaderProps) {
         await controller.save({ entityType: 'annotation', entityId: draft.entityId, mutation: 'put',
           data: { ...latest, comment: draft.comment } }, visible.revision);
         if (!sameReaderIdentity(controller, identity) || !mounted.current || liveScope.current !== scopeKey) return;
-        setCommentDraft((value) => {
-          if (!value || value.entityId !== draft.entityId) return value;
-          const next = { ...value, saved: draft.comment, revision: visible.revision };
-          draftRef.current = next; return next;
-        });
-        // React may batch the state updater; update the draft synchronously for the next iteration.
-        if (draftRef.current?.entityId === draft.entityId) draftRef.current = { ...draftRef.current, saved: draft.comment };
+        // Advance only the saved base; edits made during the write remain the current draft.
+        const value = draftRef.current;
+        if (value?.entityId === draft.entityId) updateCommentDraft({ ...value, saved: draft.comment, revision: visible.revision });
       }
       if (mounted.current) setCommentStatus('saved');
     })();
     commentWork.current = work;
     try { await work; }
     catch (failure) { if (mounted.current && liveScope.current === scopeKey) { setCommentStatus('error'); setError(errorMessage(failure)); } throw failure; }
-    finally { if (commentWork.current === work) commentWork.current = null; }
-  }, [controller, scope, scopeKey]);
+    finally { if (commentWork.current === work) commentWork.current = null; finishSave(); }
+  }, [controller, dirty, scope, scopeKey, updateCommentDraft]);
 
   const finishPending = useCallback(async () => { await saveComment(); await writer.current?.flush(); }, [saveComment]);
 
@@ -202,10 +208,10 @@ export function PaperReader(props: PaperReaderProps) {
       }
       const result = { pdf, version, runtime }; current.current = result; activeBytes.current = bytes;
       writer.current = new ReadingCheckpointWriter(controller, scope, version, {
-        onStatus: (status) => { if (mounted.current && current.current === result && sameReaderIdentity(controller, task.identity)) setPositionStatus(status); },
+        onStatus: (status) => { if (mounted.current && current.current === result && sameReaderIdentity(controller, task.identity)) updatePositionStatus(status); },
       });
       currentPoint.current = point; setPageIndex(point.pageIndex); setLoaded(result); setSelectedVersionId(version.entityId);
-      setPanel(null); setSelection(null); setCommentDraft(null); setCommentStatus('idle');
+      setPanel(null); setSelection(null); updateCommentDraft(null); setCommentStatus('idle');
       writer.current.record(point);
       void pdf.outline(abort.signal).then((items) => { if (current.current === result && mounted.current) setOutline(items); }).catch(() => undefined);
       await refreshCache().catch(() => undefined);
@@ -215,7 +221,7 @@ export function PaperReader(props: PaperReaderProps) {
       if (pdf) await pdf.close();
       if (!current.current) { abort.abort(); releaseDocumentTask.current?.(); releaseDocumentTask.current = null; }
     }
-  }, [cache, closeDocument, controller, finishPending, paper.entityId, refreshCache, scope, versions]);
+  }, [cache, closeDocument, controller, finishPending, paper.entityId, refreshCache, scope, updateCommentDraft, updatePositionStatus, versions]);
 
   const loadCached = useCallback(async (version: PdfVersion) => {
     opening.current.beginExplicitOpen();
@@ -229,7 +235,8 @@ export function PaperReader(props: PaperReaderProps) {
     });
   }, [cache, closeDocument, finishPending, openBytes, runTask, scope]);
 
-  useEffect(() => {
+  // Retire this reader during the unmount commit, before queued navigation continuations resume.
+  useLayoutEffect(() => {
     mounted.current = true;
     void refreshCache().catch((failure) => { if (mounted.current) setError(errorMessage(failure)); });
     return () => {
@@ -238,10 +245,6 @@ export function PaperReader(props: PaperReaderProps) {
       writer.current?.stop(); void current.current?.pdf.close(); activeBytes.current = null;
     };
   }, [scopeKey]);
-
-  const dirty = Boolean(commentDraft && commentDraft.comment !== commentDraft.saved)
-    || annotationSaving || positionStatus === 'saving' || positionStatus === 'error';
-  useEffect(() => { props.onDirtyChange?.(dirty); }, [dirty, props.onDirtyChange]);
 
   useInitialPdfRestore(opening.current, versions, selectedVersionId, Boolean(jumpTo), (initial) => {
     setSelectedVersionId(initial.entityId); void loadCached(initial);
@@ -259,12 +262,12 @@ export function PaperReader(props: PaperReaderProps) {
     const persist = () => { if (document.visibilityState === 'hidden') void finishPending().catch(() => undefined); };
     const pagehide = () => { void finishPending().catch(() => undefined); };
     const beforeunload = (event: BeforeUnloadEvent) => {
-      if (draftRef.current && draftRef.current.comment !== draftRef.current.saved) { event.preventDefault(); event.returnValue = ''; }
+      if (dirty.dirty) { event.preventDefault(); event.returnValue = ''; }
     };
     document.addEventListener('visibilitychange', persist); window.addEventListener('pagehide', pagehide);
     window.addEventListener('beforeunload', beforeunload);
     return () => { document.removeEventListener('visibilitychange', persist); window.removeEventListener('pagehide', pagehide); window.removeEventListener('beforeunload', beforeunload); };
-  }, [finishPending]);
+  }, [dirty, finishPending]);
 
   useLayoutEffect(() => {
     if (!scroll.current || !loaded) return;
@@ -378,8 +381,9 @@ export function PaperReader(props: PaperReaderProps) {
   };
 
   const addAnnotation = async (kind: AnnotationData['kind'], anchor = selection) => {
-    if (!anchor || !loaded || annotationSaving) return;
+    if (!anchor || !loaded || dirty.annotationSaving) return;
     let identity: ReaderIdentity | undefined; const version = loaded.version;
+    const finishSave = dirty.beginSave('annotation');
     setAnnotationSaving(true); setError(null);
     try {
       identity = readerIdentity(controller, scope);
@@ -390,7 +394,7 @@ export function PaperReader(props: PaperReaderProps) {
         setSelection(null); setAreaMode(false); globalThis.getSelection()?.removeAllRanges(); setNotice('批注已保存，联网后同步。');
       }
     } catch (failure) { if (mounted.current && (!identity || sameReaderIdentity(controller, identity))) setError(errorMessage(failure)); }
-    finally { if (mounted.current) setAnnotationSaving(false); }
+    finally { finishSave(); if (mounted.current) setAnnotationSaving(dirty.annotationSaving); }
   };
 
   const selectAnnotation = async (record: VisibleEntity) => {
@@ -403,11 +407,12 @@ export function PaperReader(props: PaperReaderProps) {
     goTo(data.anchor.pageIndex); setFocus({ requestId: crypto.randomUUID(), attachmentVersionId: data.attachmentVersionId,
       sha256: reading.version.data.sha256, pageIndex: data.anchor.pageIndex, quads: data.anchor.quads });
     const draft = { entityId: record.entityId, revision: record.revision, data, comment: data.comment, saved: data.comment };
-    draftRef.current = draft; setCommentDraft(draft); setCommentStatus('idle');
+    updateCommentDraft(draft); setCommentStatus('idle');
   };
 
   const deleteAnnotation = async (record: VisibleEntity) => {
     if (!window.confirm('删除这条批注？')) return;
+    const finishSave = dirty.beginSave('annotation');
     setAnnotationSaving(true);
     try {
       const identity = readerIdentity(controller, scope);
@@ -417,10 +422,10 @@ export function PaperReader(props: PaperReaderProps) {
       if (!latest || latest.deleted) throw new PdfError('ANNOTATION_CHANGED');
       await controller.save({ entityType: 'annotation', entityId: record.entityId, mutation: 'delete', data: null }, latest.revision);
       if (!sameReaderIdentity(controller, identity) || !mounted.current) return;
-      if (draftRef.current?.entityId === record.entityId) { draftRef.current = null; setCommentDraft(null); }
+      if (draftRef.current?.entityId === record.entityId) updateCommentDraft(null);
       setNotice('批注已删除，联网后同步。');
     } catch (failure) { if (mounted.current) setError(errorMessage(failure)); }
-    finally { if (mounted.current) setAnnotationSaving(false); }
+    finally { finishSave(); if (mounted.current) setAnnotationSaving(dirty.annotationSaving); }
   };
 
   const ask = (kind: PdfAiContext['scope']) => {
@@ -468,7 +473,13 @@ export function PaperReader(props: PaperReaderProps) {
     });
   };
   const back = async () => {
-    try { await finishPending(); props.onBack(); }
+    try {
+      await finishPending();
+      if (!mounted.current || liveScope.current !== scopeKey) return;
+      // Flush completion can precede React's next commit. Publish the current aggregate,
+      // including new edits or annotation writes that started while the flush was pending.
+      dirty.publish(); props.onBack();
+    }
     catch (failure) { setError(errorMessage(failure)); }
   };
   const selectText = useCallback((anchor: AnnotationAnchor | null, index: number) => {
@@ -565,7 +576,10 @@ export function PaperReader(props: PaperReaderProps) {
               <button type="button" className="pr-delete-annotation" aria-label={`删除第 ${data.anchor.pageIndex + 1} 页批注`} onClick={() => void deleteAnnotation(record)}><Icon name="trash" /></button>
             </li>; })}</ol>
           {commentDraft && <div className="pr-comment"><label>批注内容<textarea value={commentDraft.comment} maxLength={262144} rows={5}
-            onChange={(event) => { const next = { ...commentDraft, comment: event.target.value }; draftRef.current = next; setCommentDraft(next); }}
+            onChange={(event) => {
+              const value = draftRef.current;
+              if (value?.entityId === commentDraft.entityId) updateCommentDraft({ ...value, comment: event.target.value });
+            }}
             onBlur={() => { void saveComment().catch(() => undefined); }} /></label>
             <span role="status">{commentStatus === 'saving' ? '正在保存…' : commentStatus === 'saved' ? '已保存' : commentStatus === 'error' ? '尚未保存' : '内容会自动保存'}</span>
             {commentStatus === 'error' && <button type="button" onClick={() => { void saveComment().catch(() => undefined); }}>重试保存</button>}

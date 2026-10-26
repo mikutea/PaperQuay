@@ -2,7 +2,7 @@
 
 本方案面向可长期使用、可维护、可恢复的产品质量。完整目标是让 iPhone、Android 手机、iPad 和 Android 平板拥有与桌面端相同的业务能力，并按触控、屏幕和系统限制重新组织界面。阅读、笔记、划线和独立调用大模型 API 是核心能力。
 
-**当前阶段：M0 已完成，M1 账号与同步基础已实现并完成本机集成验收；CI 与代码/安全审查由 [PR #34](https://github.com/mikutea/PaperQuay/pull/34) 跟踪。** 53 项完整需求与 27 组验收场景仍按 M0–M5 推进；本次并不代表原生端或完整业务已经交付。代码、自动化验证、真实设备验证和生产验收分别记录。
+**当前阶段：M0 已完成，M1 已通过 [PR #34](https://github.com/mikutea/PaperQuay/pull/34) 合入；M2 阅读、笔记、原生工程和独立 AI 已实现，正在完成自动化与提交审查。** 用户明确本轮暂不接实机，M2 实机门槛尚未关闭。53 项完整需求与 27 组验收场景仍按 M0–M5 推进；代码、自动化验证、真实设备验证和生产验收分别记录。
 
 | 文档 | 用途 |
 | --- | --- |
@@ -12,6 +12,8 @@
 | [协议与架构](architecture.md) | 跨端实体、同步规则、身份及平台边界 |
 | [可视化计划](index.html) | 在浏览器中查看阶段与需求矩阵 |
 | [M1 验收记录](qa/README.md) | 真实服务、离线冲突、账号隔离与视觉证据 |
+| [M2 验证记录](qa/m2.md) | 阅读、AI、原生适配与自动化边界 |
+| [M2 检查点](m2-checkpoint.md) | 当前实现、回归结果与剩余门槛 |
 
 M1 代码入口为 [`apps/mobile`](../../apps/mobile/README.md)、[`server`](../../server/README.md) 与 [`packages/sync-core`](../../packages/sync-core/README.md)。手机文库和平板笔记已连接真实 OIDC 与 PostgreSQL；已验证两个独立浏览器 origin 的同步、离线保存、冲突后继续编辑及完整人工合并。桌面端本轮提供纯白名单投影，尚未接入旧 Reader 的双向同步。
 
@@ -27,7 +29,7 @@ M1 代码入口为 [`apps/mobile`](../../apps/mobile/README.md)、[`server`](../
 
 ## 已知基线与边界
 
-基线为 `main` 的 `6e137a3d81e3f1198766c9d199c9c68440dff7f3`。现有桌面端存在 SQLite 文库、localStorage 阅读历史、独立笔记与 radar 状态；这些内容不能原样打包成同步协议。
+方案初始基线为 `6e137a3d81e3f1198766c9d199c9c68440dff7f3`；M2 从 M1 合并后的 `main` 提交 `98eb84e36d8e5746d5a1433398de8572f0163de6` 开始。现有桌面端存在 SQLite 文库、localStorage 阅读历史、独立笔记与 radar 状态；这些内容不能原样打包成同步协议。
 
 旧阅读坐标没有历史文件 hash 证据时只能保留为未验证记录；不能用当前文件 hash 猜测旧坐标属于哪个版本。富文本笔记的真值是 `contentJson`，M1 不将其压平为 Markdown 后回写。
 

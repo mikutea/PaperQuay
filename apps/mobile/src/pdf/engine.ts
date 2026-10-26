@@ -1,10 +1,11 @@
-import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist';
+import type { PDFDocumentLoadingTask, PDFDocumentProxy, PDFPageProxy, PDFWorker } from 'pdfjs-dist';
 import type { DocumentInitParameters, TextItem } from 'pdfjs-dist/types/src/display/api.d.ts';
 import { checkCompletePdfBytes, sha256 } from './acquisition.ts';
 import { PdfError, boundedSignal, throwIfAborted } from './errors.ts';
 import { PDF_LIMITS, type PdfVersion } from './types.ts';
 import type { CropBox } from './geometry.ts';
 import { boundedTextContent } from './textContent.ts';
+import type { PdfWorkerLease } from './ownedWorker.ts';
 
 export interface PdfPageInfo { cropBox: CropBox; width: number; height: number; rotation: number; userUnit: number }
 export interface PdfOutlineItem { title: string; pageIndex: number | null; depth: number }
@@ -12,6 +13,22 @@ export interface PdfSearchMatch { pageIndex: number; excerpt: string; offset: nu
 export interface PdfRuntime {
   library: typeof import('pdfjs-dist');
   options?: Partial<DocumentInitParameters>;
+  createWorker?: () => PdfWorkerLease;
+  resourceError?: () => PdfError | null;
+}
+
+async function destroyPdfTask(task: PDFDocumentLoadingTask | undefined, dispose: () => void): Promise<void> {
+  if (!task) { dispose(); return; }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    // A crashed worker cannot acknowledge document termination. Do not retain it indefinitely.
+    await Promise.race([
+      task.destroy().catch(() => undefined),
+      new Promise<void>((resolve) => { timer = setTimeout(resolve, PDF_LIMITS.teardownTimeoutMs); }),
+    ]);
+  } finally {
+    clearTimeout(timer); dispose();
+  }
 }
 
 export class VerifiedPdf {
@@ -21,10 +38,12 @@ export class VerifiedPdf {
   readonly pages: PdfPageInfo[];
   readonly pageCount: number;
   private disposed = false;
+  private closing: Promise<void> | undefined;
   private readonly textCache = new Map<number, string>();
   private readonly detachAbort: () => void;
 
-  constructor(document: PDFDocumentProxy, hash: string, size: number, pages: PdfPageInfo[], signal?: AbortSignal) {
+  constructor(document: PDFDocumentProxy, hash: string, size: number, pages: PdfPageInfo[], signal?: AbortSignal,
+    private readonly runtime?: { dispose: () => void; resourceError?: () => PdfError | null }) {
     this.document = document; this.sha256 = hash; this.sizeBytes = size; this.pages = pages; this.pageCount = pages.length;
     const abort = () => { void this.close(); };
     signal?.addEventListener('abort', abort, { once: true });
@@ -52,6 +71,8 @@ export class VerifiedPdf {
       const content = await boundedTextContent(page, signal);
       throwIfAborted(signal);
       if (this.disposed) throw new PdfError('CANCELLED');
+      const resourceError = this.runtime?.resourceError?.();
+      if (resourceError) throw resourceError;
       let text = '';
       for (const item of content.items) {
         if (!('str' in item)) continue;
@@ -127,10 +148,10 @@ export class VerifiedPdf {
     return output;
   }
 
-  async close(): Promise<void> {
-    if (this.disposed) return;
+  close(): Promise<void> {
+    if (this.closing) return this.closing;
     this.disposed = true; this.detachAbort(); this.textCache.clear();
-    await this.document.loadingTask.destroy().catch(() => undefined);
+    return this.closing = destroyPdfTask(this.document.loadingTask, () => this.runtime?.dispose());
   }
 }
 
@@ -150,14 +171,43 @@ export async function openVerifiedPdf(bytes: Uint8Array, options: {
   const library = options.runtime?.library ?? await import('pdfjs-dist/legacy/build/pdf.mjs');
   throwIfAborted(options.signal);
   const bounded = boundedSignal(options.signal, PDF_LIMITS.operationTimeoutMs);
-  const task = library.getDocument({ ...options.runtime?.options, data: bytes.slice(),
-    verbosity: 0, enableXfa: false, stopAtErrors: true, disableAutoFetch: true, disableStream: true,
-    maxImageSize: 32 * 1024 * 1024, canvasMaxAreaInBytes: 16 * 1024 * 1024,
-  });
-  const abort = () => { void task.destroy().catch(() => undefined); };
+  let task: PDFDocumentLoadingTask | undefined;
+  let worker: PDFWorker | undefined;
+  let ownedWorker: PdfWorkerLease | undefined;
+  let workerDisposed = false;
+  const disposeWorker = () => {
+    if (workerDisposed || !ownedWorker) return;
+    workerDisposed = true; ownedWorker.dispose();
+  };
+  let destroying: Promise<void> | undefined;
+  const destroyTask = () => destroying ??= destroyPdfTask(task, disposeWorker);
+  let rejectAbort!: (error: PdfError) => void;
+  const aborted = new Promise<never>((_resolve, reject) => { rejectAbort = reject; });
+  // The same cancellation promise also covers a worker that never finishes initialization.
+  void aborted.catch(() => undefined);
+  const abort = () => {
+    rejectAbort(bounded.error());
+    // Keep an initialized worker alive until its document transport has acknowledged teardown.
+    void destroyTask();
+  };
   bounded.signal.addEventListener('abort', abort, { once: true });
   try {
-    const document = await task.promise;
+    if (options.runtime?.createWorker) {
+      try {
+        ownedWorker = options.runtime.createWorker();
+        throwIfAborted(bounded.signal);
+        worker = await Promise.race([ownedWorker.ready, aborted]);
+      } catch {
+        if (bounded.signal.aborted) throw bounded.error();
+        throw new PdfError('READER_UNAVAILABLE');
+      }
+    }
+    throwIfAborted(bounded.signal);
+    task = library.getDocument({ ...options.runtime?.options, ...(worker ? { worker } : {}), data: bytes.slice(),
+      verbosity: 0, enableXfa: false, stopAtErrors: true, disableAutoFetch: true, disableStream: true,
+      maxImageSize: 32 * 1024 * 1024, canvasMaxAreaInBytes: 16 * 1024 * 1024,
+    });
+    const document = await Promise.race([task.promise, aborted]);
     if (!Number.isInteger(document.numPages) || document.numPages < 1) throw new PdfError('INVALID_PDF');
     if (document.numPages > PDF_LIMITS.maxPages) throw new PdfError('TOO_MANY_PAGES');
     if (options.expected?.data.pageCount != null && options.expected.data.pageCount !== document.numPages) {
@@ -166,7 +216,7 @@ export async function openVerifiedPdf(bytes: Uint8Array, options: {
     const pages: PdfPageInfo[] = [];
     for (let index = 0; index < document.numPages; index++) {
       throwIfAborted(bounded.signal);
-      const page = await document.getPage(index + 1);
+      const page = await Promise.race([document.getPage(index + 1), aborted]);
       const viewport = page.getViewport({ scale: 1 });
       if (page.view.length !== 4 || !page.view.every(Number.isFinite) || !Number.isFinite(viewport.width) || !Number.isFinite(viewport.height)
         || viewport.width <= 0 || viewport.height <= 0 || viewport.width > 20_000 || viewport.height > 20_000) {
@@ -177,10 +227,16 @@ export async function openVerifiedPdf(bytes: Uint8Array, options: {
       page.cleanup();
     }
     if (bounded.signal.aborted) throw bounded.error();
-    return new VerifiedPdf(document, hash, bytes.length, pages, options.signal);
+    const resourceError = options.runtime?.resourceError?.();
+    if (resourceError) throw resourceError;
+    return new VerifiedPdf(document, hash, bytes.length, pages, options.signal,
+      { dispose: disposeWorker, resourceError: options.runtime?.resourceError });
   } catch (error) {
-    await task.destroy().catch(() => undefined);
+    await destroyTask();
+    disposeWorker();
     if (bounded.signal.aborted) throw bounded.error();
+    const resourceError = options.runtime?.resourceError?.();
+    if (resourceError) throw resourceError;
     if (error instanceof PdfError) throw error;
     if (error instanceof Error && error.name === 'PasswordException') throw new PdfError('PASSWORD');
     throw new PdfError('INVALID_PDF');

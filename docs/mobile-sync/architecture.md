@@ -16,7 +16,7 @@ M1 的设备条目代表 **OIDC 登录会话**：JWT 的 issuer/sub/sid 与服�
 
 | entityType | data 字段（拒绝额外字段） |
 | --- | --- |
-| `paper` | `title, doi:null|string, year:null|string, publication:null|string, abstractText:null|string, authors:string[], keywords:string[]` |
+| `paper` | `title, doi:null|string, year:null|string, publication:null|string, abstractText:null|string, authors:string[], keywords:string[], organization?:PaperOrganization` |
 | `attachmentVersion` | `paperId, attachmentId, sha256, sizeBytes, mediaType:'application/pdf', fileName, pageCount:null|integer` |
 | `note` | `paperId:null|UUID, title, body, format:'markdown'` |
 | `annotation` | `paperId, attachmentVersionId, kind:'highlight'|'underline'|'area', color, comment, anchor` |
@@ -24,7 +24,11 @@ M1 的设备条目代表 **OIDC 登录会话**：JWT 的 issuer/sub/sid 与服�
 
 `sha256` 为经验证的 64 位小写十六进制；附件身份、hash、sizeBytes 不可变。`fileName` 仅 basename。附件/批注/阅读位置必须引用同账号且匹配 paperId 的实体。未知 hash 不伪造 attachmentVersion。
 
-`anchor` 为 `{pageIndex, coordinateSpace:'pdf-crop-box-unrotated-normalized', quads:number[8][], quote:{exact,prefix,suffix}|null}`。页码从 0 开始，坐标/offset 在 `[0,1]`。阅读位置每设备/版本独立；不允许设备写另一个设备的检查点。最近阅读位置与最远阅读进度分开；时间只显示，不用于冲突胜负。
+`anchor` 为 `{pageIndex, coordinateSpace:'pdf-crop-box-unrotated-normalized', quads:number[8][], quote:{exact,prefix,suffix}|null}`。页码从 0 开始，坐标/offset 在 `[0,1]`。锚点以**未旋转 CropBox** 归一化：`x=(pdfX-xMin)/width`，`y=(pdfY-yMin)/height`，Y 轴向上；四个角按多边形顺序保存。选区先逆变换当前 viewport，显示时再应用 viewport，因此文件自带旋转、用户旋转和缩放不会改写锚点。阅读位置每设备/版本独立；不允许设备写另一个设备的检查点。最近阅读位置与最远阅读进度分开；时间只显示，不用于冲突胜负。
+
+`PaperOrganization` 为 `{favorite:boolean, readingStatus:'unread'|'reading'|'read', tags:string[], collections:string[], queueRank:number|null}`。它是可选的完整对象，标签至多 64 个、合集至多 32 个，每项至多 80 字符；队列顺序为非负安全整数或 null。清空分类必须显式写入空值，不能靠省略对象清空。
+
+`GET /v1/capabilities` 返回 `features.paperOrganization:1` 后，新客户端才发送 `X-PaperQuay-Features: paper-organization-v1` 并开放分类编辑。旧客户端收到的 pull、push、冲突和解决结果投影掉新增对象；旧客户端 put/restore 省略它时服务端保留当前分类，且仍按合并后的完整载荷计算配额。升级后的本地库只重置一次拉取游标，保留 outbox/冲突；同 revision 只允许旧投影补回这一字段，其他同版本内容变化仍拒绝。
 
 记录信封为：
 
@@ -71,11 +75,19 @@ cursor 是绑定账号/epoch/seq 的不透明值。M1 不裁剪 changelog；过�
 - 冲突保存 attempted operation 与 current record；解决冲突要验证当前 revision，期间又有更新则继续提示，不覆盖新版本。
 - 本地数据按账号独立；网络身份与存储账号必须一致，账号切换停止旧同步。暂时故障保留 outbox，永久拒绝和冲突有可见处理入口。
 
+M2 Web 快照使用 IndexedDB，原生快照使用 SQLite 事务；原生登录令牌与模型密钥使用系统安全存储。原生离线恢复仅接受此前通过服务端注册确认的 `(api, issuer, client, sub) → account/device` 绑定及已有本地快照，过期凭据不用于网络请求。网络恢复后先重新验证身份/设备，再同步；撤销会话不能借离线绑定重新注册。异步令牌获取、网络返回及本地写入均检查主体，旧账号任务不能写入新账号内容。
+
+笔记与批注的“已保存”表示本地事务完成。保存期间的新输入继续保持未保存状态；位置、评论和并行批注分别计入离开守卫。保存完成后的即时返回读取同一份实时状态，不等待 React 下一次渲染。
+
 ## 文件与 AI 的独立边界
 
 账号元数据同步、PDF 传输、向模型发送文本是三个独立能力。服务器默认不存 PDF；内容来源按版本/可用性/成本选择。PDF 可用来源失败时保留题录和笔记，不阻塞整个文库。
 
 公开源并不天然可信，DOI 落地页不等于 PDF。部分 Range 下载未完成前不能宣称整文件 SHA-256 已核验；可用可信 chunk 清单验证已取字节，或待完整临时下载后再启用精确版本锚定。默认关闭自动全文件预取；不支持 Range 的源由用户选择完整下载。
+
+M2 具体实现先检查公开源，再由用户明确选择完整读取并核对 SHA-256、字节数与 PDF 解析结果；即使来源支持 Range，也不把部分下载当作已验证版本。单文件最多 64 MiB/2000 页；同时渲染至多 3 页、单 canvas 至多 4M 像素。账号缓存总上限 256 MiB，其中临时 128 MiB、主动保留 192 MiB，条目至多 512；默认清理只删临时副本，显式清理账号包含主动保留副本，原始来源文件与同步记录不随之删除。
+
+阅读器首次按需加载时携带匹配版本的 PDF.js worker、CMap、标准字体与 WASM 白名单资源。以后新开文档和首次渲染其他文字页不再请求远端解码资源；每次文档独立持有工作线程，取消/关闭释放资源。资源不可用与文件本身无效分别报告。该离线保证针对已加载应用或原生打包资源；Web 未提供离线冷启动 PWA，刷新后仍需重新加载应用与登录。
 
 电脑提供文件时只接受授权附件 ID，由电脑适配器解析已导入路径；不开放任意路径/URL 读取。信令、直传与中继均绑定账号、设备、附件版本、权限和有效期。云副本由用户明确上传；流量、空间和删除单独管理。
 

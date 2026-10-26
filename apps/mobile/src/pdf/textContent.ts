@@ -7,12 +7,15 @@ import { boundedSignal, PdfError, throwIfAborted } from './errors.ts';
 export async function boundedTextContent(page: PDFPageProxy, signal?: AbortSignal): Promise<TextContent> {
   throwIfAborted(signal);
   const bounded = boundedSignal(signal, PDF_LIMITS.requestTimeoutMs);
-  const reader = page.streamTextContent({ includeMarkedContent: false }).getReader();
-  const abort = () => { void reader.cancel().catch(() => undefined); };
-  bounded.signal.addEventListener('abort', abort, { once: true });
+  let reader: ReadableStreamDefaultReader<TextContent> | undefined;
+  let cancelling: Promise<void> | undefined;
+  const cancel = (reason: Error) => { cancelling ??= reader?.cancel(reason).catch(() => undefined); };
+  const abort = () => { cancel(bounded.error()); };
   const result: TextContent = { items: [], styles: Object.create(null), lang: null };
   let characters = 0;
   try {
+    reader = page.streamTextContent({ includeMarkedContent: false }).getReader();
+    bounded.signal.addEventListener('abort', abort, { once: true });
     while (true) {
       throwIfAborted(bounded.signal);
       const part = await reader.read();
@@ -29,10 +32,17 @@ export async function boundedTextContent(page: PDFPageProxy, signal?: AbortSigna
     }
     return result;
   } catch (error) {
-    if (bounded.signal.aborted) throw bounded.error();
+    if (bounded.signal.aborted) { const reason = bounded.error(); cancel(reason); throw reason; }
+    cancel(error instanceof Error ? error : new PdfError('INVALID_PDF'));
     throw error;
   } finally {
     bounded.signal.removeEventListener('abort', abort); bounded.close();
-    await reader.cancel().catch(() => undefined); reader.releaseLock();
+    // PDF.js requires an Error to send CANCEL. A stopped worker may never send CANCEL_COMPLETE.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      if (cancelling) await Promise.race([cancelling,
+        new Promise<void>((resolve) => { timer = setTimeout(resolve, PDF_LIMITS.teardownTimeoutMs); }),
+      ]);
+    } finally { clearTimeout(timer); reader?.releaseLock(); }
   }
 }

@@ -207,6 +207,8 @@ export function ConnectedApp({
   const [aiSettings, setAiSettings] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [readerDirty, setReaderDirty] = useState(false);
+  const editorUnsaved = useRef(false);
+  const readerUnsaved = useRef(false);
   const unsaved = useRef(false);
   const resumeSync = useRef<() => Promise<void>>(async () => {});
   const [uiError, setUiError] = useState<string | null>(null);
@@ -217,13 +219,20 @@ export function ConnectedApp({
       return '我的 Web 浏览器';
     }
   });
-  const dirtyChanged = useCallback((value: boolean) => setDirty(value), []);
-  const readerDirtyChanged = useCallback((value: boolean) => setReaderDirty(value), []);
+  const dirtyChanged = useCallback((value: boolean) => {
+    editorUnsaved.current = value;
+    unsaved.current = value || readerUnsaved.current;
+    setDirty(value);
+  }, []);
+  const readerDirtyChanged = useCallback((value: boolean) => {
+    readerUnsaved.current = value;
+    unsaved.current = editorUnsaved.current || value;
+    setReaderDirty(value);
+  }, []);
   const invalidateAiContext = useCallback(() => {
     liveAiContext.current = null; setAiContext(null); setCitationTarget(null);
   }, []);
   useLayoutEffect(() => { liveAiContext.current = aiContext; }, [aiContext]);
-  useLayoutEffect(() => { unsaved.current = dirty || readerDirty; }, [dirty, readerDirty]);
 
   useEffect(() => {
     let current = true;
@@ -274,8 +283,8 @@ export function ConnectedApp({
       setReadingId(null);
       setAiContext(null);
       setCitationTarget(null);
-      setDirty(false);
-      setReaderDirty(false);
+      dirtyChanged(false);
+      readerDirtyChanged(false);
     }
   }, [authState.status, authSubjectKey, auth, controller]);
   useEffect(() => {
@@ -292,16 +301,17 @@ export function ConnectedApp({
   }, [dirty, readerDirty]);
 
   function canLeave(): boolean {
-    return (!dirty && !readerDirty) || window.confirm('当前改动尚未确认保存。离开可能丢失这些改动，仍然离开？');
+    return !unsaved.current || window.confirm('当前改动尚未确认保存。离开可能丢失这些改动，仍然离开？');
   }
   function navigate(next: Section) {
     if (!canLeave()) return;
     setSection(next);
     setSelection(null);
     setReadingId(null);
+    readerDirtyChanged(false);
     setAiContext(null);
     setCitationTarget(null);
-    setDirty(false);
+    dirtyChanged(false);
     setUiError(null);
   }
   function select(type: 'paper' | 'note', id: string) {
@@ -309,7 +319,8 @@ export function ConnectedApp({
     if (!canLeave()) return;
     setSelection({ type, id });
     setReadingId(null);
-    setDirty(false);
+    readerDirtyChanged(false);
+    dirtyChanged(false);
     setUiError(null);
   }
   async function login() {
@@ -317,7 +328,7 @@ export function ConnectedApp({
     const revoked = state.error?.code === 'SESSION_REVOKED';
     controller.deactivate();
     setSelection(null);
-    setDirty(false);
+    dirtyChanged(false);
     setUiError(null);
     try {
       if (revoked) await auth.signOut();
@@ -330,7 +341,7 @@ export function ConnectedApp({
     if (!canLeave()) return;
     controller.deactivate();
     setSelection(null);
-    setDirty(false);
+    dirtyChanged(false);
     try {
       await auth.signOut();
     } catch (error) {
@@ -349,17 +360,19 @@ export function ConnectedApp({
   function leaveReader() {
     if (!canLeave()) return;
     setReadingId(null);
+    readerDirtyChanged(false);
     setAiContext(null);
     setCitationTarget(null);
-    setDirty(false);
+    dirtyChanged(false);
   }
   function openReader(id: string) {
     if (!canLeave()) return;
     setReadingId(id);
+    readerDirtyChanged(false);
     setReadingNoteId(null);
     setAiContext(null);
     setCitationTarget(null);
-    setDirty(false);
+    dirtyChanged(false);
   }
   const conflictCount = new Set([
     ...state.conflicts.map((conflict) => conflict.conflictId),
@@ -456,7 +469,7 @@ export function ConnectedApp({
           <Icon name="account" />
           <div>
             <strong>{authState.displayName || '我的账号'}</strong>
-            <span>{state.needsLogin ? '请重新登录' : '已连接'}</span>
+            <span>{!state.online ? '离线' : state.needsLogin ? '请重新登录' : '已连接'}</span>
           </div>
         </div>
       </aside>
@@ -508,7 +521,7 @@ export function ConnectedApp({
                 onBack={() => {
                   if (canLeave()) {
                     setSelection(null);
-                    setDirty(false);
+                    dirtyChanged(false);
                   }
                 }}
                 onDirty={dirtyChanged}
@@ -533,12 +546,14 @@ export function ConnectedApp({
           <div className="reading-main">
             <div className="reading-panel-tabs" aria-label="阅读工作区">
               <button className={readingPanel === 'notes' ? 'secondary active' : 'text-button'} onClick={() => {
-                if (canLeave()) { setReadingPanel(readingPanel === 'notes' ? null : 'notes'); setDirty(false); }
+                if (canLeave()) { setReadingPanel(readingPanel === 'notes' ? null : 'notes'); dirtyChanged(false); }
               }}>阅读笔记</button>
               <button className={readingPanel === 'ai' ? 'secondary active' : 'text-button'} onClick={() => {
-                if (canLeave()) { setReadingPanel(readingPanel === 'ai' ? null : 'ai'); setDirty(false); }
+                if (canLeave()) { setReadingPanel(readingPanel === 'ai' ? null : 'ai'); dirtyChanged(false); }
               }}>AI 助手</button>
             </div>
+            <SyncStatus state={state} conflicts={conflictCount}
+              onSync={() => void controller.syncNow()} onConflicts={() => navigate('conflicts')} />
             <Suspense fallback={<p className="loading-message" role="status">正在打开阅读器…</p>}>
               <PaperReader key={`${scope.apiBaseUrl}:${scope.accountId}:${state.workspace!.sync.deviceId}:${state.workspace!.sync.generation}:${readingId}`} scope={scope} paper={readingPaper}
                 attachmentVersions={entities.filter((entity) => entity.entityType === 'attachmentVersion')}
@@ -547,21 +562,21 @@ export function ConnectedApp({
                 controller={controller} onBack={leaveReader} jumpTo={citationTarget ?? undefined}
                 onDirtyChange={readerDirtyChanged}
                 onContextInvalidated={invalidateAiContext}
-                onAskAi={(context) => { if (canLeave()) { liveAiContext.current = context; setAiContext(context); setReadingPanel('ai'); setDirty(false); } }} />
+                onAskAi={(context) => { if (canLeave()) { liveAiContext.current = context; setAiContext(context); setReadingPanel('ai'); dirtyChanged(false); } }} />
             </Suspense>
           </div>
           {readingPanel === 'notes' && <aside className="reading-side" aria-label="阅读笔记">
             <div className="reading-side-heading"><h2>阅读笔记</h2><button className="secondary" onClick={() => {
-              if (canLeave()) { setReadingNoteId(crypto.randomUUID()); setDirty(false); }
+              if (canLeave()) { setReadingNoteId(crypto.randomUUID()); dirtyChanged(false); }
             }}>新建笔记</button></div>
             <div className="related-note-list">{notes.filter((note) => !note.deleted && (note.data as NoteData).paperId === readingId).map((note) =>
               <button key={note.entityId} className={note.entityId === readingNoteId ? 'secondary active' : 'text-button'} onClick={() => {
-                if (canLeave()) { setReadingNoteId(note.entityId); setDirty(false); }
+                if (canLeave()) { setReadingNoteId(note.entityId); dirtyChanged(false); }
               }}>{(note.data as NoteData).title}</button>)}</div>
             {readingNoteId ? <EntityEditor key={`reading-note:${readingNoteId}`} type="note" entityId={readingNoteId}
               entity={notes.find((note) => note.entityId === readingNoteId)} defaultPaperId={readingId}
               papers={papers} controller={controller} hasConflict={hasEntityConflict(state.workspace!.sync, { entityType: 'note', entityId: readingNoteId })}
-              onBack={() => { if (canLeave()) { setReadingNoteId(null); setDirty(false); } }} onDirty={dirtyChanged}
+              onBack={() => { if (canLeave()) { setReadingNoteId(null); dirtyChanged(false); } }} onDirty={dirtyChanged}
               onConflicts={() => navigate('conflicts')} /> : <p className="muted reading-hint">选择一条关联笔记，或新建笔记。输入后会自动保存到此设备。</p>}
           </aside>}
           {readingPanel === 'ai' && runtime.secretStore && <aside className="reading-side" aria-label="阅读 AI 助手">
@@ -592,7 +607,7 @@ export function ConnectedApp({
             onClear={async () => {
               if (
                 window.confirm(
-                  '清除此账号在本浏览器的本地副本？尚未同步的改动将丢失，服务器上的内容会在下次同步时重新下载。',
+                  '清除此账号在本设备的文库副本与全部 PDF 缓存（包括离线保留）？尚未同步的改动将丢失。服务器上的文库记录会在下次同步时重新下载，本机原始 PDF 文件不受影响。',
                 )
               ) {
                 try {
@@ -632,7 +647,7 @@ export function ConnectedApp({
             onBack={() => navigate('account')}
             onDirty={dirtyChanged}
             onRecovered={(id) => {
-              setDirty(false);
+              dirtyChanged(false);
               setSection('notes');
               setSelection({ type: 'note', id });
               setUiError(null);
@@ -687,14 +702,12 @@ function SyncStatus({
   const blocked = state.workspace?.sync.outbox.some(
     (entry) => entry.status === 'rejected' || entry.status === 'device-blocked',
   );
-  const label = state.needsLogin
-    ? '请重新登录'
-    : conflicts
+  const label = !state.online
+    ? pending ? `离线 · ${pending} 项待同步` : '离线 · 本地内容可用'
+    : state.needsLogin
+      ? '请重新登录'
+      : conflicts
       ? `${conflicts} 项冲突待处理`
-      : !state.online
-        ? pending
-          ? `离线 · ${pending} 项待同步`
-          : '离线 · 本地内容可用'
         : state.syncing
           ? '同步中'
           : blocked

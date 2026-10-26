@@ -3,5 +3,6 @@ import { App } from './App.tsx';
 import './styles.css';
 import './components/paperReader.css';
 import './components/aiWorkspace.css';
+import './theme.css';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(<App />);

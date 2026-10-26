@@ -78,6 +78,7 @@ export const PDF_LIMITS = Object.freeze({
   maxPages: 2000,
   requestTimeoutMs: 30_000,
   operationTimeoutMs: 180_000,
+  teardownTimeoutMs: 2_000,
   rangeChunkBytes: 1024 * 1024,
   maxCacheBytes: 256 * 1024 * 1024,
   maxTemporaryBytes: 128 * 1024 * 1024,

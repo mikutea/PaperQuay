@@ -83,11 +83,14 @@ export function PdfPageView(props: Props) {
       textRoot.style.width = `${(page.view[2] - page.view[0]) * view.scale * page.userUnit}px`;
       textRoot.style.height = `${(page.view[3] - page.view[1]) * view.scale * page.userUnit}px`;
       await Promise.all([rendering.promise, textLayer.render()]);
+      const resourceError = runtime.resourceError?.();
+      if (resourceError) throw resourceError;
       if (active) setReady(true);
     })().catch((error) => {
       rendering?.cancel(); textLayer?.cancel();
       if (!active) return;
-      const safe = pdfError(error); setFailure(safe); callbacks.current.onError(safe);
+      const safe = runtime.resourceError?.() ?? (error instanceof PdfError ? error : new PdfError('PAGE_RENDER'));
+      setFailure(safe); callbacks.current.onError(safe);
     });
     work.current = job;
     return () => {
