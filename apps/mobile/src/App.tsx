@@ -695,7 +695,7 @@ export function ConnectedApp({
           />
         )}
       </main>
-      <nav className="bottom-nav" aria-label="主导航">
+      <nav className="bottom-nav app-glass" aria-label="主导航">
         {nav}
       </nav>
     </div>
@@ -846,7 +846,7 @@ function EntityList({
       <div className="list-heading">
         <h1>{type === 'paper' ? '文库' : '笔记'}</h1>
         <button className="add-button" onClick={() => onCreate(type)}>
-          <Icon name="plus" />
+          <span className="add-button-icon app-glass"><Icon name="plus" /></span>
           <span>{type === 'paper' ? '添加文献' : '新建笔记'}</span>
         </button>
       </div>
@@ -932,7 +932,12 @@ function EntityList({
               onClick={() => onSelect(type, entity.entityId)}
               aria-pressed={selection === entity.entityId}
             >
-              {type === 'paper' && <Icon name="note" className="row-document-icon" />}
+              {type === 'paper' && <span className="paper-preview" aria-hidden="true">
+                <Icon name="note" className="row-document-icon" />
+                <span className="paper-preview-title">{data?.title || '文献'}</span>
+                <span className="paper-preview-lines" />
+                <span className="paper-preview-source">{data && 'authors' in data ? data.publication || data.year || 'PDF' : 'PDF'}</span>
+              </span>}
               <span className="entity-copy">
                 <span className="entity-title">
                   {data?.title || (entity.deleted ? '已删除的内容' : '未命名笔记')}

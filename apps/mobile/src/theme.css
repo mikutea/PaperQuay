@@ -53,7 +53,6 @@
 
   .sidebar,
   .mobile-header,
-  .bottom-nav,
   .editor-placeholder,
   .pr-reader {
     background: var(--theme-background);
@@ -82,7 +81,7 @@
   .icon-button:hover:not(:disabled),
   .nav-button:hover,
   .entity-row:hover,
-  .pr-reader button:hover:not(:disabled) {
+  .pr-reader button:not(.app-glass):hover:not(:disabled) {
     background: var(--theme-soft);
   }
 
@@ -111,11 +110,11 @@
   .entity-row.selected,
   .ai-action-picker button[aria-pressed='true'],
   .ai-result-switch button[aria-pressed='true'],
-  .pr-reader button[aria-pressed='true'] {
+  .pr-reader button:not(.app-glass)[aria-pressed='true'] {
     background: var(--theme-selected);
   }
 
-  .pr-reader button[aria-pressed='true'],
+  .pr-reader button:not(.app-glass)[aria-pressed='true'],
   .pr-resume button,
   .pr-results strong,
   .pr-cache-list button,
@@ -226,6 +225,8 @@
   .pr-scroll {
     background: #0b100e;
   }
+
+  .paper-preview { background: var(--theme-soft); }
 
   .pr-scroll:focus-visible {
     outline-color: var(--accent);

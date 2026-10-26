@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type PointerEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type PointerEvent, type ReactNode } from 'react';
 import {
   getVisibleEntity, type AnnotationAnchor, type AnnotationData, type AttachmentVersionData,
   type PaperData, type ReadingPositionData, type VisibleEntity,
@@ -55,11 +55,14 @@ interface ReaderFocusViewport {
   rotation: number;
   continuous: boolean;
   offsets: number[];
+  contentTop?: number;
+  topInset?: number;
   scroll: { readonly current: HTMLDivElement | null };
 }
 
 /** A citation scrolls once; its highlight can remain through later user zooms and resizes. */
-export function useReaderFocusPosition({ focus, pdf, pageIndex, fitWidth, zoom, rotation, continuous, offsets, scroll }: ReaderFocusViewport) {
+export function useReaderFocusPosition({ focus, pdf, pageIndex, fitWidth, zoom, rotation, continuous, offsets,
+  contentTop = 0, topInset = 48, scroll }: ReaderFocusViewport) {
   const positioned = useRef<{ pdf: VerifiedPdf; requestId: string } | null>(null);
   useEffect(() => {
     if (!pdf) { positioned.current = null; return; }
@@ -72,12 +75,12 @@ export function useReaderFocusPosition({ focus, pdf, pageIndex, fitWidth, zoom, 
       const size = pageDisplaySize(pdf, pageIndex, fitWidth, zoom, rotation);
       const viewport = page.getViewport({ scale: size.scale, rotation: (page.rotate + rotation) % 360 });
       const bounds = quadBounds(focus.quads![0], pdf.pages[pageIndex].cropBox, viewport);
-      container.scrollTop = (continuous ? offsets[pageIndex] : 0) + Math.max(0, bounds.top - 48);
+      container.scrollTop = (continuous ? offsets[pageIndex] : 0) + Math.max(0, contentTop + bounds.top - topInset);
       // Failed, replaced or interrupted page loads must not consume the navigation request.
       positioned.current = { pdf, requestId: focus.requestId };
     }).catch(() => undefined);
     return () => { active = false; };
-  }, [focus, pdf, pageIndex, fitWidth, zoom, rotation, continuous, offsets, scroll]);
+  }, [focus, pdf, pageIndex, fitWidth, zoom, rotation, continuous, offsets, contentTop, topInset, scroll]);
 }
 
 export function PaperReader(props: PaperReaderProps) {
@@ -101,6 +104,8 @@ export function PaperReader(props: PaperReaderProps) {
   const [rotation, setRotation] = useState(0);
   const [continuous, setContinuous] = useState(true);
   const [fitWidth, setFitWidth] = useState(640);
+  const [chromeInsets, setChromeInsets] = useState({ top: 68, bottom: 132 });
+  const liveChromeInsets = useRef(chromeInsets); liveChromeInsets.current = chromeInsets;
   const [positionStatus, setPositionStatus] = useState<PositionStatus>('idle');
   const [outline, setOutline] = useState<PdfOutlineItem[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -114,6 +119,10 @@ export function PaperReader(props: PaperReaderProps) {
   const [commentDraft, setCommentDraft] = useState<CommentDraft | null>(null);
   const [commentStatus, setCommentStatus] = useState<PositionStatus>('idle');
   const [focus, setFocus] = useState<PdfCitationTarget | null>(null);
+  const readerRoot = useRef<HTMLElement>(null);
+  const heading = useRef<HTMLElement>(null);
+  const footer = useRef<HTMLElement>(null);
+  const pageIndicator = useRef<HTMLButtonElement>(null);
   const scroll = useRef<HTMLDivElement>(null);
   const pendingZoom = useRef<ReaderZoomAnchor | null>(null);
   const positionedDocument = useRef<VerifiedPdf | null>(null);
@@ -349,7 +358,7 @@ export function PaperReader(props: PaperReaderProps) {
   useEffect(() => { gestures.current.interrupt(); }, [compact, panel, loaded]);
   useLayoutEffect(() => { if (compact && panel) mobilePanelOpen.current?.(); }, [compact, panel]);
 
-  const pagePadding = compact ? 8 : 32;
+  const pagePadding = compact ? 0 : 32;
   const pageGap = compact ? 12 : 24;
   useLayoutEffect(() => {
     if (!scroll.current || !loaded) return;
@@ -364,6 +373,29 @@ export function PaperReader(props: PaperReaderProps) {
     return () => observer.disconnect();
   }, [loaded, panel, pagePadding]);
 
+  useLayoutEffect(() => {
+    const root = readerRoot.current;
+    if (!compact || !loaded || !root || !heading.current || !footer.current || !pageIndicator.current) return;
+    const measure = () => {
+      const bounds = root.getBoundingClientRect();
+      const headerBounds = heading.current!.getBoundingClientRect();
+      const footerBounds = footer.current!.getBoundingClientRect();
+      // The indicator sits above the actual toolbar, including larger text and wrapped selection tools.
+      root.style.setProperty('--reader-footer-height', `${footerBounds.height}px`);
+      const indicatorBounds = pageIndicator.current!.getBoundingClientRect();
+      const next = { top: Math.ceil(headerBounds.bottom - bounds.top + 8),
+        bottom: Math.ceil(bounds.bottom - Math.min(footerBounds.top, indicatorBounds.top) + 8) };
+      const before = liveChromeInsets.current;
+      if (before.top === next.top && before.bottom === next.bottom) return;
+      if (before.top !== next.top && positionedDocument.current === loaded.pdf) pendingZoom.current ??= captureZoom();
+      liveChromeInsets.current = next; setChromeInsets(next);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    for (const element of [root, heading.current, footer.current, pageIndicator.current]) observer.observe(element);
+    return () => { observer.disconnect(); root.style.removeProperty('--reader-footer-height'); };
+  }, [compact, loaded]);
+
   const layout = useMemo(() => {
     const offsets: number[] = []; const heights: number[] = []; let total = 0;
     if (loaded) for (let index = 0; index < loaded.pdf.pageCount; index++) {
@@ -377,6 +409,7 @@ export function PaperReader(props: PaperReaderProps) {
     if (!loaded || !Number.isInteger(index) || index < 0 || index >= loaded.pdf.pageCount) return;
     const point = { pageIndex: index, offsetRatio: Math.max(0, Math.min(1, offsetRatio)) };
     currentPoint.current = point; setPageIndex(index); setSelection(null); setFocus(null); writer.current?.record(point);
+    // The mobile top spacer equals its persistent reading inset, so page coordinates stay document-relative.
     if (scroll.current) scroll.current.scrollTop = (continuous ? layout.offsets[index] : 0) + point.offsetRatio * layout.heights[index];
   }, [continuous, layout, loaded]);
 
@@ -395,7 +428,7 @@ export function PaperReader(props: PaperReaderProps) {
     const point = currentPoint.current;
     scroll.current.scrollTop = (continuous ? layout.offsets[point.pageIndex] : 0) + point.offsetRatio * layout.heights[point.pageIndex];
     positionedDocument.current = loaded.pdf;
-  }, [loaded, layout, continuous, pageIndex]);
+  }, [loaded, layout, continuous, pageIndex, chromeInsets.top]);
   useEffect(() => setPageInput(String(pageIndex + 1)), [pageIndex]);
 
   useEffect(() => {
@@ -413,7 +446,8 @@ export function PaperReader(props: PaperReaderProps) {
   }, [jumpTo, versions, loaded, goTo, loadCached]);
 
   useReaderFocusPosition({ focus, pdf: loaded?.pdf ?? null, pageIndex, fitWidth, zoom, rotation,
-    continuous, offsets: layout.offsets, scroll });
+    continuous, offsets: layout.offsets, contentTop: compact ? chromeInsets.top : 0,
+    topInset: compact ? chromeInsets.top + 8 : 48, scroll });
 
   const onScroll = () => {
     gestures.current.interrupt();
@@ -615,21 +649,24 @@ export function PaperReader(props: PaperReaderProps) {
       : <button type="button" aria-label="关闭提示" onClick={() => { setError(null); setNotice(null); }}>×</button>}
   </div>;
 
-  return <section className={`pr-reader${compact ? ' pr-reader--compact' : ''}${compact && !toolsVisible ? ' pr-reader--immersive' : ''}`}
-    aria-label="PDF 阅读器" data-tools-visible={toolsVisible} onKeyDown={(event) => {
+  const chromeHidden = compact && !toolsVisible && Boolean(loaded);
+  const footerHidden = chromeHidden && !selection && !areaMode;
+  return <section ref={readerRoot} className={`pr-reader${compact ? ' pr-reader--compact' : ''}${chromeHidden ? ' pr-reader--immersive' : ''}`}
+    style={compact ? { '--reader-content-top': `${chromeInsets.top}px`, '--reader-content-bottom': `${chromeInsets.bottom}px` } as CSSProperties : undefined}
+    aria-label="PDF 阅读器" data-tools-visible={toolsVisible} data-document-loaded={Boolean(loaded)} onKeyDown={(event) => {
     const target = event.target as HTMLElement;
     if (target.closest('input,textarea,select,button,summary,[contenteditable="true"],[role="dialog"]')
       || event.nativeEvent.isComposing || event.altKey || event.ctrlKey || event.metaKey) return;
     if (event.key === 'PageDown') { event.preventDefault(); goTo(pageIndex + 1); }
     if (event.key === 'PageUp') { event.preventDefault(); goTo(pageIndex - 1); }
   }}>
-    {(!compact || toolsVisible || !loaded) && <header className="pr-heading">
-      <button type="button" className="pr-icon-button" aria-label="返回文库" onClick={() => void back()}><Icon name="back" /></button>
+    <header ref={heading} className="pr-heading" aria-hidden={chromeHidden || undefined} {...(chromeHidden ? { inert: '' } : {})}>
+      <button type="button" className={`pr-icon-button${compact ? ' app-glass' : ''}`} aria-label="返回文库" onClick={() => void back()}><Icon name="back" /></button>
       <div className="pr-title"><h2 title={title}>{title}</h2>{!compact && <p>{loaded ? `${loaded.pdf.pageCount} 页 · ${byteLabel(loaded.version.data.sizeBytes)}` : '选择 PDF 开始阅读'}</p>}</div>
-      {compact ? <button type="button" className="pr-more-button" aria-label="更多阅读选项" aria-haspopup="dialog" onClick={() => setPanel('more')}>
+      {compact ? <button type="button" className="pr-more-button app-glass" aria-label="更多阅读选项" aria-haspopup="dialog" onClick={() => setPanel('more')}>
         <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" /></svg></button>
         : <button type="button" onClick={() => setPanel(panel === 'source' ? null : 'source')}>文件</button>}
-    </header>}
+    </header>
     {loaded && !compact && <div className="pr-toolbar" role="toolbar" aria-label="阅读工具">
       {pageControls}{zoomControl}
       <button type="button" onClick={() => { setSelection(null); setRotation((value) => (value + 90) % 360); }} aria-label={`旋转页面，当前 ${rotation} 度`}>旋转</button>
@@ -744,18 +781,15 @@ export function PaperReader(props: PaperReaderProps) {
       </div> : <div className="pr-empty"><Icon name="note" /><h3>打开这篇文献的 PDF</h3><p>选择本机文件，或获取公开全文链接。核对完成后即可阅读、批注和继续上次的位置。</p>
         <button type="button" className="pr-primary" onClick={() => setPanel('source')}>选择 PDF</button></div>}
       {compact && loaded && <>
-        {toolsVisible && <button type="button" className="pr-page-indicator" aria-label={`第 ${pageIndex + 1} 页，共 ${loaded.pdf.pageCount} 页，跳转页面`}
-          aria-haspopup="dialog" onClick={() => setPanel('page')}>{pageIndex + 1} <span>/ {loaded.pdf.pageCount}</span></button>}
-        <button type="button" className="pr-tool-toggle" aria-label={toolsVisible ? '隐藏阅读工具' : '显示阅读工具'}
-          aria-pressed={!toolsVisible} onClick={() => { gestures.current.interrupt(); setToolsVisible((value) => !value); }}>
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
-            <path d={toolsVisible ? 'M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5' : 'M3 8h5V3m13 5h-5V3M8 21v-5H3m13 5v-5h5'} /></svg>
-          <span>{toolsVisible ? '收起' : '工具'}</span></button>
+        <button ref={pageIndicator} type="button" className="pr-page-indicator app-glass" aria-label={`第 ${pageIndex + 1} 页，共 ${loaded.pdf.pageCount} 页，跳转页面`}
+          aria-hidden={chromeHidden || undefined} {...(chromeHidden ? { inert: '' } : {})}
+          aria-haspopup="dialog" onClick={() => setPanel('page')}>{pageIndex + 1} <span>/ {loaded.pdf.pageCount}</span></button>
         {positionStatus === 'error' && <div className="pr-position-alert" role="alert">位置尚未保存
           <button type="button" onClick={() => { void writer.current?.flush().catch((failure) => setError(errorMessage(failure))); }}>重试</button></div>}
       </>}
     </div>
-    {loaded && (!compact || toolsVisible || selection || areaMode) && <footer className={`pr-footer${compact ? ' pr-mobile-footer' : ''}`}>
+    {loaded && <footer ref={footer} className={`pr-footer${compact ? ' pr-mobile-footer' : ''}`} data-contextual={Boolean(selection || areaMode)}>
+      <div className={compact ? 'pr-floating-tools app-glass' : undefined} aria-hidden={footerHidden || undefined} {...(footerHidden ? { inert: '' } : {})}>
       {selection ? <div className="pr-selection-tools" onPointerDown={(event) => { if ((event.target as HTMLElement).closest('button')) event.preventDefault(); }}><span>已选 {selection.quote?.exact.length ?? 0} 字</span>
         <button type="button" disabled={annotationSaving} onClick={() => void addAnnotation('highlight')}>高亮</button>
         <button type="button" disabled={annotationSaving} onClick={() => void addAnnotation('underline')}>下划线</button>
@@ -766,11 +800,18 @@ export function PaperReader(props: PaperReaderProps) {
           <button type="button" aria-haspopup="dialog" onClick={() => setPanel('contents')}><Icon name="library" /><span>目录</span></button>
           <button type="button" aria-haspopup="dialog" onClick={() => setPanel('search')}><Icon name="search" /><span>搜索</span></button>
           <button type="button" disabled={!props.onOpenNotes} onClick={props.onOpenNotes}><Icon name="note" /><span>笔记</span></button>
-          <button type="button" disabled={!onAskAi && !props.onOpenAi} aria-haspopup="dialog" onClick={() => setPanel('ask')}><span className="pr-ai-mark" aria-hidden="true">AI</span><span>AI</span></button>
+          <button type="button" disabled={!onAskAi && !props.onOpenAi} aria-haspopup="dialog" onClick={() => setPanel('ask')}>
+            <svg viewBox="0 0 24 24" className="pr-ai-mark" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5Z" /><path d="m20 2 .6 1.4L22 4l-1.4.6L20 6l-.6-1.4L18 4l1.4-.6Z" /></svg><span>AI</span></button>
         </nav> : <div className="pr-reading-status"><span role="status">{positionMessage}</span>
           {positionStatus === 'error' && <button type="button" onClick={() => { void writer.current?.flush().catch((failure) => setError(errorMessage(failure))); }}>重试</button>}
           {onAskAi && <div><button type="button" disabled={Boolean(busy)} onClick={() => ask('page')}>询问本页</button><button type="button" disabled={Boolean(busy)} onClick={() => ask('document')}>询问全文</button></div>}
         </div>}
+      </div>
+      {compact && <button type="button" className="pr-tool-toggle app-glass" aria-label={toolsVisible ? '隐藏阅读工具' : '显示阅读工具'}
+        aria-pressed={!toolsVisible} onClick={() => { gestures.current.interrupt(); setToolsVisible((value) => !value); }}>
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
+          <path d={toolsVisible ? 'M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5' : 'M3 8h5V3m13 5h-5V3M8 21v-5H3m13 5v-5h5'} /></svg>
+      </button>}
     </footer>}
   </section>;
 }

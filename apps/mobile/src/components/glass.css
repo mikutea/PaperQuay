@@ -1,0 +1,52 @@
+/* A material for floating controls, never for document pixels or modal ancestors. */
+:root {
+  --glass-solid: #fff;
+  --glass-surface: rgb(250 252 251 / 74%);
+  --glass-border: rgb(255 255 255 / 86%);
+  --glass-highlight: rgb(255 255 255 / 94%);
+  --glass-shadow: 0 6px 24px rgb(25 39 32 / 12%), 0 0 0 1px rgb(25 39 32 / 5%);
+  --glass-selected: rgb(49 91 78 / 11%);
+  --glass-text: #20382e;
+}
+.app-glass {
+  color: var(--glass-text);
+  background: var(--glass-solid);
+  border: 1px solid var(--glass-border);
+  box-shadow: inset 0 1px 0 var(--glass-highlight), var(--glass-shadow);
+}
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  @media (prefers-reduced-transparency: no-preference) {
+    .app-glass {
+      background: var(--glass-surface);
+      -webkit-backdrop-filter: blur(20px) saturate(145%);
+      backdrop-filter: blur(20px) saturate(145%);
+    }
+  }
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --glass-solid: #17211e;
+    --glass-surface: rgb(23 33 30 / 80%);
+    --glass-border: rgb(232 247 239 / 20%);
+    --glass-highlight: rgb(232 247 239 / 17%);
+    --glass-shadow: 0 6px 24px rgb(0 0 0 / 28%), 0 0 0 1px rgb(0 0 0 / 12%);
+    --glass-selected: rgb(173 224 206 / 17%);
+    --glass-text: #f1f6f3;
+  }
+}
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .app-glass {
+    background: var(--glass-solid);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+@media (prefers-contrast: more) {
+  .app-glass { border-color: currentColor; box-shadow: none; }
+}
+@media (forced-colors: active) {
+  .app-glass {
+    color: CanvasText; background: Canvas; border-color: ButtonText; box-shadow: none;
+    -webkit-backdrop-filter: none; backdrop-filter: none;
+  }
+}

@@ -59,6 +59,17 @@ test('an interrupted asynchronous page load is not consumed before the current l
   } finally { act(() => renderer.unmount()); }
 });
 
+test('floating controls use the measured document spacer and top clearance for the first citation position', async () => {
+  const value = { ...props(), contentTop: 68, topInset: 76 }; const renderer = await mount(value);
+  try {
+    assert.equal(value.scroll.current!.scrollTop, 152);
+    assert.equal(68 + 160 - value.scroll.current!.scrollTop, 76, 'the quote clears the actual floating header');
+    value.scroll.current!.scrollTop = 410;
+    await update(renderer, { ...value, contentTop: 100, topInset: 108 });
+    assert.equal(value.scroll.current!.scrollTop, 410, 'a consumed citation cannot override the resize anchor');
+  } finally { act(() => renderer.unmount()); }
+});
+
 test('closing or replacing a document resets navigation and old asynchronous pages cannot scroll the replacement', async () => {
   let resolveOld!: (page: PDFPageProxy) => void;
   const old = document(() => new Promise((resolve) => { resolveOld = resolve; }));
