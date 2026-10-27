@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createElement } from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
-import { createAccountState, queueLocalEdit, type LocalEdit } from '../../../packages/sync-core/src/index.ts';
+import { createAccountState, entityKey, queueLocalEdit, type AccountSyncState, type LocalEdit } from '../../../packages/sync-core/src/index.ts';
 import { ReaderDirtyState, useReaderDirty } from '../src/pdf/dirty.ts';
 import { ReadingCheckpointWriter, type ReaderController } from '../src/pdf/position.ts';
 import { PdfError } from '../src/pdf/errors.ts';
@@ -22,13 +22,20 @@ function fixture() {
     paperId: crypto.randomUUID(), attachmentId: crypto.randomUUID(), sha256: 'a'.repeat(64),
     mediaType: 'application/pdf', fileName: 'synthetic.pdf', sizeBytes: 100, pageCount: 3,
   } };
+  const metadata = { schemaVersion: 1 as const, revision: 1, deletedAt: null,
+    updatedAt: '2026-10-26T12:00:00.000Z', modifiedByDeviceId: state.deviceId };
+  state.serverRecords[entityKey('paper', version.data.paperId)] = { ...metadata, entityType: 'paper', entityId: version.data.paperId,
+    data: { title: 'Synthetic paper', authors: [], keywords: [], year: null, doi: null, publication: null, abstractText: null } };
+  state.serverRecords[entityKey('attachmentVersion', version.entityId)] = { ...metadata,
+    entityType: 'attachmentVersion', entityId: version.entityId, data: structuredClone(version.data) };
   let gate = deferred(); let commits = 0; let leaves = 0; let parentUnsaved = false;
   const events: string[] = [];
   const dirty = new ReaderDirtyState((value) => { parentUnsaved = value; events.push(`dirty:${value}`); });
   const controller: ReaderController = {
     getSnapshot: () => ({ workspace: { sync: state, pendingResolutions: {} } } as WorkspaceSnapshot),
-    async save(edit: LocalEdit) {
+    async save(edit: LocalEdit, _expectedRevision?: number, beforeCommit?: (current: Readonly<AccountSyncState>) => void) {
       await gate.promise;
+      beforeCommit?.(state);
       state = queueLocalEdit(state, edit, { opId: crypto.randomUUID(), clientCreatedAt: '2026-10-26T12:00:00.000Z' });
       commits++; events.push('committed');
     },

@@ -1,7 +1,8 @@
+import { validateEntityData } from '../../../../packages/sync-core/src/index.ts';
 import { accountScopeKey, type AccountScope } from '../storage/accountStore.ts';
 import { sha256 } from './acquisition.ts';
 import { PdfError, throwIfAborted } from './errors.ts';
-import type { PdfCache, PdfCacheEntry, PdfVersion } from './types.ts';
+import { PDF_LIMITS, type PdfCache, type PdfCacheEntry, type PdfVersion } from './types.ts';
 import {
   assertVersionBytes, cacheKey, decodeCacheRecord, defaultCacheLimits, newCacheRecord, planCacheWrite,
   type CacheLimits, type CacheRecord,
@@ -24,7 +25,8 @@ const ownedName = /^[0-9a-f]{64}\.[0-9a-f-]{36}\.[0-9a-f-]{36}\.pdf$/;
 const encoder = new TextEncoder();
 let nativeQueue: Promise<unknown> = Promise.resolve();
 
-async function unpack(value: string | null): Promise<Manifest | null> {
+async function unpack(value: string | null, signal?: AbortSignal): Promise<Manifest | null> {
+  throwIfAborted(signal);
   if (value === null) return null;
   try {
     if (value.length > 4 * 1024 * 1024) return null;
@@ -33,16 +35,18 @@ async function unpack(value: string | null): Promise<Manifest | null> {
     if (!data || data.formatVersion !== 1 || !Number.isSafeInteger(data.generation) || data.generation < 0
       || !Array.isArray(data.records) || data.records.length > defaultCacheLimits.maxCacheEntries
       || await sha256(encoder.encode(JSON.stringify(data))) !== wrapper.sha256) return null;
+    throwIfAborted(signal);
     const keys = new Set<string>();
     for (const record of data.records) {
       decodeCacheRecord(record);
       if (!ownedName.test(record.name) || (record.area !== 'cache' && record.area !== 'data')
         || record.entry.pinned !== (record.area === 'data') || keys.has(record.key)
         || !record.name.startsWith(`${await sha256(encoder.encode(record.scopeKey))}.${record.entry.versionId}.`)) return null;
+      throwIfAborted(signal);
       keys.add(record.key);
     }
     return data;
-  } catch { return null; }
+  } catch { throwIfAborted(signal); return null; }
 }
 
 /** Two checksummed manifests preserve the previous complete generation across an interrupted write. */
@@ -67,21 +71,29 @@ export class NativePdfCache implements PdfCache {
     return work;
   }
 
-  private async load(): Promise<Loaded> {
+  /** Select a recoverable snapshot without creating manifests or reclaiming files. */
+  private async inspect(signal?: AbortSignal): Promise<Loaded> {
+    throwIfAborted(signal);
     const [rawA, rawB] = await Promise.all([this.files.readManifest('a'), this.files.readManifest('b')]);
-    const [a, b] = await Promise.all([unpack(rawA), unpack(rawB)]);
+    throwIfAborted(signal);
+    const [a, b] = await Promise.all([unpack(rawA, signal), unpack(rawB, signal)]);
+    throwIfAborted(signal);
     if (!a && !b) {
       if (rawA !== null || rawB !== null) throw new PdfError('CACHE_CORRUPT');
       const existing = (await Promise.all([this.files.list('cache'), this.files.list('data')])).flat();
+      throwIfAborted(signal);
       if (existing.some((name) => ownedName.test(name))) throw new PdfError('CACHE_CORRUPT');
       const empty: Manifest = { formatVersion: 1, generation: 0, records: [] };
-      const initial: Loaded = { current: empty, slots: { a: null, b: null } };
-      await this.commit(initial, []);
-      return initial;
+      return { current: empty, slots: { a: null, b: null } };
     }
-    const loaded: Loaded = { current: !b || (a && a.generation >= b.generation) ? a! : b,
+    return { current: !b || (a && a.generation >= b.generation) ? a! : b,
       slots: { a, b } };
-    await this.cleanup(loaded);
+  }
+
+  private async load(): Promise<Loaded> {
+    const loaded = await this.inspect();
+    if (!loaded.slots.a && !loaded.slots.b) await this.commit(loaded, []);
+    else await this.cleanup(loaded);
     return loaded;
   }
 
@@ -123,6 +135,40 @@ export class NativePdfCache implements PdfCache {
       const loaded = await this.load();
       return loaded.current.records.filter((record) => record.scopeKey === accountScopeKey(scope))
         .map((record) => ({ ...record.entry })).sort((a, b) => b.lastUsedAt - a.lastUsedAt);
+    });
+  }
+
+  async peek(scope: AccountScope, version: PdfVersion,
+    options: { signal?: AbortSignal } = {}): Promise<Uint8Array | null> {
+    const { signal } = options;
+    throwIfAborted(signal);
+    const key = cacheKey(scope, version.entityId);
+    const scopeKey = accountScopeKey(scope);
+    const expected = { entityId: version.entityId, data: { ...version.data } };
+    if (!validateEntityData('attachmentVersion', expected.data).ok || expected.data.sizeBytes > PDF_LIMITS.maxFileBytes
+      || (expected.data.pageCount !== null && expected.data.pageCount > PDF_LIMITS.maxPages)) throw new PdfError('VERSION_MISMATCH');
+    return this.serialized(async () => {
+      try {
+        throwIfAborted(signal);
+        const loaded = await this.inspect(signal);
+        throwIfAborted(signal);
+        const record = loaded.current.records.find((item) => item.key === key);
+        if (!record) return null;
+        if (record.scopeKey !== scopeKey || record.entry.versionId !== expected.entityId
+          || record.entry.sha256 !== expected.data.sha256 || record.entry.sizeBytes !== expected.data.sizeBytes
+          || (expected.data.pageCount !== null && record.entry.pageCount !== expected.data.pageCount)) throw new PdfError('CACHE_CORRUPT');
+        const bytes = await this.files.read(record.area, record.name, record.entry.sizeBytes);
+        throwIfAborted(signal);
+        if (!bytes) return null;
+        try {
+          await assertVersionBytes({ ...expected, data: { ...expected.data, pageCount: expected.data.pageCount ?? record.entry.pageCount } }, bytes);
+        } catch {
+          throwIfAborted(signal);
+          throw new PdfError('CACHE_CORRUPT');
+        }
+        throwIfAborted(signal);
+        return bytes;
+      } catch (error) { throwIfAborted(signal); throw error; }
     });
   }
 

@@ -32,14 +32,20 @@ function deferred() {
 }
 function harness(initial = createAccountState(account, device)) {
   let state = initial; let calls = 0; let fail = false; let pause: ReturnType<typeof deferred> | null = null;
+  const metadata = { schemaVersion: 1 as const, revision: 1, deletedAt: null, updatedAt: now, modifiedByDeviceId: state.deviceId };
+  state.serverRecords[entityKey('paper', version.data.paperId)] = { ...metadata, entityType: 'paper', entityId: version.data.paperId,
+    data: { title: 'Synthetic paper', authors: [], keywords: [], year: null, doi: null, publication: null, abstractText: null } };
+  state.serverRecords[entityKey('attachmentVersion', version.entityId)] = { ...metadata,
+    entityType: 'attachmentVersion', entityId: version.entityId, data: structuredClone(version.data) };
   const controller: ReaderController = {
     getSnapshot() { return { workspace: { sync: state, pendingResolutions: {} }, devices: [] } as unknown as WorkspaceSnapshot; },
-    async save(edit: LocalEdit, expectedRevision?: number) {
+    async save(edit: LocalEdit, expectedRevision?: number, beforeCommit?: (current: Readonly<AccountSyncState>) => void) {
       calls++; const origin = { account: state.accountId, generation: state.generation, device: state.deviceId };
       if (pause) await pause.promise;
       if (origin.account !== state.accountId || origin.generation !== state.generation || origin.device !== state.deviceId) throw new PdfError('ACCOUNT_CHANGED');
       if (fail) throw new PdfError('POSITION_FAILED');
       assert.equal(getVisibleEntity(state, edit.entityType, edit.entityId)?.revision ?? 0, expectedRevision);
+      beforeCommit?.(state);
       state = queueLocalEdit(state, edit, { opId: id(), clientCreatedAt: now });
     },
   };

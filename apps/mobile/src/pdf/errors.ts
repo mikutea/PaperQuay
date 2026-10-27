@@ -11,6 +11,7 @@ const messages = {
   INCOMPLETE: '文件长度不完整，请重新获取。',
   SOURCE_CHANGED: '下载期间文件发生变化，请重新检查链接。',
   VERSION_MISMATCH: '文件与所选版本不一致。请选择正确文件，或将它作为新版本添加。',
+  TARGET_CHANGED: '文献或附件版本已删除或改变，请重新打开文献。',
   INVALID_PDF: 'PDF 无法完整解析，请换用有效文件。',
   READER_UNAVAILABLE: '本设备暂时无法启动 PDF 阅读组件，请重新打开阅读页面后重试。',
   READER_RESOURCE: 'PDF 阅读组件缺少字体或解码资源，请联网重新加载应用后重试。',

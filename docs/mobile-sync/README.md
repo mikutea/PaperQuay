@@ -2,7 +2,7 @@
 
 本方案面向可长期使用、可维护、可恢复的产品质量。完整目标是让 iPhone、Android 手机、iPad 和 Android 平板拥有与桌面端相同的业务能力，并按触控、屏幕和系统限制重新组织界面。阅读、笔记、划线和独立调用大模型 API 是核心能力。
 
-**当前阶段：M0 已完成，M1 已通过 [PR #34](https://github.com/mikutea/PaperQuay/pull/34) 合入；M2 阅读、笔记、原生工程和独立 AI 已实现；M3 已实现文库文件交换、DOI 题录预览和可选私有 PDF 云副本。** 用户明确本轮暂不接实机，M2 实机门槛尚未关闭。53 项完整需求与 27 组验收场景仍按 M0–M5 推进；代码、自动化验证、真实设备验证和生产验收分别记录。
+**当前阶段：M0 已完成，M1 已通过 [PR #34](https://github.com/mikutea/PaperQuay/pull/34) 合入；M2 阅读、笔记、原生工程和独立 AI 已实现；M3 已实现文件交换、DOI 题录预览、可选私有 PDF 云副本及缓存/云/公开链接的顺序读取。** 在线电脑、中继和完整富文本仍在后续范围。用户明确本轮暂不接实机，M2 实机门槛尚未关闭。53 项完整需求与 27 组验收场景仍按 M0–M5 推进；代码、自动化验证、真实设备验证和生产验收分别记录。
 
 | 文档 | 用途 |
 | --- | --- |
@@ -19,6 +19,8 @@
 | [M3 书目检查点](m3-bibliography-checkpoint.md) | 字段转换、无 DOI 去重、查询取消和本轮 339 项移动端回归 |
 | [M3 私有云检查点](m3-cloud-checkpoint.md) | 显式 PDF 上传、跨客户端读取、独立配额、删除与撤销、375 项移动端回归 |
 | [私有云 PDF 使用与协议](private-cloud-pdf.md) | 开关、操作入口、保存/删除边界与部署限制 |
+| [按版本打开全文](pdf-sources.md) | 三种来源的顺序、等待上限、回退原因与取消边界 |
+| [M3 全文来源检查点](m3-sources-checkpoint.md) | 同版本读取、异步与事务保护、跨客户端和 Electron 验证 |
 
 M1 代码入口为 [`apps/mobile`](../../apps/mobile/README.md)、[`server`](../../server/README.md) 与 [`packages/sync-core`](../../packages/sync-core/README.md)。手机文库和平板笔记已连接真实 OIDC 与 PostgreSQL；已验证两个独立浏览器 origin 的同步、离线保存、冲突后继续编辑及完整人工合并。桌面端本轮提供纯白名单投影，尚未接入旧 Reader 的双向同步。
 

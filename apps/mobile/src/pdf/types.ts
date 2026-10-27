@@ -70,6 +70,8 @@ export interface PdfCacheEntry {
 
 export interface PdfCache {
   list(scope: AccountScope): Promise<PdfCacheEntry[]>;
+  /** Read and verify existing bytes without updating LRU, repairing metadata or removing files. */
+  peek(scope: AccountScope, version: PdfVersion, options?: { signal?: AbortSignal }): Promise<Uint8Array | null>;
   read(scope: AccountScope, version: PdfVersion): Promise<Uint8Array | null>;
   put(scope: AccountScope, version: PdfVersion, bytes: Uint8Array, options?: {
     pinned?: boolean;

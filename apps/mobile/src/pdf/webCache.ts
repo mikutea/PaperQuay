@@ -1,10 +1,14 @@
+import { validateEntityData } from '../../../../packages/sync-core/src/index.ts';
 import { accountScopeKey, type AccountScope } from '../storage/accountStore.ts';
 import { PdfError, throwIfAborted } from './errors.ts';
-import type { PdfCache, PdfCacheEntry, PdfVersion } from './types.ts';
+import { PDF_LIMITS, type PdfCache, type PdfCacheEntry, type PdfVersion } from './types.ts';
 import {
   assertVersionBytes, cacheKey, decodeCacheRecord, defaultCacheLimits, newCacheRecord, planCacheWrite,
   type CacheLimits, type CacheRecord,
 } from './cachePolicy.ts';
+
+// Serialize full-file materialization across cache instances; cancelled queued reads allocate nothing.
+let peekQueue: Promise<unknown> = Promise.resolve();
 
 /** Metadata, content and eviction commit together; failed writes never evict an older copy. */
 export class WebPdfCache implements PdfCache {
@@ -54,6 +58,61 @@ export class WebPdfCache implements PdfCache {
         catch (error) { fail(error); }
       };
     });
+  }
+
+  async peek(scope: AccountScope, version: PdfVersion,
+    options: { signal?: AbortSignal } = {}): Promise<Uint8Array | null> {
+    const { signal } = options;
+    throwIfAborted(signal);
+    const key = cacheKey(scope, version.entityId);
+    const scopeKey = accountScopeKey(scope);
+    const expected = { entityId: version.entityId, data: { ...version.data } };
+    if (!validateEntityData('attachmentVersion', expected.data).ok || expected.data.sizeBytes > PDF_LIMITS.maxFileBytes
+      || (expected.data.pageCount !== null && expected.data.pageCount > PDF_LIMITS.maxPages)) throw new PdfError('VERSION_MISMATCH');
+    const work = peekQueue.then(async () => {
+      try {
+        throwIfAborted(signal);
+        const saved = await this.transaction<{ record: CacheRecord; blob: Blob } | null>(false, (metadata, content, done, fail) => {
+          throwIfAborted(signal);
+          const request = metadata.get(key);
+          request.onsuccess = () => {
+            try {
+              throwIfAborted(signal);
+              if (!request.result) { done(null); return; }
+              const record = decodeCacheRecord(request.result);
+              if (record.key !== key || record.scopeKey !== scopeKey || record.entry.versionId !== expected.entityId
+                || record.entry.sha256 !== expected.data.sha256 || record.entry.sizeBytes !== expected.data.sizeBytes
+                || (expected.data.pageCount !== null && record.entry.pageCount !== expected.data.pageCount)) throw new PdfError('CACHE_CORRUPT');
+              const body = content.get(key);
+              body.onsuccess = () => {
+                try {
+                  throwIfAborted(signal);
+                  if (!(body.result instanceof Blob) || body.result.size !== record.entry.sizeBytes) throw new PdfError('CACHE_CORRUPT');
+                  done({ record, blob: body.result });
+                } catch (error) { fail(error); }
+              };
+            } catch (error) { fail(error); }
+          };
+        });
+        throwIfAborted(signal);
+        if (!saved) return null;
+        const bytes = new Uint8Array(await saved.blob.arrayBuffer());
+        throwIfAborted(signal);
+        try {
+          await assertVersionBytes({ ...expected, data: { ...expected.data, pageCount: expected.data.pageCount ?? saved.record.entry.pageCount } }, bytes);
+        } catch {
+          throwIfAborted(signal);
+          throw new PdfError('CACHE_CORRUPT');
+        }
+        throwIfAborted(signal);
+        return bytes;
+      } catch (error) {
+        throwIfAborted(signal);
+        throw error instanceof PdfError ? error : new PdfError('CACHE_UNAVAILABLE');
+      }
+    });
+    peekQueue = work.catch(() => undefined);
+    return work;
   }
 
   async read(scope: AccountScope, version: PdfVersion): Promise<Uint8Array | null> {

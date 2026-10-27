@@ -3,8 +3,10 @@ import {
 } from '../../../../packages/sync-core/src/index.ts';
 import type { AccountScope } from '../storage/accountStore.ts';
 import type { WorkspaceController } from '../sync/workspace.ts';
+import { ClientError } from '../errors.ts';
 import { PdfError } from './errors.ts';
 import type { PdfVersion } from './types.ts';
+import { assertPdfTarget, capturePdfVersion } from './versionGuard.ts';
 
 export type ReaderController = Pick<WorkspaceController, 'save' | 'getSnapshot'>;
 export interface ReaderIdentity { accountId: string; deviceId: string; generation: number }
@@ -63,11 +65,11 @@ export class ReadingCheckpointWriter {
   constructor(controller: ReaderController, scope: AccountScope, version: PdfVersion, options: {
     makeId?: () => string; now?: () => string; onStatus?: (status: PositionStatus) => void; debounceMs?: number;
   } = {}) {
-    this.controller = controller; this.version = version; this.identity = readerIdentity(controller, scope);
+    this.controller = controller; this.version = capturePdfVersion(version); this.identity = readerIdentity(controller, scope);
     this.makeId = options.makeId ?? (() => crypto.randomUUID()); this.now = options.now ?? (() => new Date().toISOString());
     this.sessionId = this.makeId(); this.notify = options.onStatus ?? (() => undefined);
     this.debounceMs = options.debounceMs ?? 250;
-    const own = ownReadingPosition(controller.getSnapshot().workspace!.sync, version);
+    const own = ownReadingPosition(controller.getSnapshot().workspace!.sync, this.version);
     if (own?.data) {
       this.entityId = own.entityId;
       const data = own.data as ReadingPositionData;
@@ -93,12 +95,22 @@ export class ReadingCheckpointWriter {
     void work.finally(() => { if (this.running === work) this.running = null; }).catch(() => undefined);
   }
 
+  private assertWritable(state: Readonly<AccountSyncState>): void {
+    if (this.stopped) throw new ClientError('EDIT_CHANGED');
+    if (!sameReaderIdentity(this.controller, this.identity) || state.accountId !== this.identity.accountId
+      || state.deviceId !== this.identity.deviceId || state.generation !== this.identity.generation)
+      throw new ClientError('ACCOUNT_CHANGED');
+    try { assertPdfTarget(state, this.version.data.paperId, this.version); }
+    catch { throw new ClientError('EDIT_CHANGED'); }
+  }
+
   private async drain(): Promise<void> {
     while (this.pending && !this.stopped) {
       const point = this.pending; this.pending = null;
       try {
         if (!sameReaderIdentity(this.controller, this.identity)) throw new PdfError('ACCOUNT_CHANGED');
         const state = this.controller.getSnapshot().workspace!.sync;
+        this.assertWritable(state);
         const own = ownReadingPosition(state, this.version);
         if (own) this.entityId = own.entityId;
         this.entityId ??= this.makeId();
@@ -109,14 +121,18 @@ export class ReadingCheckpointWriter {
         const data: ReadingPositionData = { paperId: this.version.data.paperId, attachmentVersionId: this.version.entityId,
           ...point, furthestPageIndex: this.furthest.pageIndex, furthestOffsetRatio: this.furthest.offsetRatio,
           sessionId: this.sessionId, deviceSequence: sequence, observedAt: this.now() };
-        await this.controller.save({ entityType: 'readingPosition', entityId: this.entityId, mutation: 'put', data }, own?.revision ?? 0);
+        await this.controller.save({ entityType: 'readingPosition', entityId: this.entityId, mutation: 'put', data }, own?.revision ?? 0,
+          (current) => this.assertWritable(current));
+        if (this.stopped) return;
         if (!sameReaderIdentity(this.controller, this.identity)) throw new PdfError('ACCOUNT_CHANGED');
         this.failure = null;
         if (!this.pending) this.notify('saved');
       } catch (error) {
-        this.pending ??= point;
-        this.failure = error;
-        this.notify('error');
+        if (!this.stopped) {
+          this.pending ??= point;
+          this.failure = error;
+          this.notify('error');
+        }
         throw error;
       }
     }

@@ -381,7 +381,12 @@ export class WorkspaceController {
     return next;
   }
 
-  async save(edit: LocalEdit, expectedRevision?: number): Promise<void> {
+  /** beforeCommit is a trusted, synchronous, read-only check of the transaction's current state. */
+  async save(
+    edit: LocalEdit,
+    expectedRevision?: number,
+    beforeCommit?: (state: Readonly<AccountSyncState>) => void,
+  ): Promise<void> {
     const epoch = this.epoch;
     try {
       await this.update(epoch, (value) => {
@@ -391,6 +396,7 @@ export class WorkspaceController {
             expectedRevision
         )
           throw new ClientError('EDIT_CHANGED');
+        beforeCommit?.(value.sync);
         return {
           ...value,
           sync: queueLocalEdit(value.sync, edit, {

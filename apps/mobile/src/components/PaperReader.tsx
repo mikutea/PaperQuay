@@ -1,18 +1,22 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type PointerEvent, type ReactNode } from 'react';
 import {
-  getVisibleEntity, type AnnotationAnchor, type AnnotationData, type AttachmentVersionData,
+  getVisibleEntity, listVisibleEntities, type AnnotationAnchor, type AnnotationData, type AttachmentVersionData,
   type PaperData, type ReadingPositionData, type VisibleEntity,
 } from '../../../../packages/sync-core/src/index.ts';
 import { accountScopeKey } from '../storage/accountStore.ts';
-import { describeError } from '../errors.ts';
+import { ClientError, describeError } from '../errors.ts';
 import { Icon } from './Icon.tsx';
 import { ReaderSheet } from './ReaderSheet.tsx';
 import { CloudPdfPanel } from './CloudPdfPanel.tsx';
+import { PdfSourceAttempts } from './PdfSourceAttempts.tsx';
 import { CloudPdfError, describeCloudPdfError, downloadCloudPdfCopy } from '../pdf/cloudCopies.ts';
+import { describePdfSourceError, resolvePdfSource, type CloudPdfUnavailableReason, type PdfSourceAttempt } from '../pdf/sourceResolver.ts';
+import { assertPdfTarget, capturePdfVersion, pdfVersionWriteGuard } from '../pdf/versionGuard.ts';
+import { guardedPdfFetch } from '../pdf/guardedFetch.ts';
 import { ReaderTapGesture, captureReaderZoomAnchor, restoreReaderZoomAnchor,
   type ReaderPointer, type ReaderTapPoint, type ReaderZoomAnchor } from './readerGestures.ts';
 import { getPdfCache } from '../pdf/cache.ts';
-import { registerPdfTask } from '../pdf/tasks.ts';
+import { registerPdfTask, waitForPdfTask } from '../pdf/tasks.ts';
 import { InitialPdfOpening, useInitialPdfRestore } from '../pdf/opening.ts';
 import { useReaderDirty } from '../pdf/dirty.ts';
 import { downloadPublicPdf, inspectPublicPdf, readLocalPdf, safePdfName, type PdfSourceProbe } from '../pdf/acquisition.ts';
@@ -25,7 +29,7 @@ import { ownReadingPosition, positionOwner, readerIdentity, ReadingCheckpointWri
 import { PDF_LIMITS, type PaperReaderProps, type PdfAiContext, type PdfCacheEntry, type PdfCitationTarget, type PdfVersion } from '../pdf/types.ts';
 
 type Panel = 'source' | 'contents' | 'search' | 'annotations' | 'cache' | 'cloud' | 'more' | 'page' | 'ask' | null;
-interface Loaded { pdf: VerifiedPdf; version: PdfVersion; runtime: PdfRuntime }
+interface Loaded { pdf: VerifiedPdf; version: PdfVersion; runtime: PdfRuntime; identity: ReaderIdentity }
 interface Task { epoch: number; signal: AbortSignal; identity: ReaderIdentity; check: () => void }
 interface CommentDraft { entityId: string; revision: number; data: AnnotationData; comment: string; saved: string }
 const byteLabel = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
@@ -46,7 +50,7 @@ function ReaderPanel({ compact, title, onClose, children }: { compact: boolean; 
 function versionsFor(paperId: string, records: VisibleEntity[]): PdfVersion[] {
   return records.filter((record) => record.entityType === 'attachmentVersion' && !record.deleted && record.data
     && (record.data as AttachmentVersionData).paperId === paperId)
-    .map((record) => ({ entityId: record.entityId, data: record.data as AttachmentVersionData }));
+    .map((record) => capturePdfVersion({ entityId: record.entityId, data: record.data as AttachmentVersionData }));
 }
 
 interface ReaderFocusViewport {
@@ -102,6 +106,7 @@ export function PaperReader(props: PaperReaderProps) {
   const [notice, setNotice] = useState<string | null>(null);
   const [sourceUrl, setSourceUrl] = useState('');
   const [probe, setProbe] = useState<PdfSourceProbe | null>(null);
+  const [sourceAttempts, setSourceAttempts] = useState<PdfSourceAttempt[]>([]);
   const [cacheEntries, setCacheEntries] = useState<PdfCacheEntry[]>([]);
   const [pageIndex, setPageIndex] = useState(0);
   const [pageInput, setPageInput] = useState('1');
@@ -138,6 +143,7 @@ export function PaperReader(props: PaperReaderProps) {
   const liveScope = useRef(scopeKey); liveScope.current = scopeKey;
   const epoch = useRef(0);
   const taskAbort = useRef<AbortController | null>(null);
+  const activeReadTarget = useRef<{ epoch: number; check: () => void } | null>(null);
   const documentAbort = useRef<AbortController | null>(null);
   const releaseDocumentTask = useRef<(() => void) | null>(null);
   const invalidateContext = useRef(props.onContextInvalidated); invalidateContext.current = props.onContextInvalidated;
@@ -193,18 +199,38 @@ export function PaperReader(props: PaperReaderProps) {
       throwIfAborted(abort.signal);
       if (!mounted.current || liveScope.current !== scopeKey || epoch.current !== taskEpoch
         || (props.accountCurrent && !props.accountCurrent())
-        || !sameReaderIdentity(controller, identity)) throw new PdfError('ACCOUNT_CHANGED');
+        || controller.getSnapshot().status !== 'ready' || !sameReaderIdentity(controller, identity)) throw new PdfError('ACCOUNT_CHANGED');
     };
     setBusy(label); setProgress(null); setError(null); setNotice(null);
-    try { await work({ epoch: taskEpoch, signal: abort.signal, identity, check }); }
-    catch (failure) { if (mounted.current && epoch.current === taskEpoch && liveScope.current === scopeKey) setError(errorMessage(failure)); }
+    try { check(); await waitForPdfTask(abort.signal, () => work({ epoch: taskEpoch, signal: abort.signal, identity, check })); }
+    catch (failure) {
+      if (mounted.current && epoch.current === taskEpoch && liveScope.current === scopeKey) {
+        const reason = abort.signal.aborted
+          ? abort.signal.reason instanceof PdfError || abort.signal.reason instanceof ClientError
+            ? abort.signal.reason : new PdfError('CANCELLED')
+          : failure;
+        setError(errorMessage(reason));
+        setSourceAttempts((items) => items.map((item) => item.status === 'pending'
+          ? { ...item, status: 'skipped', code: 'NOT_ATTEMPTED', message: '本次检查已停止，未尝试此来源。' }
+          : ['checking', 'downloading', 'verifying'].includes(item.status)
+            ? { ...item, status: 'failed', ...describePdfSourceError(reason, item.source) } : item));
+      }
+    }
     finally {
       release();
+      if (activeReadTarget.current?.epoch === taskEpoch) activeReadTarget.current = null;
       if (mounted.current && epoch.current === taskEpoch && liveScope.current === scopeKey) {
         setBusy(null); setProgress(null); taskAbort.current = null;
       }
     }
   }, [controller, scope, scopeKey, props.accountCurrent]);
+
+  const targetTask = useCallback((task: Task, expected?: PdfVersion): Task => {
+    const captured = expected && capturePdfVersion(expected);
+    const check = () => { task.check(); assertPdfTarget(controller.getSnapshot().workspace?.sync, paper.entityId, captured); };
+    check(); activeReadTarget.current = { epoch: task.epoch, check };
+    return { ...task, check };
+  }, [controller, paper.entityId]);
 
   const saveComment = useCallback(async () => {
     if (commentWork.current) { await commentWork.current; return; }
@@ -242,27 +268,43 @@ export function PaperReader(props: PaperReaderProps) {
     source: string | undefined, task: Task) => {
     task.check(); await finishPending(); task.check(); closeDocument();
     const abort = new AbortController(); documentAbort.current = abort;
-    releaseDocumentTask.current = registerPdfTask(scope, abort);
+    const releaseDocument = registerPdfTask(scope, abort); releaseDocumentTask.current = releaseDocument;
     const cancel = () => abort.abort(); task.signal.addEventListener('abort', cancel, { once: true });
     let pdf: VerifiedPdf | null = null;
+    let adopted = false;
     try {
       const { browserPdfRuntime } = await import('../pdf/browserRuntime.ts'); task.check();
       const runtime = browserPdfRuntime();
       pdf = await openVerifiedPdf(bytes, { expected, signal: abort.signal, runtime }); task.check();
-      const known = versions.find((version) => version.data.sha256 === pdf!.sha256 && version.data.sizeBytes === pdf!.sizeBytes);
-      let version: PdfVersion = expected ?? known ?? { entityId: crypto.randomUUID(), data: {
-        paperId: paper.entityId, attachmentId: versions[0]?.data.attachmentId ?? crypto.randomUUID(),
+      const sync = controller.getSnapshot().workspace!.sync;
+      assertPdfTarget(sync, paper.entityId, expected, pdf.pageCount);
+      const liveVersions = versionsFor(paper.entityId, listVisibleEntities(sync, 'attachmentVersion'));
+      const known = liveVersions.find((version) => version.data.sha256 === pdf!.sha256 && version.data.sizeBytes === pdf!.sizeBytes);
+      const existing = expected ?? known;
+      const record = existing && assertPdfTarget(sync, paper.entityId, existing, pdf.pageCount);
+      let version: PdfVersion = record?.data
+        ? capturePdfVersion({ entityId: record.entityId, data: record.data as AttachmentVersionData })
+        : { entityId: crypto.randomUUID(), data: {
+        paperId: paper.entityId, attachmentId: liveVersions[0]?.data.attachmentId ?? crypto.randomUUID(),
         sha256: pdf.sha256, sizeBytes: pdf.sizeBytes, mediaType: 'application/pdf',
         fileName: safePdfName(fileName), pageCount: pdf.pageCount,
       } };
       if (version.data.pageCount !== null && version.data.pageCount !== pdf.pageCount) throw new PdfError('VERSION_MISMATCH');
-      if ((!expected && !known) || version.data.pageCount === null) {
+      if (!existing || version.data.pageCount === null) {
+        const beforeCommit = pdfVersionWriteGuard(paper.entityId, existing ? version : undefined, version.entityId);
         version = { ...version, data: { ...version.data, pageCount: pdf.pageCount } };
-        const visible = getVisibleEntity(controller.getSnapshot().workspace!.sync, 'attachmentVersion', version.entityId);
         task.check();
-        await controller.save({ entityType: 'attachmentVersion', entityId: version.entityId, mutation: 'put', data: version.data }, visible?.revision ?? 0);
+        await controller.save({ entityType: 'attachmentVersion', entityId: version.entityId, mutation: 'put', data: version.data }, record?.revision ?? 0,
+          (transactionState) => {
+            try { task.check(); } catch { throw new ClientError('EDIT_CHANGED'); }
+            beforeCommit(transactionState);
+          });
         task.check();
       }
+      const live = assertPdfTarget(controller.getSnapshot().workspace?.sync, paper.entityId, version, pdf.pageCount)!;
+      version = capturePdfVersion({ entityId: live.entityId, data: { ...live.data as AttachmentVersionData, pageCount: pdf.pageCount } });
+      // From this point every continuation also guards a just-created or newly discovered version.
+      task = targetTask(task, version);
       try { await cache.put(scope, version, bytes, { sourceUrl: source, signal: task.signal }); }
       catch (failure) {
         task.check(); setNotice(`${errorMessage(failure)} 本次仍可阅读，尚未保留离线副本。`);
@@ -276,59 +318,95 @@ export function PaperReader(props: PaperReaderProps) {
       if (target?.attachmentVersionId === version.entityId && target.sha256 === version.data.sha256 && target.pageIndex < pdf.pageCount) {
         point = { pageIndex: target.pageIndex, offsetRatio: 0 }; setFocus(target); pendingJump.current = null;
       }
-      const result = { pdf, version, runtime }; current.current = result; activeBytes.current = bytes;
+      const result = { pdf, version, runtime, identity: task.identity }; current.current = result; activeBytes.current = bytes;
+      adopted = true; pdf = null;
       writer.current = new ReadingCheckpointWriter(controller, scope, version, {
         onStatus: (status) => { if (mounted.current && current.current === result && sameReaderIdentity(controller, task.identity)) updatePositionStatus(status); },
       });
       currentPoint.current = point; setPageIndex(point.pageIndex); setLoaded(result); setSelectedVersionId(version.entityId);
       setPanel(null); setSelection(null); setToolsVisible(true); updateCommentDraft(null); setCommentStatus('idle');
       writer.current.record(point);
-      void pdf.outline(abort.signal).then((items) => { if (current.current === result && mounted.current) setOutline(items); }).catch(() => undefined);
-      await refreshCache().catch(() => undefined);
-      pdf = null;
+      void result.pdf.outline(abort.signal).then((items) => { if (current.current === result && mounted.current) setOutline(items); }).catch(() => undefined);
+      void refreshCache().catch(() => undefined);
     } finally {
       task.signal.removeEventListener('abort', cancel);
       if (pdf) await pdf.close();
-      if (!current.current) { abort.abort(); releaseDocumentTask.current?.(); releaseDocumentTask.current = null; }
+      if (!adopted) {
+        abort.abort(); releaseDocument();
+        if (documentAbort.current === abort) documentAbort.current = null;
+        if (releaseDocumentTask.current === releaseDocument) releaseDocumentTask.current = null;
+      }
     }
-  }, [cache, closeDocument, controller, finishPending, paper.entityId, refreshCache, scope, updateCommentDraft, updatePositionStatus, versions]);
+  }, [cache, closeDocument, controller, finishPending, paper.entityId, refreshCache, scope, targetTask, updateCommentDraft, updatePositionStatus]);
 
   const loadCached = useCallback(async (version: PdfVersion) => {
     opening.current.beginExplicitOpen();
-    await runTask('正在打开 PDF', async (task) => {
+    const captured = capturePdfVersion(version);
+    await runTask('正在打开 PDF', async (baseTask) => {
+      const task = targetTask(baseTask, captured);
       await finishPending(); task.check();
-      const bytes = await cache.read(scope, version); task.check();
-      if (!bytes) { closeDocument(); setPanel('source'); setNotice('此版本尚未保存在本机。请选择相同文件，或读取它的公开 PDF 链接。'); return; }
-      const source = (await cache.list(scope)).find((entry) => entry.versionId === version.entityId)?.sourceUrl;
+      const bytes = await cache.read(scope, captured); task.check();
+      if (!bytes) { closeDocument(); setPanel('source'); setNotice('此版本尚未保存在本机。可从可用来源打开，或选择相同的本机 PDF。'); return; }
+      const source = (await cache.list(scope)).find((entry) => entry.versionId === captured.entityId)?.sourceUrl;
       task.check(); if (source) setSourceUrl(source);
-      await openBytes(bytes, version.data.fileName, version, source, task);
+      await openBytes(bytes, captured.data.fileName, captured, source, task);
     });
-  }, [cache, closeDocument, finishPending, openBytes, runTask, scope]);
+  }, [cache, closeDocument, finishPending, openBytes, runTask, scope, targetTask]);
+
+  const checkCloudRead = (task: Task, version: PdfVersion) => {
+    task.check();
+    const snapshot = controller.getSnapshot();
+    if (snapshot.needsLogin) throw new ClientError('AUTH_REQUIRED');
+    const record = assertPdfTarget(snapshot.workspace?.sync, paper.entityId, version);
+    if (!record || record.revision < 1 || record.pending) throw new CloudPdfError('VERSION_UNAVAILABLE');
+  };
 
   function readCloudCopy() {
     const context = props.cloudPdf;
-    const version = cloudVersion;
+    const version = cloudVersion && capturePdfVersion(cloudVersion);
     if (!context || !version || busy) return;
     opening.current.beginExplicitOpen();
-    void runTask('正在下载云副本', async (task) => {
-      const check = () => {
-        task.check();
-        const snapshot = controller.getSnapshot();
-        if (snapshot.status !== 'ready' || snapshot.needsLogin) throw new PdfError('ACCOUNT_CHANGED');
-        const sync = snapshot.workspace?.sync;
-        const livePaper = sync && getVisibleEntity(sync, 'paper', version.data.paperId);
-        const liveVersion = sync && getVisibleEntity(sync, 'attachmentVersion', version.entityId);
-        const data = liveVersion?.data as AttachmentVersionData | null;
-        if (!livePaper?.data || livePaper.deleted || !data || liveVersion?.deleted
-          || data.paperId !== version.data.paperId || data.sha256 !== version.data.sha256 || data.sizeBytes !== version.data.sizeBytes)
-          throw new PdfError('VERSION_MISMATCH');
-      };
+    void runTask('正在下载云副本', async (baseTask) => {
+      const task = targetTask(baseTask, version);
+      const check = () => checkCloudRead(task, version);
+      check();
       const bytes = await downloadCloudPdfCopy(context, version, {
         signal: task.signal, isCurrent: () => { try { check(); return true; } catch { return false; } },
         onProgress: (downloaded, total) => { check(); setProgress({ loaded: downloaded, total }); },
       });
       check();
-      await openBytes(bytes, version.data.fileName, version, undefined, { ...task, check });
+      await openBytes(bytes, version.data.fileName, version, undefined, task);
+    });
+  }
+
+  function openAvailableSource() {
+    const version = cloudVersion && capturePdfVersion(cloudVersion);
+    if (!version || busy) return;
+    const publicUrl = sourceUrl.trim(); const context = props.cloudPdf;
+    opening.current.beginExplicitOpen(); setSourceAttempts([]); setProbe(null);
+    void runTask('正在查找此版本的 PDF', async (baseTask) => {
+      const task = targetTask(baseTask, version);
+      const snapshot = controller.getSnapshot();
+      const record = assertPdfTarget(snapshot.workspace?.sync, paper.entityId, version)!;
+      let reason: CloudPdfUnavailableReason | undefined;
+      if (!context) reason = 'not-configured';
+      else if (!context.getCloudPdfCapability()) reason = 'not-enabled';
+      else if (snapshot.needsLogin) reason = 'login-required';
+      else if (record.revision < 1 || record.pending) reason = 'not-synced';
+      const result = await resolvePdfSource({ scope, version, cache, publicUrl,
+        cloud: context && !reason ? { context, check: () => checkCloudRead(task, version) } : undefined,
+        cloudUnavailableReason: reason,
+      }, {
+        signal: task.signal, check: task.check,
+        onAttempt: (attempt) => { task.check(); setSourceAttempts((items) => [...items.filter((item) => item.source !== attempt.source), attempt]); },
+        onProgress: ({ loaded, total }) => { task.check(); setProgress({ loaded, total }); },
+      });
+      task.check(); setSourceAttempts(result.attempts);
+      if (result.status === 'unavailable') {
+        setNotice('这些来源暂时都无法提供此版本。可检查下面的原因，或选择相同的本机 PDF。'); return;
+      }
+      setBusy('正在核对并打开 PDF'); setProgress(null);
+      await openBytes(result.bytes, result.fileName, version, result.sourceUrl, task);
     });
   }
 
@@ -346,6 +424,22 @@ export function PaperReader(props: PaperReaderProps) {
   useInitialPdfRestore(opening.current, versions, selectedVersionId, Boolean(jumpTo), (initial) => {
     setSelectedVersionId(initial.entityId); void loadCached(initial);
   });
+
+  useEffect(() => {
+    const reading = current.current;
+    if (!reading && !activeReadTarget.current) return;
+    try {
+      activeReadTarget.current?.check();
+      if (reading) {
+        if (controller.getSnapshot().status !== 'ready' || (props.accountCurrent && !props.accountCurrent())
+          || !sameReaderIdentity(controller, reading.identity)) throw new PdfError('ACCOUNT_CHANGED');
+        assertPdfTarget(controller.getSnapshot().workspace?.sync, paper.entityId, reading.version, reading.pdf.pageCount);
+      }
+    } catch (failure) {
+      taskAbort.current?.abort(failure); activeReadTarget.current = null;
+      closeDocument(); setPanel('source'); setError(errorMessage(failure));
+    }
+  }, [paper, props.attachmentVersions, props.accountCurrent, loaded, controller, closeDocument]);
 
   useEffect(() => {
     const draft = draftRef.current;
@@ -502,7 +596,7 @@ export function PaperReader(props: PaperReaderProps) {
     opening.current.beginExplicitOpen();
     try { await finishPending(); }
     catch (failure) { setError(errorMessage(failure)); return; }
-    taskAbort.current?.abort(); setSelectedVersionId(id); setProbe(null); setSourceUrl('');
+    taskAbort.current?.abort(); setSelectedVersionId(id); setProbe(null); setSourceUrl(''); setSourceAttempts([]);
     const version = versions.find((entry) => entry.entityId === id);
     if (version) await loadCached(version);
     else { closeDocument(); setPanel('source'); setNotice(null); }
@@ -514,23 +608,30 @@ export function PaperReader(props: PaperReaderProps) {
     // Claim before reading or publishing metadata: a newly saved first version must
     // never start a second restoration task while this import is still caching bytes.
     opening.current.beginExplicitOpen();
-    const expected = versions.find((entry) => entry.entityId === selectedVersionId);
-    void runTask('正在核对 PDF', async (task) => {
-      const bytes = await readLocalPdf(file, { signal: task.signal, onProgress: (done, total) => setProgress({ loaded: done, total }) });
+    const value = versions.find((entry) => entry.entityId === selectedVersionId);
+    const expected = value && capturePdfVersion(value);
+    setSourceAttempts([]);
+    void runTask('正在核对 PDF', async (baseTask) => {
+      const task = targetTask(baseTask, expected);
+      const bytes = await readLocalPdf(file, { signal: task.signal, onProgress: (done, total) => { task.check(); setProgress({ loaded: done, total }); } });
       task.check(); await openBytes(bytes, file.name, expected, undefined, task);
     });
   };
 
-  const inspectSource = () => void runTask('正在检查链接', async (task) => {
-    const found = await inspectPublicPdf(sourceUrl, { signal: task.signal }); task.check(); setProbe(found);
+  const inspectSource = () => void runTask('正在检查链接', async (baseTask) => {
+    const task = targetTask(baseTask, versions.find((entry) => entry.entityId === selectedVersionId));
+    const found = await inspectPublicPdf(sourceUrl, { signal: task.signal, fetch: guardedPdfFetch(task.check) }); task.check(); setProbe(found);
   });
   const downloadSource = () => {
     if (!probe) return;
     opening.current.beginExplicitOpen();
-    const source = probe; const expected = versions.find((entry) => entry.entityId === selectedVersionId);
-    void runTask('正在读取 PDF', async (task) => {
-      const bytes = await downloadPublicPdf(source, { signal: task.signal,
-        onProgress: (done, total) => { if (!task.signal.aborted) setProgress({ loaded: done, total }); } });
+    const source = { ...probe }; const value = versions.find((entry) => entry.entityId === selectedVersionId);
+    const expected = value && capturePdfVersion(value);
+    setSourceAttempts([]);
+    void runTask('正在读取 PDF', async (baseTask) => {
+      const task = targetTask(baseTask, expected);
+      const bytes = await downloadPublicPdf(source, { signal: task.signal, fetch: guardedPdfFetch(task.check),
+        onProgress: (done, total) => { task.check(); setProgress({ loaded: done, total }); } });
       task.check(); await openBytes(bytes, source.fileName, expected, source.url, task);
     });
   };
@@ -698,7 +799,7 @@ export function PaperReader(props: PaperReaderProps) {
       <div className="pr-title"><h2 title={title}>{title}</h2>{!compact && <p>{loaded ? `${loaded.pdf.pageCount} 页 · ${byteLabel(loaded.version.data.sizeBytes)}` : '选择 PDF 开始阅读'}</p>}</div>
       {compact ? <button type="button" className="pr-more-button app-glass" aria-label="更多阅读选项" aria-haspopup="dialog" onClick={() => setPanel('more')}>
         <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" /></svg></button>
-        : <button type="button" onClick={() => setPanel(panel === 'source' ? null : 'source')}>文件</button>}
+        : <button type="button" onClick={() => { if (panel === 'source') taskAbort.current?.abort(); setPanel(panel === 'source' ? null : 'source'); }}>文件</button>}
     </header>
     {loaded && !compact && <div className="pr-toolbar" role="toolbar" aria-label="阅读工具">
       {pageControls}{zoomControl}
@@ -711,7 +812,7 @@ export function PaperReader(props: PaperReaderProps) {
     {(!compact || !panel) && feedback}
     <div className="pr-body">
       {panel && <ReaderPanel compact={compact} title={panelTitles[panel]} onClose={() => {
-        if (panel === 'cloud') taskAbort.current?.abort();
+        if (panel === 'cloud' || panel === 'source') taskAbort.current?.abort();
         setPanel(null);
       }}>
         {compact && feedback}
@@ -743,19 +844,24 @@ export function PaperReader(props: PaperReaderProps) {
             {versions.map((version) => <option key={version.entityId} value={version.entityId}>{version.data.fileName} · {version.data.sha256.slice(0, 8)}</option>)}
             <option value="">添加新版本</option></select></label>
           <p className="pr-muted">{selectedVersionId ? '选择与此版本一致的文件。不同文件可作为新版本添加，批注会分别保留。' : '文件只保留在当前设备。文库会同步版本信息、批注与阅读位置。'}</p>
+          {cloudVersion && <div className="pr-source-choice">
+            <button type="button" className="pr-primary" disabled={Boolean(busy)} onClick={openAvailableSource}>从可用来源打开</button>
+            <p className="pr-muted">点击后依次尝试本机缓存、私有云和下方填写的公开链接，仅打开与此版本一致的 PDF。</p>
+          </div>}
+          <PdfSourceAttempts attempts={sourceAttempts} />
           <input className="pr-file-input" type="file" accept="application/pdf,.pdf" ref={fileInput} onChange={chooseFile} tabIndex={-1} />
-          <button type="button" className="pr-primary" disabled={Boolean(busy)} onClick={() => fileInput.current?.click()}>选择本机 PDF</button>
+          <button type="button" className={cloudVersion ? undefined : 'pr-primary'} disabled={Boolean(busy)} onClick={() => fileInput.current?.click()}>选择本机 PDF</button>
           {props.cloudPdf && cloudVersion && <button type="button" disabled={Boolean(busy)} onClick={() => setPanel('cloud')}>查看此版本的云副本</button>}
           <div className="pr-divider" />
           <label>公开 PDF 链接<input type="url" value={sourceUrl} placeholder="https://…/paper.pdf" autoCapitalize="none" autoCorrect="off" spellCheck={false}
-            disabled={Boolean(busy)} onChange={(event) => { setSourceUrl(event.target.value); setProbe(null); }} /></label>
+            disabled={Boolean(busy)} onChange={(event) => { setSourceUrl(event.target.value); setProbe(null); setSourceAttempts([]); }} /></label>
           <button type="button" disabled={Boolean(busy) || !sourceUrl.trim()} onClick={inspectSource}>检查链接</button>
           {probe && <div className="pr-source-result"><p>{probe.rangeSupported ? '来源支持分段读取。' : '来源不支持分段读取，需要下载完整文件。'}
             {' '}核对版本将读取{probe.sizeBytes === null ? '完整 PDF' : `完整文件（${byteLabel(probe.sizeBytes)}）`}。</p>
             <button type="button" className="pr-primary" disabled={Boolean(busy)} onClick={downloadSource}>读取完整 PDF 并打开</button></div>}
           <p className="pr-muted">网页链接、需要登录或不允许跨域读取的来源可能无法打开。可改选本机 PDF。</p>
-          {loaded && <button type="button" onClick={togglePin}>{cacheEntry?.pinned ? '取消离线保留' : '保留此 PDF 供离线阅读'}</button>}
-          <button type="button" onClick={() => { setPanel('cache'); void refreshCache().catch((failure) => setError(errorMessage(failure))); }}>查看与清理缓存</button>
+          {loaded && <button type="button" disabled={Boolean(busy)} onClick={togglePin}>{cacheEntry?.pinned ? '取消离线保留' : '保留此 PDF 供离线阅读'}</button>}
+          <button type="button" disabled={Boolean(busy)} onClick={() => { setPanel('cache'); void refreshCache().catch((failure) => setError(errorMessage(failure))); }}>查看与清理缓存</button>
         </div>}
         {panel === 'cloud' && props.cloudPdf && cloudVersion && <CloudPdfPanel key={`${scopeKey}:${cloudVersion.entityId}`}
           context={props.cloudPdf} scope={scope} controller={controller} accountCurrent={props.accountCurrent}
