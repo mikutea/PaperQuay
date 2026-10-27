@@ -19,6 +19,7 @@ import { normalizeServiceUrl } from './config.ts';
 import { ClientError, errorFromResponse } from './errors.ts';
 import { getPlatformCapabilities } from './platform.ts';
 import type { CloudPdfCapability } from './pdf/cloudCopies.ts';
+import { isDesktopPdfCapability, type DesktopPdfCapability } from './pdf/desktopCopies.ts';
 
 export interface DeviceSession {
   id: string;
@@ -137,6 +138,7 @@ async function boundedJson(response: Response): Promise<unknown> {
 export class SyncApi {
   supportsPaperOrganization = false;
   cloudPdfCapability: CloudPdfCapability | null = null;
+  desktopPdfCapability: DesktopPdfCapability | null = null;
   private readonly baseUrl: string;
   private readonly getToken: () => Promise<string>;
   private readonly fetcher: typeof fetch;
@@ -214,9 +216,17 @@ export class SyncApi {
 
   async capabilities(signal: AbortSignal): Promise<{ paperOrganization: boolean }> {
     this.cloudPdfCapability = null;
+    this.desktopPdfCapability = null;
     const body = await this.request('/v1/capabilities', signal);
     if (!isObject(body) || body.protocolVersion !== 1) throw new ClientError('INVALID_RESPONSE');
     this.supportsPaperOrganization = isObject(body.features) && body.features.paperOrganization === 1;
+    let desktopCapability: DesktopPdfCapability | null = null;
+    if (isObject(body.features) && body.features.desktopPdfTransfer === 1) {
+      const limits = body.desktopPdf;
+      if (!isDesktopPdfCapability(limits)) throw new ClientError('INVALID_RESPONSE');
+      desktopCapability = { transport: limits.transport, maxFileBytes: limits.maxFileBytes,
+        requestTtlMs: limits.requestTtlMs, pollTimeoutMs: limits.pollTimeoutMs };
+    }
     if (body.pdfStorage === true && isObject(body.features) && body.features.privatePdfStorage === 1) {
       const limits = body.cloudPdf;
       if (!isObject(limits) || !Number.isSafeInteger(limits.maxFileBytes) || Number(limits.maxFileBytes) < 1
@@ -227,6 +237,7 @@ export class SyncApi {
       this.cloudPdfCapability = { maxFileBytes: Number(limits.maxFileBytes), maxAccountBytes: Number(limits.maxAccountBytes),
         maxCopies: Number(limits.maxCopies) };
     }
+    this.desktopPdfCapability = desktopCapability;
     return { paperOrganization: this.supportsPaperOrganization };
   }
 

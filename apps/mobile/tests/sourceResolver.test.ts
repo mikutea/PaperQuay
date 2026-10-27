@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { ClientError } from '../src/errors.ts';
 import { sha256 } from '../src/pdf/acquisition.ts';
 import { CloudPdfError, type CloudPdfContext } from '../src/pdf/cloudCopies.ts';
+import { DesktopPdfError, type DesktopPdfContext } from '../src/pdf/desktopCopies.ts';
 import { PdfError } from '../src/pdf/errors.ts';
 import {
   describePdfSourceError, PDF_SOURCE_BUDGETS, resolvePdfSource, type PdfSourceAttempt, type PdfSourceOptions,
@@ -25,6 +26,14 @@ const context = (overrides: Partial<CloudPdfContext> = {}): CloudPdfContext => (
   getCloudPdfCapability: () => ({ maxFileBytes: PDF_LIMITS.maxFileBytes, maxAccountBytes: 1024 ** 3, maxCopies: 512 }),
   ...overrides,
 });
+const DESKTOP_REQUEST = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+const desktopContext = (overrides: Partial<DesktopPdfContext> = {}): DesktopPdfContext => ({
+  apiBaseUrl: API, getAccessToken: async () => 'private-desktop-token',
+  getDesktopPdfCapability: () => ({ transport: 'http-relay-v1', maxFileBytes: PDF_LIMITS.maxFileBytes, requestTtlMs: 30_000, pollTimeoutMs: 20_000 }),
+  ...overrides,
+});
+const desktopRequest = () => new Response(JSON.stringify({ requestId: DESKTOP_REQUEST, attachmentVersionId: ID,
+  expiresAt: new Date(Date.now() + 30_000).toISOString() }), { status: 201, headers: { 'content-type': 'application/json' } });
 const request = (overrides: Partial<PdfSourceRequest> = {}): PdfSourceRequest => ({
   scope: { apiBaseUrl: API, accountId: ACCOUNT }, version: { ...version, data: { ...version.data } },
   cache: { peek: async () => null }, cloud: { context: context(), check: () => undefined }, publicUrl: URL, ...overrides,
@@ -39,7 +48,7 @@ const jsonError = (status: number, code: string) => new Response(JSON.stringify(
 const missingCloud = () => jsonError(404, 'CLOUD_PDF_NOT_FOUND');
 const attempt = (result: PdfSourceResult, source: PdfSourceAttempt['source']) => result.attempts.find((entry) => entry.source === source)!;
 const errorCode = (expected: string) => (error: unknown) => {
-  assert.ok(error instanceof PdfError || error instanceof CloudPdfError || error instanceof ClientError);
+  assert.ok(error instanceof PdfError || error instanceof CloudPdfError || error instanceof DesktopPdfError || error instanceof ClientError);
   assert.equal(error.code, expected); return true;
 };
 function deferred<T>() {
@@ -60,7 +69,8 @@ test('a verified cache hit owns its bytes and never requests a token or network 
   assert.ok(result.status === 'resolved'); assert.equal(result.source, 'cache'); assert.equal(result.fileName, 'synthetic.pdf');
   assert.deepEqual(result.bytes, bytes); assert.notEqual(result.bytes, bytes); assert.equal(result.sourceUrl, undefined);
   assert.equal(reads, 1); assert.equal(tokens, 0);
-  assert.deepEqual(result.attempts.map((entry) => entry.status), ['succeeded', 'skipped', 'skipped']);
+  assert.deepEqual(result.attempts.map((entry) => entry.status), ['succeeded', 'skipped', 'skipped', 'skipped']);
+  assert.equal(attempt(result, 'desktop').code, 'NOT_NEEDED');
   assert.equal(attempt(result, 'cloud').code, 'NOT_NEEDED');
   assert.deepEqual(events.filter((entry) => entry.source === 'cache').map((entry) => entry.status),
     ['pending', 'checking', 'verifying', 'succeeded']);
@@ -171,7 +181,7 @@ test('all source failures retain safe reasons, and invalid local/private public 
     const result = await resolvePdfSource(request({ publicUrl: url, cache: { peek: async () => { throw new Error('secret local path'); } } }),
       options({ fetch: async (input) => { requests++; assert.ok(String(input).startsWith(API)); return missingCloud(); } }));
     assert.equal(result.status, 'unavailable'); assert.equal(requests, 1);
-    assert.deepEqual(result.attempts.map((entry) => entry.code), ['CACHE_UNAVAILABLE', 'NOT_FOUND', 'URL_INVALID']);
+    assert.deepEqual(result.attempts.map((entry) => entry.code), ['CACHE_UNAVAILABLE', 'DESKTOP_NOT_CONFIGURED', 'NOT_FOUND', 'URL_INVALID']);
     assert.ok(!JSON.stringify(result.attempts).includes('secret')); assert.ok(!JSON.stringify(result.attempts).includes(url));
   }
   const poisoned = new CloudPdfError('NETWORK'); poisoned.message = 'secret bearer and URL';
@@ -433,4 +443,205 @@ test('malformed or oversize expected versions are rejected before starting sourc
     await assert.rejects(resolvePdfSource(request({ version: data, cache: { peek: async () => { reads++; return bytes; } } }), options()), errorCode(expected));
     assert.equal(reads, 0);
   }
+});
+
+test('a cache hit skips desktop eligibility, credentials and requests even when remote access is no longer eligible', async () => {
+  let tokens = 0; let checks = 0;
+  const result = await resolvePdfSource(request({ cache: { peek: async () => bytes }, desktop: {
+    context: desktopContext({ getAccessToken: async () => { tokens++; return 'token'; } }),
+    check: () => { checks++; throw new ClientError('AUTH_REQUIRED'); },
+  } }), options({ fetch: async () => { assert.fail('no remote source may run after a verified cache hit'); } }));
+  assert.ok(result.status === 'resolved'); assert.equal(result.source, 'cache');
+  assert.equal(tokens, 0); assert.equal(checks, 0); assert.equal(attempt(result, 'desktop').code, 'NOT_NEEDED');
+});
+
+test('a verified desktop copy follows cache and suppresses cloud and the private local public URL', async () => {
+  const requests: { url: string; init: RequestInit }[] = [];
+  const result = await resolvePdfSource(request({ desktop: { context: desktopContext(), check: () => undefined } }), options({ fetch: async (url, init) => {
+    requests.push({ url: String(url), init: init! });
+    assert.ok(String(url).startsWith(`${API}/v1/desktop-pdfs/`));
+    return init?.method === 'POST' ? desktopRequest() : binary(bytes, { 'accept-ranges': 'none' });
+  } }));
+  assert.ok(result.status === 'resolved'); assert.equal(result.source, 'desktop'); assert.deepEqual(result.bytes, bytes);
+  assert.equal(result.sourceUrl, undefined);
+  assert.deepEqual(result.attempts.map(({ source, status }) => [source, status]), [
+    ['cache', 'failed'], ['desktop', 'succeeded'], ['cloud', 'skipped'], ['public', 'skipped'],
+  ]);
+  assert.deepEqual(requests.map(({ url, init }) => [init.method, url]), [
+    ['POST', `${API}/v1/desktop-pdfs/requests`], ['GET', `${API}/v1/desktop-pdfs/requests/${DESKTOP_REQUEST}/content`],
+  ]);
+  assert.deepEqual(JSON.parse(String(requests[0].init.body)), { attachmentVersionId: ID });
+  assert.ok(!JSON.stringify(requests).includes(URL)); assert.ok(!JSON.stringify(result.attempts).includes('private'));
+});
+
+test('desktop unavailability, expiration, busy and integrity failures fall through once to the exact private cloud version', async () => {
+  const corrupt = bytes.slice(); corrupt[25] ^= 1;
+  for (const [reply, expected] of [
+    [() => jsonError(404, 'DESKTOP_PDF_UNAVAILABLE'), 'UNAVAILABLE'],
+    [() => jsonError(408, 'DESKTOP_PDF_TIMEOUT'), 'REQUEST_EXPIRED'],
+    [() => jsonError(409, 'DESKTOP_PDF_REQUEST_IN_USE'), 'REQUEST_IN_USE'],
+    [() => jsonError(429, 'DESKTOP_PDF_TRANSFER_BUSY'), 'RATE_LIMITED'],
+    [() => jsonError(500, 'PRIVATE_SERVER_PATH'), 'FAILED'],
+    [() => binary(corrupt, { 'accept-ranges': 'none' }), 'VERSION_MISMATCH'],
+  ] as const) {
+    const requests: string[] = [];
+    const result = await resolvePdfSource(request({ desktop: { context: desktopContext(), check: () => undefined } }), options({ fetch: async (url, init) => {
+      requests.push(`${init?.method} ${String(url)}`);
+      if (init?.method === 'POST') return desktopRequest();
+      if (init?.method === 'DELETE') return jsonError(404, 'NOT_FOUND');
+      if (String(url).includes('/desktop-pdfs/')) return reply();
+      assert.ok(String(url).includes('/cloud-pdfs/')); return binary();
+    } }));
+    assert.ok(result.status === 'resolved'); assert.equal(result.source, 'cloud'); assert.equal(attempt(result, 'desktop').code, expected);
+    assert.equal(requests.filter((item) => item.startsWith('POST ')).length, 1);
+    assert.equal(requests.filter((item) => item.startsWith('GET ') && item.includes('/desktop-pdfs/')).length, 1);
+    assert.equal(requests.filter((item) => item.startsWith('DELETE ')).length, 1);
+    assert.equal(requests.filter((item) => item.includes('/cloud-pdfs/')).length, 1);
+    assert.ok(!requests.some((item) => item.includes(URL))); assert.ok(!JSON.stringify(result.attempts).includes('PRIVATE'));
+  }
+});
+
+test('an unavailable desktop at creation does not issue content or cleanup and preserves all later source reasons', async () => {
+  const requests: string[] = [];
+  const result = await resolvePdfSource(request({ desktop: { context: desktopContext(), check: () => undefined } }), options({ fetch: async (url, init) => {
+    requests.push(`${init?.method} ${String(url)}`);
+    if (String(url).includes('/desktop-pdfs/')) return jsonError(404, 'DESKTOP_PDF_UNAVAILABLE');
+    return String(url).includes('/cloud-pdfs/') ? missingCloud() : binary();
+  } }));
+  assert.ok(result.status === 'resolved'); assert.equal(result.source, 'public');
+  assert.deepEqual(result.attempts.map((item) => item.code), ['CACHE_MISSING', 'UNAVAILABLE', 'NOT_FOUND', undefined]);
+  assert.equal(requests.filter((item) => item.includes('/desktop-pdfs/')).length, 1);
+  assert.ok(requests[0].startsWith('POST '));
+});
+
+test('disabled or omitted desktop capability makes no token request and preserves old cloud/public compatibility', async () => {
+  let tokens = 0;
+  const result = await resolvePdfSource(request({ desktop: { context: desktopContext({ getDesktopPdfCapability: () => null,
+    getAccessToken: async () => { tokens++; return 'token'; } }), check: () => undefined } }), options({ fetch: async (url) => {
+    assert.ok(String(url).includes('/cloud-pdfs/')); return binary();
+  } }));
+  assert.ok(result.status === 'resolved'); assert.equal(result.source, 'cloud'); assert.equal(tokens, 0);
+  assert.equal(attempt(result, 'desktop').status, 'skipped'); assert.equal(attempt(result, 'desktop').code, 'TRANSFER_DISABLED');
+  for (const [reason, expected] of [
+    ['not-configured', 'DESKTOP_NOT_CONFIGURED'], ['not-enabled', 'TRANSFER_DISABLED'],
+    ['not-synced', 'DESKTOP_NOT_SYNCED'], ['login-required', 'DESKTOP_LOGIN_REQUIRED'],
+  ] as const) {
+    const value = await resolvePdfSource(request({ cloud: undefined, publicUrl: undefined, desktopUnavailableReason: reason }),
+      options({ fetch: async () => { assert.fail('omitted sources cannot probe endpoints'); } }));
+    assert.equal(attempt(value, 'desktop').code, expected); assert.equal(value.status, 'unavailable');
+  }
+});
+
+test('desktop authentication and object invalidation terminate every later source, including a configured public URL', async () => {
+  for (const [status, serverCode, expected] of [
+    [401, 'AUTHENTICATION_REQUIRED', 'AUTH_REQUIRED'], [403, 'SESSION_REVOKED', 'SESSION_REVOKED'],
+    [404, 'NOT_FOUND', 'VERSION_UNAVAILABLE'], [410, 'ATTACHMENT_VERSION_UNAVAILABLE', 'VERSION_UNAVAILABLE'],
+    [409, 'DESKTOP_PDF_CHANGED', 'CHANGED'],
+  ] as const) {
+    let requests = 0;
+    await assert.rejects(resolvePdfSource(request({ desktop: { context: desktopContext(), check: () => undefined } }),
+      options({ fetch: async (url) => { requests++; assert.ok(String(url).includes('/desktop-pdfs/')); return jsonError(status, serverCode); } })), errorCode(expected));
+    assert.equal(requests, 1);
+  }
+});
+
+test('stalled desktop auth/object error bodies cannot be converted to a recoverable stage timeout', async () => {
+  for (const [status, expected] of [[401, 'AUTH_REQUIRED'], [403, 'AUTH_REQUIRED'], [404, 'VERSION_UNAVAILABLE'],
+    [409, 'CHANGED'], [410, 'VERSION_UNAVAILABLE']] as const) {
+    let cancelled = false; let requests = 0;
+    await assert.rejects(resolvePdfSource(request({ desktop: { context: desktopContext(), check: () => undefined } }), options({ budgets: { desktopMs: 12 },
+      fetch: async (url) => { requests++; assert.ok(String(url).includes('/desktop-pdfs/'));
+        return new Response(new ReadableStream({ cancel() { cancelled = true; } }), { status, headers: { 'content-type': 'application/json' } }); },
+    })), errorCode(expected));
+    assert.equal(cancelled, true); assert.equal(requests, 1);
+  }
+});
+
+test('desktop eligibility loss while waiting or after a failure callback cannot fall through to cloud', async () => {
+  const original = new DesktopPdfError('VERSION_UNAVAILABLE'); let eligible = true;
+  await assert.rejects(resolvePdfSource(request({ desktop: { context: desktopContext(), check: () => { if (!eligible) throw original; } } }),
+    options({ fetch: async (url) => { assert.ok(String(url).includes('/desktop-pdfs/')); return jsonError(404, 'DESKTOP_PDF_UNAVAILABLE'); },
+      onAttempt: (value) => { if (value.source === 'desktop' && value.status === 'failed') eligible = false; },
+    })), (error) => error === original);
+  eligible = true; const began = deferred<void>();
+  const pending = resolvePdfSource(request({ desktop: { context: desktopContext(), check: () => { if (!eligible) throw original; } } }),
+    options({ budgets: { desktopMs: 15 }, fetch: async (url) => { assert.ok(String(url).includes('/desktop-pdfs/')); began.resolve(); return new Promise(() => undefined); } }));
+  await began.promise; eligible = false; await assert.rejects(pending, (error) => error === original);
+});
+
+test('desktop token timeout permits cloud but its late token never dispatches an old authenticated request', async () => {
+  const token = deferred<string>(); let desktopRequests = 0;
+  const result = await resolvePdfSource(request({ desktop: { context: desktopContext({ getAccessToken: () => token.promise }), check: () => undefined } }),
+    options({ budgets: { desktopMs: 10 }, fetch: async (url) => {
+      if (String(url).includes('/desktop-pdfs/')) desktopRequests++; return binary();
+    } }));
+  assert.ok(result.status === 'resolved'); assert.equal(result.source, 'cloud'); assert.equal(attempt(result, 'desktop').code, 'TIMEOUT');
+  token.resolve('late-desktop-token'); await flush(); assert.equal(desktopRequests, 0);
+});
+
+test('a desktop content timeout cleans up separately and ignores late bytes and progress after cloud wins', async () => {
+  const reply = deferred<Response>(); const events: PdfSourceAttempt[] = []; let cancelled = false; const methods: string[] = [];
+  const result = await resolvePdfSource(request({ desktop: { context: desktopContext(), check: () => undefined } }), options({
+    budgets: { desktopMs: 12 }, onAttempt: (value) => events.push(value), fetch: async (url, init) => {
+      if (String(url).includes('/desktop-pdfs/')) {
+        methods.push(init!.method!);
+        if (init?.method === 'POST') return desktopRequest();
+        if (init?.method === 'DELETE') return jsonError(404, 'NOT_FOUND');
+        return reply.promise;
+      }
+      return binary();
+    },
+  }));
+  assert.ok(result.status === 'resolved'); assert.equal(result.source, 'cloud'); const count = events.length;
+  reply.resolve(new Response(new ReadableStream({ cancel() { cancelled = true; } }),
+    { headers: { 'content-type': 'application/pdf', 'content-length': String(bytes.length), 'accept-ranges': 'none' } }));
+  await flush(); assert.equal(cancelled, true); assert.equal(events.length, count); assert.deepEqual(methods, ['POST', 'GET', 'DELETE']);
+});
+
+test('cancellation while desktop content waits ends the chain before fallback and late response disposal changes no row', async () => {
+  const abort = new AbortController(); const began = deferred<void>(); const reply = deferred<Response>(); const events: PdfSourceAttempt[] = [];
+  const methods: string[] = []; let cancelled = false;
+  const pending = resolvePdfSource(request({ desktop: { context: desktopContext(), check: () => undefined } }), options({
+    signal: abort.signal, onAttempt: (value) => events.push(value), fetch: async (url, init) => {
+      assert.ok(String(url).includes('/desktop-pdfs/')); methods.push(init!.method!);
+      if (init?.method === 'POST') return desktopRequest();
+      if (init?.method === 'DELETE') return jsonError(404, 'NOT_FOUND');
+      began.resolve(); return reply.promise;
+    },
+  }));
+  await began.promise; abort.abort(); await assert.rejects(pending, errorCode('CANCELLED')); await flush();
+  const count = events.length; assert.deepEqual(methods, ['POST', 'GET', 'DELETE']);
+  reply.resolve(new Response(new ReadableStream({ cancel() { cancelled = true; } }), { headers: { 'content-type': 'application/pdf' } }));
+  await flush(); assert.equal(cancelled, true); assert.equal(events.length, count);
+});
+
+test('the shared total deadline stops during desktop instead of starting a fresh cloud budget', async () => {
+  let calls = 0;
+  await assert.rejects(resolvePdfSource(request({ desktop: { context: desktopContext(), check: () => undefined } }), options({
+    budgets: { totalMs: 12 }, fetch: async (url) => { calls++; assert.ok(String(url).includes('/desktop-pdfs/')); return new Promise(() => undefined); },
+  })), errorCode('TIMEOUT'));
+  assert.equal(calls, 1);
+});
+
+test('desktop service binding is checked before acquiring a token and its private diagnostics never enter attempts', async () => {
+  let tokens = 0;
+  await assert.rejects(resolvePdfSource(request({ desktop: { context: desktopContext({ apiBaseUrl: 'https://other-account.example.test',
+    getAccessToken: async () => { tokens++; return 'token'; } }), check: () => undefined } }), options()), errorCode('ACCOUNT_CHANGED'));
+  assert.equal(tokens, 0);
+  const poisoned = new DesktopPdfError('UNAVAILABLE'); poisoned.message = 'private token and https://private.invalid';
+  assert.ok(!describePdfSourceError(poisoned, 'desktop').message.includes('private'));
+  assert.equal(describePdfSourceError(new Error('private token'), 'desktop').code, 'NETWORK');
+});
+
+test('injected desktop budgets cannot extend the new stage or overall deadline', async (t) => {
+  const timers: number[] = []; const set = globalThis.setTimeout;
+  t.mock.method(globalThis, 'setTimeout', ((handler: (...args: unknown[]) => void, timeout?: number, ...args: unknown[]) => {
+    timers.push(timeout!); return set(handler, timeout, ...args);
+  }) as typeof setTimeout);
+  const result = await resolvePdfSource(request({ desktop: { context: desktopContext(), check: () => undefined } }), options({
+    budgets: { desktopMs: Number.MAX_SAFE_INTEGER, totalMs: Number.MAX_SAFE_INTEGER },
+    fetch: async (_url, init) => init?.method === 'POST' ? desktopRequest() : binary(bytes, { 'accept-ranges': 'none' }),
+  }));
+  assert.ok(result.status === 'resolved'); assert.equal(result.source, 'desktop');
+  assert.deepEqual(timers, [60_000, 5_000, 15_000, 15_000]);
 });

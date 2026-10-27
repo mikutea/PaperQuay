@@ -165,11 +165,63 @@ Push 在账号事务锁内构造完整候选结果，并在实体、变更记录
 
 认证、撤销、输入格式和服务临时故障仍沿用已有错误码。所有副本响应继续携带 `Cache-Control:no-store`；已开始发送的字节不能追回，撤销提交后的请求与上传提交都会重新拒绝旧会话。
 
+## 可选在线桌面 PDF 取回
+
+`PAPERQUAY_DESKTOP_PDF_ENABLED=1` 才开放在线桌面传输；默认 `0`，与私有云副本开关相互独立。启用后 capabilities 增加 `features.desktopPdfTransfer:1` 和 `desktopPdf:{transport:'http-relay-v1',maxFileBytes,requestTtlMs,pollTimeoutMs,byteWindowMs,accountWindowBytes,processWindowBytes}`。该功能通过 API 进程实时转发字节，不生成云 PDF 副本，不把传输状态或文件字节写入数据库、磁盘；本机连接测试不构成公网、移动真机或多实例验收。
+
+桌面端先通过现有同步接口发布文献与精确附件版本元数据，再注册当前 OIDC 会话并主动轮询。消费者和提供者必须属于同一 `(issuer,sub)`、使用不同 `sid`；每次传输还绑定各自已验证的客户端和会话。服务接受已注册平台为 `windows`、`macos`、`linux` 的提供者；平台字段用于功能选择，不是设备可信证明。服务只接受精确附件版本 UUID，不接受本地路径、来源 URL 或任意文件标识。
+
+| 方法与路径 | 返回值或行为 |
+| --- | --- |
+| `GET /v1/desktop-pdfs/versions?after=&limit=` | `{items,nextAfter,hasMore}`；UUID keyset 分页，默认 25、最多 100 条 |
+| `GET /v1/desktop-pdfs/versions/:id` | 当前有效的 `Target`；同时检查父文献、版本与 64 MiB 上限 |
+| `POST /v1/desktop-pdfs/provider/poll` | 空 JSON `{}`，最长等待 20 秒；返回 `{request:null}` 或 `{request:Job}` |
+| `DELETE /v1/desktop-pdfs/provider` | 停止当前提供者并终止其已分配传输；返回 `{stopped:true}` |
+| `POST /v1/desktop-pdfs/requests` | `{attachmentVersionId}`；HTTP 201 返回 `{requestId,attachmentVersionId,expiresAt}` |
+| `GET /v1/desktop-pdfs/requests/:id/content` | 仅请求创建会话可用，一次性完整 PDF 流；无 Range 支持 |
+| `POST /v1/desktop-pdfs/requests/:id/content` | 仅分配到的提供会话可用；原始 `application/pdf`、精确 `Content-Length`；消费者响应完成后返回 `{sent:true}` |
+| `POST /v1/desktop-pdfs/requests/:id/unavailable` | 提供者用空 JSON `{}` 拒绝当前任务；返回 `{acknowledged:true}`，尝试另一个在线会话 |
+| `DELETE /v1/desktop-pdfs/requests/:id` | 创建会话取消请求；返回 `{cancelled:true}`，已结束请求为 404 |
+
+`Target` 为 `{paper:{entityId,revision,title},version:{entityId,revision,data:AttachmentVersionData}}`。列表只包含当前账号、父文献和版本都未删除且大小合规的 PDF 元数据；没有本地文件路径或来源 URL。分页不是数据库快照，并发新增 UUID 可能位于当前 `after` 之前，刷新列表应从头开始。该元数据表示同步版本存在，不保证此刻有桌面在线或仍保有对应本地文件。
+
+`Job` 为 `{requestId,attachmentVersionId,sha256,sizeBytes,expiresAt}`。提供者每次长轮询只领取一个任务，同一请求最多依次尝试 4 个不同提供会话；声明不可用或领取后 10 秒内未开始上传才切换候选者，不向已尝试会话重复派发。没有提供者时明确返回不可用，不能通过未知 UUID 观察其他账号或其他会话的请求。
+
+每次请求从创建起有最长 30 秒的固定期限，同时不超过消费者令牌的验证后 `exp`。正常配置下剩余有效期不足 2 秒拒绝创建；提供者轮询令牌需覆盖完整请求期限，上传时新令牌不能延长期限。传输过程中每秒重查会话、父文献与版本，并在释放最后一块前再次核验。删除后恢复也会改变 revision，不能让旧请求继续；设备撤销接口成功后还会立即中断本进程相关连接。数据库读校验使用短只读事务、事务局部 RLS 和 1 秒语句/锁等待上限，不获取账号写锁、不更新 last-seen。超过 1.5 秒仍未返回的检查使传输失败，未完成的数据库动作继续占用准入槽，避免无限叠加查询。
+
+HTTP 流按最多 64 KiB 分块，增量计算 SHA-256、完整长度、PDF 头和末尾 EOF 标记；末块在完整性和最终授权通过前不发出。应用只保留有界流缓冲，不整文件收集。已经发出的前缀无法追回，客户端必须以完整长度、哈希和阅读器解析通过后才能接纳缓存；这些检查也不等同于完整 PDF 语义或安全性解析。消费者断线、提供者断线、取消、撤销、版本变化或超时会终止两端未完成的流；已发送响应头后的失败关闭连接，不能再返回 JSON 错误。
+
+| 单 API 进程限制 | 数值 |
+| --- | --- |
+| 单文件 | 64 MiB |
+| 活跃请求 | 每账号 1 个、进程 2 个；从创建至传输/未完成校验结束保留 |
+| 提供会话 | 每账号 4 个、进程 32 个；在线状态最长 30 秒，需持续轮询 |
+| 15 分钟准入字节预算 | 每账号 256 MiB、进程 1 GiB；最多跟踪 256 个账号窗口 |
+
+字节预算在请求准入时按版本声明的完整大小计入，取消或未完成不退还，以限制反复创建并中断传输。窗口与所有会话/请求状态仅在内存中保存；重启后旧请求失败，额度重置。多实例之间不共享会话、请求和预算，当前版本要求参与同一传输的请求落到同一 API 进程，不声称已支持多实例调度。以上限制不替代反向代理的连接、请求、带宽控制；代理还需允许长轮询和流式转发。
+
+| 错误码 | HTTP | 含义 |
+| --- | --- | --- |
+| `DESKTOP_PDF_TRANSFER_DISABLED` | 503 | 管理员未启用此能力 |
+| `DESKTOP_PDF_PROVIDER_REQUIRED` | 403 | 当前注册平台不在提供者范围内 |
+| `DESKTOP_PDF_UNAVAILABLE` | 404 | 无可用提供者，或被选提供者停止/失效 |
+| `NOT_FOUND` | 404 | 版本/请求不存在、不属于当前账号或不属于当前调用会话 |
+| `DESKTOP_PDF_REQUEST_IN_USE` | 409 | 同一轮询、消费者或上传已被占用 |
+| `DESKTOP_PDF_CHANGED` | 409 | 请求被取消或传输绑定状态已变化 |
+| `DESKTOP_PDF_TIMEOUT` | 408 | 固定请求期限或等待期限已到 |
+| `DESKTOP_PDF_TRANSFER_BUSY` | 429 | 请求、提供者或字节预算已满；含 `Retry-After` |
+| `ATTACHMENT_VERSION_UNAVAILABLE` | 410 | 版本或父文献已删除 |
+| `PDF_INTEGRITY_MISMATCH` / `INVALID_PDF` | 422 / 415 | 字节/哈希不符，或 PDF 标记无效 |
+| `REQUEST_TOO_LARGE` | 413 | 超过单文件上限 |
+
+认证、会话撤销、输入格式和服务临时故障继续使用已有错误码。所有响应保持 `Cache-Control:no-store`；错误正文不包含令牌、路径或输入内容。默认环境示例允许 `paperquay-desktop` 客户端，但身份提供商的客户端、回调地址和 PKCE 策略仍需与实际部署匹配。
+
 ## 验证
 
 ```sh
 npm run typecheck
 npm test
+npm run test:socket
 npm run test:integration
 ```
 
@@ -178,6 +230,7 @@ npm run test:integration
 ```sh
 node node_modules/typescript/bin/tsc --noEmit
 node --test tests/unit/*.test.ts
+node --test tests/socket/*.test.ts
 node --test --test-concurrency=1 tests/integration/*.test.ts
 ```
 
@@ -186,3 +239,5 @@ node --test --test-concurrency=1 tests/integration/*.test.ts
 当前本机验证覆盖真实 PostgreSQL 非 owner/NOBYPASSRLS 角色、并发 CAS 和回执、事务回滚重试、账号隔离、撤销与等待写入的锁顺序、精确版本绑定、冲突保留/显式恢复、分页响应预算与新连接恢复，以及真实 Keycloak discovery/JWKS/访问令牌/刷新/两个账号隔离。保留字节回归覆盖 UTF-8 精确临界、四类内容的独立 SQL 汇总、并发争用、回执最后一字节超限导致全回滚、满额幂等重放、各类 resolve 分支，以及旧账号超过默认 256 MiB 后的完整迁移与 RLS 恢复。新连接恢复证明数据库状态可重读；操作系统级重启、备份恢复、正式公网部署和真实移动设备仍需各自验收。
 
 私有副本新增真实数据库回归验证独立配额、512/513 份边界、SHA-256 数据库约束、账号隔离、墓碑、撤销、删除 generation 和故障回滚。真实回环 HTTP 连接验证部分上传期间的删除/撤销、主动中断、准入等待期间断连、绝对截止时间，以及暂停读取 64 MiB 下载时服务器响应确实未 finish、同账号第二下载被拒绝、断开后传输槽可复用。测试使用合成 PDF 标记内容；它们不声称真实论文的完整语义解析。截止时间测试通过仅限 AppOptions 的测试入口缩短等待，普通进程环境仍固定为 45 秒。
+
+在线桌面取回另有真实 PostgreSQL 隔离、撤销、元数据分页和版本变化回归，以及无需数据库的真实回环 HTTP 流测试。后者覆盖末块等待最终授权、双向断线、取消后的晚到上传、设备撤销、固定截止时间、哈希失败，以及暂停读取 64 MiB 时服务端响应未完成、上游未整份读入、应用缓冲有界且传输槽仍占用。Windows TCP 发送缓冲可能接纳整份客户端写入，因此测试不把客户端 `write` 完成误当作服务端完整接收。生产公网代理、真实手机到桌面的链路和进程重启后的交互仍需单独验收。

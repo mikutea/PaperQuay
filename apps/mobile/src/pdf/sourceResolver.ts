@@ -4,12 +4,14 @@ import { ClientError } from '../errors.ts';
 import { accountScopeKey, type AccountScope } from '../storage/accountStore.ts';
 import { checkCompletePdfBytes, downloadPublicPdf, inspectPublicPdf, publicPdfUrl, sha256 } from './acquisition.ts';
 import { CloudPdfError, downloadCloudPdfCopy, type CloudPdfContext, type CloudPdfErrorCode } from './cloudCopies.ts';
+import { DesktopPdfError, downloadDesktopPdfCopy, type DesktopPdfContext } from './desktopCopies.ts';
 import { PdfError } from './errors.ts';
 import { PDF_LIMITS, type PdfCache, type PdfVersion } from './types.ts';
 
-export type PdfSourceKind = 'cache' | 'cloud' | 'public';
+export type PdfSourceKind = 'cache' | 'desktop' | 'cloud' | 'public';
 export type PdfSourceStatus = 'pending' | 'checking' | 'downloading' | 'verifying' | 'succeeded' | 'failed' | 'skipped';
 export type CloudPdfUnavailableReason = 'not-configured' | 'not-enabled' | 'not-synced' | 'login-required';
+export type DesktopPdfUnavailableReason = 'not-configured' | 'not-enabled' | 'not-synced' | 'login-required';
 export interface PdfSourceFailure { code: string; message: string }
 export interface PdfSourceProgress { source: PdfSourceKind; loaded: number; total: number | null }
 export interface PdfSourceAttempt extends PdfSourceProgress {
@@ -17,12 +19,15 @@ export interface PdfSourceAttempt extends PdfSourceProgress {
   code?: string;
   message?: string;
 }
-export interface PdfSourceBudgets { cacheMs: number; cloudMs: number; publicMs: number; totalMs: number }
-export const PDF_SOURCE_BUDGETS: Readonly<PdfSourceBudgets> = Object.freeze({ cacheMs: 5_000, cloudMs: 15_000, publicMs: 30_000, totalMs: 60_000 });
+export interface PdfSourceBudgets { cacheMs: number; desktopMs: number; cloudMs: number; publicMs: number; totalMs: number }
+export const PDF_SOURCE_BUDGETS: Readonly<PdfSourceBudgets> = Object.freeze({ cacheMs: 5_000, desktopMs: 15_000, cloudMs: 15_000, publicMs: 30_000, totalMs: 60_000 });
 export interface PdfSourceRequest {
   scope: AccountScope;
   version: PdfVersion;
   cache: Pick<PdfCache, 'peek'>;
+  /** Supply only for a synced version; check must revalidate live account and version eligibility. */
+  desktop?: { context: DesktopPdfContext; check: () => void };
+  desktopUnavailableReason?: DesktopPdfUnavailableReason;
   /** Supply only for a synced version; check must revalidate live cloud eligibility. */
   cloud?: { context: CloudPdfContext; check: () => void };
   cloudUnavailableReason?: CloudPdfUnavailableReason;
@@ -43,7 +48,7 @@ export type PdfSourceResult = {
   status: 'resolved'; bytes: Uint8Array; fileName: string; source: PdfSourceKind; sourceUrl?: string; attempts: PdfSourceAttempt[];
 } | { status: 'unavailable'; attempts: PdfSourceAttempt[] };
 
-const sources: readonly PdfSourceKind[] = ['cache', 'cloud', 'public'];
+const sources: readonly PdfSourceKind[] = ['cache', 'desktop', 'cloud', 'public'];
 const cloudMessages: Record<CloudPdfErrorCode, string> = {
   STORAGE_DISABLED: '账号服务尚未开放 PDF 云副本。',
   CAPABILITY_CHANGED: '云副本服务配置已变化，本次未采用返回内容。',
@@ -64,16 +69,24 @@ const cloudUnavailable: Record<CloudPdfUnavailableReason, PdfSourceFailure> = {
   'not-synced': { code: 'CLOUD_NOT_SYNCED', message: '此版本尚未同步，暂不读取云副本。' },
   'login-required': { code: 'CLOUD_LOGIN_REQUIRED', message: '当前登录不可用于读取云副本。' },
 };
+const desktopUnavailable: Record<DesktopPdfUnavailableReason, PdfSourceFailure> = {
+  'not-configured': { code: 'DESKTOP_NOT_CONFIGURED', message: '尚未配置在线电脑来源。' },
+  'not-enabled': { code: 'TRANSFER_DISABLED', message: new DesktopPdfError('TRANSFER_DISABLED').message },
+  'not-synced': { code: 'DESKTOP_NOT_SYNCED', message: '此版本尚未同步，暂不从在线电脑取文件。' },
+  'login-required': { code: 'DESKTOP_LOGIN_REQUIRED', message: '当前登录不可用于从在线电脑取文件。' },
+};
 
 /** Fixed user-facing descriptions: transport messages, URLs and credentials never enter attempt records. */
 export function describePdfSourceError(error: unknown, source: PdfSourceKind): PdfSourceFailure {
+  if (error instanceof DesktopPdfError)
+    return { code: error.code, message: new DesktopPdfError(error.code).message };
   if (error instanceof CloudPdfError && Object.hasOwn(cloudMessages, error.code))
     return { code: error.code, message: cloudMessages[error.code] };
   if (error instanceof PdfError || error instanceof ClientError) {
     const safe = error instanceof PdfError ? new PdfError(error.code) : new ClientError(error.code);
     if (typeof safe.message === 'string' && safe.message) return { code: error.code, message: safe.message };
   }
-  const safe = new PdfError(source === 'cache' ? 'CACHE_UNAVAILABLE' : 'NETWORK');
+  const safe = source === 'desktop' ? new DesktopPdfError('NETWORK') : new PdfError(source === 'cache' ? 'CACHE_UNAVAILABLE' : 'NETWORK');
   return { code: safe.code, message: safe.message };
 }
 
@@ -88,6 +101,7 @@ function terminalSourceError(error: unknown): boolean {
     return ['AUTH_REQUIRED', 'AUTH_FAILED', 'SESSION_REVOKED', 'ACCOUNT_CHANGED'].includes(error.code);
   if (error instanceof PdfError)
     return ['CANCELLED', 'ACCOUNT_CHANGED', 'TARGET_CHANGED'].includes(error.code);
+  if (error instanceof DesktopPdfError) return ['CANCELLED', 'VERSION_UNAVAILABLE', 'CHANGED'].includes(error.code);
   return error instanceof CloudPdfError && (error.code === 'CANCELLED' || error.code === 'VERSION_UNAVAILABLE');
 }
 
@@ -99,13 +113,19 @@ interface Stage {
   close: () => void;
 }
 
-/** Explicit, sequential, read-only acquisition for one existing version; parsing/persistence belongs to openBytes. */
+/** Explicit, sequential acquisition for one existing version; library persistence belongs to openBytes. */
 export async function resolvePdfSource(input: PdfSourceRequest, options: PdfSourceOptions): Promise<PdfSourceResult> {
   const scope = Object.freeze({ ...input.scope });
   const version: PdfVersion = Object.freeze({ entityId: input.version.entityId, data: Object.freeze({ ...input.version.data }) });
   const cache = input.cache;
   const publicInput = input.publicUrl;
   const unavailableReason = input.cloudUnavailableReason ?? 'not-configured';
+  const desktopUnavailableReason = input.desktopUnavailableReason ?? 'not-configured';
+  const desktop = input.desktop && { check: input.desktop.check, context: {
+    apiBaseUrl: input.desktop.context.apiBaseUrl,
+    getAccessToken: input.desktop.context.getAccessToken.bind(input.desktop.context),
+    getDesktopPdfCapability: input.desktop.context.getDesktopPdfCapability.bind(input.desktop.context),
+  } };
   const cloud = input.cloud && { check: input.cloud.check, context: {
     apiBaseUrl: input.cloud.context.apiBaseUrl,
     getAccessToken: input.cloud.context.getAccessToken.bind(input.cloud.context),
@@ -114,6 +134,7 @@ export async function resolvePdfSource(input: PdfSourceRequest, options: PdfSour
   const fetcher = options.fetch ?? ((...args: Parameters<typeof fetch>) => globalThis.fetch(...args));
   const budgets = {
     cache: duration(options.budgets?.cacheMs, PDF_SOURCE_BUDGETS.cacheMs),
+    desktop: duration(options.budgets?.desktopMs, PDF_SOURCE_BUDGETS.desktopMs),
     cloud: duration(options.budgets?.cloudMs, PDF_SOURCE_BUDGETS.cloudMs),
     public: duration(options.budgets?.publicMs, PDF_SOURCE_BUDGETS.publicMs),
     total: duration(options.budgets?.totalMs, PDF_SOURCE_BUDGETS.totalMs),
@@ -132,6 +153,11 @@ export async function resolvePdfSource(input: PdfSourceRequest, options: PdfSour
   const checkCloud = () => {
     check();
     try { cloud?.check(); }
+    catch (error) { stop(error); throw error; }
+  };
+  const checkDesktop = () => {
+    check();
+    try { desktop?.check(); }
     catch (error) { stop(error); throw error; }
   };
   const abort = () => stop(new PdfError('CANCELLED'));
@@ -158,7 +184,8 @@ export async function resolvePdfSource(input: PdfSourceRequest, options: PdfSour
     const stageCheck = () => {
       check();
       if (!stageActive) throw new PdfError('CANCELLED');
-      // Losing cloud authorization must outrank a simultaneous recoverable stage timeout.
+      // Losing account/version authorization must outrank a simultaneous recoverable stage timeout.
+      if (source === 'desktop') checkDesktop();
       if (source === 'cloud') checkCloud();
       if (child.signal.aborted) throw new PdfError(timedOut ? 'TIMEOUT' : 'CANCELLED');
     };
@@ -197,17 +224,20 @@ export async function resolvePdfSource(input: PdfSourceRequest, options: PdfSour
     for (const source of sources) report(source, {});
     for (const source of sources) {
       check();
+      if (source === 'desktop' && !desktop) { report(source, { status: 'skipped', ...desktopUnavailable[desktopUnavailableReason] }); continue; }
       if (source === 'cloud' && !cloud) { report(source, { status: 'skipped', ...cloudUnavailable[unavailableReason] }); continue; }
       if (source === 'public' && !publicInput?.trim()) {
         report(source, { status: 'skipped', code: 'NO_PUBLIC_URL', message: '未提供公开 PDF 链接。' }); continue;
       }
       const stage = stageFor(source);
       let cloudStatus: number | undefined;
+      let desktopStatus: number | undefined;
       let sourceUrl: string | undefined;
       const guardedFetch: typeof fetch = async (...args) => {
         const response = await stage.wait(() => fetcher(...args), disposeResponse);
         try { stage.check(); } catch (error) { disposeResponse(response); throw error; }
         if (source === 'cloud') cloudStatus = response.status;
+        if (source === 'desktop') desktopStatus = response.status;
         return response;
       };
       const progress = (loaded: number, total: number | null) => {
@@ -221,6 +251,16 @@ export async function resolvePdfSource(input: PdfSourceRequest, options: PdfSour
         stage.check(); report(source, { status: 'checking' });
         let acquired: Uint8Array | null;
         if (source === 'cache') acquired = await stage.wait(() => cache.peek(scope, version, { signal: stage.signal }));
+        else if (source === 'desktop') {
+          if (normalizeServiceUrl(desktop!.context.apiBaseUrl) !== normalizeServiceUrl(scope.apiBaseUrl)) {
+            const error = new ClientError('ACCOUNT_CHANGED'); stop(error); throw error;
+          }
+          report(source, { status: 'downloading' });
+          acquired = await stage.wait(() => downloadDesktopPdfCopy(desktop!.context, version, {
+            signal: stage.signal, isCurrent: () => { stage.check(); return true; }, fetch: guardedFetch, cleanupFetch: fetcher,
+            timeoutMs: budgets.desktop, onProgress: progress,
+          }));
+        }
         else if (source === 'cloud') {
           if (normalizeServiceUrl(cloud!.context.apiBaseUrl) !== normalizeServiceUrl(scope.apiBaseUrl)) {
             const error = new ClientError('ACCOUNT_CHANGED'); stop(error); throw error;
@@ -260,6 +300,7 @@ export async function resolvePdfSource(input: PdfSourceRequest, options: PdfSour
       } catch (error) {
         // A stale identity or changed target must outrank a recoverable transport/content failure.
         check();
+        if (source === 'desktop') checkDesktop();
         if (source === 'cloud') checkCloud();
         if (stage.timedOut()) error = new PdfError('TIMEOUT');
         else if (error instanceof Error && error.name === 'AbortError') error = new PdfError('CANCELLED');
@@ -268,9 +309,17 @@ export async function resolvePdfSource(input: PdfSourceRequest, options: PdfSour
           if (!(error instanceof ClientError && error.code === 'SESSION_REVOKED')) error = new ClientError('AUTH_REQUIRED');
         } else if (cloudStatus === 410 || (cloudStatus === 404 && !(error instanceof CloudPdfError && error.code === 'NOT_FOUND')))
           error = new CloudPdfError('VERSION_UNAVAILABLE');
+        if (desktopStatus === 401 || desktopStatus === 403) {
+          if (!(error instanceof ClientError && error.code === 'SESSION_REVOKED')) error = new ClientError('AUTH_REQUIRED');
+        } else if (desktopStatus === 410 || (desktopStatus === 404 && !(error instanceof DesktopPdfError && error.code === 'UNAVAILABLE')))
+          error = new DesktopPdfError('VERSION_UNAVAILABLE');
+        else if (desktopStatus === 409 && !(error instanceof DesktopPdfError && error.code === 'REQUEST_IN_USE'))
+          error = new DesktopPdfError('CHANGED');
         const description = describePdfSourceError(error, source);
-        report(source, { status: error instanceof CloudPdfError && error.code === 'STORAGE_DISABLED' ? 'skipped' : 'failed', ...description });
+        report(source, { status: (error instanceof CloudPdfError && error.code === 'STORAGE_DISABLED')
+          || (error instanceof DesktopPdfError && error.code === 'TRANSFER_DISABLED') ? 'skipped' : 'failed', ...description });
         if (terminalSourceError(error)) { stop(error); throw error; }
+        if (source === 'desktop') checkDesktop();
         if (source === 'cloud') checkCloud();
       } finally { stage.close(); }
     }

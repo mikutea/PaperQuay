@@ -26,6 +26,7 @@ export const SECRETS_STORAGE_KEY = 'paper-reader-secrets-v1';
 export type PreferencesSectionKey =
   | 'general'
   | 'library'
+  | 'desktopAccount'
   | 'reading'
   | 'mineru'
   | 'backup'

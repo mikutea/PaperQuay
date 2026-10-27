@@ -4,13 +4,14 @@ import { createElement } from 'react';
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer';
 import { IDBFactory } from 'fake-indexeddb';
 import {
-  createAccountState, entityKey, getVisibleEntity,
+  createAccountState, entityKey, getVisibleEntity, queueLocalEdit,
   type AttachmentVersionData, type SyncRecord,
 } from '../../../packages/sync-core/src/index.ts';
 import { PaperReader } from '../src/components/PaperReader.tsx';
 import { sha256 } from '../src/pdf/acquisition.ts';
 import { getPdfCache } from '../src/pdf/cache.ts';
 import { PdfError } from '../src/pdf/errors.ts';
+import { DesktopPdfError, type DesktopPdfContext } from '../src/pdf/desktopCopies.ts';
 import { cancelPdfTasks } from '../src/pdf/tasks.ts';
 import { PDF_LIMITS, type PaperReaderProps, type PdfVersion } from '../src/pdf/types.ts';
 import type { WorkspaceSnapshot } from '../src/sync/workspace.ts';
@@ -272,10 +273,12 @@ test('the actual source action shows separate cache, unconfigured-cloud, and mis
     await until(() => !busy(env.renderer), 'all unavailable sources reported');
     const content = text(env.renderer.root);
     assert.ok(content.includes(new PdfError('CACHE_MISSING').message));
+    assert.ok(content.includes('尚未配置在线电脑来源'));
     assert.ok(content.includes('尚未配置云副本来源'));
     assert.ok(content.includes('未提供公开 PDF 链接'));
     const attempts = env.renderer.root.findByProps({ 'aria-label': '全文来源尝试' });
     assert.equal(attempts.findByProps({ 'data-source': 'cache' }).props['data-status'], 'failed');
+    assert.equal(attempts.findByProps({ 'data-source': 'desktop' }).props['data-status'], 'skipped');
     assert.equal(attempts.findByProps({ 'data-source': 'cloud' }).props['data-status'], 'skipped');
     assert.equal(attempts.findByProps({ 'data-source': 'public' }).props['data-status'], 'skipped');
     assert.equal(requests, 0);
@@ -336,7 +339,8 @@ test('closing the source panel finalizes every attempt and a late cloud response
       .map((row) => ({ source: row.props['data-source'], status: row.props['data-status'], content: text(row) }));
     const active = attemptRows();
     assert.deepEqual(active.map(({ source, status }) => ({ source, status })), [
-      { source: 'cache', status: 'failed' }, { source: 'cloud', status: 'downloading' }, { source: 'public', status: 'pending' },
+      { source: 'cache', status: 'failed' }, { source: 'desktop', status: 'skipped' },
+      { source: 'cloud', status: 'downloading' }, { source: 'public', status: 'pending' },
     ]);
     assert.equal(env.renderer.root.findAllByType('progress').length, 1);
     await act(async () => { env.renderer.root.findByProps({ 'aria-label': '关闭面板' }).props.onClick(); });
@@ -345,11 +349,13 @@ test('closing the source panel finalizes every attempt and a late cloud response
     await click(env.renderer, '文件');
     const terminal = attemptRows();
     assert.deepEqual(terminal.map(({ source, status }) => ({ source, status })), [
-      { source: 'cache', status: 'failed' }, { source: 'cloud', status: 'failed' }, { source: 'public', status: 'skipped' },
+      { source: 'cache', status: 'failed' }, { source: 'desktop', status: 'skipped' },
+      { source: 'cloud', status: 'failed' }, { source: 'public', status: 'skipped' },
     ]);
     assert.deepEqual(terminal[0], active[0], 'the earlier cache failure must retain its original explanation');
-    assert.ok(terminal[1].content.includes(new PdfError('CANCELLED').message));
-    assert.ok(terminal[2].content.includes('本次检查已停止，未尝试此来源。'));
+    assert.deepEqual(terminal[1], active[1], 'the unavailable desktop row must keep its explanation');
+    assert.ok(terminal[2].content.includes(new PdfError('CANCELLED').message));
+    assert.ok(terminal[3].content.includes('本次检查已停止，未尝试此来源。'));
     assert.ok(terminal.every((row) => !['pending', 'checking', 'downloading', 'verifying'].includes(row.status)));
     assert.equal(env.renderer.root.findAllByType('progress').length, 0);
     const body = responseBody(); waiting.resolve(body.response);
@@ -362,4 +368,148 @@ test('closing the source panel finalizes every attempt and a late cloud response
     assert.equal(body.consumed(), 0);
     assertNoAdoption(env, data);
   } finally { waiting.resolve(responseBody().response); await env.close(); }
+});
+
+function desktopContext(data: Model): DesktopPdfContext {
+  return { apiBaseUrl: data.scope.apiBaseUrl, getAccessToken: async () => 'synthetic-desktop-token',
+    getDesktopPdfCapability: () => ({ transport: 'http-relay-v1', maxFileBytes: PDF_LIMITS.maxFileBytes,
+      requestTtlMs: 30_000, pollTimeoutMs: 20_000 }) };
+}
+const desktopCreated = (data: Model, requestId: string) => new Response(JSON.stringify({
+  requestId, attachmentVersionId: data.version.entityId, expiresAt: new Date(Date.now() + 30_000).toISOString(),
+}), { status: 201, headers: { 'content-type': 'application/json' } });
+const sourceFailure = (status: number, code: string) => new Response(JSON.stringify({ error: { code } }),
+  { status, headers: { 'content-type': 'application/json' } });
+
+test('the actual reader remains cache-only on mount and shows desktop, cloud and public fallback reasons in order', async (t) => {
+  const data = model(); data.props.desktopPdf = desktopContext(data);
+  data.props.cloudPdf = { apiBaseUrl: data.scope.apiBaseUrl, getAccessToken: async () => 'synthetic-cloud-token',
+    getCloudPdfCapability: () => ({ maxFileBytes: PDF_LIMITS.maxFileBytes, maxAccountBytes: 1024 ** 3, maxCopies: 512 }) };
+  const requests: { url: string; method: string; authorization: string | null; body: string }[] = [];
+  t.mock.method(globalThis, 'fetch', async (input: unknown, init?: RequestInit) => {
+    const url = String(input); requests.push({ url, method: init?.method ?? 'GET',
+      authorization: new Headers(init?.headers).get('Authorization'), body: String(init?.body ?? '') });
+    if (url.includes('/desktop-pdfs/')) return sourceFailure(404, 'DESKTOP_PDF_UNAVAILABLE');
+    if (url.includes('/cloud-pdfs/')) return sourceFailure(404, 'CLOUD_PDF_NOT_FOUND');
+    return new Response('Unavailable', { status: 404 });
+  });
+  const env = await mount(t, data);
+  try {
+    await until(() => !busy(env.renderer), 'initial cache-only restoration'); assert.equal(requests.length, 0);
+    const publicUrl = 'https://papers.example.invalid/synthetic.pdf?private-local-only=1';
+    await setUrl(env.renderer, publicUrl); await click(env.renderer, '从可用来源打开');
+    await until(() => !busy(env.renderer), 'all four source outcomes settled');
+    assert.deepEqual(requests.map(({ method, url }) => [method, url]), [
+      ['POST', `${data.scope.apiBaseUrl}/v1/desktop-pdfs/requests`],
+      ['GET', `${data.scope.apiBaseUrl}/v1/cloud-pdfs/${data.version.entityId}/content`], ['GET', publicUrl],
+    ]);
+    assert.equal(requests[0].authorization, 'Bearer synthetic-desktop-token');
+    assert.equal(requests[1].authorization, 'Bearer synthetic-cloud-token'); assert.equal(requests[2].authorization, null);
+    assert.deepEqual(JSON.parse(requests[0].body), { attachmentVersionId: data.version.entityId });
+    const attempts = env.renderer.root.findByProps({ 'aria-label': '全文来源尝试' });
+    assert.deepEqual(attempts.findAllByType('li').map((row) => row.props['data-source']), ['cache', 'desktop', 'cloud', 'public']);
+    assert.ok(text(attempts).includes(new DesktopPdfError('UNAVAILABLE').message));
+    assert.ok(!text(attempts).includes('private-local-only')); assertNoAdoption(env, data);
+  } finally { await env.close(); }
+});
+
+for (const mode of ['feature-disabled', 'needs-login', 'pending-edit', 'new-version'] as const) {
+  test(`actual reader skips desktop for ${mode} without acquiring credentials or probing availability`, async (t) => {
+    const data = model(); let tokens = 0; let requests = 0;
+    const desktop = desktopContext(data);
+    data.props.desktopPdf = { ...desktop, getAccessToken: async () => { tokens++; return 'token'; },
+      getDesktopPdfCapability: () => mode === 'feature-disabled' ? null : desktop.getDesktopPdfCapability() };
+    if (mode === 'needs-login') data.snapshot.needsLogin = true;
+    if (mode === 'pending-edit' || mode === 'new-version') {
+      if (mode === 'new-version') delete data.sync.serverRecords[entityKey('attachmentVersion', data.version.entityId)];
+      const state = queueLocalEdit(data.sync, { entityType: 'attachmentVersion', entityId: data.version.entityId,
+        mutation: 'put', data: { ...data.version.data, fileName: 'local-pending.pdf' } }, { opId: crypto.randomUUID(), clientCreatedAt: NOW });
+      data.snapshot.workspace!.sync = state;
+      data.props.attachmentVersions = [getVisibleEntity(state, 'attachmentVersion', data.version.entityId)!];
+    }
+    t.mock.method(globalThis, 'fetch', async () => { requests++; throw new Error('disabled source cannot fetch'); });
+    const env = await mount(t, data);
+    try {
+      await until(() => !busy(env.renderer), 'initial cache miss'); await click(env.renderer, '从可用来源打开');
+      await until(() => !busy(env.renderer), 'unavailable remote source settled');
+      const row = env.renderer.root.findByProps({ 'data-source': 'desktop' });
+      assert.equal(row.props['data-status'], 'skipped');
+      const expected = mode === 'feature-disabled' ? '账号服务尚未开放在线电脑取文件'
+        : mode === 'needs-login' ? '当前登录不可用于从在线电脑取文件' : '此版本尚未同步';
+      assert.ok(text(row).includes(expected)); assert.equal(tokens, 0); assert.equal(requests, 0);
+      assert.equal(env.writes(), 0); assert.deepEqual(data.saved, []);
+      assert.equal(data.snapshot.workspace!.sync.outbox.length, mode === 'pending-edit' || mode === 'new-version' ? 1 : 0);
+    } finally { await env.close(); }
+  });
+}
+
+test('actual reader target invalidation from desktop ends the chain and displays a specific terminal reason', async (t) => {
+  const data = model(); data.props.desktopPdf = desktopContext(data); const requests: string[] = [];
+  t.mock.method(globalThis, 'fetch', async (input: unknown) => {
+    requests.push(String(input)); assert.ok(String(input).includes('/desktop-pdfs/'));
+    return sourceFailure(409, 'DESKTOP_PDF_CHANGED');
+  });
+  const env = await mount(t, data);
+  try {
+    await until(() => !busy(env.renderer), 'initial cache miss');
+    await setUrl(env.renderer, 'https://papers.example.invalid/should-not-fetch.pdf');
+    await click(env.renderer, '从可用来源打开'); await until(() => !busy(env.renderer), 'terminal desktop error');
+    assert.equal(requests.length, 1); assert.ok(text(env.renderer.root).includes(new DesktopPdfError('CHANGED').message));
+    for (const source of ['cloud', 'public']) {
+      const row = env.renderer.root.findByProps({ 'data-source': source }); assert.equal(row.props['data-status'], 'skipped');
+      assert.ok(text(row).includes('本次检查已停止，未尝试此来源。'));
+    }
+    assertNoAdoption(env, data);
+  } finally { await env.close(); }
+});
+
+test('closing the source panel during desktop content cancels its own request promptly and keeps late rows terminal', async (t) => {
+  const data = model(); data.props.desktopPdf = desktopContext(data); const requestId = crypto.randomUUID();
+  const reply = deferred<Response>(); const cleanup = deferred<Response>(); const requests: { method: string; url: string }[] = [];
+  let contentSignal: AbortSignal | undefined;
+  t.mock.method(globalThis, 'fetch', async (input: unknown, init?: RequestInit) => {
+    const method = init?.method ?? 'GET'; requests.push({ method, url: String(input) });
+    assert.ok(String(input).includes('/desktop-pdfs/'));
+    if (method === 'POST') return desktopCreated(data, requestId);
+    if (method === 'DELETE') return cleanup.promise;
+    contentSignal = init!.signal!; return reply.promise;
+  });
+  const env = await mount(t, data);
+  try {
+    await until(() => !busy(env.renderer), 'initial cache miss');
+    await setUrl(env.renderer, 'https://papers.example.invalid/never-fallback.pdf');
+    await click(env.renderer, '从可用来源打开'); await until(() => Boolean(contentSignal), 'desktop content waiting');
+    await act(async () => { env.renderer.root.findByProps({ 'aria-label': '关闭面板' }).props.onClick(); });
+    await until(() => !busy(env.renderer), 'UI released without waiting for DELETE'); assert.equal(contentSignal!.aborted, true);
+    await click(env.renderer, '文件');
+    const rows = () => env.renderer.root.findByProps({ 'aria-label': '全文来源尝试' }).findAllByType('li')
+      .map((row) => ({ source: row.props['data-source'], status: row.props['data-status'], message: text(row) }));
+    const terminal = rows();
+    assert.deepEqual(terminal.map(({ source, status }) => [source, status]), [
+      ['cache', 'failed'], ['desktop', 'failed'], ['cloud', 'skipped'], ['public', 'skipped'],
+    ]);
+    assert.ok(terminal[1].message.includes('已取消')); assert.equal(env.renderer.root.findAllByType('progress').length, 0);
+    assert.deepEqual(requests, [
+      { method: 'POST', url: `${data.scope.apiBaseUrl}/v1/desktop-pdfs/requests` },
+      { method: 'GET', url: `${data.scope.apiBaseUrl}/v1/desktop-pdfs/requests/${requestId}/content` },
+      { method: 'DELETE', url: `${data.scope.apiBaseUrl}/v1/desktop-pdfs/requests/${requestId}` },
+    ]);
+    const body = responseBody(); reply.resolve(body.response); cleanup.resolve(sourceFailure(404, 'NOT_FOUND'));
+    await until(body.cancelled, 'late desktop response disposed'); await flush();
+    assert.equal(body.consumed(), 0); assert.deepEqual(rows(), terminal); assertNoAdoption(env, data);
+  } finally { reply.resolve(responseBody().response); cleanup.resolve(sourceFailure(404, 'NOT_FOUND')); await env.close(); }
+});
+
+test('login eligibility lost during desktop creation prevents content and fallback even before React rerenders', async (t) => {
+  const data = model(); data.props.desktopPdf = desktopContext(data); const reply = deferred<Response>(); let requests = 0;
+  t.mock.method(globalThis, 'fetch', async () => { requests++; return reply.promise; });
+  const env = await mount(t, data);
+  try {
+    await until(() => !busy(env.renderer), 'initial cache miss');
+    await setUrl(env.renderer, 'https://papers.example.invalid/never-fallback.pdf'); await click(env.renderer, '从可用来源打开');
+    await until(() => requests === 1, 'desktop creation pending'); data.snapshot.needsLogin = true;
+    reply.resolve(desktopCreated(data, crypto.randomUUID())); await until(() => !busy(env.renderer), 'login eligibility loss stopped the chain');
+    assert.equal(requests, 1); assert.ok(text(env.renderer.root).includes('登录已过期'));
+    assertNoAdoption(env, data);
+  } finally { reply.resolve(sourceFailure(404, 'NOT_FOUND')); await env.close(); }
 });

@@ -1,0 +1,57 @@
+import { invoke } from '../platform/electron/core';
+import { listen } from '../platform/electron/event';
+
+export interface DesktopAccountConfig {
+  apiBaseUrl: string;
+  oidcIssuer: string;
+  oidcClientId: string;
+  deviceName: string;
+}
+export interface DesktopPdfBinding {
+  bindingId: string;
+  localPaperId: string;
+  localAttachmentId: string;
+  title: string;
+  fileName: string;
+  attachmentVersionId: string;
+  paperId: string;
+  sha256: string;
+  sizeBytes: number;
+  publicationStatus: 'pending-paper' | 'pending-version' | 'published' | 'blocked' | 'source-changed';
+  errorCode?: string;
+}
+export interface DesktopAccountStatus {
+  config: DesktopAccountConfig | null;
+  auth: { status: 'signed-out' | 'signing-in' | 'signed-in' | 'error'; displayName?: string; expiresAt?: number; errorCode?: string };
+  account: { accountId: string; deviceId: string; deviceName: string } | null;
+  enabled: boolean;
+  busy: boolean;
+  capability: { transport: 'http-relay-v1'; maxFileBytes: number; requestTtlMs: number; pollTimeoutMs: number } | null;
+  bindings: DesktopPdfBinding[];
+  transfers: { transferId: string; attachmentVersionId: string; status: 'reading' | 'sending'; sizeBytes: number }[];
+  errorCode: string | null;
+}
+export interface DesktopPdfCandidate {
+  localPaperId: string; localAttachmentId: string; title: string; fileName: string; sizeBytes: number;
+  bindingId?: string; publicationStatus?: DesktopPdfBinding['publicationStatus'];
+}
+export interface DesktopRemoteVersion {
+  paperId: string; attachmentVersionId: string; title: string; fileName: string; sha256: string; sizeBytes: number; pageCount: number | null;
+}
+
+export const desktopAccount = {
+  status: () => invoke<DesktopAccountStatus>('desktop_account_status'),
+  configure: (config: DesktopAccountConfig) => invoke<DesktopAccountStatus>('desktop_account_configure', { config }),
+  signIn: () => invoke<DesktopAccountStatus>('desktop_account_sign_in'),
+  cancelSignIn: () => invoke<DesktopAccountStatus>('desktop_account_cancel_sign_in'),
+  signOut: () => invoke<DesktopAccountStatus>('desktop_account_sign_out'),
+  candidates: () => invoke<{ items: DesktopPdfCandidate[]; hasMore?: boolean }>('desktop_provider_candidates'),
+  remoteVersions: () => invoke<{ items: DesktopRemoteVersion[]; hasMore?: boolean }>('desktop_provider_remote_versions'),
+  publish: (localPaperId: string, localAttachmentId: string) => invoke<DesktopAccountStatus>('desktop_provider_publish', { localPaperId, localAttachmentId }),
+  bind: (localPaperId: string, localAttachmentId: string, attachmentVersionId: string) => invoke<DesktopAccountStatus>('desktop_provider_bind', { localPaperId, localAttachmentId, attachmentVersionId }),
+  unbind: (bindingId: string) => invoke<DesktopAccountStatus>('desktop_provider_unbind', { bindingId }),
+  setEnabled: (enabled: boolean) => invoke<DesktopAccountStatus>('desktop_provider_set_enabled', { enabled }),
+  retry: (bindingId: string) => invoke<DesktopAccountStatus>('desktop_provider_retry', { bindingId }),
+  cancel: (transferId: string) => invoke<DesktopAccountStatus>('desktop_provider_cancel', { transferId }),
+  onChanged: (listener: () => void) => listen('desktop-account:changed', listener),
+};

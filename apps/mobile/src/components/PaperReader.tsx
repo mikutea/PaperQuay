@@ -10,7 +10,8 @@ import { ReaderSheet } from './ReaderSheet.tsx';
 import { CloudPdfPanel } from './CloudPdfPanel.tsx';
 import { PdfSourceAttempts } from './PdfSourceAttempts.tsx';
 import { CloudPdfError, describeCloudPdfError, downloadCloudPdfCopy } from '../pdf/cloudCopies.ts';
-import { describePdfSourceError, resolvePdfSource, type CloudPdfUnavailableReason, type PdfSourceAttempt } from '../pdf/sourceResolver.ts';
+import { DesktopPdfError } from '../pdf/desktopCopies.ts';
+import { describePdfSourceError, resolvePdfSource, type CloudPdfUnavailableReason, type DesktopPdfUnavailableReason, type PdfSourceAttempt } from '../pdf/sourceResolver.ts';
 import { assertPdfTarget, capturePdfVersion, pdfVersionWriteGuard } from '../pdf/versionGuard.ts';
 import { guardedPdfFetch } from '../pdf/guardedFetch.ts';
 import { ReaderTapGesture, captureReaderZoomAnchor, restoreReaderZoomAnchor,
@@ -34,7 +35,8 @@ interface Task { epoch: number; signal: AbortSignal; identity: ReaderIdentity; c
 interface CommentDraft { entityId: string; revision: number; data: AnnotationData; comment: string; saved: string }
 const byteLabel = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 const errorMessage = (error: unknown) => error instanceof CloudPdfError ? describeCloudPdfError(error)
-  : error instanceof PdfError ? error.message : describeError(error);
+  : error instanceof DesktopPdfError ? new DesktopPdfError(error.code).message
+    : error instanceof PdfError ? error.message : describeError(error);
 const labelForKind = (kind: AnnotationData['kind']) => kind === 'highlight' ? '高亮' : kind === 'underline' ? '下划线' : '区域';
 const panelTitles: Record<NonNullable<Panel>, string> = { source: 'PDF 文件', contents: '目录与阅读接续', search: '搜索原文',
   annotations: '批注', cache: '本机缓存', cloud: '私有云 PDF', more: '阅读选项', page: '跳转页面', ask: '阅读 AI' };
@@ -360,6 +362,13 @@ export function PaperReader(props: PaperReaderProps) {
     const record = assertPdfTarget(snapshot.workspace?.sync, paper.entityId, version);
     if (!record || record.revision < 1 || record.pending) throw new CloudPdfError('VERSION_UNAVAILABLE');
   };
+  const checkDesktopRead = (task: Task, version: PdfVersion) => {
+    task.check();
+    const snapshot = controller.getSnapshot();
+    if (snapshot.needsLogin) throw new ClientError('AUTH_REQUIRED');
+    const record = assertPdfTarget(snapshot.workspace?.sync, paper.entityId, version);
+    if (!record || record.revision < 1 || record.pending) throw new DesktopPdfError('VERSION_UNAVAILABLE');
+  };
 
   function readCloudCopy() {
     const context = props.cloudPdf;
@@ -383,6 +392,7 @@ export function PaperReader(props: PaperReaderProps) {
     const version = cloudVersion && capturePdfVersion(cloudVersion);
     if (!version || busy) return;
     const publicUrl = sourceUrl.trim(); const context = props.cloudPdf;
+    const desktopContext = props.desktopPdf;
     opening.current.beginExplicitOpen(); setSourceAttempts([]); setProbe(null);
     void runTask('正在查找此版本的 PDF', async (baseTask) => {
       const task = targetTask(baseTask, version);
@@ -393,7 +403,14 @@ export function PaperReader(props: PaperReaderProps) {
       else if (!context.getCloudPdfCapability()) reason = 'not-enabled';
       else if (snapshot.needsLogin) reason = 'login-required';
       else if (record.revision < 1 || record.pending) reason = 'not-synced';
+      let desktopReason: DesktopPdfUnavailableReason | undefined;
+      if (!desktopContext) desktopReason = 'not-configured';
+      else if (!desktopContext.getDesktopPdfCapability()) desktopReason = 'not-enabled';
+      else if (snapshot.needsLogin) desktopReason = 'login-required';
+      else if (record.revision < 1 || record.pending) desktopReason = 'not-synced';
       const result = await resolvePdfSource({ scope, version, cache, publicUrl,
+        desktop: desktopContext && !desktopReason ? { context: desktopContext, check: () => checkDesktopRead(task, version) } : undefined,
+        desktopUnavailableReason: desktopReason,
         cloud: context && !reason ? { context, check: () => checkCloudRead(task, version) } : undefined,
         cloudUnavailableReason: reason,
       }, {
@@ -846,7 +863,7 @@ export function PaperReader(props: PaperReaderProps) {
           <p className="pr-muted">{selectedVersionId ? '选择与此版本一致的文件。不同文件可作为新版本添加，批注会分别保留。' : '文件只保留在当前设备。文库会同步版本信息、批注与阅读位置。'}</p>
           {cloudVersion && <div className="pr-source-choice">
             <button type="button" className="pr-primary" disabled={Boolean(busy)} onClick={openAvailableSource}>从可用来源打开</button>
-            <p className="pr-muted">点击后依次尝试本机缓存、私有云和下方填写的公开链接，仅打开与此版本一致的 PDF。</p>
+            <p className="pr-muted">点击后依次尝试本机缓存、同账号在线电脑、私有云和下方填写的公开链接，仅打开与此版本一致的 PDF。电脑需开启文件提供并保持在线。</p>
           </div>}
           <PdfSourceAttempts attempts={sourceAttempts} />
           <input className="pr-file-input" type="file" accept="application/pdf,.pdf" ref={fileInput} onChange={chooseFile} tabIndex={-1} />

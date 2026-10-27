@@ -9,6 +9,7 @@ const { createNoteStore } = require('./backend/noteStore.cjs');
 const { createReviewCommands } = require('./backend/reviewCommands.cjs');
 const { createUpdateCommands } = require('./backend/updateCommands.cjs');
 const { createRadarController } = require('./backend/radarCommands.cjs');
+const { createDesktopAccountCommands } = require('./backend/desktopAccountCommands.cjs');
 
 function toErrorMessage(error) {
   return error instanceof Error ? error.message : String(error);
@@ -98,6 +99,12 @@ function createBackend({ app, libraryLocation }) {
     }
   } });
   radar.start();
+  const desktopAccount = createDesktopAccountCommands(context, { onChange: () => {
+    const { BrowserWindow } = require('electron');
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.webContents.isDestroyed()) window.webContents.send('paperquay:event', 'desktop-account:changed', {});
+    }
+  } });
 
   const commands = {
     ...fileCommands,
@@ -109,6 +116,7 @@ function createBackend({ app, libraryLocation }) {
     ...createReviewCommands(context),
     ...createUpdateCommands(context),
     ...radar.commands,
+    ...desktopAccount.commands,
     ...(libraryLocation ? {
       library_location_status: () => libraryLocation.status(),
       library_location_select: () => libraryLocation.selectExisting(),
@@ -119,6 +127,7 @@ function createBackend({ app, libraryLocation }) {
   return {
     authorizeLocalRead: context.authorizeLocalRead,
     close() {
+      desktopAccount.close();
       radar.close();
       noteStore.close();
       ragStore.close();

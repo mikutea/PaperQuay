@@ -1,9 +1,9 @@
 import type { PdfSourceAttempt, PdfSourceKind, PdfSourceStatus } from '../pdf/sourceResolver.ts';
 
-const labels: Record<PdfSourceKind, string> = { cache: '本机缓存', cloud: '私有云', public: '公开链接' };
+const labels: Record<PdfSourceKind, string> = { cache: '本机缓存', desktop: '在线电脑', cloud: '私有云', public: '公开链接' };
 const statuses: Record<PdfSourceStatus, string> = { pending: '等待尝试', checking: '检查中', downloading: '读取中',
   verifying: '核对文件', succeeded: '文件已核验', failed: '未取得', skipped: '未使用' };
-const order: PdfSourceKind[] = ['cache', 'cloud', 'public'];
+const order: PdfSourceKind[] = ['cache', 'desktop', 'cloud', 'public'];
 
 export function PdfSourceAttempts({ attempts }: { attempts: PdfSourceAttempt[] }) {
   if (!attempts.length) return null;

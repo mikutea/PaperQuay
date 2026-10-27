@@ -31,6 +31,7 @@ import { verifiedBinding } from './storage/verifiedBinding.ts';
 import { filterPapers, organizationOf, readingStatusLabels } from './library/organization.ts';
 import type { PdfAiContext, PdfCitationTarget } from './pdf/types.ts';
 import type { CloudPdfContext } from './pdf/cloudCopies.ts';
+import type { DesktopPdfContext } from './pdf/desktopCopies.ts';
 import { assertAiNoteTarget } from './integration/aiNotes.ts';
 import {
   decodeWorkspace,
@@ -65,6 +66,7 @@ interface Runtime {
   controller: WorkspaceController;
   secretStore?: SecretStore;
   cloudPdf?: CloudPdfContext;
+  desktopPdf?: DesktopPdfContext;
   dispose?: () => Promise<void>;
 }
 function initialConfig(): PublicConfigInput {
@@ -111,6 +113,7 @@ async function makeRuntime(input: PublicConfigInput): Promise<Runtime> {
   });
   return { config, auth, controller, secretStore,
     cloudPdf: { apiBaseUrl: config.apiBaseUrl, getAccessToken: auth.getAccessToken, getCloudPdfCapability: () => api.cloudPdfCapability },
+    desktopPdf: { apiBaseUrl: config.apiBaseUrl, getAccessToken: auth.getAccessToken, getDesktopPdfCapability: () => api.desktopPdfCapability },
     dispose: async () => {
     controller.deactivate();
     await auth.dispose();
@@ -598,6 +601,7 @@ export function ConnectedApp({
                 positions={entities.filter((entity) => entity.entityType === 'readingPosition')}
                 controller={controller} onBack={leaveReader} jumpTo={citationTarget ?? undefined}
                 cloudPdf={runtime.cloudPdf}
+                desktopPdf={runtime.desktopPdf}
                 accountCurrent={() => JSON.stringify(auth.getSubject?.() ?? null) === authSubjectKey}
                 compact={compactReader}
                 onOpenNotes={() => showReadingPanel('notes')}

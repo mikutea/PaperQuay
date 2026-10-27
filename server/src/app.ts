@@ -15,8 +15,10 @@ import type { TokenVerifier, VerifiedIdentity } from './auth.ts';
 import { ApiError, isTransientDatabaseError } from './errors.ts';
 import { SERVER_LIMITS } from './config.ts';
 import type { ServerConfig } from './config.ts';
-import type { CloudPdfRepository, DeviceRegistration, ResolveRequest, SyncRepository } from './types.ts';
+import type { CloudPdfRepository, DesktopPdfRepository, DeviceRegistration, ResolveRequest, SyncRepository } from './types.ts';
 import { registerCloudPdfRoutes } from './cloud-pdf.ts';
+import { DESKTOP_PDF_CAPABILITY, registerDesktopPdfRoutes } from './desktop-pdf.ts';
+import type { DesktopPdfTimings } from './desktop-pdf.ts';
 
 declare module 'fastify' {
   interface FastifyRequest { identity: VerifiedIdentity | null }
@@ -26,11 +28,13 @@ interface AppOptions {
   config: ServerConfig;
   repository: SyncRepository;
   cloudPdfRepository?: CloudPdfRepository;
+  desktopPdfRepository?: DesktopPdfRepository;
   verifyToken: TokenVerifier;
   logger?: FastifyServerOptions['logger'];
   /** Used only by isolated tests, never set by process environment. */
   rateLimitEnabled?: boolean;
   cloudPdfTransferTimeoutMs?: number;
+  desktopPdfTimings?: Partial<DesktopPdfTimings>;
 }
 
 class PrivateLogController extends LogController {
@@ -137,6 +141,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   await app.register(cors, {
     origin: config.allowedOrigins.length ? config.allowedOrigins : false,
     methods: ['GET', 'POST', 'PUT', 'DELETE'], allowedHeaders: ['Authorization', 'Content-Type', SYNC_FEATURE_HEADER],
+    exposedHeaders: ['Accept-Ranges'],
     credentials: false, strictPreflight: true, maxAge: 600,
   });
   if (options.rateLimitEnabled !== false) {
@@ -191,7 +196,8 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   app.get('/v1/capabilities', { onRequest: enforceRateLimit }, async () => ({
     protocolVersion: 1,
     entitySchemas: Object.fromEntries(ENTITY_TYPES.map((type) => [type, [1]])),
-    features: { paperOrganization: 1, ...(config.cloudPdfEnabled ? { privatePdfStorage: 1 } : {}) },
+    features: { paperOrganization: 1, ...(config.cloudPdfEnabled ? { privatePdfStorage: 1 } : {}),
+      ...(config.desktopPdfEnabled ? { desktopPdfTransfer: 1 } : {}) },
     deviceBinding: 'oidc-session',
     limits: {
       maxBatchOperations: SYNC_LIMITS.maxBatchOperations,
@@ -212,6 +218,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     pdfStorage: config.cloudPdfEnabled,
     ...(config.cloudPdfEnabled ? { cloudPdf: { maxFileBytes: SERVER_LIMITS.cloudPdfMaxFileBytes,
       maxAccountBytes: config.cloudPdfAccountBytes, maxCopies: SERVER_LIMITS.cloudPdfMaxCopies } } : {}),
+    ...(config.desktopPdfEnabled ? { desktopPdf: DESKTOP_PDF_CAPABILITY } : {}),
     tombstoneRetention: 'no-pruning-in-m1',
   }));
   app.post<{ Body: DeviceRegistration }>('/v1/devices', {
@@ -235,7 +242,11 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     onRequest: authenticate,
     schema: { params: idParams, response: { 200: { type: 'object', additionalProperties: false, required: ['revoked', 'deviceId'],
       properties: { revoked: { const: true }, deviceId: uuid } } } },
-  }, async (request) => repository.revokeDevice(identity(request), request.params.id));
+  }, async (request) => {
+    const result = await repository.revokeDevice(identity(request), request.params.id);
+    desktop.revokeDevice(identity(request), result.deviceId);
+    return result;
+  });
   app.post<{ Body: PushRequest }>('/v1/sync/push', {
     onRequest: authenticate, schema: { body: PUSH_REQUEST_SCHEMA, response: { 200: PUSH_RESPONSE_SCHEMA } },
   }, async (request) => {
@@ -271,5 +282,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   }, async (request) => presentResult(request, await repository.resolveConflict(identity(request), request.params.id, request.body)));
   await registerCloudPdfRoutes(app, { enabled: config.cloudPdfEnabled, repository: options.cloudPdfRepository,
     sessions: repository, authenticate, transferTimeoutMs: options.cloudPdfTransferTimeoutMs });
+  const desktop = await registerDesktopPdfRoutes(app, { enabled: config.desktopPdfEnabled, repository: options.desktopPdfRepository,
+    authenticate, timings: options.desktopPdfTimings });
   return app;
 }

@@ -5,6 +5,7 @@ import {
   FolderOpen,
   Languages,
   Library,
+  Laptop,
   RefreshCw,
   Settings2,
   Sparkles,
@@ -50,6 +51,7 @@ import {
 import { ReaderPreferencesBackupSection } from './readerPreferencesBackupSection';
 import { ReaderPreferencesModelsSection } from './readerPreferencesModelsSection';
 import { ReaderPreferencesUpdateSection } from './readerPreferencesUpdateSection';
+import { ReaderPreferencesDesktopAccountSection } from './readerPreferencesDesktopAccountSection';
 import type {
   ReaderPreferencesLocalizer,
   ReaderPreferencesSectionDescriptor,
@@ -152,6 +154,12 @@ export function buildReaderPreferencesSections(
       title: l('文库与 Zotero', 'Library & Zotero'),
       description: l('Zotero、本地路径和 PDF 来源', 'Zotero, local paths, and PDF sources'),
       icon: <Library className="h-4 w-4" strokeWidth={1.8} />,
+    },
+    {
+      key: 'desktopAccount',
+      title: l('账号与在线文件', 'Account & Online Files'),
+      description: l('登录账号，选择可供手机和平板读取的 PDF', 'Sign in and choose PDFs for your phone and tablet'),
+      icon: <Laptop className="h-4 w-4" strokeWidth={1.8} />,
     },
     {
       key: 'reading',
@@ -303,6 +311,7 @@ export function ReaderPreferencesContent({
 
   return (
     <div className="mx-auto max-w-3xl space-y-4">
+      {activeSection === 'desktopAccount' ? <ReaderPreferencesDesktopAccountSection l={l} /> : null}
       {activeSection === 'general' ? (
         <>
         <SettingsField

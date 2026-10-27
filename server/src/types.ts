@@ -1,4 +1,4 @@
-import type { EntityData, EntityType, PullResponse, PushRequest, PushResponse, PushResult, SyncOperation, SyncRecord } from '../../packages/sync-core/src/index.ts';
+import type { AttachmentVersionData, EntityData, EntityType, PullResponse, PushRequest, PushResponse, PushResult, SyncOperation, SyncRecord } from '../../packages/sync-core/src/index.ts';
 import type { VerifiedIdentity } from './auth.ts';
 
 export type DevicePlatform = 'web' | 'windows' | 'macos' | 'linux' | 'ios' | 'android';
@@ -47,6 +47,29 @@ export interface CloudPdfRepository {
   putCloudPdf(identity: VerifiedIdentity, attachmentVersionId: string, content: Buffer, generation: string): Promise<{ copy: CloudPdfCopy; replayed: boolean; quota: CloudPdfQuota }>;
   downloadCloudPdf(identity: VerifiedIdentity, attachmentVersionId: string): Promise<{ copy: CloudPdfCopy; content: Buffer }>;
   deleteCloudPdf(identity: VerifiedIdentity, attachmentVersionId: string): Promise<{ attachmentVersionId: string; deleted: boolean; quota: CloudPdfQuota }>;
+}
+
+/** Deliberately excludes paper bodies, paths, source URLs, and unrelated sync entities. */
+export interface DesktopPdfTarget {
+  paper: { entityId: string; revision: number; title: string };
+  version: { entityId: string; revision: number; data: AttachmentVersionData };
+}
+export interface DesktopPdfVersionPage {
+  items: DesktopPdfTarget[];
+  nextAfter: string | null;
+  hasMore: boolean;
+}
+export interface DesktopPdfAccess {
+  accountId: string;
+  consumerDeviceId: string;
+  providerDeviceId: string | null;
+}
+export interface DesktopPdfRepository {
+  /** Short read-only transactions: no account write lock and no last-seen update. */
+  desktopPdfSession(identity: VerifiedIdentity): Promise<SessionView>;
+  listDesktopPdfVersions(identity: VerifiedIdentity, after: string | undefined, limit: number): Promise<DesktopPdfVersionPage>;
+  getDesktopPdfVersion(identity: VerifiedIdentity, attachmentVersionId: string): Promise<DesktopPdfTarget>;
+  checkDesktopPdfTransfer(consumer: VerifiedIdentity, provider: VerifiedIdentity | null, target: DesktopPdfTarget): Promise<DesktopPdfAccess>;
 }
 
 export interface SyncRepository {

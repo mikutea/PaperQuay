@@ -18,6 +18,7 @@ const native = spawnSync(process.execPath, [path.join(__dirname, 'native', 'buil
 });
 if (native.error) throw native.error;
 if (native.status !== 0) process.exit(native.status || 1);
+require('./buildSyncCore.cjs');
 const hasTarget = (targets) =>
   buildArgs.some((arg) => targets.some((target) => arg === target || arg.startsWith(`${target}=`)));
 const isMacOnlyBuild = hasTarget(['-m', '--mac', '--macos']) && !hasTarget(['-w', '--win', '--windows', '-l', '--linux']);

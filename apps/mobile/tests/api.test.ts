@@ -192,3 +192,40 @@ test('private PDF copies require explicit versioned capability and validated lim
     assert.equal(api.cloudPdfCapability, null);
   }
 });
+
+test('desktop transfer requires its independent versioned capability and old services never enable it', async () => {
+  const limits = { transport: 'http-relay-v1', maxFileBytes: 64 * 1024 * 1024, requestTtlMs: 30_000, pollTimeoutMs: 20_000 };
+  const enabled = { protocolVersion: 1, features: { desktopPdfTransfer: 1 }, desktopPdf: limits };
+  let body: unknown; const requests: string[] = [];
+  const api = new SyncApi('https://sync.example.test', async () => 'test-token', async (url) => { requests.push(String(url)); return json(body); });
+  const signal = new AbortController().signal;
+  for (const disabled of [{ protocolVersion: 1 }, { ...enabled, features: {} },
+    { ...enabled, features: { desktopPdfTransfer: 2 } }, { ...enabled, features: { privatePdfStorage: 1 }, pdfStorage: false }]) {
+    body = enabled; await api.capabilities(signal);
+    assert.deepEqual(api.desktopPdfCapability, limits); assert.equal(api.cloudPdfCapability, null, 'desktop does not require private cloud storage');
+    body = disabled; await api.capabilities(signal); assert.equal(api.desktopPdfCapability, null);
+  }
+  body = { ...enabled, desktopPdf: { ...limits, byteWindowMs: 60_000, accountWindowBytes: 1, processWindowBytes: 2 } };
+  await api.capabilities(signal); assert.deepEqual(api.desktopPdfCapability, limits, 'unknown optional budget fields are not saved as client authority');
+  assert.ok(requests.every((url) => url.endsWith('/v1/capabilities')), 'capability negotiation never probes a desktop endpoint');
+});
+
+test('malformed desktop bounds fail closed and a failed capability negotiation clears the old desktop capability', async () => {
+  const limits = { transport: 'http-relay-v1', maxFileBytes: 64 * 1024 * 1024, requestTtlMs: 30_000, pollTimeoutMs: 20_000 };
+  const enabled = { protocolVersion: 1, features: { desktopPdfTransfer: 1 }, desktopPdf: limits };
+  let body: unknown;
+  const api = new SyncApi('https://sync.example.test', async () => 'test-token', async () => json(body));
+  const signal = new AbortController().signal;
+  for (const invalid of [undefined, { ...limits, transport: 'p2p-url' }, { ...limits, maxFileBytes: 0 },
+    { ...limits, maxFileBytes: limits.maxFileBytes + 1 }, { ...limits, requestTtlMs: 30_001 }, { ...limits, requestTtlMs: 1_999 },
+    { ...limits, pollTimeoutMs: 0 }, { ...limits, pollTimeoutMs: 20_001 }, { ...limits, requestTtlMs: 2_000, pollTimeoutMs: 3_000 },
+    { ...limits, requestTtlMs: '30000' }]) {
+    body = enabled; await api.capabilities(signal);
+    body = { ...enabled, desktopPdf: invalid };
+    await assert.rejects(api.capabilities(signal), { code: 'INVALID_RESPONSE' }); assert.equal(api.desktopPdfCapability, null);
+  }
+  body = enabled; await api.capabilities(signal);
+  body = { ...enabled, pdfStorage: true, features: { desktopPdfTransfer: 1, privatePdfStorage: 1 }, cloudPdf: {} };
+  await assert.rejects(api.capabilities(signal), { code: 'INVALID_RESPONSE' });
+  assert.equal(api.desktopPdfCapability, null, 'a later malformed capability must not leave desktop enabled from a failed reply');
+});

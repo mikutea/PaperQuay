@@ -27,6 +27,17 @@ try {
 
   require(pakoEntry);
   require(path.join(pizzipDirectory, 'flate.js'));
+  const syncCore = require(path.join(extractionRoot, 'electron', 'generated', 'desktopSyncCore.cjs'));
+  for (const name of ['projectDesktopLibrary', 'createDesktopIdentityMap', 'queueLocalCreates', 'preparePush', 'applyPushResults']) {
+    if (typeof syncCore[name] !== 'function') throw new Error(`Packaged desktop sync core is missing ${name}.`);
+  }
+  const oidcEntry = require.resolve('openid-client', { paths: [extractionRoot] });
+  if (!oidcEntry.startsWith(`${extractionRoot}${path.sep}`)) throw new Error('OIDC dependency escaped the package.');
+  const oidcCheck = spawnSync(process.execPath, ['--input-type=module', '-e',
+    'const client = await import(process.argv[1]); if (typeof client.authorizationCodeGrant !== "function" || typeof client.enableNonRepudiationChecks !== "function") process.exit(1);',
+    require('node:url').pathToFileURL(oidcEntry).href], { stdio: 'inherit', windowsHide: true });
+  if (oidcCheck.error) throw oidcCheck.error;
+  if (oidcCheck.status !== 0) throw new Error('Packaged OIDC runtime dependencies failed verification.');
   const nativeCheck = spawnSync(process.execPath, [path.join(__dirname, 'native', 'smoke.cjs'), extractionRoot], {
     stdio: 'inherit', windowsHide: true,
   });
@@ -38,7 +49,7 @@ try {
   );
 
   process.stdout.write(
-    `Packaged PaperQuay ${packageJson.version} resolved pizzip and pako successfully.\n`,
+    `Packaged PaperQuay ${packageJson.version} resolved document, desktop sync, and OIDC dependencies successfully.\n`,
   );
 } finally {
   fs.rmSync(extractionRoot, { recursive: true, force: true });

@@ -8,6 +8,7 @@ import type {
 import type { AccountScope } from '../storage/accountStore.ts';
 import type { WorkspaceController } from '../sync/workspace.ts';
 import type { CloudPdfContext } from './cloudCopies.ts';
+import type { DesktopPdfContext } from './desktopCopies.ts';
 
 export interface PdfAiContext {
   paperId: string;
@@ -47,6 +48,7 @@ export interface PaperReaderProps {
   onMobilePanelOpen?: () => void;
   statusContent?: ReactNode;
   cloudPdf?: CloudPdfContext;
+  desktopPdf?: DesktopPdfContext;
   accountCurrent?: () => boolean;
 }
 

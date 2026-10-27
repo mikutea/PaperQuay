@@ -27,6 +27,7 @@ coverage/
 
 # Electron / desktop packaging output
 electron/native/bin/
+electron/generated/
 builder-debug.yml
 builder-effective-config.yaml
 *.asar

@@ -89,7 +89,7 @@ jobs:
       PAPERQUAY_TEST_ADMIN_DATABASE_URL: postgresql://postgres:paperquay-ci-bootstrap-only@127.0.0.1:5432/postgres
       PAPERQUAY_OIDC_ISSUER: http://127.0.0.1:18081/realms/paperquay-local
       PAPERQUAY_OIDC_AUDIENCE: paperquay-sync
-      PAPERQUAY_OIDC_CLIENT_IDS: paperquay-mobile,paperquay-integration
+      PAPERQUAY_OIDC_CLIENT_IDS: paperquay-mobile,paperquay-desktop,paperquay-integration
       PAPERQUAY_ALLOWED_ORIGINS: http://127.0.0.1:4317,http://127.0.0.1:4318
       PAPERQUAY_TEST_USERNAME: qa-reader
       PAPERQUAY_TEST_OTHER_USERNAME: qa-other
@@ -156,6 +156,7 @@ jobs:
         run: |
           npm run typecheck --prefix server
           npm test --prefix server
+          npm run test:socket --prefix server
           npm run test:integration --prefix server
       - name: Check mobile persistence, recovery and production build
         env:

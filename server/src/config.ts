@@ -15,6 +15,7 @@ export interface ServerConfig {
   entityLimitBytes: number;
   maxAccountRetainedBytes: number;
   cloudPdfEnabled: boolean;
+  desktopPdfEnabled: boolean;
   cloudPdfAccountBytes: number;
   requestsPerMinute: number;
   trustedProxyIps: string[];
@@ -41,6 +42,21 @@ export const SERVER_LIMITS = Object.freeze({
   cloudPdfMaxConfiguredAccountBytes: 10 * 1024 * 1024 * 1024,
   cloudPdfMaxCopies: 512,
   cloudPdfMaxTransfers: 2,
+  desktopPdfMaxFileBytes: 64 * 1024 * 1024,
+  desktopPdfRequestTtlMs: 30000,
+  desktopPdfPollTimeoutMs: 20000,
+  desktopPdfPresenceTtlMs: 30000,
+  desktopPdfClaimTimeoutMs: 10000,
+  desktopPdfRecheckIntervalMs: 1000,
+  desktopPdfRecheckTimeoutMs: 1500,
+  desktopPdfMaxTransfers: 2,
+  desktopPdfMaxProviders: 32,
+  desktopPdfMaxAccountProviders: 4,
+  desktopPdfByteWindowMs: 15 * 60 * 1000,
+  desktopPdfAccountWindowBytes: 256 * 1024 * 1024,
+  desktopPdfProcessWindowBytes: 1024 * 1024 * 1024,
+  desktopPdfMaxBudgetAccounts: 256,
+  desktopPdfChunkBytes: 64 * 1024,
 });
 
 export function checkedCloudPdfByteLimit(value: number): number {
@@ -127,6 +143,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   }
   const cloudPdfEnabled = env.PAPERQUAY_CLOUD_PDF_ENABLED ?? '0';
   if (!['0', '1'].includes(cloudPdfEnabled)) throw new ApiError('CONFIGURATION_INVALID', 500);
+  const desktopPdfEnabled = env.PAPERQUAY_DESKTOP_PDF_ENABLED ?? '0';
+  if (!['0', '1'].includes(desktopPdfEnabled)) throw new ApiError('CONFIGURATION_INVALID', 500);
   return {
     host, port, databaseUrl, oidcIssuer, oidcAudience, oidcClientIds, allowedOrigins, cursorSecret,
     bodyLimitBytes: SERVER_LIMITS.bodyLimitBytes,
@@ -134,6 +152,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     entityLimitBytes: SERVER_LIMITS.entityLimitBytes,
     maxAccountRetainedBytes: checkedRetainedByteLimit(Number(env.PAPERQUAY_MAX_ACCOUNT_RETAINED_BYTES ?? SERVER_LIMITS.maxAccountRetainedBytes)),
     cloudPdfEnabled: cloudPdfEnabled === '1',
+    desktopPdfEnabled: desktopPdfEnabled === '1',
     cloudPdfAccountBytes: checkedCloudPdfByteLimit(Number(env.PAPERQUAY_CLOUD_PDF_ACCOUNT_BYTES ?? SERVER_LIMITS.cloudPdfAccountBytes)),
     requestsPerMinute, trustedProxyIps: trustedProxyIps(env.PAPERQUAY_TRUSTED_PROXY_IPS),
   };

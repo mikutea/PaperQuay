@@ -12,7 +12,7 @@ import type { VerifiedIdentity } from './auth.ts';
 import { CursorCodec } from './cursor.ts';
 import { ApiError, isTransientDatabaseError } from './errors.ts';
 import { checkedCloudPdfByteLimit, checkedRetainedByteLimit, SERVER_LIMITS } from './config.ts';
-import type { CloudPdfCopy, CloudPdfQuota, CloudPdfRepository, CloudPdfStatus, ConflictPage, Device, DevicePlatform, DeviceRegistration, ResolveRequest, SessionView, SyncRepository } from './types.ts';
+import type { CloudPdfCopy, CloudPdfQuota, CloudPdfRepository, CloudPdfStatus, ConflictPage, DesktopPdfAccess, DesktopPdfRepository, DesktopPdfTarget, DesktopPdfVersionPage, Device, DevicePlatform, DeviceRegistration, ResolveRequest, SessionView, SyncRepository } from './types.ts';
 
 interface AccountRow {
   id: string; epoch: string; last_seq: string; last_conflict_seq: string; entity_count: number; receipt_count: number; retained_bytes: string;
@@ -38,6 +38,11 @@ interface ConflictRow {
 interface TransactionContext {
   client: PoolClient; account: AccountRow; device: DeviceRow;
   preflightedReceiptOpId?: string;
+}
+interface DesktopReadContext { client: PoolClient; accountId: string; device: DeviceRow }
+interface DesktopTargetRow {
+  version_id: string; version_revision: string; version_data: AttachmentVersionData; version_deleted: Date | null;
+  paper_id: string | null; paper_revision: string | null; paper_title: string | null; paper_deleted: Date | null;
 }
 type ResponsePreflight = (result: PushResult) => void;
 type RetainedWriteKind = 'entity' | 'conflict' | 'change' | 'receipt';
@@ -73,6 +78,19 @@ const cloudPdfColumns = `c.attachment_version_id, c.paper_id, c.sha256, c.size_b
 const cloudPdfJoins = `JOIN paperquay.entities v ON v.account_id = c.account_id
     AND v.entity_type = 'attachmentVersion' AND v.entity_id = c.attachment_version_id
   JOIN paperquay.entities p ON p.account_id = c.account_id AND p.entity_type = 'paper' AND p.entity_id = c.paper_id`;
+const desktopTargetColumns = 'v.entity_id AS version_id, v.revision AS version_revision, v.data AS version_data, v.deleted_at AS version_deleted, '
+  + 'p.entity_id AS paper_id, p.revision AS paper_revision, p.data ->> \'title\' AS paper_title, p.deleted_at AS paper_deleted';
+const desktopTargetFrom = ' FROM paperquay.entities v LEFT JOIN paperquay.entities p ON p.account_id = v.account_id '
+  + 'AND p.entity_type = \'paper\' AND p.entity_id = (v.data ->> \'paperId\')::uuid ';
+
+function toDesktopTarget(row: DesktopTargetRow): DesktopPdfTarget {
+  const data = row.version_data;
+  return { paper: { entityId: row.paper_id!, revision: Number(row.paper_revision), title: row.paper_title! },
+    version: { entityId: row.version_id, revision: Number(row.version_revision), data: {
+      paperId: data.paperId, attachmentId: data.attachmentId, sha256: data.sha256, sizeBytes: data.sizeBytes,
+      mediaType: data.mediaType, fileName: data.fileName, pageCount: data.pageCount,
+    } } };
+}
 
 function toCloudPdf(row: CloudPdfRow): CloudPdfCopy {
   return { attachmentVersionId: row.attachment_version_id, paperId: row.paper_id, sha256: row.sha256,
@@ -114,7 +132,7 @@ function rejected(opId: string, code: string, retryable = false): PushResult {
 }
 
 /** Every request uses a transaction-local identity; a pooled connection never carries tenant state. */
-export class PostgresSyncStore implements SyncRepository, CloudPdfRepository {
+export class PostgresSyncStore implements SyncRepository, CloudPdfRepository, DesktopPdfRepository {
   readonly pool: pg.Pool;
   readonly cursors: CursorCodec;
   readonly hooks: StoreHooks;
@@ -216,6 +234,96 @@ export class PostgresSyncStore implements SyncRepository, CloudPdfRepository {
 
   async me(identity: VerifiedIdentity): Promise<SessionView> {
     return this.withAccount(identity, false, async ({ account, device }) => ({ accountId: account.id, device: toDevice(device) }));
+  }
+
+  /** Streaming checks must not hold the account write lock or mutate last_seen_at. */
+  private async withDesktopAccount<T>(identity: VerifiedIdentity, action: (context: DesktopReadContext) => Promise<T>): Promise<T> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN READ ONLY');
+      await client.query("SET LOCAL statement_timeout = '1s'");
+      await client.query("SET LOCAL lock_timeout = '1s'");
+      await client.query("SELECT set_config('paperquay.issuer', $1, true), set_config('paperquay.subject', $2, true)", [identity.issuer, identity.subject]);
+      const accounts = await client.query<{ id: string }>('SELECT id FROM paperquay.accounts WHERE issuer = $1 AND subject = $2', [identity.issuer, identity.subject]);
+      const accountId = accounts.rows[0]?.id;
+      if (!accountId) throw new ApiError('DEVICE_NOT_REGISTERED', 403);
+      await client.query("SELECT set_config('paperquay.account_id', $1, true)", [accountId]);
+      const devices = await client.query<DeviceRow>('SELECT ' + deviceColumns + ' FROM paperquay.devices WHERE account_id = $1 AND session_id = $2', [accountId, identity.sessionId]);
+      const device = devices.rows[0];
+      if (!device) throw new ApiError('DEVICE_NOT_REGISTERED', 403);
+      if (device.revoked_at) throw new ApiError('SESSION_REVOKED', 403);
+      const result = await action({ client, accountId, device });
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally { client.release(); }
+  }
+
+  async desktopPdfSession(identity: VerifiedIdentity): Promise<SessionView> {
+    return this.withDesktopAccount(identity, async ({ accountId, device }) => ({ accountId, device: toDevice(device) }));
+  }
+
+  private async desktopPdfTarget(context: DesktopReadContext, attachmentVersionId: string): Promise<DesktopPdfTarget> {
+    const result = await context.client.query<DesktopTargetRow>('SELECT ' + desktopTargetColumns + desktopTargetFrom
+      + "WHERE v.account_id = $1 AND v.entity_type = 'attachmentVersion' AND v.entity_id = $2", [context.accountId, attachmentVersionId]);
+    const row = result.rows[0];
+    if (!row) throw new ApiError('NOT_FOUND', 404);
+    if (row.version_deleted || !row.paper_id || row.paper_deleted) throw new ApiError('ATTACHMENT_VERSION_UNAVAILABLE', 410);
+    if (row.version_data.mediaType !== 'application/pdf') throw new ApiError('INVALID_PDF', 415);
+    if (row.version_data.sizeBytes > SERVER_LIMITS.desktopPdfMaxFileBytes) throw new ApiError('REQUEST_TOO_LARGE', 413);
+    return toDesktopTarget(row);
+  }
+
+  async getDesktopPdfVersion(identity: VerifiedIdentity, attachmentVersionId: string): Promise<DesktopPdfTarget> {
+    return this.withDesktopAccount(identity, (context) => this.desktopPdfTarget(context, attachmentVersionId));
+  }
+
+  async listDesktopPdfVersions(identity: VerifiedIdentity, after: string | undefined, limit: number): Promise<DesktopPdfVersionPage> {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new ApiError('VALIDATION_FAILED');
+    return this.withDesktopAccount(identity, async (context) => {
+      const result = await context.client.query<DesktopTargetRow>('SELECT ' + desktopTargetColumns + desktopTargetFrom
+        + "WHERE v.account_id = $1 AND v.entity_type = 'attachmentVersion' AND v.deleted_at IS NULL "
+        + "AND p.entity_id IS NOT NULL AND p.deleted_at IS NULL AND v.data ->> 'mediaType' = 'application/pdf' "
+        + "AND (v.data ->> 'sizeBytes')::bigint <= $2 AND ($3::uuid IS NULL OR v.entity_id > $3::uuid) "
+        + 'ORDER BY v.entity_id LIMIT $4', [context.accountId, SERVER_LIMITS.desktopPdfMaxFileBytes, after ?? null, limit + 1]);
+      const items = result.rows.slice(0, limit).map(toDesktopTarget);
+      const hasMore = result.rows.length > limit;
+      return { items, hasMore, nextAfter: hasMore ? items[items.length - 1].version.entityId : null };
+    });
+  }
+
+  async checkDesktopPdfTransfer(consumer: VerifiedIdentity, provider: VerifiedIdentity | null, target: DesktopPdfTarget): Promise<DesktopPdfAccess> {
+    if (provider && (consumer.issuer !== provider.issuer || consumer.subject !== provider.subject || consumer.sessionId === provider.sessionId)) {
+      throw new ApiError('NOT_FOUND', 404);
+    }
+    return this.withDesktopAccount(consumer, async (context) => {
+      // Both devices and both entities are observed by one statement. A long
+      // stream never holds this transaction or an account row lock open.
+      const result = await context.client.query<DesktopTargetRow & {
+        consumer_device_id: string; consumer_revoked_at: Date | null;
+        provider_device_id: string | null; provider_revoked_at: Date | null; provider_platform: DevicePlatform | null;
+      }>('SELECT ' + desktopTargetColumns + ', c.id AS consumer_device_id, c.revoked_at AS consumer_revoked_at, '
+        + 'd.id AS provider_device_id, d.revoked_at AS provider_revoked_at, d.platform AS provider_platform'
+        + desktopTargetFrom
+        + 'JOIN paperquay.devices c ON c.account_id = v.account_id AND c.session_id = $3 '
+        + 'LEFT JOIN paperquay.devices d ON d.account_id = v.account_id AND d.session_id = $4 '
+        + "WHERE v.account_id = $1 AND v.entity_type = 'attachmentVersion' AND v.entity_id = $2",
+      [context.accountId, target.version.entityId, consumer.sessionId, provider?.sessionId ?? null]);
+      const row = result.rows[0];
+      if (!row) throw new ApiError('NOT_FOUND', 404);
+      if (row.consumer_revoked_at) throw new ApiError('SESSION_REVOKED', 403);
+      if (row.version_deleted || !row.paper_id || row.paper_deleted) throw new ApiError('ATTACHMENT_VERSION_UNAVAILABLE', 410);
+      const current = toDesktopTarget(row);
+      if (current.paper.entityId !== target.paper.entityId || current.paper.revision !== target.paper.revision
+        || current.version.revision !== target.version.revision || current.version.data.sha256 !== target.version.data.sha256
+        || current.version.data.sizeBytes !== target.version.data.sizeBytes) throw new ApiError('DESKTOP_PDF_CHANGED', 409);
+      if (provider && (!row.provider_device_id || row.provider_revoked_at
+        || !['windows', 'macos', 'linux'].includes(row.provider_platform ?? '')
+        || row.provider_device_id === row.consumer_device_id)) throw new ApiError('DESKTOP_PDF_UNAVAILABLE', 404);
+      return { accountId: context.accountId, consumerDeviceId: row.consumer_device_id, providerDeviceId: row.provider_device_id };
+    });
   }
 
   async listDevices(identity: VerifiedIdentity): Promise<{ devices: Device[] }> {

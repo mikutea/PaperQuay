@@ -11,7 +11,7 @@ try {
     maxAccountRetainedBytes: config.maxAccountRetainedBytes, cloudPdfEnabled: config.cloudPdfEnabled,
     cloudPdfAccountBytes: config.cloudPdfAccountBytes });
   const verifyToken = await createOidcVerifier({ issuer: config.oidcIssuer, audience: config.oidcAudience, clientIds: config.oidcClientIds });
-  const app = await buildApp({ config, repository: store, cloudPdfRepository: store, verifyToken, logger: {
+  const app = await buildApp({ config, repository: store, cloudPdfRepository: store, desktopPdfRepository: store, verifyToken, logger: {
     level: 'info', redact: ['req.headers.authorization', 'req.headers.cookie', 'res.headers.set-cookie'],
   } });
   app.addHook('onClose', async () => store?.close());
