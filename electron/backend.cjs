@@ -126,6 +126,7 @@ function createBackend({ app, libraryLocation }) {
 
   return {
     authorizeLocalRead: context.authorizeLocalRead,
+    stopDesktopProvider: () => desktopAccount.stopProvider(),
     close() {
       desktopAccount.close();
       radar.close();

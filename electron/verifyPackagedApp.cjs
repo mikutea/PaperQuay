@@ -31,6 +31,13 @@ try {
   for (const name of ['projectDesktopLibrary', 'createDesktopIdentityMap', 'queueLocalCreates', 'preparePush', 'applyPushResults']) {
     if (typeof syncCore[name] !== 'function') throw new Error(`Packaged desktop sync core is missing ${name}.`);
   }
+  for (const file of ['backend/desktopPeerHost.cjs', 'desktopPeerPreload.cjs', 'desktopPeer.html', 'appWindowLifecycle.cjs']) {
+    const stat = fs.statSync(path.join(extractionRoot, 'electron', file));
+    if (!stat.isFile() || !stat.size) throw new Error(`Packaged direct transfer runtime is missing ${file}.`);
+  }
+  if (typeof require(path.join(extractionRoot, 'electron', 'backend', 'desktopPeerHost.cjs')).createDesktopPeerHost !== 'function') {
+    throw new Error('Packaged direct transfer host failed verification.');
+  }
   const oidcEntry = require.resolve('openid-client', { paths: [extractionRoot] });
   if (!oidcEntry.startsWith(`${extractionRoot}${path.sep}`)) throw new Error('OIDC dependency escaped the package.');
   const oidcCheck = spawnSync(process.execPath, ['--input-type=module', '-e',

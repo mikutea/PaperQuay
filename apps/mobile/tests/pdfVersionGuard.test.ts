@@ -121,6 +121,48 @@ test('guards use pending local edits and overlays rather than only the server re
   assert.throws(() => assertPdfTarget(deleted, env.paperId, env.version), code('TARGET_CHANGED'));
 });
 
+test('chunk target checks do not traverse unrelated library content; storage decoding still validates it', () => {
+  const env = model();
+  const unrelatedId = crypto.randomUUID();
+  const unrelatedKey = entityKey('paper', unrelatedId);
+  let unrelatedReads = 0;
+  Object.defineProperty(env.state.serverRecords, unrelatedKey, {
+    enumerable: true, get() { unrelatedReads++; throw new Error('unrelated library traversal'); },
+  });
+  for (let chunk = 0; chunk < 128; chunk++) assertPdfTarget(env.state, env.paperId, env.version);
+  assert.equal(unrelatedReads, 0);
+  assert.throws(() => decodeWorkspace({ sync: env.state, pendingResolutions: {} }), { code: 'STORAGE_CORRUPT' });
+});
+
+test('chunk target checks reread in-place metadata and retain target schema validation', () => {
+  const env = model();
+  const key = entityKey('attachmentVersion', env.version.entityId);
+  const data = env.state.serverRecords[key].data as AttachmentVersionData;
+  assertPdfTarget(env.state, env.paperId, env.version);
+  data.fileName = 'in-place-rename.pdf';
+  assert.equal((assertPdfTarget(env.state, env.paperId, env.version)!.data as AttachmentVersionData).fileName, data.fileName);
+  data.sha256 = 'b'.repeat(64);
+  assert.throws(() => assertPdfTarget(env.state, env.paperId, env.version), code('TARGET_CHANGED'));
+  data.sha256 = env.version.data.sha256; data.sizeBytes = -1;
+  assert.throws(() => assertPdfTarget(env.state, env.paperId, env.version), { code: 'INVALID_CLIENT_STATE' });
+});
+
+test('target projections preserve conflict validation, duplicate detection and pending state', () => {
+  const env = model();
+  const pending = queueLocalEdit(env.state, { entityType: 'attachmentVersion', entityId: env.version.entityId,
+    mutation: 'put', data: { ...env.version.data, fileName: 'conflicted-name.pdf' } },
+  { opId: crypto.randomUUID(), clientCreatedAt: now });
+  const entry = pending.outbox[0], conflictId = crypto.randomUUID();
+  entry.status = 'conflict'; entry.conflictId = conflictId;
+  pending.conflicts[conflictId] = { conflictId, attempted: structuredClone(entry.operation),
+    current: structuredClone(env.state.serverRecords[entityKey('attachmentVersion', env.version.entityId)]) };
+  assert.deepEqual(assertPdfTarget(pending, env.paperId, env.version), getVisibleEntity(pending, 'attachmentVersion', env.version.entityId));
+  delete pending.conflicts[conflictId];
+  assert.throws(() => assertPdfTarget(pending, env.paperId, env.version), { code: 'INVALID_CLIENT_STATE' });
+  entry.status = 'queued'; entry.conflictId = null; pending.outbox.push(structuredClone(entry));
+  assert.throws(() => assertPdfTarget(pending, env.paperId, env.version), { code: 'INVALID_CLIENT_STATE' });
+});
+
 test('transaction guards preserve captured identity and expose only controlled edit-change failures', () => {
   const env = model();
   const guard = pdfVersionWriteGuard(env.paperId, env.version, env.version.entityId);

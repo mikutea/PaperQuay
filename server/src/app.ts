@@ -17,7 +17,7 @@ import { SERVER_LIMITS } from './config.ts';
 import type { ServerConfig } from './config.ts';
 import type { CloudPdfRepository, DesktopPdfRepository, DeviceRegistration, ResolveRequest, SyncRepository } from './types.ts';
 import { registerCloudPdfRoutes } from './cloud-pdf.ts';
-import { DESKTOP_PDF_CAPABILITY, registerDesktopPdfRoutes } from './desktop-pdf.ts';
+import { desktopPdfCapability, registerDesktopPdfRoutes } from './desktop-pdf.ts';
 import type { DesktopPdfTimings } from './desktop-pdf.ts';
 
 declare module 'fastify' {
@@ -218,7 +218,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     pdfStorage: config.cloudPdfEnabled,
     ...(config.cloudPdfEnabled ? { cloudPdf: { maxFileBytes: SERVER_LIMITS.cloudPdfMaxFileBytes,
       maxAccountBytes: config.cloudPdfAccountBytes, maxCopies: SERVER_LIMITS.cloudPdfMaxCopies } } : {}),
-    ...(config.desktopPdfEnabled ? { desktopPdf: DESKTOP_PDF_CAPABILITY } : {}),
+    ...(config.desktopPdfEnabled ? { desktopPdf: desktopPdfCapability(config.desktopPdfStunUrls) } : {}),
     tombstoneRetention: 'no-pruning-in-m1',
   }));
   app.post<{ Body: DeviceRegistration }>('/v1/devices', {

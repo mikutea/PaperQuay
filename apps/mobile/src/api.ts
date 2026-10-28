@@ -225,7 +225,9 @@ export class SyncApi {
       const limits = body.desktopPdf;
       if (!isDesktopPdfCapability(limits)) throw new ClientError('INVALID_RESPONSE');
       desktopCapability = { transport: limits.transport, maxFileBytes: limits.maxFileBytes,
-        requestTtlMs: limits.requestTtlMs, pollTimeoutMs: limits.pollTimeoutMs };
+        requestTtlMs: limits.requestTtlMs, pollTimeoutMs: limits.pollTimeoutMs,
+        ...(limits.direct ? { direct: { transport: limits.direct.transport, attemptMs: limits.direct.attemptMs,
+          maxSdpBytes: limits.direct.maxSdpBytes, stunUrls: [...limits.direct.stunUrls] } } : {}) };
     }
     if (body.pdfStorage === true && isObject(body.features) && body.features.privatePdfStorage === 1) {
       const limits = body.cloudPdf;

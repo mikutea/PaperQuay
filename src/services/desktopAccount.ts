@@ -26,9 +26,11 @@ export interface DesktopAccountStatus {
   account: { accountId: string; deviceId: string; deviceName: string } | null;
   enabled: boolean;
   busy: boolean;
-  capability: { transport: 'http-relay-v1'; maxFileBytes: number; requestTtlMs: number; pollTimeoutMs: number } | null;
+  capability: { transport: 'http-relay-v1'; maxFileBytes: number; requestTtlMs: number; pollTimeoutMs: number;
+    direct?: { transport: 'webrtc-data-v1'; attemptMs: number; maxSdpBytes: number; stunUrls: string[] } } | null;
   bindings: DesktopPdfBinding[];
-  transfers: { transferId: string; attachmentVersionId: string; status: 'reading' | 'sending'; sizeBytes: number }[];
+  transfers: { transferId: string; attachmentVersionId: string; status: 'reading' | 'connecting' | 'sending'; sizeBytes: number;
+    transport?: 'webrtc-data-v1' | 'http-relay-v1'; candidateType?: 'host' | 'srflx' | 'prflx' | 'unknown' }[];
   errorCode: string | null;
 }
 export interface DesktopPdfCandidate {

@@ -10,6 +10,7 @@ import {
   type PdfSourceRequest, type PdfSourceResult,
 } from '../src/pdf/sourceResolver.ts';
 import { PDF_LIMITS, type PdfVersion } from '../src/pdf/types.ts';
+import { FakeDesktopPeer, TEST_SDP, fakeDesktopFactory } from './helpers/desktopRtc.ts';
 
 const API = 'https://sync.example.test/account-api';
 const URL = 'https://papers.example.test/synthetic.pdf?private=not-for-diagnostics';
@@ -644,4 +645,61 @@ test('injected desktop budgets cannot extend the new stage or overall deadline',
   }));
   assert.ok(result.status === 'resolved'); assert.equal(result.source, 'desktop');
   assert.deepEqual(timers, [60_000, 5_000, 15_000, 15_000]);
+});
+
+test('desktop direct and same-lease relay publish their transfer state and retain the original source order', async () => {
+  for (const fallback of [false, true]) {
+    const peer = new FakeDesktopPeer(); const events: PdfSourceAttempt[] = []; const paths: string[] = [];
+    const expiresAt = new Date(Date.now() + 30000).toISOString(), directExpiresAt = new Date(Date.now() + 6000).toISOString();
+    peer.onAnswer = () => {
+      if (!fallback) peer.deliver(version, DESKTOP_REQUEST, bytes);
+      else {
+        peer.channel.receive(JSON.stringify({ type: 'metadata', requestId: DESKTOP_REQUEST, attachmentVersionId: ID, sha256: hash, sizeBytes: bytes.length }));
+        peer.channel.receive(bytes.slice(0, 8).buffer); peer.fail();
+      }
+    };
+    const legacy = desktopContext(); const direct = desktopContext({ getDesktopPdfCapability: () => ({ ...legacy.getDesktopPdfCapability()!,
+      direct: { transport: 'webrtc-data-v1', attemptMs: 6000, maxSdpBytes: 32768, stunUrls: [] } }) });
+    const result = await resolvePdfSource(request({ desktop: { context: direct, check: () => undefined } }), options({
+      createDesktopPeerConnection: fakeDesktopFactory(peer), onAttempt: (value) => events.push(value), fetch: async (url, init) => {
+        const path = String(url).slice(API.length); paths.push(path);
+        const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+        if (path === '/v1/desktop-pdfs/requests') return reply({ requestId: DESKTOP_REQUEST, attachmentVersionId: ID, expiresAt }, 201);
+        if (path.endsWith('/direct')) return reply({ state: 'direct', answer: TEST_SDP, expiresAt, directExpiresAt, relayReady: false,
+          authorizedUntil: new Date(Date.now() + 1900).toISOString() });
+        if (path.endsWith('/complete')) return reply({ received: true });
+        if (path.endsWith('/fallback')) return reply({ state: 'relay' });
+        assert.equal(init?.method, 'GET'); assert.ok(path.endsWith(`/${DESKTOP_REQUEST}/content`));
+        return binary(bytes, { 'accept-ranges': 'none' });
+      },
+    }));
+    assert.ok(result.status === 'resolved'); assert.equal(result.source, 'desktop'); assert.deepEqual(result.bytes, bytes);
+    assert.equal(attempt(result, 'desktop').desktopTransfer, fallback ? 'relay-received' : 'direct-received');
+    assert.deepEqual(result.attempts.map(({ source, status }) => [source, status]), [
+      ['cache', 'failed'], ['desktop', 'succeeded'], ['cloud', 'skipped'], ['public', 'skipped'],
+    ]);
+    assert.equal(paths.filter((path) => path === '/v1/desktop-pdfs/requests').length, 1);
+    if (fallback) {
+      assert.ok(events.some((entry) => entry.desktopTransfer === 'direct-connecting' && entry.loaded === 8));
+      assert.ok(events.some((entry) => entry.desktopTransfer === 'relay-fallback' && entry.loaded === 0));
+    } else assert.equal(paths.some((path) => path.endsWith('/content')), false);
+    assert.equal(JSON.stringify(result.attempts).includes('synthetic.invalid'), false);
+  }
+});
+
+test('the outer desktop deadline preserves direct auth or target status and never starts cloud', async () => {
+  for (const [status, expected] of [[403, 'AUTH_REQUIRED'], [409, 'CHANGED'], [410, 'VERSION_UNAVAILABLE']] as const) {
+    const peer = new FakeDesktopPeer(); let cancelled = false; const methods: string[] = [];
+    const legacy = desktopContext(); const direct = desktopContext({ getDesktopPdfCapability: () => ({ ...legacy.getDesktopPdfCapability()!,
+      direct: { transport: 'webrtc-data-v1', attemptMs: 6000, maxSdpBytes: 32768, stunUrls: [] } }) });
+    await assert.rejects(resolvePdfSource(request({ desktop: { context: direct, check: () => undefined } }), options({
+      createDesktopPeerConnection: fakeDesktopFactory(peer), budgets: { desktopMs: 30 }, fetch: async (url, init) => {
+        assert.ok(String(url).includes('/desktop-pdfs/')); methods.push(init!.method!);
+        if (init?.method === 'POST') return desktopRequest();
+        if (init?.method === 'DELETE') return jsonError(404, 'NOT_FOUND');
+        return new Response(new ReadableStream({ cancel() { cancelled = true; } }), { status, headers: { 'content-type': 'application/json' } });
+      },
+    })), errorCode(expected));
+    await flush(); assert.equal(cancelled, true); assert.equal(peer.closed, 1); assert.deepEqual(methods, ['POST', 'GET', 'DELETE']);
+  }
 });

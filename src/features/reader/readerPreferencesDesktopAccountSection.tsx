@@ -137,7 +137,7 @@ export function ReaderPreferencesDesktopAccountSection({ l }: { l: ReaderPrefere
           : signedIn ? <button type="button" className={buttonClass} onClick={() => void run(desktopAccount.signOut)}><LogOut className="h-4 w-4" />{l('退出账号', 'Sign out')}</button>
             : <button type="button" className={buttonClass} disabled={!status?.config || busy} onClick={() => void run(desktopAccount.signIn)}><LogIn className="h-4 w-4" />{l('在浏览器中登录', 'Sign in with browser')}</button>}
       </div>
-      <p className="mt-3 text-xs leading-5 text-[var(--pq-text-muted)]">{l('每次启动需重新登录并开启。文件经服务临时转发；本操作不会创建云端长期副本。', 'Sign in and enable access after each restart. Files are relayed temporarily; this does not create a permanent cloud copy.')}</p>
+      <p className="mt-3 text-xs leading-5 text-[var(--pq-text-muted)]">{l('每次启动需重新登录并开启。本操作不会创建云端长期副本。', 'Sign in and enable access after each restart. This does not create a permanent cloud copy.')}</p>
     </div>
 
     {message ? <div role="alert" className="rounded-xl bg-[var(--pq-error-bg)] px-4 py-3 text-sm text-[var(--pq-error)]">{message}</div> : null}
@@ -170,8 +170,16 @@ export function ReaderPreferencesDesktopAccountSection({ l }: { l: ReaderPrefere
         <span className={`relative h-6 w-11 shrink-0 rounded-full ${status?.enabled ? 'bg-[var(--pq-accent)]' : 'bg-[var(--pq-border-strong)]'}`}><span className={`absolute top-1 h-4 w-4 rounded-full bg-white ${status?.enabled ? 'left-6' : 'left-1'}`} /></span>
       </button>
       {signedIn && !status.capability ? <p className="text-xs leading-5 text-[var(--pq-text-muted)]">{l('当前服务尚未提供此功能。', 'This service does not offer this feature yet.')}</p> : null}
-      {status?.transfers.map((transfer) => <div key={transfer.transferId} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--pq-border)] p-3">
-        <p role="status" className="text-sm text-[var(--pq-text)]">{transfer.status === 'reading' ? l('正在校验本机 PDF', 'Checking the local PDF') : l('正在发送 PDF', 'Sending PDF')} · {sizeLabel(transfer.sizeBytes)}</p>
+      {status?.capability ? <p className="text-xs leading-5 text-[var(--pq-text-muted)]">{status.capability.direct
+        ? l('优先尝试设备直连，失败后使用临时中继。中继服务会转发文件，但不保存 PDF。', 'Try a direct device connection first, then use the temporary relay if needed. The relay forwards the file without storing the PDF.')
+        : l('通过临时中继传输。中继服务会转发文件，但不保存 PDF。', 'Files use the temporary relay, which forwards them without storing the PDF.')}</p> : null}
+      {status?.transfers.map((transfer) => <div key={transfer.transferId} data-desktop-transfer={transfer.transport || 'reading'} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--pq-border)] p-3">
+        <p role="status" className="text-sm text-[var(--pq-text)]">{transfer.status === 'reading' ? l('正在校验本机 PDF', 'Checking the local PDF')
+          : transfer.status === 'connecting' ? transfer.transport === 'http-relay-v1'
+            ? l('直连未建立，等待临时中继', 'Direct connection unavailable; waiting for the relay')
+            : l('正在建立设备直连', 'Connecting directly to your device')
+          : transfer.transport === 'webrtc-data-v1' ? l('正在通过设备直连发送 PDF', 'Sending PDF directly to your device')
+            : l('正在通过临时中继发送 PDF', 'Sending PDF through the temporary relay')} · {sizeLabel(transfer.sizeBytes)}</p>
         <button type="button" className={buttonClass} onClick={() => void run(() => desktopAccount.cancel(transfer.transferId))}>{l('取消传输', 'Cancel transfer')}</button>
       </div>)}
     </SettingsField>

@@ -4,7 +4,8 @@ import { ClientError } from '../errors.ts';
 import { accountScopeKey, type AccountScope } from '../storage/accountStore.ts';
 import { checkCompletePdfBytes, downloadPublicPdf, inspectPublicPdf, publicPdfUrl, sha256 } from './acquisition.ts';
 import { CloudPdfError, downloadCloudPdfCopy, type CloudPdfContext, type CloudPdfErrorCode } from './cloudCopies.ts';
-import { DesktopPdfError, downloadDesktopPdfCopy, type DesktopPdfContext } from './desktopCopies.ts';
+import { DesktopPdfError, desktopApiFailureError, downloadDesktopPdfCopy, type DesktopApiFailure,
+  type DesktopPdfContext, type DesktopPeerFactory, type DesktopTransferState } from './desktopCopies.ts';
 import { PdfError } from './errors.ts';
 import { PDF_LIMITS, type PdfCache, type PdfVersion } from './types.ts';
 
@@ -18,6 +19,7 @@ export interface PdfSourceAttempt extends PdfSourceProgress {
   status: PdfSourceStatus;
   code?: string;
   message?: string;
+  desktopTransfer?: DesktopTransferState;
 }
 export interface PdfSourceBudgets { cacheMs: number; desktopMs: number; cloudMs: number; publicMs: number; totalMs: number }
 export const PDF_SOURCE_BUDGETS: Readonly<PdfSourceBudgets> = Object.freeze({ cacheMs: 5_000, desktopMs: 15_000, cloudMs: 15_000, publicMs: 30_000, totalMs: 60_000 });
@@ -41,6 +43,7 @@ export interface PdfSourceOptions {
   onAttempt?: (attempt: PdfSourceAttempt) => void;
   onProgress?: (progress: PdfSourceProgress) => void;
   fetch?: typeof globalThis.fetch;
+  createDesktopPeerConnection?: DesktopPeerFactory;
   /** Values may shorten the defaults, never extend their upper bounds. */
   budgets?: Partial<PdfSourceBudgets>;
 }
@@ -231,13 +234,12 @@ export async function resolvePdfSource(input: PdfSourceRequest, options: PdfSour
       }
       const stage = stageFor(source);
       let cloudStatus: number | undefined;
-      let desktopStatus: number | undefined;
+      let desktopFailure: DesktopApiFailure | null = null;
       let sourceUrl: string | undefined;
       const guardedFetch: typeof fetch = async (...args) => {
         const response = await stage.wait(() => fetcher(...args), disposeResponse);
         try { stage.check(); } catch (error) { disposeResponse(response); throw error; }
         if (source === 'cloud') cloudStatus = response.status;
-        if (source === 'desktop') desktopStatus = response.status;
         return response;
       };
       const progress = (loaded: number, total: number | null) => {
@@ -259,6 +261,12 @@ export async function resolvePdfSource(input: PdfSourceRequest, options: PdfSour
           acquired = await stage.wait(() => downloadDesktopPdfCopy(desktop!.context, version, {
             signal: stage.signal, isCurrent: () => { stage.check(); return true; }, fetch: guardedFetch, cleanupFetch: fetcher,
             timeoutMs: budgets.desktop, onProgress: progress,
+            createPeerConnection: options.createDesktopPeerConnection,
+            onApiFailure: (failure) => { desktopFailure = failure; },
+            onTransferState: (state) => {
+              stage.check(); report(source, { desktopTransfer: state,
+                ...(state === 'relay-fallback' ? { loaded: 0, total: version.data.sizeBytes } : {}) });
+            },
           }));
         }
         else if (source === 'cloud') {
@@ -309,12 +317,7 @@ export async function resolvePdfSource(input: PdfSourceRequest, options: PdfSour
           if (!(error instanceof ClientError && error.code === 'SESSION_REVOKED')) error = new ClientError('AUTH_REQUIRED');
         } else if (cloudStatus === 410 || (cloudStatus === 404 && !(error instanceof CloudPdfError && error.code === 'NOT_FOUND')))
           error = new CloudPdfError('VERSION_UNAVAILABLE');
-        if (desktopStatus === 401 || desktopStatus === 403) {
-          if (!(error instanceof ClientError && error.code === 'SESSION_REVOKED')) error = new ClientError('AUTH_REQUIRED');
-        } else if (desktopStatus === 410 || (desktopStatus === 404 && !(error instanceof DesktopPdfError && error.code === 'UNAVAILABLE')))
-          error = new DesktopPdfError('VERSION_UNAVAILABLE');
-        else if (desktopStatus === 409 && !(error instanceof DesktopPdfError && error.code === 'REQUEST_IN_USE'))
-          error = new DesktopPdfError('CHANGED');
+        error = desktopApiFailureError(desktopFailure) ?? error;
         const description = describePdfSourceError(error, source);
         report(source, { status: (error instanceof CloudPdfError && error.code === 'STORAGE_DISABLED')
           || (error instanceof DesktopPdfError && error.code === 'TRANSFER_DISABLED') ? 'skipped' : 'failed', ...description });

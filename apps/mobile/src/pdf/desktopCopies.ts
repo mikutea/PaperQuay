@@ -4,12 +4,18 @@ import { ClientError } from '../errors.ts';
 import { checkCompletePdfBytes, sha256 } from './acquisition.ts';
 import { PdfError } from './errors.ts';
 import { PDF_LIMITS, type PdfVersion } from './types.ts';
+import { createDesktopDirectPeer, DesktopDirectError, isDesktopDirectCapability,
+  type DesktopDirectCapability, type DesktopDirectPeer, type DesktopPeerFactory, type DesktopTransferState } from './desktopDirectPeer.ts';
+import { receiveDesktopDirectPdf } from './desktopDirectTransfer.ts';
+
+export type { DesktopDirectCapability, DesktopPeerFactory, DesktopTransferState } from './desktopDirectPeer.ts';
 
 export interface DesktopPdfCapability {
   transport: 'http-relay-v1';
   maxFileBytes: number;
   requestTtlMs: number;
   pollTimeoutMs: number;
+  direct?: DesktopDirectCapability;
 }
 export interface DesktopPdfContext {
   apiBaseUrl: string;
@@ -25,7 +31,12 @@ export interface DesktopPdfOptions {
   cleanupFetch?: typeof globalThis.fetch;
   timeoutMs?: number;
   onProgress?: (loaded: number, total: number) => void;
+  onTransferState?: (state: DesktopTransferState) => void;
+  createPeerConnection?: DesktopPeerFactory;
+  /** Only normalized, potentially terminal API status is exposed to the outer source deadline. */
+  onApiFailure?: (failure: DesktopApiFailure | null) => void;
 }
+export interface DesktopApiFailure { status: number; code?: string }
 
 const messages = {
   TRANSFER_DISABLED: '账号服务尚未开放在线电脑取文件。',
@@ -41,6 +52,7 @@ const messages = {
   NETWORK: '暂时无法连接电脑文件服务。',
   INVALID_RESPONSE: '电脑文件服务返回的内容无效，本次未采用返回内容。',
   FAILED: '从在线电脑读取文件失败。',
+  DIRECT_FALLBACK: '设备直连未建立，将使用临时中继。',
 } as const;
 export type DesktopPdfErrorCode = keyof typeof messages;
 export class DesktopPdfError extends Error {
@@ -52,6 +64,8 @@ export class DesktopPdfError extends Error {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const MAX_JSON_BYTES = 16 * 1024;
+// An ASCII SDP can double in size when its characters are JSON-escaped.
+const MAX_DIRECT_JSON_BYTES = 72 * 1024;
 const MAX_OPERATION_MS = 15_000;
 const CLEANUP_MS = 1_000;
 const isObject = (value: unknown): value is Record<string, unknown> =>
@@ -64,13 +78,26 @@ export function isDesktopPdfCapability(value: unknown): value is DesktopPdfCapab
   return isObject(value) && value.transport === 'http-relay-v1'
     && integer(value.maxFileBytes, 1, PDF_LIMITS.maxFileBytes)
     && integer(value.requestTtlMs, 2_000, 30_000)
-    && integer(value.pollTimeoutMs, 1, 20_000) && value.pollTimeoutMs <= value.requestTtlMs;
+    && integer(value.pollTimeoutMs, 1, 20_000) && value.pollTimeoutMs <= value.requestTtlMs
+    && (value.direct === undefined || isDesktopDirectCapability(value.direct));
 }
 function capability(value: DesktopPdfCapability | null): DesktopPdfCapability {
   if (!value) throw new DesktopPdfError('TRANSFER_DISABLED');
   if (!isDesktopPdfCapability(value)) throw new DesktopPdfError('INVALID_RESPONSE');
   return { transport: value.transport, maxFileBytes: value.maxFileBytes,
-    requestTtlMs: value.requestTtlMs, pollTimeoutMs: value.pollTimeoutMs };
+    requestTtlMs: value.requestTtlMs, pollTimeoutMs: value.pollTimeoutMs,
+    ...(value.direct ? { direct: { transport: value.direct.transport, attemptMs: value.direct.attemptMs,
+      maxSdpBytes: value.direct.maxSdpBytes, stunUrls: [...value.direct.stunUrls] } } : {}) };
+}
+export function desktopApiFailureError(failure: DesktopApiFailure | null | undefined): ClientError | DesktopPdfError | null {
+  if (!failure) return null;
+  if (failure.status === 401 || failure.status === 403)
+    return new ClientError(failure.code === 'SESSION_REVOKED' || failure.code === 'DEVICE_REVOKED' ? 'SESSION_REVOKED' : 'AUTH_REQUIRED');
+  if (failure.status === 410 || (failure.status === 404 && failure.code !== 'DESKTOP_PDF_UNAVAILABLE'))
+    return new DesktopPdfError('VERSION_UNAVAILABLE');
+  if (failure.status === 409 && !['DESKTOP_PDF_REQUEST_IN_USE', 'DESKTOP_PDF_DIRECT_FALLBACK'].includes(failure.code ?? ''))
+    return new DesktopPdfError('CHANGED');
+  return null;
 }
 function disposeBody(response: Response): void {
   if (response.body && !response.body.locked) void response.body.cancel().catch(() => undefined);
@@ -89,7 +116,7 @@ function cancelRequest(baseUrl: string, requestId: string, token: string, fetche
   } catch { clearTimeout(timer); }
 }
 
-/** Create one short-lived request and consume it once. No URL discovery, polling or automatic reissue. */
+/** Create one short-lived request. Direct and relay share its identity, deadline and cancellation. */
 export async function downloadDesktopPdfCopy(context: DesktopPdfContext, version: PdfVersion,
   options: DesktopPdfOptions): Promise<Uint8Array> {
   const baseUrl = normalizeServiceUrl(context.apiBaseUrl);
@@ -102,7 +129,14 @@ export async function downloadDesktopPdfCopy(context: DesktopPdfContext, version
   let active = true; let timedOut = false; let completed = false;
   let initialCapability: DesktopPdfCapability | undefined;
   let requestId: string | undefined; let token: string | undefined;
-  let observedStatus: number | undefined;
+  let requestExpiresAt = 0;
+  let peer: DesktopDirectPeer | null = null;
+  const failures: DesktopApiFailure[] = [];
+  const responses = new WeakMap<Response, DesktopApiFailure>();
+  const currentFailure = () => failures.find((item) => item.status === 401 || item.status === 403)
+    ?? failures.find((item) => desktopApiFailureError(item) !== null) ?? null;
+  const publishFailure = () => { options.onApiFailure?.(currentFailure()); };
+  const assertApiFailure = () => { const error = desktopApiFailureError(currentFailure()); if (error) throw error; };
   const onAbort = () => controller.abort();
   if (options.signal.aborted) onAbort();
   else options.signal.addEventListener('abort', onAbort, { once: true });
@@ -115,49 +149,56 @@ export async function downloadDesktopPdfCopy(context: DesktopPdfContext, version
     const latest = capability(getCapability());
     if (initialCapability && (latest.transport !== initialCapability.transport
       || latest.maxFileBytes !== initialCapability.maxFileBytes || latest.requestTtlMs !== initialCapability.requestTtlMs
-      || latest.pollTimeoutMs !== initialCapability.pollTimeoutMs)) throw new DesktopPdfError('CAPABILITY_CHANGED');
+      || latest.pollTimeoutMs !== initialCapability.pollTimeoutMs
+      || JSON.stringify(latest.direct ?? null) !== JSON.stringify(initialCapability.direct ?? null))) throw new DesktopPdfError('CAPABILITY_CHANGED');
   };
-  const wait = <T>(work: () => Promise<T>, late?: (value: T) => void): Promise<T> => new Promise((resolve, reject) => {
+  const checkLocal = (signal?: AbortSignal) => {
+    check(); if (signal?.aborted) throw new DesktopDirectError('CLOSED');
+  };
+  const wait = <T>(work: () => Promise<T>, late?: (value: T) => void, signal?: AbortSignal): Promise<T> => new Promise((resolve, reject) => {
     let settled = false;
     const dispose = (value: T) => { try { late?.(value); } catch { /* Best effort resource release. */ } };
     const rejectOnce = (error: unknown) => {
       if (settled) return;
-      settled = true; controller.signal.removeEventListener('abort', abort); reject(error);
+      settled = true; controller.signal.removeEventListener('abort', abort); signal?.removeEventListener('abort', abort); reject(error);
     };
     const abort = () => {
-      try { check(); rejectOnce(new DesktopPdfError('CANCELLED')); }
+      try { checkLocal(signal); rejectOnce(new DesktopPdfError('CANCELLED')); }
       catch (error) { rejectOnce(error); }
     };
     controller.signal.addEventListener('abort', abort, { once: true });
+    signal?.addEventListener('abort', abort, { once: true });
     let pending: Promise<T>;
-    try { check(); pending = work(); } catch (error) { rejectOnce(error); return; }
+    try { checkLocal(signal); pending = work(); } catch (error) { rejectOnce(error); return; }
     pending.then((value) => {
       if (settled) { dispose(value); return; }
-      try { check(); } catch (error) { dispose(value); rejectOnce(error); return; }
-      settled = true; controller.signal.removeEventListener('abort', abort); resolve(value);
+      try { checkLocal(signal); } catch (error) { dispose(value); rejectOnce(error); return; }
+      settled = true; controller.signal.removeEventListener('abort', abort); signal?.removeEventListener('abort', abort); resolve(value);
     }, (error: unknown) => {
       if (settled) return;
-      try { check(); } catch (currentError) { error = currentError; }
+      try { checkLocal(signal); } catch (currentError) { error = currentError; }
       rejectOnce(error);
     });
   });
-  const request = async (path: string, method: string, accept: string, body?: string): Promise<Response> => {
-    check();
+  const request = async (path: string, method: string, accept: string, body?: string, signal?: AbortSignal): Promise<Response> => {
+    checkLocal(signal);
     const url = `${baseUrl}${path}`;
     const response = await wait(() => fetcher(url, {
       method, body, headers: { Authorization: `Bearer ${token!}`, Accept: accept,
         ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
       redirect: 'error', credentials: 'omit', cache: 'no-store', referrerPolicy: 'no-referrer',
-      mode: 'cors', signal: controller.signal,
-    }), disposeBody);
-    observedStatus = response.status;
+      mode: 'cors', signal: signal ? AbortSignal.any([controller.signal, signal]) : controller.signal,
+    }), disposeBody, signal);
+    if (response.status >= 400) {
+      const failure = { status: response.status }; failures.push(failure); responses.set(response, failure); publishFailure();
+    }
     if (response.redirected || response.type === 'opaque' || response.type === 'opaqueredirect'
       || (response.status >= 300 && response.status < 400) || (response.url && response.url !== url)) {
       disposeBody(response); throw new DesktopPdfError('INVALID_RESPONSE');
     }
     return response;
   };
-  const readBytes = async (response: Response, maximum: number, expectedLength?: number): Promise<Uint8Array> => {
+  const readBytes = async (response: Response, maximum: number, expectedLength?: number, signal?: AbortSignal): Promise<Uint8Array> => {
     const raw = response.headers.get('content-length');
     if (!response.body || (raw === null && expectedLength !== undefined)
       || (raw !== null && (!/^\d+$/.test(raw) || !integer(Number(raw), 1, maximum))))
@@ -168,45 +209,50 @@ export async function downloadDesktopPdfCopy(context: DesktopPdfContext, version
     const reader = response.body.getReader();
     const cancel = () => { void reader.cancel().catch(() => undefined); };
     controller.signal.addEventListener('abort', cancel, { once: true });
+    signal?.addEventListener('abort', cancel, { once: true });
     let count = 0;
     try {
       while (true) {
-        check(); const chunk = await wait(() => reader.read());
+        checkLocal(signal); const chunk = await wait(() => reader.read(), undefined, signal);
         if (chunk.done) break;
         if (!(chunk.value instanceof Uint8Array) || count + chunk.value.byteLength > bytes.length)
           throw new DesktopPdfError('INVALID_RESPONSE');
         bytes.set(chunk.value, count); count += chunk.value.byteLength;
         if (expectedLength !== undefined) { check(); options.onProgress?.(count, expectedLength); check(); }
       }
-      check();
+      checkLocal(signal);
       if ((declared !== null && count !== declared) || (expectedLength !== undefined && count !== expectedLength))
         throw expectedLength === undefined ? new DesktopPdfError('INVALID_RESPONSE') : new PdfError('INCOMPLETE');
       return count === bytes.length ? bytes : bytes.subarray(0, count);
     } finally {
-      controller.signal.removeEventListener('abort', cancel); cancel(); reader.releaseLock();
+      controller.signal.removeEventListener('abort', cancel); signal?.removeEventListener('abort', cancel); cancel(); reader.releaseLock();
     }
   };
-  const readJson = async (response: Response): Promise<unknown> => {
+  const readJson = async (response: Response, maximum = MAX_JSON_BYTES, signal?: AbortSignal): Promise<unknown> => {
     if (response.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'application/json')
       throw new DesktopPdfError('INVALID_RESPONSE');
-    const bytes = await readBytes(response, MAX_JSON_BYTES);
+    const bytes = await readBytes(response, maximum, undefined, signal);
     try { return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) as unknown; }
     catch { throw new DesktopPdfError('INVALID_RESPONSE'); }
   };
-  const responseError = async (response: Response): Promise<never> => {
+  const responseError = async (response: Response, signal?: AbortSignal): Promise<never> => {
     let code: string | undefined;
     try {
-      const body = await readJson(response);
+      const body = await readJson(response, MAX_JSON_BYTES, signal);
       if (isObject(body) && isObject(body.error) && typeof body.error.code === 'string') code = body.error.code;
     } catch { /* Status below remains authoritative for malformed authentication or target errors. */ }
+    const failure = responses.get(response);
+    if (failure && ['SESSION_REVOKED', 'DEVICE_REVOKED', 'DESKTOP_PDF_UNAVAILABLE', 'DESKTOP_PDF_REQUEST_IN_USE',
+      'DESKTOP_PDF_DIRECT_FALLBACK'].includes(code ?? '')) { failure.code = code; publishFailure(); }
     if (response.status === 401 || response.status === 403)
       throw new ClientError(code === 'SESSION_REVOKED' || code === 'DEVICE_REVOKED' ? 'SESSION_REVOKED' : 'AUTH_REQUIRED');
     if (response.status === 404)
       throw new DesktopPdfError(code === 'DESKTOP_PDF_UNAVAILABLE' ? 'UNAVAILABLE' : 'VERSION_UNAVAILABLE');
     if (response.status === 410) throw new DesktopPdfError('VERSION_UNAVAILABLE');
     if (response.status === 409)
-      throw new DesktopPdfError(code === 'DESKTOP_PDF_REQUEST_IN_USE' ? 'REQUEST_IN_USE' : 'CHANGED');
-    check();
+      throw new DesktopPdfError(code === 'DESKTOP_PDF_REQUEST_IN_USE' ? 'REQUEST_IN_USE'
+        : code === 'DESKTOP_PDF_DIRECT_FALLBACK' ? 'DIRECT_FALLBACK' : 'CHANGED');
+    checkLocal(signal);
     if (response.status === 408) throw new DesktopPdfError('REQUEST_EXPIRED');
     if (response.status === 429) throw new DesktopPdfError('RATE_LIMITED');
     if (response.status === 413) throw new PdfError('TOO_LARGE');
@@ -223,8 +269,20 @@ export async function downloadDesktopPdfCopy(context: DesktopPdfContext, version
     check();
     if (typeof token !== 'string' || token.length > 65_536 || !/^[A-Za-z0-9._~+\/-]+=*$/.test(token))
       throw new ClientError('AUTH_REQUIRED');
+    let offer: string | undefined; let directFailed = false;
+    if (initialCapability.direct) {
+      try {
+        peer = createDesktopDirectPeer(initialCapability.direct, expected, { signal: controller.signal, check,
+          onProgress: options.onProgress, createPeerConnection: options.createPeerConnection });
+        if (peer) { options.onTransferState?.('direct-connecting'); offer = await wait(() => peer!.prepareOffer()); }
+      } catch {
+        peer?.close(); peer = null; check(); directFailed = true;
+      }
+    }
+    if (!peer) options.onTransferState?.(directFailed ? 'relay-fallback' : 'relay');
+    check(); const requestStartedAt = Date.now();
     const created = await request('/v1/desktop-pdfs/requests', 'POST', 'application/json',
-      JSON.stringify({ attachmentVersionId: expected.entityId }));
+      JSON.stringify({ attachmentVersionId: expected.entityId, ...(offer ? { direct: { offer } } : {}) }));
     try {
       if (created.status !== 201) return await responseError(created);
       const body = await readJson(created);
@@ -233,9 +291,57 @@ export async function downloadDesktopPdfCopy(context: DesktopPdfContext, version
         || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(body.expiresAt)
         || !Number.isFinite(Date.parse(body.expiresAt))) throw new DesktopPdfError('INVALID_RESPONSE');
       requestId = body.requestId;
-      if (Date.parse(body.expiresAt) <= Date.now()) throw new DesktopPdfError('REQUEST_EXPIRED');
+      requestExpiresAt = Date.parse(body.expiresAt);
+      if (requestExpiresAt <= Date.now()) throw new DesktopPdfError('REQUEST_EXPIRED');
     } finally { disposeBody(created); }
     check();
+    if (peer && offer && initialCapability.direct) {
+      peer.bindRequest(requestId!);
+      // The server reserves one control operation per role. Keep that slot
+      // until its response has actually settled, even if direct has already
+      // failed locally. The original fifteen-second budget still bounds it.
+      let controlTail: Promise<void> = Promise.resolve();
+      const serialControl = <T>(work: () => Promise<T>): Promise<T> => {
+        const pending = controlTail.then(() => { check(); assertApiFailure(); return work(); });
+        controlTail = pending.then(() => undefined, () => undefined); return pending;
+      };
+      const directJson = async (path: string, method: 'GET' | 'POST', body: unknown | undefined, signal: AbortSignal) => {
+        return wait(() => serialControl(async () => {
+          checkLocal(signal);
+          const response = await request(path, method, 'application/json', body === undefined ? undefined : JSON.stringify(body));
+          try {
+            if (response.status !== 200) return await responseError(response);
+            const result = await readJson(response, MAX_DIRECT_JSON_BYTES); checkLocal(signal); return result;
+          } finally { disposeBody(response); }
+        }), undefined, signal);
+      };
+      try {
+        const bytes = await receiveDesktopDirectPdf(peer, expected, { requestId: requestId!, expiresAt: requestExpiresAt,
+          requestStartedAt, capability: initialCapability.direct, signal: controller.signal, check, assertApiFailure,
+          requestJson: directJson, verify: async (received, signal) => {
+            checkLocal(signal); checkCompletePdfBytes(received);
+            if (received.byteLength !== expected.data.sizeBytes || await wait(() => sha256(received), undefined, signal) !== expected.data.sha256)
+              throw new PdfError('VERSION_MISMATCH');
+          } });
+        check(); assertApiFailure(); completed = true; options.onTransferState?.('direct-received'); check(); return bytes;
+      } catch (error) {
+        peer.close(); peer = null; check(); assertApiFailure();
+        if (error instanceof ClientError || error instanceof PdfError && ['CANCELLED', 'ACCOUNT_CHANGED', 'TARGET_CHANGED'].includes(error.code)
+          || error instanceof DesktopPdfError && ['CANCELLED', 'VERSION_UNAVAILABLE', 'CHANGED', 'REQUEST_IN_USE', 'REQUEST_EXPIRED',
+            'TRANSFER_DISABLED', 'CAPABILITY_CHANGED'].includes(error.code)) throw error;
+        if (error instanceof DesktopDirectError && error.reason === 'COMPLETE_UNCONFIRMED') throw new DesktopPdfError('REQUEST_IN_USE');
+        options.onTransferState?.('relay-fallback'); check();
+        await serialControl(async () => {
+          const fallback = await request(`/v1/desktop-pdfs/requests/${requestId}/direct/fallback`, 'POST', 'application/json', '{}');
+          try {
+            if (fallback.status !== 200) return await responseError(fallback);
+            const result = await readJson(fallback);
+            if (!isObject(result) || result.state !== 'relay') throw new DesktopPdfError('INVALID_RESPONSE');
+          } finally { disposeBody(fallback); }
+        });
+      }
+    }
+    check(); assertApiFailure();
     const response = await request(`/v1/desktop-pdfs/requests/${requestId}/content`, 'GET', 'application/pdf');
     try {
       if (response.status !== 200) return await responseError(response);
@@ -246,22 +352,17 @@ export async function downloadDesktopPdfCopy(context: DesktopPdfContext, version
       const bytes = await readBytes(response, expected.data.sizeBytes, expected.data.sizeBytes);
       checkCompletePdfBytes(bytes);
       if (await wait(() => sha256(bytes)) !== expected.data.sha256) throw new PdfError('VERSION_MISMATCH');
-      check(); completed = true; return bytes;
+      check(); assertApiFailure(); completed = true; options.onTransferState?.('relay-received'); check(); return bytes;
     } finally { disposeBody(response); }
   } catch (error) {
     // Caller identity/target guards outrank the response; a deadline cannot hide an observed auth/target failure.
     if (!options.isCurrent()) throw new ClientError('ACCOUNT_CHANGED');
-    if (observedStatus === 401 || observedStatus === 403)
-      throw error instanceof ClientError && error.code === 'SESSION_REVOKED' ? error : new ClientError('AUTH_REQUIRED');
-    if (observedStatus === 410 || (observedStatus === 404 && !(error instanceof DesktopPdfError && error.code === 'UNAVAILABLE')))
-      throw new DesktopPdfError('VERSION_UNAVAILABLE');
-    if (observedStatus === 409 && !(error instanceof DesktopPdfError && error.code === 'REQUEST_IN_USE'))
-      throw new DesktopPdfError('CHANGED');
+    assertApiFailure();
     check();
     if (error instanceof DesktopPdfError || error instanceof PdfError || error instanceof ClientError) throw error;
     throw new DesktopPdfError('NETWORK');
   } finally {
-    active = false; clearTimeout(timer); options.signal.removeEventListener('abort', onAbort); controller.abort();
+    active = false; clearTimeout(timer); options.signal.removeEventListener('abort', onAbort); controller.abort(); peer?.close();
     if (!completed && requestId && token) cancelRequest(baseUrl, requestId, token, cleanupFetch);
   }
 }

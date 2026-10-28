@@ -15,6 +15,7 @@ import { DesktopPdfError, type DesktopPdfContext } from '../src/pdf/desktopCopie
 import { cancelPdfTasks } from '../src/pdf/tasks.ts';
 import { PDF_LIMITS, type PaperReaderProps, type PdfVersion } from '../src/pdf/types.ts';
 import type { WorkspaceSnapshot } from '../src/sync/workspace.ts';
+import { FakeDesktopPeer, TEST_SDP } from './helpers/desktopRtc.ts';
 
 const NOW = '2026-10-27T10:00:00.000Z';
 // Acquisition only inspects these bytes. Every test stops before PDF runtime loading.
@@ -513,3 +514,53 @@ test('login eligibility lost during desktop creation prevents content and fallba
     assertNoAdoption(env, data);
   } finally { reply.resolve(sourceFailure(404, 'NOT_FOUND')); await env.close(); }
 });
+
+for (const mode of ['complete-wait', 'relay-wait'] as const) {
+  test(`actual reader shows ${mode} transport and cancel prevents both early adoption and late revival`, async (t) => {
+    const data = model(); const legacy = desktopContext(data); const requestId = crypto.randomUUID();
+    const peer = new FakeDesktopPeer(); const hold = deferred<Response>(); let waiting = false; const paths: string[] = [];
+    const expiresAt = new Date(Date.now() + 30000).toISOString(), directExpiresAt = new Date(Date.now() + 6000).toISOString();
+    data.props.desktopPdf = { ...legacy, getDesktopPdfCapability: () => ({ ...legacy.getDesktopPdfCapability()!,
+      direct: { transport: 'webrtc-data-v1', attemptMs: 6000, maxSdpBytes: 32768, stunUrls: [] } }) };
+    const original = Object.getOwnPropertyDescriptor(globalThis, 'RTCPeerConnection');
+    Object.defineProperty(globalThis, 'RTCPeerConnection', { configurable: true, value: function () { return peer; } });
+    t.after(() => { if (original) Object.defineProperty(globalThis, 'RTCPeerConnection', original); else Reflect.deleteProperty(globalThis, 'RTCPeerConnection'); });
+    peer.onAnswer = () => {
+      if (mode === 'complete-wait') peer.deliver(data.version, requestId, bytes);
+      else {
+        peer.channel.receive(JSON.stringify({ type: 'metadata', requestId, attachmentVersionId: data.version.entityId,
+          sha256: hash, sizeBytes: bytes.length }));
+        peer.channel.receive(bytes.slice(0, 8).buffer); peer.fail();
+      }
+    };
+    const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+    t.mock.method(globalThis, 'fetch', async (input: unknown, init?: RequestInit) => {
+      const path = String(input).slice(data.scope.apiBaseUrl.length); paths.push(path);
+      if (init?.method === 'DELETE') return reply({ cancelled: true });
+      if (path === '/v1/desktop-pdfs/requests') return reply({ requestId, attachmentVersionId: data.version.entityId, expiresAt }, 201);
+      if (path.endsWith('/direct')) return reply({ state: 'direct', answer: TEST_SDP, expiresAt, directExpiresAt, relayReady: false,
+        authorizedUntil: new Date(Date.now() + 1900).toISOString() });
+      if (path.endsWith('/fallback')) return reply({ state: 'relay' });
+      assert.ok(path.endsWith(mode === 'complete-wait' ? '/complete' : '/content'));
+      waiting = true; return hold.promise;
+    });
+    const env = await mount(t, data);
+    try {
+      await until(() => !busy(env.renderer), 'initial cache miss'); assert.equal(paths.length, 0); assert.equal(peer.created.length, 0);
+      await click(env.renderer, '从可用来源打开'); await until(() => waiting, 'transport awaiting verified receipt or relay');
+      const row = env.renderer.root.findByProps({ 'data-source': 'desktop' });
+      assert.equal(row.props['data-transfer'], mode === 'complete-wait' ? 'direct-connecting' : 'relay-fallback');
+      assert.ok(text(row).includes(mode === 'complete-wait' ? '正在尝试设备直连' : '直连未建立，使用临时中继'));
+      if (mode === 'relay-wait') assert.equal(row.findByType('progress').props.value, 0);
+      assert.deepEqual(peer.channel.sent, []); assertNoAdoption(env, data);
+      await act(async () => { env.renderer.root.findByProps({ 'aria-label': '关闭面板' }).props.onClick(); });
+      await until(() => !busy(env.renderer), 'cancelled direct task released the reader');
+      assert.equal(peer.closed, 1); await click(env.renderer, '文件');
+      const terminal = text(env.renderer.root.findByProps({ 'data-source': 'desktop' })); assert.ok(terminal.includes('已取消'));
+      hold.resolve(reply({ received: true })); await flush();
+      assert.equal(text(env.renderer.root.findByProps({ 'data-source': 'desktop' })), terminal);
+      assert.equal(paths.filter((path) => path === '/v1/desktop-pdfs/requests').length, 1); assertNoAdoption(env, data);
+      assert.equal(paths.some((path) => path.includes('/cloud-pdfs/')), false);
+    } finally { hold.resolve(sourceFailure(410, 'ATTACHMENT_VERSION_UNAVAILABLE')); await env.close(); }
+  });
+}

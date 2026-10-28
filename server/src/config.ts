@@ -16,6 +16,7 @@ export interface ServerConfig {
   maxAccountRetainedBytes: number;
   cloudPdfEnabled: boolean;
   desktopPdfEnabled: boolean;
+  desktopPdfStunUrls: string[];
   cloudPdfAccountBytes: number;
   requestsPerMinute: number;
   trustedProxyIps: string[];
@@ -57,7 +58,30 @@ export const SERVER_LIMITS = Object.freeze({
   desktopPdfProcessWindowBytes: 1024 * 1024 * 1024,
   desktopPdfMaxBudgetAccounts: 256,
   desktopPdfChunkBytes: 64 * 1024,
+  desktopPdfDirectAttemptMs: 6000,
+  desktopPdfDirectAuthorizationMs: 2000,
+  desktopPdfDirectReceiptMs: 5000,
+  desktopPdfDirectMaxReceipts: 64,
+  desktopPdfDirectMaxSdpBytes: 32768,
+  desktopPdfDirectMaxCandidates: 32,
 });
+
+/** Admin-only STUN configuration. This never accepts peer-supplied servers or credentials. */
+export function checkedDesktopPdfStunUrls(value: string | undefined): string[] {
+  if (value === undefined) return [];
+  if (value.length > 256) throw new ApiError('CONFIGURATION_INVALID', 500);
+  if (value.trim() === '') return [];
+  const urls = value.split(',').map((item) => item.trim());
+  if (urls.length > 2 || urls.some((item) => {
+    const match = /^(stuns?):(\[[0-9a-fA-F:.]+\]|[A-Za-z0-9.-]+)(?::([1-9][0-9]{0,4}))?$/.exec(item);
+    if (!match || (match[3] && Number(match[3]) > 65535)) return true;
+    const host = match[2];
+    if (host.startsWith('[')) return isIP(host.slice(1, -1)) !== 6;
+    if (/^[0-9.]+$/.test(host)) return isIP(host) !== 4;
+    return host.length > 253 || host.split('.').some((label) => !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/.test(label));
+  })) throw new ApiError('CONFIGURATION_INVALID', 500);
+  return [...new Set(urls)];
+}
 
 export function checkedCloudPdfByteLimit(value: number): number {
   if (!Number.isSafeInteger(value) || value < 1 || value > SERVER_LIMITS.cloudPdfMaxConfiguredAccountBytes) {
@@ -153,6 +177,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     maxAccountRetainedBytes: checkedRetainedByteLimit(Number(env.PAPERQUAY_MAX_ACCOUNT_RETAINED_BYTES ?? SERVER_LIMITS.maxAccountRetainedBytes)),
     cloudPdfEnabled: cloudPdfEnabled === '1',
     desktopPdfEnabled: desktopPdfEnabled === '1',
+    desktopPdfStunUrls: checkedDesktopPdfStunUrls(env.PAPERQUAY_DESKTOP_PDF_STUN_URLS),
     cloudPdfAccountBytes: checkedCloudPdfByteLimit(Number(env.PAPERQUAY_CLOUD_PDF_ACCOUNT_BYTES ?? SERVER_LIMITS.cloudPdfAccountBytes)),
     requestsPerMinute, trustedProxyIps: trustedProxyIps(env.PAPERQUAY_TRUSTED_PROXY_IPS),
   };

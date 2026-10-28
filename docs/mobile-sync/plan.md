@@ -1,6 +1,6 @@
 # 开发计划
 
-截至 2026-10-27：M0 已完成；M1 已通过 [PR #34](https://github.com/mikutea/PaperQuay/pull/34) 合入 `main`，真实 OIDC/PostgreSQL、独立客户端同步及故障证据见 [M1 验收记录](qa/README.md)。M2 的原生工程、阅读、笔记、分类与独立 AI 已实现，详见 [M2 检查点](m2-checkpoint.md) 和 [M2 验证记录](qa/m2.md)。用户明确本轮暂不接实机，M2 阶段门槛仍未关闭；M3 已实现文件交换、DOI 查询预览、可选私有云和同账号在线电脑取文件。统一入口依次读取缓存、电脑、云与公开链接，最新证据见 [桌面文件检查点](m3-desktop-checkpoint.md)。电脑文件通过临时 HTTP 中继传送；设备直连、跨进程调度、外部库持续映射、解析与富文本及 M4–M5 尚未完成。
+截至 2026-10-28：M0 已完成；M1 已通过 [PR #34](https://github.com/mikutea/PaperQuay/pull/34) 合入 `main`，真实 OIDC/PostgreSQL、独立客户端同步及故障证据见 [M1 验收记录](qa/README.md)。M2 的原生工程、阅读、笔记、分类与独立 AI 已实现，详见 [M2 检查点](m2-checkpoint.md) 和 [M2 验证记录](qa/m2.md)。用户明确本轮暂不接实机，M2 阶段门槛仍未关闭；M3 已实现文件交换、DOI 查询预览、可选私有云和同账号在线电脑取文件。统一入口依次读取缓存、电脑、云与公开链接。在线电脑已加入设备直连和失败后的同请求临时中继回退，协议见 [直连约定](direct-transfer-contract.md)，本轮验证状态见 [直连检查点](m3-direct-checkpoint.md)。跨进程调度、外部库持续映射、解析与富文本及 M4–M5 尚未完成。
 
 ## 实施顺序
 

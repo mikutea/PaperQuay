@@ -52,7 +52,8 @@ function fakeService() {
       device: { id: service.deviceId, name: body.name, platform: body.platform, createdAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(), revokedAt: null } });
     if (url.pathname === '/v1/capabilities') return Response.json({ protocolVersion: 1, features: service.feature ? { desktopPdfTransfer: 1 } : {},
       ...(service.feature ? { desktopPdf: { transport: 'http-relay-v1', maxFileBytes: 67108864, requestTtlMs: 30000, pollTimeoutMs: 20000,
-        byteWindowMs: 900000, accountWindowBytes: 268435456, processWindowBytes: 1073741824 } } : {}) });
+        byteWindowMs: 900000, accountWindowBytes: 268435456, processWindowBytes: 1073741824,
+        ...(service.direct === undefined ? {} : { direct: service.direct }) } } : {}) });
     if (url.pathname === '/v1/sync/push') {
       service.onPush?.(body);
       const results = body.operations.map((operation) => {
@@ -143,6 +144,35 @@ test('service capability extensions do not block login or escape the validated d
   await f.manager.commands.desktop_provider_set_enabled({ enabled: true });
   assert.equal(f.manager.getStatus().enabled, true);
   assert.deepEqual(Object.keys(f.manager.getStatus().capability).sort(), ['maxFileBytes', 'pollTimeoutMs', 'requestTtlMs', 'transport']);
+});
+
+test('direct capability is validated, projected and opted in while window shutdown stops the helper', async (t) => {
+  const f = await fixture(t); let closed = 0;
+  const manager = f.create({ peerHost: { close: async () => { closed++; }, settled: async () => {} } });
+  const expected = { transport: 'webrtc-data-v1', attemptMs: 6000, maxSdpBytes: 32768, stunUrls: ['stun:relay-independent.test:3478'] };
+  f.service.direct = { ...expected, privateServerExtension: 'do not expose' };
+  await f.login(manager); assert.deepEqual(manager.getStatus().capability.direct, expected);
+  const returned = manager.getStatus(); returned.capability.direct.stunUrls.push('turn:untrusted.test');
+  assert.deepEqual(manager.getStatus().capability.direct, expected);
+  await f.publish(manager); await manager.commands.desktop_provider_set_enabled({ enabled: true });
+  await until(() => f.service.polls === 1);
+  assert.deepEqual(f.service.calls.find((call) => call.url.endsWith('/provider/poll')).body, { direct: true });
+  const before = closed; const stopping = manager.stopProvider();
+  assert.equal(manager.getStatus().enabled, false); assert.equal(closed, before + 1);
+  await stopping;
+});
+
+test('TURN or credential-bearing direct capability cannot start an account provider', async (t) => {
+  for (const stunUrls of [['turn:example.test:3478'], ['stun:user:secret@example.test:3478']]) {
+    await t.test(stunUrls[0].startsWith('turn:') ? 'TURN rejected' : 'credentials rejected', async (child) => {
+      const f = await fixture(child);
+      f.service.direct = { transport: 'webrtc-data-v1', attemptMs: 6000, maxSdpBytes: 32768, stunUrls };
+      await f.manager.commands.desktop_account_configure({ config: CONFIG });
+      await f.manager.commands.desktop_account_sign_in(); await f.manager.settled();
+      assert.equal(f.manager.getStatus().account, null); assert.equal(f.manager.getStatus().errorCode, 'DESKTOP_INVALID_RESPONSE');
+      assert.equal(f.manager.getStatus().enabled, false); assert.equal(f.service.polls, 0);
+    });
+  }
 });
 
 test('same-tick sign in commands share startup and register exactly one live device', async (t) => {

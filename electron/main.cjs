@@ -4,6 +4,7 @@ const { createBackend } = require('./backend.cjs');
 const { createLibraryLocationManager } = require('./libraryLocation.cjs');
 const { createWindowSaveBarrier } = require('./windowSaveBarrier.cjs');
 const { attachRendererTrust, assertTrustedRenderer } = require('./rendererTrust.cjs');
+const { createAppWindowLifecycle } = require('./appWindowLifecycle.cjs');
 const trustedContents = new WeakSet();
 const {
   registerLocalPdfProtocol,
@@ -12,6 +13,7 @@ const {
 
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
 let backend = null;
+const appWindows = createAppWindowLifecycle(() => backend?.stopDesktopProvider());
 let quitRequested = false;
 const windowSaveBarrier = createWindowSaveBarrier({
   dialog,
@@ -83,6 +85,7 @@ function createWindow() {
     mainWindow.show();
   });
   windowSaveBarrier.attach(mainWindow);
+  appWindows.attach(mainWindow);
 
   if (isDev) {
     mainWindow.webContents.on('console-message', (event) => {
@@ -176,7 +179,7 @@ app.whenReady().then(async () => {
   createWindow();
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
+    if (appWindows.count() === 0) {
       createWindow();
     }
   });

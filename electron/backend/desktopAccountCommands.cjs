@@ -3,6 +3,7 @@ const { createHash, randomUUID } = require('node:crypto');
 const nativeFs = require('./nativeFs.cjs');
 const { MAX_FILE_BYTES, captureLibraryAnchor, sameLibraryAnchor, assertLibraryAnchor,
   findAttachment, readDesktopAttachment, createDesktopPdfProvider } = require('./desktopPdfProvider.cjs');
+const { validStunUrls } = require('./desktopPeerHost.cjs');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const HASH = /^[0-9a-f]{64}$/;
@@ -21,7 +22,7 @@ const KNOWN_ERRORS = new Set(['AUTHENTICATION_REQUIRED', 'AUTH_REQUIRED', 'AUTH_
   'AUTH_SIGN_IN_FAILED', 'AUTH_SESSION_CHANGED', 'AUTH_CANCELLED', 'ACCOUNT_CONFIGURATION_INVALID',
   'NOT_FOUND', 'DESKTOP_PDF_UNAVAILABLE', 'ATTACHMENT_VERSION_UNAVAILABLE', 'DESKTOP_PDF_CHANGED', 'DESKTOP_PDF_REQUEST_IN_USE',
   'DESKTOP_PDF_TRANSFER_BUSY', 'REQUEST_TOO_LARGE', 'PDF_INTEGRITY_MISMATCH', 'INVALID_PDF', 'DESKTOP_PDF_TIMEOUT',
-  'IDENTITY_PROVIDER_UNAVAILABLE', 'SERVICE_UNAVAILABLE', 'RATE_LIMITED', 'NETWORK_UNAVAILABLE', 'REQUEST_TIMEOUT',
+  'DESKTOP_PDF_DIRECT_FALLBACK', 'IDENTITY_PROVIDER_UNAVAILABLE', 'SERVICE_UNAVAILABLE', 'RATE_LIMITED', 'NETWORK_UNAVAILABLE', 'REQUEST_TIMEOUT',
   'ACCOUNT_STORAGE_LIMIT', 'ACCOUNT_ENTITY_LIMIT', 'ACCOUNT_CHANGE_LIMIT', 'ACCOUNT_RECEIPT_LIMIT', 'CONFLICT',
   'LOCAL_CAPACITY_EXCEEDED', 'ENTITY_ALREADY_EXISTS', 'INVALID_DESKTOP_SOURCE', 'INVALID_PAPER_METADATA', 'INVALID_ATTACHMENT_METADATA']);
 function publicError(error) {
@@ -90,6 +91,8 @@ function createDesktopAccountCommands(context, options = {}) {
   let document = null, scopePath = null, libraryBindingId = null, busy = 0, loginTask = null, loginStarting = null, lock = null;
   let mutations = Promise.resolve(), actions = Promise.resolve(), shutdownTask = null, pendingCleanup = Promise.resolve();
   let providerIntent = 0, stoppingProvider = Promise.resolve();
+  let peerHost = options.peerHost || null;
+  const getPeerHost = () => peerHost ||= require('./desktopPeerHost.cjs').createDesktopPeerHost();
   const actionTasks = new Map(), bindingControllers = new Map(), sourceErrors = new Map();
   let core;
   function syncCore() { return core ||= options.core || require('../generated/desktopSyncCore.cjs'); }
@@ -153,7 +156,8 @@ function createDesktopAccountCommands(context, options = {}) {
     if (Number.isFinite(raw.expiresAt)) safeAuth.expiresAt = raw.expiresAt;
     if (raw.errorCode) safeAuth.errorCode = publicError({ code: raw.errorCode });
     return { config: config && { ...config }, auth: safeAuth, account: account && { ...account }, enabled, busy: busy > 0,
-      capability: capability && { ...capability }, bindings: (currentLibrary()?.bindings || []).filter((item) => !item.removed).map(publicBinding),
+      capability: capability && { ...capability, ...(capability.direct ? { direct: { ...capability.direct, stunUrls: [...capability.direct.stunUrls] } } : {}) },
+      bindings: (currentLibrary()?.bindings || []).filter((item) => !item.removed).map(publicBinding),
       transfers: provider.snapshot(), errorCode: lastError };
   }
   function activeBinding(versionId) {
@@ -237,6 +241,7 @@ function createDesktopAccountCommands(context, options = {}) {
     read: (binding, signal) => readDesktopAttachment(context, { ...binding, anchor: currentLibrary().anchor, signal,
       expected: binding, maxBytes: capability.maxFileBytes }),
     validateTarget, ensureTokenLifetime: tokenForExpiry, onChange: notify, now,
+    getDirectCapability: () => capability?.direct || null, getPeerHost,
     ...(options.retryDelay ? { retryDelay: options.retryDelay } : {}),
     onError(error, binding) {
       const code = publicError(error);
@@ -358,10 +363,17 @@ function createDesktopAccountCommands(context, options = {}) {
     // into the desktop status contract or influence local transfer behavior.
     capability = { transport: value.transport, maxFileBytes: value.maxFileBytes,
       requestTtlMs: value.requestTtlMs, pollTimeoutMs: value.pollTimeoutMs };
+    if (value.direct !== undefined) {
+      const direct = value.direct;
+      if (!plain(direct) || direct.transport !== 'webrtc-data-v1' || direct.attemptMs !== 6000 || direct.maxSdpBytes !== 32768 ||
+          !validStunUrls(direct.stunUrls)) fail('DESKTOP_INVALID_RESPONSE');
+      capability.direct = { transport: direct.transport, attemptMs: direct.attemptMs,
+        maxSdpBytes: direct.maxSdpBytes, stunUrls: [...direct.stunUrls] };
+    }
   }
   function stopProviderRemote() {
     const settings = config, currentAuth = auth, previousStop = stoppingProvider;
-    enabled = false; providerIntent++; provider.stop(); notify();
+    enabled = false; providerIntent++; provider.stop(); void peerHost?.close(); notify();
     if (!settings || !currentAuth || !account) return stoppingProvider;
     // Capture the session before it is locally cleared; this fixed endpoint
     // cannot receive a renderer-supplied URL or credential.
@@ -636,13 +648,15 @@ function createDesktopAccountCommands(context, options = {}) {
   }]));
   return {
     commands, getStatus,
+    stopProvider: stopProviderRemote,
     close() {
       if (closed) return;
       closed = true; enabled = false; providerIntent++; epoch++; sessionController.abort(); provider.stop();
+      void peerHost?.close();
       for (const controller of bindingControllers.values()) controller.abort();
       authUnsubscribe?.(); auth?.close();
       const ownedLock = lock; lock = null;
-      shutdownTask = Promise.allSettled([loginStarting, loginTask, mutations, actions, provider.settled(), initialization, pendingCleanup, stoppingProvider]).then(() => releaseLock(ownedLock));
+      shutdownTask = Promise.allSettled([loginStarting, loginTask, mutations, actions, provider.settled(), peerHost?.settled(), initialization, pendingCleanup, stoppingProvider]).then(() => releaseLock(ownedLock));
       account = null; document = null; scopePath = null; libraryBindingId = null;
     },
     // A completion hook for isolated tests and orderly backend shutdown checks.

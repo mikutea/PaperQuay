@@ -4,6 +4,13 @@ const labels: Record<PdfSourceKind, string> = { cache: '本机缓存', desktop: 
 const statuses: Record<PdfSourceStatus, string> = { pending: '等待尝试', checking: '检查中', downloading: '读取中',
   verifying: '核对文件', succeeded: '文件已核验', failed: '未取得', skipped: '未使用' };
 const order: PdfSourceKind[] = ['cache', 'desktop', 'cloud', 'public'];
+const transferLabels = {
+  'direct-connecting': '正在尝试设备直连',
+  'relay-fallback': '直连未建立，使用临时中继',
+  relay: '正在使用临时中继',
+  'direct-received': '已通过设备直连取得',
+  'relay-received': '已通过临时中继取得',
+};
 
 export function PdfSourceAttempts({ attempts }: { attempts: PdfSourceAttempt[] }) {
   if (!attempts.length) return null;
@@ -13,11 +20,12 @@ export function PdfSourceAttempts({ attempts }: { attempts: PdfSourceAttempt[] }
       const attempt = attempts.find((item) => item.source === source);
       if (!attempt) return null;
       const transferring = attempt.status === 'downloading';
-      return <li key={source} data-source={source} data-status={attempt.status}>
+      return <li key={source} data-source={source} data-status={attempt.status} data-transfer={attempt.desktopTransfer}>
         <div><strong>{labels[source]}</strong><span role="status">{statuses[attempt.status]}</span></div>
         {transferring && <progress aria-label={`${labels[source]}读取进度`} max={attempt.total ?? 1}
           value={attempt.total === null ? undefined : Math.min(attempt.loaded, attempt.total)} />}
         {attempt.message && <p>{attempt.message}</p>}
+        {!attempt.message && attempt.desktopTransfer && <p>{transferLabels[attempt.desktopTransfer]}</p>}
       </li>;
     })}</ol>
   </section>;

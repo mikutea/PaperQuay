@@ -229,3 +229,23 @@ test('malformed desktop bounds fail closed and a failed capability negotiation c
   await assert.rejects(api.capabilities(signal), { code: 'INVALID_RESPONSE' });
   assert.equal(api.desktopPdfCapability, null, 'a later malformed capability must not leave desktop enabled from a failed reply');
 });
+
+test('optional desktop direct capability has fixed bounds and only adopts the configured STUN URLs', async () => {
+  const direct = { transport: 'webrtc-data-v1', attemptMs: 6000, maxSdpBytes: 32768, stunUrls: ['stun:ice.example.test:3478'] };
+  const limits = { transport: 'http-relay-v1', maxFileBytes: 64 * 1024 * 1024, requestTtlMs: 30000, pollTimeoutMs: 20000, direct };
+  const enabled = { protocolVersion: 1, features: { desktopPdfTransfer: 1 }, desktopPdf: limits };
+  let body: unknown = enabled;
+  const api = new SyncApi('https://sync.example.test', async () => 'test-token', async () => json(body));
+  const signal = new AbortController().signal;
+  await api.capabilities(signal); assert.deepEqual(api.desktopPdfCapability, limits);
+  body = { ...enabled, desktopPdf: { ...limits, direct: { ...direct, unknown: 'not stored' } } };
+  await api.capabilities(signal); assert.deepEqual(api.desktopPdfCapability, limits);
+  for (const invalid of [null, { ...direct, transport: 'turn' }, { ...direct, attemptMs: 6001 }, { ...direct, maxSdpBytes: 32769 },
+    { ...direct, stunUrls: ['turn:relay.example.test'] }, { ...direct, stunUrls: ['stun:user:password@ice.example.test'] },
+    { ...direct, stunUrls: ['stun:ice.example.test?transport=udp'] }, { ...direct, stunUrls: ['stun:a.test', 'stun:b.test', 'stun:c.test'] }]) {
+    body = { ...enabled, desktopPdf: { ...limits, direct: invalid } };
+    await assert.rejects(api.capabilities(signal), { code: 'INVALID_RESPONSE' }); assert.equal(api.desktopPdfCapability, null);
+  }
+  body = { ...enabled, desktopPdf: { ...limits, direct: undefined } };
+  await api.capabilities(signal); assert.equal(api.desktopPdfCapability?.direct, undefined);
+});

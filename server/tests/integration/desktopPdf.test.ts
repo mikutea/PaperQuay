@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test, { after, before } from 'node:test';
 import pg from 'pg';
+import { buildApp } from '../../src/app.ts';
 import { PostgresSyncStore } from '../../src/store.ts';
-import { identity, operation, paper, version } from '../fixtures.ts';
+import { identity, operation, paper, testConfig, version } from '../fixtures.ts';
+import { directAnswer, directBase, directOffer } from '../direct-fixtures.ts';
 import type { SyncOperation } from '../../../packages/sync-core/src/index.ts';
 
 const databaseUrl = process.env.PAPERQUAY_DATABASE_URL;
@@ -93,4 +95,56 @@ test('stream revalidation does not wait behind an unrelated account write lock',
     await store.checkDesktopPdfTransfer(f.consumer, f.provider, f.target);
     assert.ok(performance.now() - start < 1500, 'read-only validation must not join the account write-lock queue');
   } finally { await client.query('ROLLBACK'); client.release(); }
+});
+
+async function directFixture() {
+  const f = await fixture(); f.consumer.expiresAtMs = f.provider.expiresAtMs = Date.now() + 300000;
+  const app = await buildApp({ config: testConfig({ PAPERQUAY_DESKTOP_PDF_ENABLED: '1' }), repository: store,
+    desktopPdfRepository: store, rateLimitEnabled: false,
+    desktopPdfTimings: { pollTimeoutMs: 10, recheckIntervalMs: 1000 },
+    verifyToken: async (header) => ({ ...(header === 'Bearer provider' ? f.provider : f.consumer) }) });
+  const headers = (provider = false) => ({ authorization: provider ? 'Bearer provider' : 'Bearer consumer' });
+  const send = (id: string, action = '', provider = false, body: Record<string, unknown> = {}) => app.inject({
+    method: action ? 'POST' : 'GET', url: directBase + '/requests/' + id + '/direct' + (action ? '/' + action : ''),
+    headers: headers(provider), ...(action ? { payload: body } : {}),
+  });
+  const online = await app.inject({ method: 'POST', url: directBase + '/provider/poll', headers: headers(true), payload: { direct: true } });
+  assert.equal(online.statusCode, 200);
+  const created = await app.inject({ method: 'POST', url: directBase + '/requests', headers: headers(),
+    payload: { attachmentVersionId: f.attachment.entityId, direct: { offer: directOffer } } });
+  assert.equal(created.statusCode, 201, created.body); const id = created.json().requestId as string;
+  const polled = await app.inject({ method: 'POST', url: directBase + '/provider/poll', headers: headers(true), payload: { direct: true } });
+  assert.equal(polled.statusCode, 200); assert.equal(polled.json().request?.requestId, id); assert.ok(polled.json().request?.direct);
+  assert.equal((await send(id, 'answer', true, { sdp: directAnswer })).statusCode, 200);
+  const summary = { sha256: f.target.version.data.sha256, sizeBytes: f.target.version.data.sizeBytes };
+  return { ...f, app, id, send, summary };
+}
+
+test('real Postgres direct completion and receipt reads revalidate the exact parent and attachment', async (t) => {
+  const f = await directFixture(); t.after(() => f.app.close());
+  assert.equal((await f.send(f.id, 'authorize', true)).statusCode, 200);
+  assert.deepEqual((await f.send(f.id, 'complete', false, f.summary)).json(), { received: true });
+  const receipt = await f.send(f.id, '', true); assert.equal(receipt.statusCode, 200);
+  assert.equal(receipt.json().state, 'complete'); assert.equal(receipt.json().answer, null); assert.equal(receipt.json().authorizedUntil, null);
+  await f.push([operation('paper', null, { entityId: f.parent.entityId, mutation: 'delete', baseRevision: 1 })]);
+  const stale = await f.send(f.id, 'complete', false, f.summary);
+  assert.equal(stale.statusCode, 410); assert.equal(stale.json().error.code, 'ATTACHMENT_VERSION_UNAVAILABLE');
+  assert.equal((await f.send(f.id)).statusCode, 404);
+});
+
+test('real Postgres final direct checks reject provider revocation and delete/restore without falling back', async (t) => {
+  for (const mutation of ['revoke', 'restore'] as const) {
+    const f = await directFixture(); t.after(() => f.app.close());
+    assert.equal((await f.send(f.id, 'authorize', true)).statusCode, 200);
+    if (mutation === 'revoke') await store.revokeDevice(f.consumer, f.providerView.device.id);
+    else {
+      await f.push([operation('attachmentVersion', null, { entityId: f.attachment.entityId, mutation: 'delete', baseRevision: 1 })]);
+      await f.push([operation('attachmentVersion', f.attachment.data, { entityId: f.attachment.entityId, mutation: 'restore', baseRevision: 2 })]);
+    }
+    const completed = await f.send(f.id, 'complete', false, f.summary);
+    assert.equal(completed.statusCode, mutation === 'revoke' ? 404 : 409);
+    assert.equal(completed.json().error.code, mutation === 'revoke' ? 'DESKTOP_PDF_UNAVAILABLE' : 'DESKTOP_PDF_CHANGED');
+    assert.equal((await f.send(f.id, 'fallback')).statusCode, 404);
+    assert.equal((await store.desktopPdfSession(f.consumer)).device.revokedAt, null);
+  }
 });
