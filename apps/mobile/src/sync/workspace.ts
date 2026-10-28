@@ -11,6 +11,7 @@ import {
   markPushUncertain,
   preparePush,
   queueLocalCreates,
+  queueLocalPuts,
   queueLocalEdit,
   rebindDevice,
   resumeAfterRestart,
@@ -25,6 +26,7 @@ import {
   type PushResult,
   type SyncContext,
   type SyncMutation,
+  type VisibleEntity,
 } from '../../../../packages/sync-core/src/index.ts';
 import type {
   AccountIdentity,
@@ -40,6 +42,16 @@ import {
   type LibraryArchive,
   type LibraryImportSummary,
 } from '../library/libraryTransfer.ts';
+import {
+  ExternalLibraryError,
+  materializeExternalLibraryImport,
+  planExternalLibraryImport,
+  validateExternalLibraryRegistry,
+  type ExternalLibraryDecision,
+  type ExternalLibraryRegistry,
+  type ExternalLibrarySnapshot,
+  type ExternalLibrarySummary,
+} from '../library/externalLibrary.ts';
 import type { AccountStorage, AccountScope } from '../storage/accountStore.ts';
 
 interface PendingResolution {
@@ -52,6 +64,8 @@ export interface StoredWorkspace {
   sync: AccountSyncState;
   pendingResolutions: Record<string, PendingResolution>;
   paperOrganizationVersion?: 1;
+  /** Private to this account on this device; never part of the synchronization payload. */
+  externalLibraries?: ExternalLibraryRegistry;
 }
 export interface WorkspaceSnapshot {
   status: 'signed-out' | 'binding' | 'ready' | 'error';
@@ -76,13 +90,17 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
 export function decodeWorkspace(value: unknown): StoredWorkspace {
   if (
     !isObject(value) ||
-    Object.keys(value).length !== (value.paperOrganizationVersion === undefined ? 2 : 3) ||
+    Object.keys(value).some((key) => !['sync', 'pendingResolutions', 'paperOrganizationVersion', 'externalLibraries'].includes(key)) ||
     (value.paperOrganizationVersion !== undefined && value.paperOrganizationVersion !== 1) ||
     !isObject(value.pendingResolutions) ||
     !validateClientState(value.sync).ok ||
     Object.keys(value.pendingResolutions).length > 10_000
   )
     throw new ClientError('STORAGE_CORRUPT');
+  if (value.externalLibraries !== undefined) {
+    try { validateExternalLibraryRegistry(value.externalLibraries); }
+    catch { throw new ClientError('STORAGE_CORRUPT'); }
+  }
   for (const [conflictId, pending] of Object.entries(value.pendingResolutions)) {
     if (
       !uuid.test(conflictId) ||
@@ -124,6 +142,20 @@ export function decodeWorkspace(value: unknown): StoredWorkspace {
       throw new ClientError('STORAGE_CORRUPT');
   }
   return value as unknown as StoredWorkspace;
+}
+
+/** Retained conflicts and a resolution in flight can outlive a visible outbox row. */
+export function externalLibraryEntities(workspace: StoredWorkspace): VisibleEntity[] {
+  const blocked = new Set<string>();
+  for (const conflict of Object.values(workspace.sync.conflicts)) {
+    if (conflict.attempted.entityType === 'paper') blocked.add(conflict.attempted.entityId);
+    if (conflict.current?.entityType === 'paper') blocked.add(conflict.current.entityId);
+  }
+  for (const resolution of Object.values(workspace.pendingResolutions)) {
+    if (resolution.entityType === 'paper') blocked.add(resolution.entityId);
+  }
+  return listVisibleEntities(workspace.sync).map((entity) => entity.entityType === 'paper' && blocked.has(entity.entityId)
+    ? { ...entity, pending: true, status: 'conflict' as const } : entity);
 }
 
 const sameContext = (a: SyncContext, b: SyncContext): boolean =>
@@ -460,6 +492,64 @@ export class WorkspaceController {
     } catch (error) {
       this.assertBinding(epoch);
       const safe = error instanceof ClientError ? error : new ClientError('STORAGE_FAILED');
+      this.publish({ error: safe });
+      throw safe;
+    }
+  }
+
+  async importExternalLibrary(
+    snapshot: ExternalLibrarySnapshot,
+    decisions: readonly ExternalLibraryDecision[] | undefined,
+    reviewedSignature: string,
+    reviewedScopeKey: string,
+  ): Promise<ExternalLibrarySummary> {
+    const epoch = this.epoch;
+    const context = this.context;
+    if (!context || reviewedScopeKey !== JSON.stringify([context.accountId, context.deviceId, context.generation]))
+      throw new ClientError('ACCOUNT_CHANGED');
+    let summary: ExternalLibrarySummary | undefined;
+    try {
+      await this.update(epoch, (value) => {
+        try {
+          const plan = planExternalLibraryImport(snapshot, value.externalLibraries, externalLibraryEntities(value), decisions);
+          if (typeof reviewedSignature !== 'string' || plan.signature !== reviewedSignature)
+            throw new ClientError('IMPORT_CHANGED');
+          const imported = materializeExternalLibraryImport(plan, this.makeId);
+          const sync = queueLocalPuts(value.sync, imported.edits, imported.edits.map(() => ({
+            opId: this.makeId(), clientCreatedAt: this.now(),
+          })));
+          this.assertBinding(epoch);
+          summary = imported.summary;
+          // Mapping baselines and paper operations have one durability boundary.
+          return { ...value, sync, externalLibraries: imported.newRegistry };
+        } catch (error) {
+          if (error instanceof ClientError) throw error;
+          if (error instanceof SyncStateError) {
+            if (error.code === 'LOCAL_CAPACITY_EXCEEDED') throw new ClientError('IMPORT_CAPACITY');
+            if (['TARGET_HAS_PENDING_EDITS', 'RESTORE_REQUIRED'].includes(error.code))
+              throw new ClientError('IMPORT_CHANGED');
+          }
+          if (error instanceof ExternalLibraryError && error.code === 'REGISTRY_TOO_LARGE')
+            throw new ClientError('IMPORT_CAPACITY');
+          throw new ClientError('IMPORT_INVALID');
+        }
+      });
+      this.assertBinding(epoch);
+      if (this.snapshot.error?.code.startsWith('IMPORT_') || this.snapshot.error?.code === 'STORAGE_FAILED')
+        this.publish({ error: null });
+      if (!this.snapshot.needsLogin) void this.syncNow();
+      return summary!;
+    } catch (error) {
+      this.assertBinding(epoch);
+      const safe = error instanceof ClientError ? error : new ClientError('STORAGE_FAILED');
+      if (safe.code === 'IMPORT_CHANGED' && this.scope) {
+        // Another tab can commit while this preview is open. Read its saved value
+        // so the user can review again without repeatedly submitting a stale view.
+        const latest = await this.store.read(this.scope);
+        this.assertBinding(epoch);
+        if (latest && this.context && sameContext(getSyncContext(latest.sync), this.context))
+          this.publish({ workspace: latest });
+      }
       this.publish({ error: safe });
       throw safe;
     }

@@ -243,6 +243,74 @@ export function queueLocalCreates(state: AccountSyncState, edits: readonly Local
   return next;
 }
 
+/** Atomically queue puts for new or clean synced entities, using each current server revision. */
+export function queueLocalPuts(state: AccountSyncState, edits: readonly LocalEdit[], identities: readonly EditIdentity[]): AccountSyncState {
+  assertState(state);
+  if (!Array.isArray(edits) || !Array.isArray(identities) || edits.length !== identities.length) fail('INVALID_PUT_BATCH');
+  // Bound the batch before inspecting its rows or allocating property descriptors.
+  if (edits.length > SYNC_LIMITS.maxLocalOperations - state.outbox.length) fail('LOCAL_CAPACITY_EXCEEDED');
+  const batchSchema: JsonSchema = { type: 'array', maxItems: SYNC_LIMITS.maxLocalOperations };
+  if (!validateJsonSchema(batchSchema, edits).ok || !validateJsonSchema(batchSchema, identities).ok) fail('INVALID_PUT_BATCH');
+  if (!edits.length) return state;
+
+  const keys = new Set(Object.keys(state.serverRecords));
+  const pendingKeys = new Set<string>();
+  const opIds = new Set<string>();
+  for (const operation of [
+    ...state.outbox.map((entry) => entry.operation),
+    ...Object.values(state.overlays),
+    ...Object.values(state.conflicts).map((conflict) => conflict.attempted),
+  ]) {
+    const key = operationKey(operation);
+    keys.add(key);
+    pendingKeys.add(key);
+    opIds.add(operation.opId);
+  }
+  for (const conflict of Object.values(state.conflicts)) {
+    if (conflict.current) {
+      const key = operationKey(conflict.current);
+      keys.add(key);
+      pendingKeys.add(key);
+    }
+  }
+  if (keys.size > SYNC_LIMITS.maxLocalEntities) fail('LOCAL_CAPACITY_EXCEEDED');
+
+  const targets = new Set<string>();
+  const operations: SyncOperation[] = [];
+  for (let index = 0; index < edits.length; index += 1) {
+    const edit = edits[index];
+    const identity = identities[index];
+    if (!validateJsonSchema(identitySchema, identity).ok) fail('INVALID_EDIT_IDENTITY');
+    if (!validateJsonSchema(editSchema, edit).ok || edit.mutation !== 'put') fail('INVALID_EDIT');
+    const key = operationKey(edit);
+    if (targets.has(key)) fail('INVALID_PUT_BATCH');
+    // Retained conflicts can be absent from the visible library and the outbox.
+    // Never coalesce or silently resolve any pending work during a batch import.
+    if (pendingKeys.has(key)) fail('TARGET_HAS_PENDING_EDITS');
+    const current = Object.hasOwn(state.serverRecords, key) ? state.serverRecords[key] : undefined;
+    if (edit.entityType === 'readingPosition' && current && current.modifiedByDeviceId !== state.deviceId) fail('READING_DEVICE_MISMATCH');
+    if (current?.deletedAt !== null && current?.deletedAt !== undefined) fail('RESTORE_REQUIRED');
+    if (opIds.has(identity.opId)) fail('OP_ID_REUSED');
+    const operation = {
+      entityType: edit.entityType, entityId: edit.entityId, mutation: 'put', data: edit.data,
+      opId: identity.opId, clientCreatedAt: identity.clientCreatedAt,
+      schemaVersion: 1, baseRevision: current?.revision ?? 0,
+    } as SyncOperation;
+    if (!validateOperation(operation).ok) fail('INVALID_EDIT');
+    targets.add(key);
+    keys.add(key);
+    if (keys.size > SYNC_LIMITS.maxLocalEntities) fail('LOCAL_CAPACITY_EXCEEDED');
+    opIds.add(operation.opId);
+    operations.push(operation);
+  }
+  // Clone the library and all prepared payloads together only after the complete
+  // batch has passed. Neither a late error nor later caller edits can leak in.
+  const next = copy({ state, operations });
+  next.state.outbox.push(...next.operations.map((operation) => newEntry(operation, next.state.deviceId)));
+  assertState(next.state);
+  return next.state;
+}
+
 /** Commit state first; send request only when opIds is non-empty. */
 export function preparePush(state: AccountSyncState, context: SyncContext, limit: number = SYNC_LIMITS.maxBatchOperations): PreparedPush {
   assertContext(state, context);

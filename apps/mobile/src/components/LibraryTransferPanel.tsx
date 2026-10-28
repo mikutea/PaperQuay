@@ -11,8 +11,10 @@ import { DoiLookupError, lookupDoi, type DoiLookupErrorCode, type DoiLookupWarni
 import { exportFilename, exportTextFile, FileExportError } from '../platform/exportFile.ts';
 import type { WorkspaceController } from '../sync/workspace.ts';
 import { ReaderSheet } from './ReaderSheet.tsx';
+import { ExternalLibraryPanel } from './ExternalLibraryPanel.tsx';
 import './readerSheet.css';
 import './libraryTransfer.css';
+import './externalLibrary.css';
 
 interface Props {
   entities: readonly VisibleEntity[];
@@ -170,7 +172,7 @@ function rowDetail(row: LibraryImportRow): string {
 }
 
 export function LibraryTransferPanel({ entities, controller, scopeKey, accountCurrent, onClose }: Props) {
-  const [tab, setTab] = useState<'import' | 'export'>('import');
+  const [tab, setTab] = useState<'import' | 'export' | 'external'>('import');
   const [archive, setArchive] = useState<LibraryArchive | null>(null);
   const [filename, setFilename] = useState('');
   const [selection, setSelection] = useState<readonly string[] | undefined>();
@@ -222,7 +224,7 @@ export function LibraryTransferPanel({ entities, controller, scopeKey, accountCu
     catch (cause) { return { result: null, error: message(cause) }; }
   }, [entities, tab, paperId, bibliographyFormat]);
 
-  function changeTab(next: 'import' | 'export') {
+  function changeTab(next: 'import' | 'export' | 'external') {
     if (busyRef.current) return;
     setTab(next); setError(null); setFeedback(null);
   }
@@ -315,6 +317,7 @@ export function LibraryTransferPanel({ entities, controller, scopeKey, accountCu
       <div className="transfer-tabs" role="group" aria-label="文件操作">
         <button type="button" aria-pressed={tab === 'import'} disabled={busy} onClick={() => changeTab('import')}>导入</button>
         <button type="button" aria-pressed={tab === 'export'} disabled={busy} onClick={() => changeTab('export')}>导出</button>
+        <button type="button" aria-pressed={tab === 'external'} disabled={busy} onClick={() => changeTab('external')}>外部文库</button>
       </div>
       {tab === 'import' ? <>
         <section className="transfer-intro">
@@ -369,7 +372,8 @@ export function LibraryTransferPanel({ entities, controller, scopeKey, accountCu
         </section>}
         {busy && !plan && sourceMode === 'file' && <p role="status">正在读取文件…</p>}
         {planned?.error && <p className="inline-error" role="alert">{planned.error}</p>}
-      </> : <>
+      </> : tab === 'external' ? <ExternalLibraryPanel controller={controller} scopeKey={scopeKey}
+        accountCurrent={accountCurrent} onBusyChange={setBusy} /> : <>
         <section className="transfer-export">
           <h3>书目文件</h3>
           <p className="muted">导出当前已保存的题录，供 Zotero 等文献工具读取。</p>
@@ -414,8 +418,8 @@ export function LibraryTransferPanel({ entities, controller, scopeKey, accountCu
           <button type="button" className="secondary" disabled={busy || !chosenNote} onClick={() => void saveExport('note')}>导出 Markdown</button>
         </section>
       </>}
-      {error && !(tab === 'import' && plan) && <p className="inline-error transfer-message" role="alert">{error}</p>}
-      {feedback && <p className="transfer-message transfer-success" role="status">{feedback}</p>}
+      {tab !== 'external' && error && !(tab === 'import' && plan) && <p className="inline-error transfer-message" role="alert">{error}</p>}
+      {tab !== 'external' && feedback && <p className="transfer-message transfer-success" role="status">{feedback}</p>}
     </div>
   </ReaderSheet>;
 }
