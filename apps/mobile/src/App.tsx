@@ -25,7 +25,7 @@ import { ContentPreview, EntityEditor } from './components/EntityEditor.tsx';
 import { Icon } from './components/Icon.tsx';
 import { ClientError, describeError } from './errors.ts';
 import { assertPlatformReady, getPlatformCapabilities } from './platform.ts';
-import { createAccountStorage } from './storage/accountStore.ts';
+import { accountScopeKey, createAccountStorage } from './storage/accountStore.ts';
 import { createSecretStore, type SecretStore } from './platform/secretStore.ts';
 import { verifiedBinding } from './storage/verifiedBinding.ts';
 import { filterPapers, organizationOf, readingStatusLabels } from './library/organization.ts';
@@ -226,6 +226,7 @@ export function ConnectedApp({
   const compactReader = useSyncExternalStore(subscribeCompactReader, compactReaderSnapshot, () => false);
   const [readingNoteId, setReadingNoteId] = useState<string | null>(null);
   const [aiContext, setAiContext] = useState<PdfAiContext | null>(null);
+  const [archiveEpochs, setArchiveEpochs] = useState<Record<string, number>>({});
   const liveAiContext = useRef<PdfAiContext | null>(null);
   const [citationTarget, setCitationTarget] = useState<PdfCitationTarget | null>(null);
   const [aiSettings, setAiSettings] = useState(false);
@@ -642,7 +643,7 @@ export function ConnectedApp({
           <ReaderSheet open={readingPanel === 'ai'} title="AI 助手" onClose={closeReadingPanel}
             keepMounted modal={compactReader} portalTarget={readingPanelHost} className="reading-ai-sheet">
           {openedReadingPanels.ai && runtime.secretStore && <aside className="reading-side" aria-label="阅读 AI 助手内容">
-            <Suspense fallback={<p role="status">正在打开 AI 助手…</p>}><AiWorkspace accountScope={scope} context={aiContext}
+            <Suspense fallback={<p role="status">正在打开 AI 助手…</p>}><AiWorkspace accountScope={scope} context={aiContext} archiveEpoch={archiveEpochs[accountScopeKey(scope)] ?? 0}
               secretStore={runtime.secretStore} onSaveNote={async (note, source) => {
                 await saveAiResultNote(controller, runtime.config.apiBaseUrl, () => liveAiContext.current, source, note);
               }} onNavigateCitation={(target) => {
@@ -672,7 +673,7 @@ export function ConnectedApp({
             onClear={async () => {
               if (
                 window.confirm(
-                  '清除此账号在本设备的文库副本、外部文库映射、解析包与全部 PDF 缓存（包括离线保留）？尚未同步的改动将丢失。服务器上的文库记录会在下次同步时重新下载，外部文库需要重新确认关联，解析包需重新导入；本机原始文件不受影响。',
+                  '清除此账号在本设备的文库副本、外部文库映射、解析包、问答记录、问题模板与全部 PDF 缓存（包括离线保留）？尚未同步的改动将丢失。服务器上的文库记录会在下次同步时重新下载，本机问答和模板没有云端副本，外部文库需要重新确认关联，解析包需重新导入；本机原始文件不受影响。',
                 )
               ) {
                 try {
@@ -682,6 +683,10 @@ export function ConnectedApp({
                     await clearPdfCache(scope, { includePinned: true });
                     const { getParsedCache } = await import('./parsed/cache.ts');
                     await getParsedCache().clear(scope);
+                    const { getAiArchiveStore } = await import('./ai/archiveStore.ts');
+                    await getAiArchiveStore().clear(scope);
+                    const clearedScope = accountScopeKey(scope);
+                    setArchiveEpochs(current => ({ ...current, [clearedScope]: (current[clearedScope] ?? 0) + 1 }));
                   }
                 } catch (problem) {
                   setUiError(describeError(problem));
@@ -708,7 +713,7 @@ export function ConnectedApp({
         </section>}
         {section === 'account' && scope && runtime.secretStore && <section className="account-ai-settings">
           <button className="secondary" onClick={() => setAiSettings(!aiSettings)}>{aiSettings ? '收起 AI 设置' : 'AI 提供商设置'}</button>
-          {aiSettings && <Suspense fallback={<p role="status">正在打开设置…</p>}><AiWorkspace accountScope={scope} context={null}
+          {aiSettings && <Suspense fallback={<p role="status">正在打开设置…</p>}><AiWorkspace accountScope={scope} context={null} archiveEpoch={archiveEpochs[accountScopeKey(scope)] ?? 0}
             secretStore={runtime.secretStore} onSaveNote={async () => { throw new ClientError('ACCOUNT_CHANGED'); }} onNavigateCitation={() => {}} /></Suspense>}
         </section>}
         {section === 'conflicts' && (

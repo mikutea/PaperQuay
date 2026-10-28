@@ -1,4 +1,5 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { AiArchivePanel } from './AiArchivePanel.tsx';
 import { AiClient } from '../ai/client.ts';
 import { AI_ACTION_LABELS, aiResultNote, prepareAiContext } from '../ai/context.ts';
 import { AiSessionController } from '../ai/controller.ts';
@@ -39,6 +40,13 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
   const lifecycle = useRef(0);
   const secretAbort = useRef<AbortController | null>(null);
   const controller = useMemo(() => new AiSessionController(new AiClient(props.secretStore, props.transport)), [props.secretStore, props.transport]);
+  const archiveDraft = useMemo(() => ({ action, question }), [action, question]);
+  const captureRecord = useCallback((requestId: string) => controller.historyRecord(requestId), [controller]);
+  const canCaptureRecord = useCallback((requestId: string) => controller.hasResult(requestId), [controller]);
+  const applyArchiveDraft = useCallback((nextAction: AiAction, nextQuestion: string) => {
+    if (controller.getSnapshot().busy) return;
+    setAction(nextAction); setQuestion(nextQuestion); setLocalFailure(null); setNotice('');
+  }, [controller]);
   const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
   const prepared = useMemo(() => {
     try { return { context: prepareAiContext(props.context), failure: null }; }
@@ -158,7 +166,7 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
     <details className="ai-settings" open={settingsOpen} onToggle={(event) => setSettingsOpen(event.currentTarget.open)}>
       <summary>模型服务 <span>{config.model || '尚未选择模型'}</span></summary>
       <div className="ai-settings-content">
-        <p className="ai-muted">直接连接你配置的模型服务。只有点击测试或发送才会联网；密钥与 AI 会话不进入文库同步。</p>
+        <p className="ai-muted">直接连接你配置的模型服务。只有点击测试或发送才会联网；密钥与本机问答记录不进入文库同步。</p>
         <label htmlFor={id + '-endpoint'}>API 基础地址</label>
         <input id={id + '-endpoint'} type="url" inputMode="url" autoCapitalize="none" autoCorrect="off" spellCheck={false}
           placeholder="https://api.example.com/v1" value={config.endpoint} onChange={(event) => editConfig({ endpoint: event.target.value })} />
@@ -247,5 +255,9 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
       <div className="ai-usage"><span>{result.usage ? `输入 ${result.usage.promptTokens} · 输出 ${result.usage.completionTokens} · 合计 ${result.usage.totalTokens} tokens` : '用量未知：服务商尚未返回完整统计'}</span><span>费用未知，以服务商账单为准</span></div>
       <button type="button" className="secondary" disabled={!result.text.trim() || result.status === 'running' || saving} onClick={() => void saveNote(result.requestId)}>{saving ? '正在保存…' : result.status === 'complete' ? '保存为文献笔记' : '将部分结果保存为笔记'}</button>
     </section>}
+    <AiArchivePanel accountScope={props.accountScope} resetEpoch={props.archiveEpoch} currentContext={props.context} contextIdentity={prepared.context?.identity ?? null}
+      currentResult={result?.status === 'running' ? null : result} busy={busy} draft={archiveDraft}
+      captureRecord={captureRecord} canCaptureRecord={canCaptureRecord} onApplyDraft={applyArchiveDraft}
+      onNavigateCitation={props.onNavigateCitation} />
   </section>;
 }

@@ -354,6 +354,72 @@ test('saved notes preserve version/scope and actual usage without keys, fabricat
   controller.dispose();
 });
 
+test('history snapshots retain the original request question, public provider and terminal timestamps', async () => {
+  const transport: AiTransport = { kind: 'native', supportsStreaming: false, redirectPolicy: 'error',
+    request: async () => new Response(JSON.stringify(completion('Archived answer [P2]'))) };
+  const { client, config } = await configured('https://fixture.invalid/v1', {}, transport);
+  const controller = new AiSessionController(client); controller.bind(SCOPE, config, pdfContext());
+  const running = controller.start('ask', 'The question actually sent');
+  const requestId = controller.getSnapshot().result!.requestId;
+  assert.throws(() => controller.historyRecord(requestId), code('CONTEXT_INVALID'));
+  await running;
+  const result = controller.getSnapshot().result!, record = controller.historyRecord(requestId);
+  assert.equal(record.question, 'The question actually sent'); assert.equal(record.id, requestId);
+  assert.deepEqual(record.provider, { id: config.id, endpoint: config.endpoint, model: config.model });
+  assert.equal(record.createdAt, result.startedAt); assert.equal(record.updatedAt, result.finishedAt);
+  assert.ok(record.updatedAt >= record.createdAt); assert.equal(record.result.status, 'complete');
+  assert.equal(JSON.stringify(record).includes(KEY), false);
+  const copy = controller.historyRecord(requestId); copy.context.pages[0].text = 'Changed outside controller';
+  assert.notEqual(controller.historyRecord(requestId).context.pages[0].text, copy.context.pages[0].text);
+  controller.credentialsChanged(); assert.throws(() => controller.historyRecord(requestId), code('CONTEXT_INVALID'));
+  controller.dispose(); assert.throws(() => controller.historyRecord(requestId), code('CONTEXT_INVALID'));
+});
+
+test('terminal history preserves each real controller request across failure, truncation, cancel, replacement and probe', async t => {
+  for (const mode of ['failed', 'truncated', 'cancelled', 'replaced', 'probe'] as const) await t.test(mode, async () => {
+    let posts = 0;
+    await provider((request, response) => {
+      response.setHeader('Content-Type', 'application/json');
+      if (request.method === 'GET') { response.end(JSON.stringify({ data: [{ id: 'fixture-model' }] })); return; }
+      if (++posts > 1) { response.end(JSON.stringify(completion('New request answer'))); return; }
+      if (mode === 'failed') { response.writeHead(401); response.end('Synthetic failure'); return; }
+      response.setHeader('Content-Type', 'text/event-stream');
+      response.write(sse(delta('Original partial answer [P2]', mode === 'truncated' ? 'length' : null)));
+      if (mode === 'truncated') response.end('data: [DONE]\n\n');
+    }, async endpoint => {
+      const { client, config } = await configured(endpoint);
+      const context = pdfContext();
+      const controller = new AiSessionController(client); controller.bind(SCOPE, config, context);
+      const received = deferred<void>();
+      const unsubscribe = controller.subscribe(() => { if (controller.getSnapshot().result?.text) received.resolve(); });
+      try {
+        const running = controller.start('ask', 'Original request question');
+        const initial = controller.getSnapshot().result!;
+        if (mode !== 'failed' && mode !== 'truncated') {
+          await received.promise;
+          if (mode === 'replaced') await controller.start('ask', 'Replacement question');
+          else if (mode === 'probe') await controller.probe();
+          else controller.cancel();
+        }
+        await running;
+        const terminal = mode === 'replaced' ? controller.getSnapshot().previousResult! : controller.getSnapshot().result!;
+        const record = controller.historyRecord(initial.requestId);
+        assert.equal(record.id, initial.requestId);
+        assert.equal(record.question, 'Original request question');
+        assert.deepEqual(record.provider, { id: config.id, endpoint: config.endpoint, model: config.model });
+        assert.equal(prepareAiContext(record.context).identity, initial.contextIdentity);
+        assert.equal(record.createdAt, initial.startedAt); assert.equal(record.updatedAt, terminal.finishedAt);
+        assert.ok(record.updatedAt >= record.createdAt);
+        assert.equal(record.result.status, mode === 'failed' ? 'failed' : mode === 'truncated' ? 'incomplete' : 'cancelled');
+        assert.equal(record.result.failure?.code, mode === 'failed' ? 'AUTHENTICATION_FAILED' : mode === 'truncated' ? 'OUTPUT_TRUNCATED' : 'CANCELLED');
+        assert.equal(record.result.text, mode === 'failed' ? '' : 'Original partial answer [P2]');
+        assert.equal(JSON.stringify(record).includes(KEY), false);
+        if (mode === 'replaced') assert.equal(controller.historyRecord(controller.getSnapshot().result!.requestId).question, 'Replacement question');
+      } finally { unsubscribe(); controller.dispose(); }
+    });
+  });
+});
+
 test('a failed retry retains the last output in memory, bounds the history to two results and clears it at a scope boundary', async () => {
   let request = 0;
   const transport: AiTransport = { kind: 'fetch', supportsStreaming: false, redirectPolicy: 'error', request: async () => {

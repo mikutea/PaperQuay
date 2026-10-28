@@ -3,6 +3,7 @@ import { citedPages, prepareAiContext } from './context.ts';
 import { AiError, aiFailure } from './errors.ts';
 import { aiAccountKey, parseAiProvider } from './provider.ts';
 import type { AiAccountScope, AiAction, AiProviderConfig, AiResult, AiSaveContext, AiSnapshot, PdfAiContext, PreparedAiContext } from './types.ts';
+import { createAiHistoryRecord, type AiHistoryRecord } from './archiveTypes.ts';
 
 const emptySnapshot = (): AiSnapshot => ({ busy: null, result: null, previousResult: null, failure: null, models: [], connection: 'untested' });
 
@@ -59,14 +60,16 @@ export class AiSessionController {
     if (!this.#scope || !this.#config || this.#disposed) return;
     const prior = this.#snapshot.result;
     const previousResult = prior?.text.trim() ? (prior.status === 'running'
-      ? { ...prior, status: 'cancelled' as const, failure: { code: 'CANCELLED' as const } } : prior) : this.#snapshot.previousResult;
+      ? { ...prior, status: 'cancelled' as const, finishedAt: new Date().toISOString(), failure: { code: 'CANCELLED' as const } } : prior) : this.#snapshot.previousResult;
     this.#invalidate(); const epoch = this.#epoch;
     const context = this.#context;
     if (!context) { this.#publish({ ...this.#snapshot, busy: null, failure: aiFailure(this.#contextError) }); return; }
     const scope = this.#scope; const config = this.#config;
     const requestId = crypto.randomUUID();
     const result: AiResult = {
-      requestId, action, model: config.model, source: {
+      requestId, action, model: config.model, question,
+      provider: { id: config.id, endpoint: config.endpoint, model: config.model },
+      contextIdentity: context.identity, startedAt: new Date().toISOString(), finishedAt: null, source: {
         paperId: context.source.paperId, attachmentVersionId: context.source.attachmentVersionId,
         sha256: context.source.sha256, label: context.source.label, scope: context.source.scope,
         scopeLabel: context.scopeLabel, pageIndices: [...context.pageIndices], characters: context.characters,
@@ -92,12 +95,12 @@ export class AiSessionController {
       if (!this.#current(epoch)) return;
       const failure = completed.finishReason === 'length' ? { code: 'OUTPUT_TRUNCATED' as const }
         : completed.finishReason === 'content_filter' ? { code: 'CONTENT_FILTERED' as const } : null;
-      update({ ...completed, status: failure ? 'incomplete' : 'complete', failure });
+      update({ ...completed, status: failure ? 'incomplete' : 'complete', finishedAt: new Date().toISOString(), failure });
       this.#publish({ ...this.#snapshot, busy: null, failure });
     } catch (error) {
       if (!this.#current(epoch)) return;
       const failure = aiFailure(error);
-      update({ status: failure.code === 'CANCELLED' ? 'cancelled' : this.#snapshot.result?.text ? 'incomplete' : 'failed', failure });
+      update({ status: failure.code === 'CANCELLED' ? 'cancelled' : this.#snapshot.result?.text ? 'incomplete' : 'failed', finishedAt: new Date().toISOString(), failure });
       this.#publish({ ...this.#snapshot, busy: null, failure });
     } finally { if (this.#current(epoch)) this.#abort = null; }
   }
@@ -107,7 +110,7 @@ export class AiSessionController {
     this.#invalidate();
     const failure = { code: 'CANCELLED' as const };
     this.#publish({ ...this.#snapshot, busy: null, failure,
-      ...(busy === 'generate' && this.#snapshot.result ? { result: { ...this.#snapshot.result, status: 'cancelled' as const, failure } } : {}),
+      ...(busy === 'generate' && this.#snapshot.result ? { result: { ...this.#snapshot.result, status: 'cancelled' as const, finishedAt: new Date().toISOString(), failure } } : {}),
       ...(busy === 'probe' ? { connection: 'untested' as const } : {}),
     });
   }
@@ -122,6 +125,12 @@ export class AiSessionController {
   }
   hasResult(requestId: string): boolean {
     return this.#snapshot.result?.requestId === requestId || this.#snapshot.previousResult?.requestId === requestId;
+  }
+  historyRecord(requestId: string): AiHistoryRecord {
+    const result = this.#snapshot.result?.requestId === requestId ? this.#snapshot.result : this.#snapshot.previousResult;
+    if (this.#disposed || !this.#scope || !this.#context || !result || result.requestId !== requestId || result.status === 'running')
+      throw new AiError('CONTEXT_INVALID');
+    return createAiHistoryRecord(this.#context.source, result);
   }
   dispose(): void { this.#disposed = true; this.#invalidate(); this.#listeners.clear(); }
 }

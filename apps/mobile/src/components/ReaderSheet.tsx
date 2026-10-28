@@ -75,8 +75,9 @@ export function activateReaderSheet(dialog: HTMLElement, onClose: () => void): (
   }
   const isTop = () => state!.stack[state!.stack.length - 1] === dialog;
   const focus = (element: HTMLElement) => element.focus({ preventScroll: true });
+  const eligible = (element: HTMLElement) => element.tabIndex >= 0 && !element.matches(':disabled') && visible(element);
   const candidates = () => Array.from(dialog.querySelectorAll<HTMLElement>(focusableSelector))
-    .filter((element) => element.tabIndex >= 0 && !element.matches(':disabled') && visible(element))
+    .filter(eligible)
     .sort((left, right) => (left.tabIndex || Infinity) - (right.tabIndex || Infinity));
   const first = () => candidates()[0] ?? dialog;
   const keydown = (event: KeyboardEvent) => {
@@ -127,8 +128,24 @@ export function activateReaderSheet(dialog: HTMLElement, onClose: () => void): (
     }
     const becameInline = dialog.isConnected && dialog.getAttribute('role') === 'region' && !dialog.closest('[hidden]');
     if (wasTop && !becameInline) {
-      if (opener && visible(opener)) focus(opener);
+      if (opener && opener !== document.body && opener !== document.documentElement && visible(opener)) focus(opener);
       else if (state!.stack.length) focus(state!.stack[state!.stack.length - 1]);
+      else {
+        const active = document.activeElement as HTMLElement | null;
+        if (active && active !== document.body && active !== document.documentElement && !dialog.contains(active) && visible(active)) return;
+        // A desktop-to-mobile transition can capture an opener inside this
+        // same retained panel. Return to a nearby visible control when it hides.
+        for (let parent = dialog.parentElement; parent; parent = parent.parentElement) {
+          const target = Array.from(parent.querySelectorAll<HTMLElement>(focusableSelector))
+            .find(element => !dialog.contains(element) && eligible(element));
+          if (target) { focus(target); return; }
+        }
+        const body = document.body, previousTabIndex = body?.getAttribute('tabindex');
+        if (body) {
+          body.setAttribute('tabindex', '-1'); focus(body);
+          if (previousTabIndex == null) body.removeAttribute('tabindex'); else body.setAttribute('tabindex', previousTabIndex);
+        }
+      }
     }
   };
 }

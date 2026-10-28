@@ -1,0 +1,25 @@
+.ai-archive { margin-top: 20px; min-width: 0; border-top: 1px solid var(--line); padding-top: 18px; }
+.ai-archive-save { display: grid; gap: 8px; margin-bottom: 16px; }
+.ai-archive-save p { color: var(--muted); font-size: .8125rem; line-height: 1.65; margin: 0; }
+.ai-archive > details > summary { min-height: 44px; cursor: pointer; font-weight: 650; padding-block: 10px; }
+.ai-archive-content { display: grid; gap: 12px; min-width: 0; }
+.ai-archive-content > p { margin: 0; }
+.ai-archive-toolbar, .ai-archive-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.ai-archive-toolbar { justify-content: space-between; }
+.ai-archive-toolbar [role='group'] { display: flex; gap: 4px; flex-wrap: wrap; }
+.ai-archive-toolbar [aria-pressed='true'] { color: var(--accent-dark); background: var(--theme-accent-soft, #f0fdfa); }
+.ai-archive-list { max-height: 22rem; overflow: auto; min-width: 0; }
+.ai-archive-row { display: flex; align-items: flex-start; gap: 6px; border-bottom: 1px solid var(--line); }
+.ai-archive-row > button:first-child { flex: 1; min-width: 0; text-align: left; padding: 10px 8px; display: grid; gap: 4px; overflow-wrap: anywhere; }
+.ai-archive-row strong { font-weight: 550; }
+.ai-archive-row small { font-size: .75rem; color: var(--muted); }
+.ai-archive-row > button:last-child { flex-shrink: 0; }
+.ai-template-form, .ai-archive-detail { border: 1px solid var(--line); border-radius: 10px; padding: 14px; min-width: 0; }
+.ai-template-form .ai-archive-actions { margin-top: 12px; }
+.ai-template-form input, .ai-template-form textarea, .ai-template-form select { max-width: 100%; min-width: 0; width: 100%; }
+.ai-archive-detail h3, .ai-archive-detail h4 { overflow-wrap: anywhere; margin: 12px 0 6px; }
+.ai-archive-detail > h3:first-child { margin-top: 0; }
+.ai-archive-detail pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.8; margin: 8px 0 14px; }
+.ai-archive-detail > details > summary { cursor: pointer; min-height: 44px; padding-block: 10px; }
+.ai-archive button { max-width: 100%; white-space: normal; }
+@media (max-width: 420px) { .ai-archive-actions > button { flex: 1 1 auto; } }

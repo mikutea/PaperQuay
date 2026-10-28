@@ -4,6 +4,7 @@ import './styles.css';
 import './components/paperReader.css';
 import './components/cloudPdf.css';
 import './components/aiWorkspace.css';
+import './components/aiArchive.css';
 import './theme.css';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(<App />);

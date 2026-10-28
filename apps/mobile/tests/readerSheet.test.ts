@@ -154,6 +154,26 @@ test('an inline editor becoming a mobile modal retains the existing input focus'
   restore();
 });
 
+test('closing a responsive modal returns focus outside its retained hidden branch', () => {
+  const env = fixture(); env.restore();
+  env.opener.candidate = true; env.last.focus();
+  const restore = activateReaderSheet(env.dialog as unknown as HTMLElement, () => {});
+  assert.equal(env.document.activeElement, env.last);
+  env.overlay.setAttribute('hidden', ''); env.overlay.setAttribute('inert', '');
+  restore();
+  assert.equal(env.document.activeElement, env.opener);
+  assert.equal(env.document.activeElement.closest('[hidden],[inert],[aria-hidden="true"]'), null);
+});
+
+test('closing a responsive modal finds a nearby control after the browser has dropped focus to body', () => {
+  const env = fixture(); env.restore();
+  env.opener.candidate = true; env.last.focus();
+  const restore = activateReaderSheet(env.dialog as unknown as HTMLElement, () => {});
+  env.overlay.setAttribute('hidden', ''); env.document.body.focus();
+  restore();
+  assert.equal(env.document.activeElement, env.opener);
+});
+
 test('keepMounted preserves child state across hiding and responsive modal changes, and backdrop drags do not close', () => {
   let mounted = 0; let unmounted = 0; let closes = 0; let renderer!: ReactTestRenderer;
   function Draft() {

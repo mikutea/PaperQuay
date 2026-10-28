@@ -92,10 +92,16 @@ export interface AiSourceSummary {
   textSource?: PdfAiContext['textSource'];
 }
 export interface AiCitation { pageNumber: number; target: PdfCitationTarget }
+export interface AiProviderReference { id: string; endpoint: string; model: string }
 export interface AiResult {
   requestId: string;
   action: AiAction;
   model: string;
+  question: string;
+  provider: AiProviderReference;
+  contextIdentity: string;
+  startedAt: string;
+  finishedAt: string | null;
   source: AiSourceSummary;
   text: string;
   status: 'running' | 'complete' | 'incomplete' | 'cancelled' | 'failed';
@@ -123,6 +129,7 @@ export interface AiSaveContext {
   parsedPackageDigest?: string;
 }
 export interface AiWorkspaceProps {
+  archiveEpoch?: number;
   accountScope: AiAccountScope;
   context: PdfAiContext | null;
   secretStore: SecretStore;
