@@ -28,8 +28,14 @@ try {
   require(pakoEntry);
   require(path.join(pizzipDirectory, 'flate.js'));
   const syncCore = require(path.join(extractionRoot, 'electron', 'generated', 'desktopSyncCore.cjs'));
-  for (const name of ['projectDesktopLibrary', 'createDesktopIdentityMap', 'queueLocalCreates', 'preparePush', 'applyPushResults']) {
+  for (const name of ['projectDesktopLibrary', 'createDesktopIdentityMap', 'queueLocalCreates', 'preparePush', 'applyPushResults', 'verifyParsedDocument', 'inspectParsedImage']) {
     if (typeof syncCore[name] !== 'function') throw new Error(`Packaged desktop sync core is missing ${name}.`);
+  }
+  const parsedConverter = require(path.join(extractionRoot, 'electron', 'generated', 'desktopParsedDocument.cjs'));
+  if (typeof parsedConverter.createPortableParsedDocument !== 'function') throw new Error('Packaged parsed document converter is missing.');
+  for (const file of ['node_modules/pdfjs-dist/legacy/build/pdf.mjs', 'node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs']) {
+    const stat = fs.statSync(path.join(extractionRoot, file));
+    if (!stat.isFile() || !stat.size) throw new Error(`Packaged PDF inspection runtime is missing ${file}.`);
   }
   for (const file of ['backend/desktopPeerHost.cjs', 'desktopPeerPreload.cjs', 'desktopPeer.html', 'appWindowLifecycle.cjs']) {
     const stat = fs.statSync(path.join(extractionRoot, 'electron', file));

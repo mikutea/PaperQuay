@@ -22,6 +22,64 @@ async function until(condition) {
   const deadline = Date.now() + 5000;
   while (!condition()) { if (Date.now() > deadline) assert.fail('Timed out waiting for test condition'); await new Promise((resolve) => setTimeout(resolve, 5)); }
 }
+
+test('parsed export derives its source and account IDs from the current binding and forwards only the native event', async (t) => {
+  const f = await fixture(t); let prepared = 0, saved = 0;
+  const nativeEvent = { sender: 'synthetic-native-sender' };
+  const manager = f.create({ parsedDocumentExporter: {
+    async prepare(input) {
+      prepared++; input.check(); assert.deepEqual(input.bytes, PDF);
+      const binding = manager.getStatus().bindings[0];
+      assert.equal(input.binding.paperId, binding.paperId);
+      assert.equal(input.binding.attachmentVersionId, binding.attachmentVersionId);
+      assert.equal(input.expectedPageCount, null);
+      return { bytes: Buffer.from('{}') };
+    },
+    async save(_prepared, input) {
+      saved++; assert.equal(input.event, nativeEvent); await input.beforeWrite(); input.check();
+      return { status: 'exported', blockCount: 1, assetCount: 0 };
+    },
+  } });
+  await f.login(manager); await f.publish(manager);
+  const result = await manager.commands.desktop_provider_export_parsed({ bindingId: manager.getStatus().bindings[0].bindingId,
+    pdfPath: '//unapproved.invalid/share/private.pdf', paperId: randomUUID() }, nativeEvent);
+  assert.deepEqual(result, { status: 'exported', blockCount: 1, assetCount: 0 });
+  assert.equal(prepared, 1); assert.equal(saved, 1);
+  await assert.rejects(manager.commands.desktop_provider_export_parsed({ bindingId: randomUUID() }), { code: 'DESKTOP_BINDING_NOT_FOUND' });
+  assert.equal(prepared, 1);
+});
+
+for (const change of ['sign-out', 'remove-binding', 'replace-PDF']) {
+  test(`parsed export rechecks ${change} after the save picker and cannot write a retired source`, async (t) => {
+    const f = await fixture(t); let beforeWriteReturned = false;
+    const manager = f.create({ parsedDocumentExporter: {
+      async prepare(input) { input.check(); return {}; },
+      async save(_prepared, input) {
+        if (change === 'sign-out') await manager.commands.desktop_account_sign_out();
+        else if (change === 'remove-binding') await manager.commands.desktop_provider_unbind({ bindingId: manager.getStatus().bindings[0].bindingId });
+        else fs.writeFileSync(f.attachment.storedPath, Buffer.concat([PDF, Buffer.from('replaced')]));
+        await input.beforeWrite(); beforeWriteReturned = true;
+        return { status: 'exported' };
+      },
+    } });
+    await f.login(manager); await f.publish(manager);
+    await assert.rejects(manager.commands.desktop_provider_export_parsed({ bindingId: manager.getStatus().bindings[0].bindingId }),
+      { code: change === 'replace-PDF' ? 'DESKTOP_SOURCE_CHANGED' : 'DESKTOP_OPERATION_CANCELLED' });
+    assert.equal(beforeWriteReturned, false);
+  });
+}
+
+test('a missing or invalid parse proof reports a fixed code before opening a save picker', async (t) => {
+  const f = await fixture(t); let pickerOpened = false;
+  const manager = f.create({ parsedDocumentExporter: {
+    async prepare() { throw Object.assign(new Error('private path must not escape'), { code: 'DESKTOP_PARSED_REPARSE_REQUIRED' }); },
+    async save() { pickerOpened = true; },
+  } });
+  await f.login(manager); await f.publish(manager);
+  await assert.rejects(manager.commands.desktop_provider_export_parsed({ bindingId: manager.getStatus().bindings[0].bindingId }),
+    { code: 'DESKTOP_PARSED_REPARSE_REQUIRED', message: 'DESKTOP_PARSED_REPARSE_REQUIRED' });
+  assert.equal(pickerOpened, false);
+});
 function fakeAuth() {
   let snapshot = { status: 'signed-out' }; const listeners = new Set();
   const publish = (next) => { snapshot = next; for (const listener of listeners) listener(); };

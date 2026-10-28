@@ -1,4 +1,6 @@
 @import './components/glass.css';
+@import 'katex/dist/katex.min.css';
+@import './components/parsedDocument.css';
 
 .library-list-actions { display: flex; align-items: center; gap: 6px; }
 .library-list-actions > .transfer-button { width: 44px; height: 44px; display: grid; place-items: center; flex: none; border-radius: 50%; color: var(--accent-dark); }

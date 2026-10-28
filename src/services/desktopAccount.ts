@@ -54,6 +54,8 @@ export const desktopAccount = {
   unbind: (bindingId: string) => invoke<DesktopAccountStatus>('desktop_provider_unbind', { bindingId }),
   setEnabled: (enabled: boolean) => invoke<DesktopAccountStatus>('desktop_provider_set_enabled', { enabled }),
   retry: (bindingId: string) => invoke<DesktopAccountStatus>('desktop_provider_retry', { bindingId }),
+  exportParsed: (bindingId: string) => invoke<{ status: 'cancelled' | 'exported'; blockCount?: number; assetCount?: number }>(
+    'desktop_provider_export_parsed', { bindingId }),
   cancel: (transferId: string) => invoke<DesktopAccountStatus>('desktop_provider_cancel', { transferId }),
   onChanged: (listener: () => void) => listen('desktop-account:changed', listener),
 };

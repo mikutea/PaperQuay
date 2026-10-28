@@ -117,6 +117,7 @@ export interface UseReaderLibraryPreviewResult {
     item: WorkspaceItem;
     pdfPath: string;
     sourceKind: MineruCacheManifest['sourceKind'];
+    sourcePath?: string;
     contentJsonText?: string | null;
     middleJsonText?: string | null;
     markdownText?: string | null;
@@ -124,6 +125,7 @@ export interface UseReaderLibraryPreviewResult {
     dataId?: string;
     fileName?: string;
     zipEntries?: string[];
+    provenance?: MineruCacheManifest['provenance'];
   }) => Promise<Awaited<ReturnType<typeof writeMineruParseCache>>>;
   setItemParseStatusMap: Dispatch<SetStateAction<Record<string, boolean | undefined>>>;
   setLibraryPreviewStates: Dispatch<SetStateAction<Record<string, LibraryPreviewState>>>;
@@ -500,6 +502,7 @@ export function useReaderLibraryPreview({
       item: WorkspaceItem;
       pdfPath: string;
       sourceKind: MineruCacheManifest['sourceKind'];
+      sourcePath?: string;
       contentJsonText?: string | null;
       middleJsonText?: string | null;
       markdownText?: string | null;
@@ -507,6 +510,7 @@ export function useReaderLibraryPreview({
       dataId?: string;
       fileName?: string;
       zipEntries?: string[];
+      provenance?: MineruCacheManifest['provenance'];
     }) =>
       writeMineruParseCache({
         ...options,

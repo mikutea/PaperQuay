@@ -105,6 +105,7 @@ export interface UseReaderLibraryActionsOptions {
     item: WorkspaceItem;
     pdfPath: string;
     sourceKind: MineruCacheManifest['sourceKind'];
+    sourcePath?: string;
     contentJsonText?: string | null;
     middleJsonText?: string | null;
     markdownText?: string | null;
@@ -112,6 +113,7 @@ export interface UseReaderLibraryActionsOptions {
     dataId?: string;
     fileName?: string;
     zipEntries?: string[];
+    provenance?: MineruCacheManifest['provenance'];
   }) => Promise<
     Awaited<
       ReturnType<typeof import('./readerLibraryPreview').writeMineruParseCache>

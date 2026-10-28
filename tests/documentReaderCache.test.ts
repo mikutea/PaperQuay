@@ -125,7 +125,23 @@ test('cache provenance cannot redirect an older artifact to a newer source direc
   }
 });
 
-test('cache provenance ignores foreign, cloud, malformed and non-local sources', async () => {
+test('new cloud caches use only the exact parser-run source and disable mixed or missing resources', async () => {
+  const cachedPath = 'D:/cache/document-1/content_list_v2.json';
+  const sourcePath = 'D:/cache/document-1/parse-new-run/content_list.json';
+  const cachedText = '[{"type":"image","img_path":"images/figure.png"}]';
+  for (const sourceText of [cachedText, 'different parser output', null, new Error('Read permission revoked')]) {
+    const result = await resolveCachedMineruSourcePath({
+      item: item(), cachedPath, cachedText, manifestPath: 'manifest.json',
+      readText: async (file) => file === 'manifest.json' ? JSON.stringify({
+        documentKey: 'item-1', pdfPath: 'D:/papers/paper.pdf', sourceKind: 'cloud', sourcePath,
+        provenance: { status: 'verified', runId: 'new-run' },
+      }) : file === sourcePath ? sourceText instanceof Error ? Promise.reject(sourceText) : sourceText : null,
+    });
+    assert.equal(result, sourceText === cachedText ? sourcePath : cachedPath + '.unavailable-resources/document.json');
+  }
+});
+
+test('cache provenance ignores foreign, legacy cloud, malformed and non-local sources', async () => {
   const cachedPath = 'D:/cache/document-1/content_list_v2.json';
   for (const overrides of [
     { documentKey: 'other' }, { sourceKind: 'cloud' }, { sourceKind: 'unknown' },

@@ -30,12 +30,15 @@ export async function resolveCachedMineruSourcePath({
   manifestPath: string;
   readText: ReadLocalTextFileIfExists;
 }): Promise<string> {
+  let cloudCacheWithSource = false;
   try {
     const raw = await readText(manifestPath);
     if (!raw) return cachedPath;
     const manifest = JSON.parse(raw);
     if (!isMineruCacheManifest(manifest) || manifest.documentKey !== item.itemKey ||
-        !['manual-json', 'sibling-json'].includes(manifest.sourceKind)) return cachedPath;
+        !['manual-json', 'sibling-json', 'cloud'].includes(manifest.sourceKind) ||
+        manifest.sourceKind === 'cloud' && !manifest.provenance) return cachedPath;
+    cloudCacheWithSource = manifest.sourceKind === 'cloud';
 
     const sourcePath = manifest.sourcePath;
     if (typeof sourcePath === 'string' &&
@@ -45,6 +48,13 @@ export async function resolveCachedMineruSourcePath({
         // A shared manifest can be newer than this particular cached artifact.
         // Never borrow another representation's resource directory.
         await readText(sourcePath) === cachedText) return sourcePath;
+
+    // New cloud output lives in a unique parser-run directory. If its source
+    // does not match this cached representation, keep text readable but select
+    // an unavailable resource base. Never borrow an earlier run's public-cache
+    // image directory. This is display resolution, not export certification.
+    if (manifest.sourceKind === 'cloud' && (manifest.sourcePath || manifest.provenance))
+      return `${cachedPath}.unavailable-resources/document.json`;
 
     // Older sibling caches did not record provenance. Recover it only when
     // the original sibling output is still an exact match for the cached text.
@@ -59,7 +69,7 @@ export async function resolveCachedMineruSourcePath({
   } catch {
     // Missing or malformed provenance must not discard a usable text cache.
   }
-  return cachedPath;
+  return cloudCacheWithSource ? `${cachedPath}.unavailable-resources/document.json` : cachedPath;
 }
 
 export interface SavedMineruPagesResult {

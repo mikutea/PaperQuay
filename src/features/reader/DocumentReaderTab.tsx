@@ -909,6 +909,7 @@ function DocumentReaderTab({
       dataId,
       fileName,
       zipEntries,
+      provenance,
     }: {
       item: WorkspaceItem;
       pdfPath: string;
@@ -921,6 +922,7 @@ function DocumentReaderTab({
       dataId?: string;
       fileName?: string;
       zipEntries?: string[];
+      provenance?: Parameters<typeof writeMineruParseCache>[0]['provenance'];
     }) => {
       return writeMineruParseCache({
         item,
@@ -934,6 +936,7 @@ function DocumentReaderTab({
         dataId,
         fileName,
         zipEntries,
+        provenance,
         mineruCacheDir: settings.mineruCacheDir,
       });
     },
@@ -1610,6 +1613,7 @@ function DocumentReaderTab({
           item: currentDocument,
           pdfPath,
           sourceKind: 'cloud',
+          sourcePath: result.contentJsonPath || result.middleJsonPath || undefined,
           contentJsonText: result.contentJsonText,
           middleJsonText: result.middleJsonText,
           markdownText: result.markdownText,
@@ -1617,6 +1621,7 @@ function DocumentReaderTab({
           dataId: result.dataId,
           fileName: result.fileName,
           zipEntries: result.zipEntries,
+          provenance: result.provenance,
         }).catch(() => null);
 
         if (savedPaths) {
@@ -1631,6 +1636,10 @@ function DocumentReaderTab({
         }
       }
 
+      if (result.provenance?.status === 'unavailable') nextStatusMessage += lRef.current(
+        '。解析内容已保留，但来源证据不可用，暂不能导出解析包。',
+        '. Parsed content is preserved, but provenance is unavailable and verified export is disabled.',
+      );
       applyMineruPages(pages, nextMineruPath, {
         item: currentDocument,
         pdfPath,

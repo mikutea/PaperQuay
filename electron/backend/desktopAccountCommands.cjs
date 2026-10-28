@@ -233,6 +233,7 @@ function createDesktopAccountCommands(context, options = {}) {
     if (target.version.entityId !== binding.attachmentVersionId || target.paper.entityId !== binding.paperId ||
         target.version.data.sha256 !== binding.sha256 || target.version.data.sizeBytes !== binding.sizeBytes) fail('DESKTOP_PDF_CHANGED');
     return target;
+    return target;
   }
   const provider = createDesktopPdfProvider({
     request, sendContent: (route, bytes, signal, expiry) => request(route, { method: 'POST', body: bytes, raw: true, signal,
@@ -607,6 +608,38 @@ function createDesktopAccountCommands(context, options = {}) {
         lastError = null; return getStatus();
       });
     },
+    async desktop_provider_export_parsed({ bindingId }, event) {
+      requireAccount(); if (!UUID.test(bindingId)) fail('DESKTOP_ARGUMENT_INVALID');
+      return runAction(`export-parsed:${bindingId}`, async (captured) => {
+        const libraryId = libraryBindingId;
+        const binding = currentLibrary().bindings.find((item) => item.bindingId === bindingId && !item.removed);
+        if (!binding || bindingStatus(binding).publicationStatus !== 'published') fail('DESKTOP_BINDING_NOT_FOUND');
+        const snapshot = structuredClone(binding);
+        const check = () => {
+          assertEpoch(captured); requireAccount();
+          if (libraryBindingId !== libraryId || !currentLibrary().bindings.some((item) => !item.removed &&
+              item.bindingId === bindingId && JSON.stringify(item) === JSON.stringify(snapshot))) fail('DESKTOP_OPERATION_CANCELLED');
+          assertLibraryAnchor(context, currentLibrary().anchor);
+        };
+        const signal = sessionController.signal;
+        const target = await validateTarget(snapshot, signal); check();
+        const verified = await readDesktopAttachment(context, { localPaperId: snapshot.localPaperId,
+          localAttachmentId: snapshot.localAttachmentId, anchor: currentLibrary().anchor, signal,
+          expected: snapshot, maxBytes: MAX_FILE_BYTES }); check();
+        const exporter = options.parsedDocumentExporter || require('./parsedDocumentExport.cjs').createParsedDocumentExporter(context,
+          { core: syncCore(), ...options.parsedDocumentExport });
+        const prepared = await exporter.prepare({ binding: snapshot, bytes: verified.bytes,
+          expectedPageCount: target.version.data.pageCount, check });
+        return exporter.save(prepared, { fileName: snapshot.fileName, event, check, beforeWrite: async () => {
+          check();
+          const currentTarget = await validateTarget(snapshot, signal); check();
+          if (JSON.stringify(currentTarget.version.data) !== JSON.stringify(target.version.data)) fail('DESKTOP_PDF_CHANGED');
+          await readDesktopAttachment(context, { localPaperId: snapshot.localPaperId,
+            localAttachmentId: snapshot.localAttachmentId, anchor: currentLibrary().anchor, signal,
+            expected: snapshot, maxBytes: MAX_FILE_BYTES }); check();
+        } });
+      });
+    },
     async desktop_provider_unbind({ bindingId }) {
       requireAccount(); if (!UUID.test(bindingId)) fail('DESKTOP_ARGUMENT_INVALID');
       provider.cancelBinding(bindingId); bindingControllers.get(bindingId)?.abort();
@@ -637,9 +670,9 @@ function createDesktopAccountCommands(context, options = {}) {
       provider.cancel(transferId); return getStatus();
     },
   };
-  const commands = Object.fromEntries(Object.entries(handlers).map(([name, handler]) => [name, async (args = {}) => {
+  const commands = Object.fromEntries(Object.entries(handlers).map(([name, handler]) => [name, async (args = {}, event) => {
     const startedAtEpoch = epoch;
-    try { if (closed) fail('DESKTOP_CLOSED'); return await handler(args); }
+    try { if (closed) fail('DESKTOP_CLOSED'); return await handler(args, event); }
     catch (error) {
       const code = publicError(error);
       if (code !== 'DESKTOP_OPERATION_CANCELLED' || startedAtEpoch === epoch) { lastError = code; notify(); }

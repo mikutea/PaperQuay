@@ -82,17 +82,25 @@ export class ReadingCheckpointWriter {
       || point.pageIndex >= (this.version.data.pageCount ?? 0) || !Number.isFinite(point.offsetRatio)) return;
     this.pending = { pageIndex: point.pageIndex, offsetRatio: Math.max(0, Math.min(1, point.offsetRatio)) };
     this.furthest = further(this.furthest, this.pending);
-    this.notify('saving');
-    if (!this.failure && !this.running && !this.timer) {
-      this.timer = setTimeout(() => { this.timer = null; this.start(); }, this.debounceMs);
-    }
+    this.notify(this.failure ? 'error' : 'saving');
+    this.schedule();
+  }
+
+  private schedule(): void {
+    if (this.stopped || this.failure || this.running || this.timer || !this.pending) return;
+    this.timer = setTimeout(() => { this.timer = null; this.start(); }, this.debounceMs);
   }
 
   private start(): void {
     if (this.running || this.stopped || !this.pending) return;
     const work = this.drain();
     this.running = work;
-    void work.finally(() => { if (this.running === work) this.running = null; }).catch(() => undefined);
+    void work.finally(() => {
+      if (this.running !== work) return;
+      this.running = null;
+      // A new point can arrive after drain exits but before this promise handoff.
+      this.schedule();
+    }).catch(() => undefined);
   }
 
   private assertWritable(state: Readonly<AccountSyncState>): void {
@@ -142,10 +150,17 @@ export class ReadingCheckpointWriter {
     if (this.stopped) return;
     if (this.timer) { clearTimeout(this.timer); this.timer = null; }
     if (this.running) { try { await this.running; } catch { /* An explicit flush may retry the retained point. */ } }
+    if (this.stopped) return;
     this.failure = null;
-    this.start();
-    if (this.running) await this.running;
-    if (this.failure) throw this.failure;
+    while (!this.stopped && (this.pending || this.running)) {
+      if (this.timer) { clearTimeout(this.timer); this.timer = null; }
+      this.start();
+      const work = this.running;
+      if (!work) break;
+      // A failure in this flush rejects once; automatic retries would spin.
+      await work;
+    }
+    if (!this.stopped && this.failure) throw this.failure;
   }
 
   stop(): void { this.stopped = true; this.pending = null; if (this.timer) clearTimeout(this.timer); this.timer = null; }

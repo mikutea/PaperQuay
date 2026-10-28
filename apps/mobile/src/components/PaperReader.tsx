@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type PointerEvent, type ReactNode } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type PointerEvent, type ReactNode } from 'react';
 import {
   getVisibleEntity, listVisibleEntities, type AnnotationAnchor, type AnnotationData, type AttachmentVersionData,
   type PaperData, type ReadingPositionData, type VisibleEntity,
@@ -29,7 +29,8 @@ import { ownReadingPosition, positionOwner, readerIdentity, ReadingCheckpointWri
   type PositionStatus, type ReaderIdentity, type ReadingPoint } from '../pdf/position.ts';
 import { PDF_LIMITS, type PaperReaderProps, type PdfAiContext, type PdfCacheEntry, type PdfCitationTarget, type PdfVersion } from '../pdf/types.ts';
 
-type Panel = 'source' | 'contents' | 'search' | 'annotations' | 'cache' | 'cloud' | 'more' | 'page' | 'ask' | null;
+const ParsedDocumentPanel = lazy(() => import('./ParsedDocumentPanel.tsx'));
+type Panel = 'source' | 'contents' | 'search' | 'annotations' | 'cache' | 'cloud' | 'parsed' | 'more' | 'page' | 'ask' | null;
 interface Loaded { pdf: VerifiedPdf; version: PdfVersion; runtime: PdfRuntime; identity: ReaderIdentity }
 interface Task { epoch: number; signal: AbortSignal; identity: ReaderIdentity; check: () => void }
 interface CommentDraft { entityId: string; revision: number; data: AnnotationData; comment: string; saved: string }
@@ -39,7 +40,7 @@ const errorMessage = (error: unknown) => error instanceof CloudPdfError ? descri
     : error instanceof PdfError ? error.message : describeError(error);
 const labelForKind = (kind: AnnotationData['kind']) => kind === 'highlight' ? '高亮' : kind === 'underline' ? '下划线' : '区域';
 const panelTitles: Record<NonNullable<Panel>, string> = { source: 'PDF 文件', contents: '目录与阅读接续', search: '搜索原文',
-  annotations: '批注', cache: '本机缓存', cloud: '私有云 PDF', more: '阅读选项', page: '跳转页面', ask: '阅读 AI' };
+  annotations: '批注', cache: '本机缓存', cloud: '私有云 PDF', parsed: '解析阅读', more: '阅读选项', page: '跳转页面', ask: '阅读 AI' };
 
 function ReaderPanel({ compact, title, onClose, children }: { compact: boolean; title: string; onClose: () => void; children: ReactNode }) {
   if (compact) return <ReaderSheet open title={title} onClose={onClose} className="pr-reader-sheet">{children}</ReaderSheet>;
@@ -825,6 +826,7 @@ export function PaperReader(props: PaperReaderProps) {
       <button type="button" aria-pressed={panel === 'contents'} onClick={() => setPanel(panel === 'contents' ? null : 'contents')}>目录</button>
       <button type="button" aria-pressed={panel === 'search'} onClick={() => setPanel(panel === 'search' ? null : 'search')}>搜索</button>
       <button type="button" aria-pressed={panel === 'annotations'} onClick={() => setPanel(panel === 'annotations' ? null : 'annotations')}>批注 {annotationRecords.length || ''}</button>
+      <button type="button" aria-pressed={panel === 'parsed'} onClick={() => setPanel(panel === 'parsed' ? null : 'parsed')}>解析</button>
     </div>}
     {(!compact || !panel) && feedback}
     <div className="pr-body">
@@ -833,11 +835,24 @@ export function PaperReader(props: PaperReaderProps) {
         setPanel(null);
       }}>
         {compact && feedback}
+        {panel === 'parsed' && (loaded ? <Suspense fallback={<p className="pr-panel-content" role="status">正在打开解析阅读…</p>}>
+          <ParsedDocumentPanel key={`${scopeKey}:${loaded.version.entityId}:${loaded.version.data.sha256}`} scope={scope}
+            version={loaded.version} pageCount={loaded.pdf.pageCount} pdfPageIndex={pageIndex}
+            isCurrent={() => {
+              try {
+                if (current.current !== loaded || !mounted.current || (props.accountCurrent && !props.accountCurrent())
+                  || controller.getSnapshot().status !== 'ready' || !sameReaderIdentity(controller, loaded.identity)) return false;
+                assertPdfTarget(controller.getSnapshot().workspace?.sync, paper.entityId, loaded.version, loaded.pdf.pageCount);
+                return true;
+              } catch { return false; }
+            }} onJump={(index) => { goTo(index); if (compact) setPanel(null); }} />
+        </Suspense> : <p className="pr-panel-content">请先打开需要核对的 PDF。</p>)}
         {panel === 'more' && <div className="pr-panel-content pr-options">
           {loaded && <section className="pr-option-section" aria-label="阅读显示"><h3>阅读显示</h3>
             <div className="pr-option-controls">{zoomControl}{modeControl}</div>
             <button type="button" onClick={() => { setSelection(null); setRotation((value) => (value + 90) % 360); }} aria-label={`旋转页面，当前 ${rotation} 度`}>旋转页面 <span>{rotation}°</span></button>
-            <button type="button" onClick={() => setPanel('annotations')}>批注 <span>{annotationRecords.length}</span></button></section>}
+            <button type="button" onClick={() => setPanel('annotations')}>批注 <span>{annotationRecords.length}</span></button>
+            <button type="button" onClick={() => setPanel('parsed')}>解析阅读</button></section>}
           <section className="pr-option-section" aria-label="文件与离线"><h3>文件与离线</h3>
             <button type="button" onClick={() => setPanel('source')}>文件与版本</button>
             {props.cloudPdf && <button type="button" disabled={!cloudVersion} onClick={() => setPanel('cloud')}>私有云 PDF</button>}

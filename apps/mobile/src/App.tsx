@@ -668,7 +668,7 @@ export function ConnectedApp({
             onClear={async () => {
               if (
                 window.confirm(
-                  '清除此账号在本设备的文库副本、外部文库映射与全部 PDF 缓存（包括离线保留）？尚未同步的改动将丢失。服务器上的文库记录会在下次同步时重新下载，外部文库需要重新确认关联；本机原始 PDF 文件不受影响。',
+                  '清除此账号在本设备的文库副本、外部文库映射、解析包与全部 PDF 缓存（包括离线保留）？尚未同步的改动将丢失。服务器上的文库记录会在下次同步时重新下载，外部文库需要重新确认关联，解析包需重新导入；本机原始文件不受影响。',
                 )
               ) {
                 try {
@@ -676,6 +676,8 @@ export function ConnectedApp({
                   if (scope) {
                     const { clearPdfCache } = await import('./pdf/cache.ts');
                     await clearPdfCache(scope, { includePinned: true });
+                    const { getParsedCache } = await import('./parsed/cache.ts');
+                    await getParsedCache().clear(scope);
                   }
                 } catch (problem) {
                   setUiError(describeError(problem));

@@ -24,6 +24,18 @@ function errorLabel(code: string | undefined | null, l: ReaderPreferencesLocaliz
     DESKTOP_STORAGE_INVALID: ['账号状态文件无法校验，已停止提供文件。', 'Account state could not be verified. File access has stopped.'],
     DESKTOP_STORAGE_UNAVAILABLE: ['无法保存账号状态，请检查本机存储。', 'Cannot save account state. Check local storage.'],
     DESKTOP_STORAGE_FULL: ['本机账号状态已达到容量限制。', 'Local account state reached its capacity limit.'],
+    DESKTOP_PARSED_REPARSE_REQUIRED: ['此 PDF 没有可验证的解析来源。请重新运行云端解析；手动或旧缓存不能直接导出。', 'This PDF has no verified parse provenance. Run cloud parsing again; manual and old caches cannot be exported.'],
+    DESKTOP_PARSED_PROVENANCE_UNAVAILABLE: ['系统安全存储不可用，解析内容仍保留，但暂不能导出可验证解析包。', 'Secure storage is unavailable. Parsed content is preserved, but verified export is unavailable.'],
+    DESKTOP_PARSED_PROVENANCE_INVALID: ['解析来源证据无法验证，请重新运行云端解析。', 'Parse provenance cannot be verified. Run cloud parsing again.'],
+    DESKTOP_PARSED_OUTPUT_CHANGED: ['解析产物或图片已变化，请重新解析后再导出。', 'Parsed output or an image changed. Parse the PDF again before exporting.'],
+    DESKTOP_PARSED_RESOURCE_UNAVAILABLE: ['解析资源当前不可读取，请检查缓存目录授权。', 'Parse resources are unavailable. Check cache directory access.'],
+    DESKTOP_PARSED_RESOURCE_INVALID: ['解析图片引用不在本次已验证产物中，未导出。', 'A parsed image is outside the verified output. Nothing was exported.'],
+    DESKTOP_PARSED_OUTPUT_INVALID: ['解析结构或图片不符合可移植格式，未导出。', 'The parsed structure or image is not supported by the portable format. Nothing was exported.'],
+    DESKTOP_PARSED_TABLE_UNSUPPORTED: ['此解析表格不能完整转换，请重新解析。', 'This parsed table cannot be converted completely. Parse it again.'],
+    DESKTOP_PARSED_PAGE_MISMATCH: ['解析页码与 PDF 版本不一致，未导出。', 'The parse pages do not match this PDF version. Nothing was exported.'],
+    DESKTOP_PARSED_PDF_INVALID: ['无法核验 PDF 的实际页数，未导出。', 'The PDF page count could not be verified. Nothing was exported.'],
+    DESKTOP_PARSED_PACKAGE_TOO_LARGE: ['解析包超过 16 MiB 或图片容量限制，未导出。', 'The parse package exceeds 16 MiB or its image limits. Nothing was exported.'],
+    DESKTOP_PARSED_SAVE_FAILED: ['解析包未能安全保存，请重新选择保存位置。', 'The parse package could not be saved safely. Choose a save location again.'],
     DESKTOP_PUBLICATION_BLOCKED: ['题录同步需要处理，请检查版本或重新关联。', 'Metadata sync needs attention. Check the version or link an existing one.'],
     DESKTOP_REQUEST_TIMEOUT: ['连接超时，请检查网络后重试。', 'The connection timed out. Check the network and retry.'],
     DESKTOP_SERVICE_FAILED: ['服务暂时不可用，请稍后重试。', 'The service is unavailable. Try again later.'],
@@ -102,7 +114,7 @@ export function ReaderPreferencesDesktopAccountSection({ l }: { l: ReaderPrefere
     setPending(true); setError(null); setNotice('');
     try {
       await operation();
-      if (alive.current) { setNotice(success); await reload(); }
+      if (alive.current) { if (success) setNotice(success); await reload(); }
     } catch (failure) { if (alive.current) setError(extractCode(failure)); }
     finally { if (alive.current) setPending(false); }
   };
@@ -224,11 +236,17 @@ export function ReaderPreferencesDesktopAccountSection({ l }: { l: ReaderPrefere
         </div></div>
         <div className="mt-3 flex flex-wrap items-center gap-2"><span className="mr-auto text-xs text-[var(--pq-text-muted)]">{bindingLabels[binding.publicationStatus]}</span>
           {binding.publicationStatus !== 'published' ? <button type="button" className={buttonClass} disabled={!signedIn || busy} onClick={() => void run(() => desktopAccount.retry(binding.bindingId))}>{l('重试同步', 'Retry sync')}</button> : null}
+          <button type="button" className={buttonClass} disabled={!signedIn || busy || binding.publicationStatus !== 'published'}
+            onClick={() => void run(async () => {
+              const result = await desktopAccount.exportParsed(binding.bindingId);
+              if (alive.current && result.status === 'exported') setNotice(l('解析包已导出，可在手机或平板中导入。', 'Parsed document exported. Import it on your phone or tablet.'));
+            })}>{l('导出解析包', 'Export parsed document')}</button>
           <button type="button" className={buttonClass} disabled={busy} onClick={() => void run(() => desktopAccount.unbind(binding.bindingId))}>{l('停止提供', 'Remove access')}</button>
         </div>
         {binding.errorCode ? <p className="mt-2 text-xs leading-5 text-[var(--pq-error)]">{errorLabel(binding.errorCode, l)}</p> : null}
       </article>)}
       <p className="text-xs leading-5 text-[var(--pq-text-muted)]">{l('停止提供会移除这台电脑的关联；保留本机文件及账号中的题录。', 'Removing access unlinks this computer and preserves the local file and account metadata.')}</p>
+      <p className="text-xs leading-5 text-[var(--pq-text-muted)]">{l('解析包需要本机重新云端解析时保存的来源证据。旧缓存或手动 JSON 请先重新解析。', 'Parsed document export requires provenance saved during a new cloud parse on this computer. Parse old caches or manually imported JSON again first.')}</p>
     </section>
   </div>;
 }

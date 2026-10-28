@@ -91,9 +91,87 @@ test('failed checkpoint stays dirty and explicit retry saves the last requested 
   const writer = new ReadingCheckpointWriter(app.controller, scope, version, { now: () => now, onStatus: (status) => statuses.push(status) });
   writer.record({ pageIndex: 6, offsetRatio: 0.4 }); await assert.rejects(writer.flush(), code('POSITION_FAILED'));
   assert.equal(statuses.at(-1), 'error'); assert.equal(ownReadingPosition(app.state, version), null);
-  writer.record({ pageIndex: 2, offsetRatio: 0.1 }); app.fail = false; await writer.flush();
+  writer.record({ pageIndex: 2, offsetRatio: 0.1 });
+  assert.equal(statuses.at(-1), 'error', 'a later scroll must keep the visible retry state while a failed save is retained');
+  assert.equal(app.calls, 1, 'failed writes wait for an explicit retry');
+  app.fail = false; await writer.flush();
   const saved = ownReadingPosition(app.state, version)!.data as ReadingPositionData;
   assert.equal(saved.pageIndex, 2); assert.equal(saved.furthestPageIndex, 6); assert.equal(statuses.at(-1), 'saved'); writer.stop();
+});
+
+test('a new point at automatic save completion is persisted without another scroll or explicit flush', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const app = harness(); const statuses: PositionStatus[] = []; let completions = 0;
+  const writer = new ReadingCheckpointWriter(app.controller, scope, version, {
+    now: () => now, debounceMs: 1,
+    onStatus(status) {
+      statuses.push(status);
+      if (status === 'saved' && ++completions === 1) queueMicrotask(() => writer.record({ pageIndex: 3, offsetRatio: 0.6 }));
+    },
+  });
+  t.after(() => { writer.stop(); t.mock.timers.reset(); });
+  writer.record({ pageIndex: 1, offsetRatio: 0.2 });
+  // Both save operations are immediate; this observes the automatic timer and
+  // promise handoff without flush(), which would conceal a stranded checkpoint.
+  t.mock.timers.tick(1); await new Promise<void>((resolve) => setImmediate(resolve));
+  t.mock.timers.tick(1); await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(app.calls, 2);
+  const saved = ownReadingPosition(app.state, version)!.data as ReadingPositionData;
+  assert.equal(saved.pageIndex, 3); assert.equal(saved.offsetRatio, 0.6);
+  assert.equal(saved.deviceSequence, 2); assert.equal(statuses.at(-1), 'saved');
+});
+
+test('flush waits for successor checkpoints created at each save completion', async (t) => {
+  const app = harness(); const statuses: PositionStatus[] = []; let completions = 0;
+  const writer = new ReadingCheckpointWriter(app.controller, scope, version, {
+    now: () => now, debounceMs: 1000,
+    onStatus(status) {
+      statuses.push(status);
+      if (status === 'saved' && ++completions < 3) queueMicrotask(() => writer.record({ pageIndex: completions + 2, offsetRatio: 0.4 }));
+    },
+  });
+  t.after(() => writer.stop());
+  writer.record({ pageIndex: 1, offsetRatio: 0.2 }); await writer.flush();
+  assert.equal(app.calls, 3); assert.equal(statuses.at(-1), 'saved');
+  const saved = ownReadingPosition(app.state, version)!.data as ReadingPositionData;
+  assert.equal(saved.pageIndex, 4); assert.equal(saved.deviceSequence, 3);
+});
+
+test('a failed successor rejects flush once and retains the latest point for explicit retry', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const app = harness(); const statuses: PositionStatus[] = []; let queued = false;
+  const writer = new ReadingCheckpointWriter(app.controller, scope, version, {
+    now: () => now, debounceMs: 1,
+    onStatus(status) {
+      statuses.push(status);
+      if (status === 'saved' && !queued) { queued = true; queueMicrotask(() => {
+        app.fail = true; writer.record({ pageIndex: 3, offsetRatio: 0.7 });
+      }); }
+    },
+  });
+  t.after(() => { writer.stop(); t.mock.timers.reset(); });
+  writer.record({ pageIndex: 1, offsetRatio: 0.2 });
+  await assert.rejects(writer.flush(), code('POSITION_FAILED'));
+  t.mock.timers.tick(1000); await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(app.calls, 2); assert.equal(statuses.at(-1), 'error');
+  app.fail = false; await writer.flush();
+  assert.equal((ownReadingPosition(app.state, version)!.data as ReadingPositionData).pageIndex, 3);
+  assert.equal(app.calls, 3); assert.equal(statuses.at(-1), 'saved');
+});
+
+test('stop during the completion handoff prevents a pending point from being scheduled', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const app = harness();
+  const writer = new ReadingCheckpointWriter(app.controller, scope, version, {
+    now: () => now, debounceMs: 1,
+    onStatus(status) { if (status === 'saved') queueMicrotask(() => { writer.record({ pageIndex: 3, offsetRatio: 0.5 }); writer.stop(); }); },
+  });
+  t.after(() => { writer.stop(); t.mock.timers.reset(); });
+  writer.record({ pageIndex: 1, offsetRatio: 0.2 });
+  t.mock.timers.tick(1); await new Promise<void>((resolve) => setImmediate(resolve));
+  t.mock.timers.tick(1000); await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(app.calls, 1);
+  assert.equal((ownReadingPosition(app.state, version)!.data as ReadingPositionData).pageIndex, 1);
 });
 
 test('own-device resume excludes remote high-page checkpoints and chooses the latest own observation', () => {

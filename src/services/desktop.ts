@@ -330,6 +330,10 @@ export interface MineruCloudParseResult {
   middleJsonPath: string | null;
   markdownPath: string | null;
   zipEntries: string[];
+  /** Main-process evidence; never synthesized from an old cache or renderer hash. */
+  provenance?:
+    | { status: 'verified'; runId: string; pdf: { sha256: string; sizeBytes: number } }
+    | { status: 'unavailable'; code: 'DESKTOP_PARSED_PROVENANCE_UNAVAILABLE' };
 }
 
 export async function runMineruCloudParse(

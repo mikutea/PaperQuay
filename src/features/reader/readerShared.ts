@@ -1,4 +1,4 @@
-import type { AppDefaultPaths } from '../../services/desktop';
+import type { AppDefaultPaths, MineruCloudParseResult } from '../../services/desktop';
 import type {
   ModelReasoningEffort,
   ModelRuntimeConfig,
@@ -615,6 +615,7 @@ export interface MineruCacheManifest {
   dataId?: string;
   fileName?: string;
   zipEntries?: string[];
+  provenance?: MineruCloudParseResult['provenance'];
 }
 
 export const EMPTY_LIBRARY_PREVIEW_STATE: LibraryPreviewState = {
