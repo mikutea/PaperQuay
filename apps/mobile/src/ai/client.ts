@@ -1,4 +1,4 @@
-import { buildAiMessages } from './context.ts';
+import { buildConversationMessages, type AiConversationData } from '../../../../packages/ai-core/src/conversation.ts';
 import { AiError } from './errors.ts';
 import { AI_SECRET_KEY, aiAccountKey, aiSecretNamespace, checkedApiKey, parseAiProvider } from './provider.ts';
 import { AiSseParser, ChatOutput, type ChatCompletionResult } from './stream.ts';
@@ -10,6 +10,7 @@ export interface GenerateOptions extends RequestOptions {
   context: PreparedAiContext;
   action: AiAction;
   question: string;
+  conversation?: AiConversationData;
   onText(text: string): void;
   onUsage?(usage: AiUsage): void;
 }
@@ -105,7 +106,7 @@ export class AiClient {
   }
   async generate(options: GenerateOptions): Promise<ChatCompletionResult> {
     const config = parseAiProvider(options.config, true);
-    const messages = buildAiMessages(options.context, options.action, options.question);
+    const messages = buildConversationMessages(options.context, options.action, options.question, options.conversation);
     if (options.context.bytes > this.#limits.contextBytes) throw new AiError('CONTEXT_TOO_LARGE');
     const streaming = config.stream && this.#transport.supportsStreaming;
     const body = JSON.stringify({ model: config.model, messages, n: 1, stream: streaming,

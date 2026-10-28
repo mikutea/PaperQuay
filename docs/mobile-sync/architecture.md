@@ -18,7 +18,9 @@ M1 的设备条目代表 **OIDC 登录会话**：JWT 的 issuer/sub/sid 与服�
 | --- | --- |
 | `paper` | `title, doi:null|string, year:null|string, publication:null|string, abstractText:null|string, authors:string[], keywords:string[], organization?:PaperOrganization` |
 | `attachmentVersion` | `paperId, attachmentId, sha256, sizeBytes, mediaType:'application/pdf', fileName, pageCount:null|integer` |
-| `note` | `paperId:null|UUID, title, body, format:'markdown'` |
+| `note` | Markdown：`paperId, title, body, format:'markdown'`；富文本：`paperId, title, body, format:'tiptap-json', document, metadata, assets` |
+| `aiConversation` | `version:1, title, paperId, attachmentVersionId, sha256, context, turns` |
+| `aiTemplate` | `version:1, title, action, question` |
 | `annotation` | `paperId, attachmentVersionId, kind:'highlight'|'underline'|'area', color, comment, anchor` |
 | `readingPosition` | `paperId, attachmentVersionId, pageIndex, offsetRatio, furthestPageIndex, furthestOffsetRatio, sessionId, deviceSequence, observedAt` |
 
@@ -46,6 +48,12 @@ type SyncOperation = {
 ```
 
 创建 baseRevision 为 0。服务端分配 revision/updatedAt；delete 的 data 为 null。restore 必须显式且引用当前墓碑 revision，不能以普通 put 复活。
+
+新内容通过 `rich-notes-v1`、`ai-conversations-v1` 单独协商。旧客户端拉取时隐藏不支持的记录但继续推进游标，不能修改／删除隐藏内容；启用能力时只重置一次拉取游标，保留 outbox 与冲突。服务端拒绝把富文本静默降为 Markdown，或改变已保存会话的共同原文。
+
+富文本保留受支持 TipTap AST、显式元数据及有 SHA-256／尺寸／字节数的 PNG/JPEG/WebP 资源，正文是校验后的派生文字。历史坐标保留 `verification:unverified`，未知引用显式未解析。单条最多 1 MiB，超限和未知节点整条拒绝；资源不能使用远程 URL、本机路径或过期 blob。v2 文件中的源 ID 仅用于包内重绑，不自动连接当前账号同名实体。
+
+会话保存共同 PDF／解析上下文和最多 24 轮真实问答终态，单条最多 1 MiB；同账号至多 50 个会话、100 个模板。公开模型引用可同步，密钥、端点 headers 和本机模型设置不进入实体。续问显式恢复保存的原文，每次只把此前完成的问答加入前文；保存事务重新核对完整快照、revision、冲突和待决解决操作。纯模块位于 `packages/ai-core`，平台存储与网络适配保留在各客户端。
 
 ## API 与事务
 
@@ -114,7 +122,17 @@ Web 独立 IndexedDB 的正文和目录在同一事务提交，原生使用独�
 
 移动端每次准备解析文本都重新校验完整包与 PDF 目标。请求 identity 除文献/版本/hash/文本外，还包括规范解析包摘要；本页使用解析面板当前页，包范围只列实际有文字的页，均不声称完整文档。公式、表格结构和题注转成有限文本；不传图像资源、坐标或包的原始对象。用户在发送预览之后主动请求自己配置的模型，解析文本不自动进入网关或账号同步。
 
-缓存替换、单篇或账号解析清理通过成功提交结果使对应旧解析上下文失效；取消发生在提交之后时撤下旧显示并要求重新载入。AI 笔记保存既检查点击时来源，也在实际本地事务中读取实时上下文/解析摘要及事务的可见版本，避免排队期间变更被旧快照漏过。笔记记录来源摘要后按既有 note 协议同步，AI 会话与缓存仍本机独立。见 [操作与边界](parsed-ai.md)。
+缓存替换、单篇或账号解析清理通过成功提交结果使对应旧解析上下文失效；取消发生在提交之后时撤下旧显示并要求重新载入。AI 笔记保存既检查点击时来源，也在实际本地事务中读取实时上下文/解析摘要及事务的可见版本，避免排队期间变更被旧快照漏过。笔记记录来源摘要后按既有 note 协议同步，未明确存入同步会话的本机记录与解析缓存仍独立保存。见 [操作与边界](parsed-ai.md)。
+
+## 外部增量与受控远程任务
+
+Zotero 增量仅请求固定官方 API，分页、删除列表和最终版本须一致；每轮最多 500 个键、4 MiB、24 次请求与 30 秒。预览后采用，在一个账号事务中复核旧游标和计划，再提交映射、题录、outbox 与新游标；来源删除仅提示。映射／游标留在本设备，密钥按账号／服务／来源隔离，不随题录同步。
+
+`/v1/remote-tasks` 默认关闭，管理员显式启用后开放同账号 provider、任务、租约、状态、取消、恢复、产物和清理路由；DTO 位于 `packages/sync-core/src/remoteTasks.ts`。迁移 005–008 增加持久队列、RLS、幂等回执、租约 fence 和最近执行日志持有方。移动端先原子保存请求身份与载荷再 POST；结果不明只允许显式重放原请求。
+
+桌面须每次启动后明确开启，私有配置与凭据代次不公开。实际读取固定映射的 PDF 并重验 hash／字节数；每次付费请求之前持久保存执行阶段。重登录换绑须核对本机旧日志，再用当前有效租约确认接管。提交结果不明保留记录且不重发；已知 MinerU batch 只恢复查询／下载，向量按已确认批次复用。结果绑定原版本，解析包进入独立缓存，索引提供真实文件导出；M4 检索尚未接入。完整预算及清理范围见 [完整文库](m3-full-library.md)。
+
+桌面笔记导出使用独立 `desktopRichNoteArchive` 纯模块包，从已保存 NoteStore 只读捕获；文件选择返回后再次核验源指纹，通过受控文件适配器写出 v2。仅纳入能核验的资源，整条跳过的原因写入报告；不修改旧笔记或账号身份映射。
 
 ## 官方依据
 

@@ -3,8 +3,11 @@ import type { NoteData, PaperData, VisibleEntity } from '../../../../packages/sy
 import { ClientError, describeError } from '../errors.ts';
 import {
   exportLibraryArchive, LIBRARY_TRANSFER_LIMITS, LibraryTransferError, parseLibraryArchive, planLibraryImport,
-  type LibraryArchive, type LibraryImportRow,
+  richLibraryNoteData, type LibraryArchive, type LibraryImportRow, type LibraryArchiveNote,
 } from '../library/libraryTransfer.ts';
+import { remapRichNoteReferences } from '../../../../packages/sync-core/src/richNote.ts';
+import { ContentPreview } from './EntityEditor.tsx';
+import { RichNoteImagePool, RichNoteImageError } from './richNoteImages.ts';
 import { BibliographyTransferError, exportBibliography, parseBibliography,
   type BibliographyFormat, type BibliographyWarning } from '../library/bibliographyTransfer.ts';
 import { DoiLookupError, lookupDoi, type DoiLookupErrorCode, type DoiLookupWarning } from '../library/doiLookup.ts';
@@ -32,7 +35,7 @@ export function libraryTransferScope(controller: WorkspaceController): string | 
 }
 
 function message(error: unknown): string {
-  if (error instanceof ClientError) return describeError(error);
+  if (error instanceof ClientError) return error.code === 'IMPORT_UNSUPPORTED' ? '当前账号尚未启用所选内容的同步能力，请更新服务后重新比较。' : describeError(error);
   if (error instanceof FileExportError) {
     if (error.code === 'CHANGED') return '账号已变化，请关闭此面板后重试。';
     if (error.code === 'UNAVAILABLE') return '此设备暂不支持文件分享，请使用包含分享组件的完整安装包。';
@@ -46,6 +49,7 @@ function message(error: unknown): string {
     return `${record}书目文件无法完整解析，请检查格式后重试。尚未导入任何记录。`;
   }
   if (error instanceof DoiLookupError) return doiErrorMessage(error.code);
+  if (error instanceof RichNoteImageError) return '结构笔记图片不能完整解码，尚未导入任何记录。';
   if (error instanceof LibraryTransferError) {
     if (error.code === 'ARCHIVE_TOO_LARGE') return '文件超出本次导入上限：4 MB、500 篇文献和 500 条笔记。请拆分后重试。';
     if (error.issues.some((issue) => issue.code === 'TOO_MANY_ITEMS')) return '本次文件最多支持 500 篇文献和 500 条笔记。请缩小范围后重试。';
@@ -170,6 +174,14 @@ function rowDetail(row: LibraryImportRow): string {
   if (row.blockedReason === 'AMBIGUOUS_PAPER') parts.push('存在多个匹配文献；选择文件中的文献另存副本后即可关联');
   return parts.join('。');
 }
+function ArchiveNotePreview({ note }: { note: LibraryArchiveNote }) {
+  const [open, setOpen] = useState(false);
+  const data = useMemo(() => !open ? null : note.format === 'tiptap-json'
+    ? remapRichNoteReferences(richLibraryNoteData(note), () => null)
+    : { paperId: null, title: note.title, body: note.body, format: 'markdown' as const }, [open, note]);
+  return <details onToggle={(event) => setOpen(event.currentTarget.open)}><summary>{note.format === 'tiptap-json' ? '查看完整结构笔记' : '查看 Markdown 正文'}</summary>
+    {data && <ContentPreview data={data} sessionKey={`file-note:${note.ref}`} />}</details>;
+}
 
 export function LibraryTransferPanel({ entities, controller, scopeKey, accountCurrent, onClose }: Props) {
   const [tab, setTab] = useState<'import' | 'export' | 'external'>('import');
@@ -194,8 +206,9 @@ export function LibraryTransferPanel({ entities, controller, scopeKey, accountCu
   const formatSelectId = useId();
   const doiInputId = useId();
   const queryAbort = useRef<AbortController | null>(null);
+  const importImages = useRef<RichNoteImagePool | null>(null);
   useEffect(() => { alive.current = true; return () => {
-    alive.current = false; operation.current++; queryAbort.current?.abort();
+    alive.current = false; operation.current++; queryAbort.current?.abort(); importImages.current?.close();
   }; }, []);
   const current = () => alive.current && accountCurrent() && libraryTransferScope(controller) === scopeKey;
   const planned = useMemo(() => {
@@ -204,6 +217,7 @@ export function LibraryTransferPanel({ entities, controller, scopeKey, accountCu
     catch (cause) { return { plan: null, error: message(cause) }; }
   }, [archive, entities, selection]);
   const plan = planned?.plan;
+  const richSupported = controller.getContentCapabilities().richNotes;
   const exported = useMemo(() => {
     if (tab !== 'export') return null;
     try { return { result: exportLibraryArchive(entities), error: null }; }
@@ -211,7 +225,7 @@ export function LibraryTransferPanel({ entities, controller, scopeKey, accountCu
       const tooLarge = cause instanceof LibraryTransferError && (cause.code === 'ARCHIVE_TOO_LARGE'
         || cause.issues.some((issue) => issue.code === 'TOO_MANY_ITEMS'));
       return { result: null, error: tooLarge
-        ? '当前文库超过本次 JSON 导出上限（4 MB、500 篇文献和 500 条笔记）。逐条导出 Markdown 仍可使用，分批文库导出尚未支持。'
+        ? '当前文库超过本次 JSON 导出上限（4 MB、500 篇文献和 500 条笔记）。可逐条导出笔记；结构笔记保持 JSON，分批文库导出尚未支持。'
         : message(cause) };
     }
   }, [entities, tab]);
@@ -285,8 +299,16 @@ export function LibraryTransferPanel({ entities, controller, scopeKey, accountCu
   }
   async function confirmImport() {
     if (!plan || busyRef.current || !current()) return;
+    if (plan.requiresRichNotes && !controller.getContentCapabilities().richNotes) { setError('当前账号尚未启用结构笔记同步，请取消选择结构笔记或更新服务。'); return; }
     busyRef.current = true; setBusy(true); setError(null); setFeedback(null);
     try {
+      const chosen = new Set(plan.rows.filter((row) => row.selected).map((row) => row.key));
+      for (const note of plan.archive.notes) if (note.format === 'tiptap-json' && chosen.has(`note:${note.ref}`)) {
+        const pool = new RichNoteImagePool(); importImages.current = pool;
+        try { const ready = await pool.replace(note.assets); if (!ready || !current()) return; }
+        finally { pool.close(); if (importImages.current === pool) importImages.current = null; }
+      }
+      if (!current()) return;
       const result = await controller.importLibrary(plan.archive, selection, plan.signature);
       if (!current()) return;
       setArchive(null); setSelection(undefined); setWarnings([]);
@@ -301,11 +323,14 @@ export function LibraryTransferPanel({ entities, controller, scopeKey, accountCu
     busyRef.current = true; setBusy(true); setError(null); setFeedback(null);
     try {
       const note = chosenNote?.data as NoteData | undefined;
+      const richExport = kind === 'note' && note?.format === 'tiptap-json' ? exportLibraryArchive(entities.filter((entry) =>
+        entry.entityType === 'note' && entry.entityId === chosenNote!.entityId || entry.entityType === 'paper' && entry.entityId === note.paperId)) : null;
       const outcome = await exportTextFile(kind === 'bibliography'
         ? { name: `PaperQuay-bibliography-${new Date().toISOString().slice(0, 10)}.${bibliographyFormat === 'bibtex' ? 'bib' : 'ris'}`,
           text: bibliography!.result!.text, mime: bibliographyFormat === 'bibtex' ? 'application/x-bibtex' : 'application/x-research-info-systems' }
         : kind === 'library'
         ? { name: `PaperQuay-library-${new Date().toISOString().slice(0, 10)}.json`, text: result!.json, mime: 'application/json' }
+        : richExport ? { name: exportFilename(note!.title || '未命名笔记', 'json'), text: richExport.json, mime: 'application/json' }
         : { name: exportFilename(note!.title || '未命名笔记', 'md'), text: note!.body, mime: 'text/markdown' }, current);
       if (current()) setFeedback(outcome === 'download' ? '已开始下载，请在浏览器下载列表中查看文件。' : '系统分享面板已关闭；保存结果请在所选应用中确认。');
     } catch (cause) { if (current()) setError(message(cause)); }
@@ -350,6 +375,14 @@ export function LibraryTransferPanel({ entities, controller, scopeKey, accountCu
           <h3>预览导入</h3>
           <p>选中 {plan.summary.selectedPapers} 篇文献、{plan.summary.selectedNotes} 条笔记；跳过 {plan.summary.skipped} 项。</p>
           <p className="transfer-hint">重复项默认跳过；勾选后另存副本，也会保留文件中的分类。</p>
+          {plan.archive.version === 2 && <p className="transfer-hint">结构笔记包含完整正文、标记和图片。sourceId 是原文件的来源标识，仅用于文件内引用绑定，不代表当前账号记录；未选或未知目标会保留为未解析引用。</p>}
+          {plan.archive.exportReport && <div className="transfer-hint" role="note">
+            <p>此文件来自桌面选中的已保存笔记。sourceId 是独立导出别名，originalId 仅供核对原记录；两者都不会直接绑定当前账号。</p>
+            <p>原选 {plan.archive.exportReport.requestedNotes} 条笔记，文件保留 {plan.archive.notes.length} 条；跳过 {plan.archive.exportReport.skipped.length} 项。</p>
+            {plan.archive.exportReport.skipped.length > 0 && <details><summary>查看未导出项</summary><ul>
+              {plan.archive.exportReport.skipped.map((item, index) => <li key={index}>{item.entityType === 'note' ? '笔记' : '题录'} {item.index + 1}：{item.code}</li>)}
+            </ul></details>}
+          </div>}
           <WarningList warnings={warnings} />
           <div className="transfer-selection-actions">
             <button type="button" className="text-button" disabled={busy} onClick={() => setSelection(undefined)}>使用默认选择</button>
@@ -362,12 +395,14 @@ export function LibraryTransferPanel({ entities, controller, scopeKey, accountCu
                 {rowDetail(row) && <small className={row.blockedReason ? 'transfer-blocked' : ''}>{rowDetail(row)}</small>}
               </span></label>
             {row.entityType === 'paper' && <MetadataPreview paper={plan.archive.papers.find((paper) => paper.ref === row.ref)!.data} />}
+            {row.entityType === 'note' && <ArchiveNotePreview note={plan.archive.notes.find((note) => note.ref === row.ref)!} />}
           </li>)}</ul>
           {plan.summary.selectedBlockedNotes > 0 && <p className="inline-error" role="status">有 {plan.summary.selectedBlockedNotes} 条笔记的关联需要处理。</p>}
+          {plan.requiresRichNotes && !richSupported && <p className="inline-error" role="status">当前账号未启用结构笔记同步。可取消选择这些笔记，其他已支持内容仍可导入。</p>}
           <div className="transfer-confirm">
             {error && <p className="inline-error transfer-message" role="alert">{error}</p>}
             <button type="button" className="primary"
-            disabled={busy || selected === 0 || plan.summary.selectedBlockedNotes > 0} onClick={() => void confirmImport()}>
+            disabled={busy || selected === 0 || plan.summary.selectedBlockedNotes > 0 || plan.requiresRichNotes && !richSupported} onClick={() => void confirmImport()}>
             {busy ? '正在保存…' : `导入所选 ${selected} 项`}</button></div>
         </section>}
         {busy && !plan && sourceMode === 'file' && <p role="status">正在读取文件…</p>}
@@ -393,11 +428,11 @@ export function LibraryTransferPanel({ entities, controller, scopeKey, accountCu
               onClick={() => void saveExport('bibliography')}>导出 {bibliographyFormat === 'bibtex' ? 'BibTeX' : 'RIS'}</button>
           </>}
           {bibliography?.error && <p className="inline-error" role="alert">{bibliography.error}</p>}
-          <p className="transfer-hint">仅含题录，不含 PDF、批注、笔记或分类。完整分类与 Markdown 笔记可用下方文库 JSON。</p>
+          <p className="transfer-hint">仅含题录，不含 PDF、批注、笔记或分类。完整分类与笔记可用下方文库 JSON。</p>
         </section>
         <section className="transfer-export">
           <h3>文库 JSON</h3>
-          <p className="muted">导出已保存的题录、分类与 Markdown 笔记，可在这里重新导入。</p>
+          <p className="muted">导出已保存的题录、分类与笔记。结构笔记保存完整节点、引用、元数据和图片，不转换为 Markdown。</p>
           {exported?.result && <>
             <p>{exported.result.summary.papers} 篇文献 · {exported.result.summary.notes} 条笔记</p>
             {exported.result.summary.unresolvedNoteLinks > 0 && <p className="transfer-hint">{exported.result.summary.unresolvedNoteLinks} 条笔记的关联文献不可用，文件会保留待核对的关联；重新导入时需补全对应文献。</p>}
@@ -409,13 +444,14 @@ export function LibraryTransferPanel({ entities, controller, scopeKey, accountCu
           {exported?.error && <p className="inline-error" role="alert">{exported.error}</p>}
         </section>
         <section className="transfer-export">
-          <h3>Markdown 笔记</h3>
+          <h3>单条笔记</h3>
           <div className="field"><label htmlFor={noteSelectId}>选择已保存的笔记</label>
             <select id={noteSelectId} value={noteId} disabled={busy || notes.length === 0} onChange={(event) => setNoteId(event.target.value)}>
               <option value="">{notes.length ? '请选择一条笔记' : '还没有可导出的笔记'}</option>
               {notes.map((note) => <option key={note.entityId} value={note.entityId}>{note.data?.title || '未命名笔记'}</option>)}
             </select></div>
-          <button type="button" className="secondary" disabled={busy || !chosenNote} onClick={() => void saveExport('note')}>导出 Markdown</button>
+          <button type="button" className="secondary" disabled={busy || !chosenNote} onClick={() => void saveExport('note')}>{chosenNote?.data.format === 'tiptap-json' ? '导出结构笔记 JSON' : '导出 Markdown'}</button>
+          {chosenNote?.data.format === 'tiptap-json' && <p className="transfer-hint">JSON 会附带当前可用的主关联题录；其他未随包导入的引用保持未解析。sourceId 只用于文件内绑定。</p>}
         </section>
       </>}
       {tab !== 'external' && error && !(tab === 'import' && plan) && <p className="inline-error transfer-message" role="alert">{error}</p>}

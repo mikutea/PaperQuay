@@ -37,8 +37,8 @@ test('desktop transport is independently opt-in and exposes bounded, non-persist
   t.after(async () => { await off.close(); await app.close(); });
   await assert.rejects(buildApp({ config: testConfig({ PAPERQUAY_DESKTOP_PDF_ENABLED: '1' }), repository: f.repository, verifyToken: async () => identity() }), { code: 'CONFIGURATION_INVALID' });
   const old = (await off.inject('/v1/capabilities')).json(); const current = (await app.inject('/v1/capabilities')).json();
-  assert.equal(old.desktopPdf, undefined); assert.deepEqual(old.features, { paperOrganization: 1 });
-  assert.deepEqual(current.features, { paperOrganization: 1, desktopPdfTransfer: 1 });
+  assert.equal(old.desktopPdf, undefined); assert.deepEqual(old.features, { paperOrganization: 1,richNotes:1,aiConversations:1 });
+  assert.deepEqual(current.features, { paperOrganization: 1,richNotes:1,aiConversations:1, desktopPdfTransfer: 1 });
   assert.equal(current.pdfStorage, false); assert.equal(current.cloudPdf, undefined);
   assert.equal(current.desktopPdf.transport, 'http-relay-v1');
   assert.equal(current.desktopPdf.maxFileBytes, 64 * 1024 * 1024);

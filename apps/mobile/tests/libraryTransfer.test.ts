@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { EntityData, LocalEdit, NoteData, PaperData, VisibleEntity } from '../../../packages/sync-core/src/index.ts';
+import type { EntityData, LocalEdit, NoteData,MarkdownNoteData, PaperData, VisibleEntity } from '../../../packages/sync-core/src/index.ts';
 import {
   exportLibraryArchive, LIBRARY_TRANSFER_LIMITS, LibraryTransferError, materializeLibraryImport,
   parseLibraryArchive, planLibraryImport, type LibraryArchive, type LibraryTransferErrorCode,
@@ -9,7 +9,7 @@ import {
 const id = (value: number) => `00000000-0000-4000-8000-${value.toString(16).padStart(12, '0')}`;
 const paper = (overrides: Partial<PaperData> = {}): PaperData => ({ title: 'A study', doi: '10.1234/study',
   year: '2026', publication: 'Journal', abstractText: 'Abstract', authors: ['A. Author'], keywords: ['topic'], ...overrides });
-const note = (paperId: string | null = null, overrides: Partial<NoteData> = {}): NoteData => ({
+const note = (paperId: string | null = null, overrides: Partial<MarkdownNoteData> = {}): MarkdownNoteData => ({
   paperId, title: 'Reading note', body: '# 原文笔记\n\n保留 **Markdown** 与换行。\n', format: 'markdown', ...overrides,
 });
 const visible = (entityType: VisibleEntity['entityType'], entityId: string, data: EntityData | null,
@@ -300,7 +300,7 @@ test('all unknown fields and unsupported schemas are rejected without exposing t
     assert.ok(!JSON.stringify(error).includes(secret));
   }
   rejects('UNSUPPORTED_FORMAT', () => parseLibraryArchive(JSON.stringify({ ...archive(), format: 'bibtex' })));
-  rejects('UNSUPPORTED_FORMAT', () => parseLibraryArchive(JSON.stringify({ ...archive(), version: 2 })));
+  rejects('UNSUPPORTED_FORMAT', () => parseLibraryArchive(JSON.stringify({ ...archive(), version: 3 })));
   rejects('INVALID_JSON', () => parseLibraryArchive('@article{paper,title={A}}'));
   rejects('INVALID_JSON', () => parseLibraryArchive('TY  - JOUR\nER  -'));
 });

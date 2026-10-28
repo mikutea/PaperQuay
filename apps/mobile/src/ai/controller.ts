@@ -4,6 +4,7 @@ import { AiError, aiFailure } from './errors.ts';
 import { aiAccountKey, parseAiProvider } from './provider.ts';
 import type { AiAccountScope, AiAction, AiProviderConfig, AiResult, AiSaveContext, AiSnapshot, PdfAiContext, PreparedAiContext } from './types.ts';
 import { createAiHistoryRecord, type AiHistoryRecord } from './archiveTypes.ts';
+import { validateAiConversation, type AiConversationData } from '../../../../packages/ai-core/src/conversation.ts';
 
 const emptySnapshot = (): AiSnapshot => ({ busy: null, result: null, previousResult: null, failure: null, models: [], connection: 'untested' });
 
@@ -56,7 +57,7 @@ export class AiSessionController {
       if (this.#current(epoch)) this.#publish({ ...this.#snapshot, busy: null, failure: aiFailure(error), connection: 'failed' });
     } finally { if (this.#current(epoch)) this.#abort = null; }
   }
-  async start(action: AiAction, question = ''): Promise<void> {
+  async start(action: AiAction, question = '', conversation?: AiConversationData): Promise<void> {
     if (!this.#scope || !this.#config || this.#disposed) return;
     const prior = this.#snapshot.result;
     const previousResult = prior?.text.trim() ? (prior.status === 'running'
@@ -90,6 +91,7 @@ export class AiSessionController {
     try {
       const completed = await this.#client.generate({
         accountScope: scope, config, context, action, question, signal: abort.signal,
+        ...(conversation ? { conversation: validateAiConversation(conversation) } : {}),
         onText: (text) => update({ text }), onUsage: (usage) => update({ usage }),
       });
       if (!this.#current(epoch)) return;

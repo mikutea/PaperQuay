@@ -8,7 +8,7 @@ import {
   ENTITY_TYPES, ENTITY_DATA_SCHEMAS, ISO_TIMESTAMP_PATTERN, UUID_PATTERN,
   PUSH_REQUEST_SCHEMA, PUSH_RESPONSE_SCHEMA, PUSH_RESULT_SCHEMA, PULL_RESPONSE_SCHEMA,
   SYNC_OPERATION_SCHEMA, SYNC_RECORD_SCHEMA, SYNC_LIMITS,
-  SYNC_FEATURE_HEADER, PAPER_ORGANIZATION_FEATURE, projectLegacyPaper,
+  SYNC_FEATURE_HEADER, PAPER_ORGANIZATION_FEATURE, projectLegacyPaper,RICH_NOTES_FEATURE,AI_CONVERSATIONS_FEATURE,supportsSyncRecord,
 } from '../../packages/sync-core/src/index.ts';
 import type { PushRequest, PushResult } from '../../packages/sync-core/src/index.ts';
 import type { TokenVerifier, VerifiedIdentity } from './auth.ts';
@@ -19,6 +19,8 @@ import type { CloudPdfRepository, DesktopPdfRepository, DeviceRegistration, Reso
 import { registerCloudPdfRoutes } from './cloud-pdf.ts';
 import { desktopPdfCapability, registerDesktopPdfRoutes } from './desktop-pdf.ts';
 import type { DesktopPdfTimings } from './desktop-pdf.ts';
+import {registerRemoteTaskRoutes,REMOTE_TASK_CAPABILITY,REMOTE_TASK_UPLOAD_HEADERS} from './remote-tasks.ts';
+import type {RemoteTaskRepository} from './remote-task-store.ts';
 
 declare module 'fastify' {
   interface FastifyRequest { identity: VerifiedIdentity | null }
@@ -29,6 +31,7 @@ interface AppOptions {
   repository: SyncRepository;
   cloudPdfRepository?: CloudPdfRepository;
   desktopPdfRepository?: DesktopPdfRepository;
+  remoteTaskRepository?:RemoteTaskRepository;
   verifyToken: TokenVerifier;
   logger?: FastifyServerOptions['logger'];
   /** Used only by isolated tests, never set by process environment. */
@@ -97,8 +100,14 @@ function organizationEnabled(request: FastifyRequest): boolean {
   const header = request.headers[SYNC_FEATURE_HEADER.toLowerCase()];
   return typeof header === 'string' && header.split(',').map((value) => value.trim()).includes(PAPER_ORGANIZATION_FEATURE);
 }
+function negotiatedFeatures(request:FastifyRequest){
+  const value=request.headers[SYNC_FEATURE_HEADER.toLowerCase()];
+  const features=typeof value==='string'?value.split(',').map(item=>item.trim()):[];
+  return{richNotes:features.includes(RICH_NOTES_FEATURE),aiConversations:features.includes(AI_CONVERSATIONS_FEATURE)};
+}
 
 function presentResult(request: FastifyRequest, result: PushResult): PushResult {
+  if(result.record&&!supportsSyncRecord(negotiatedFeatures(request),result.record))return{opId:result.opId,status:'rejected',replayed:false,code:'FEATURE_NOT_NEGOTIATED',retryable:false};
   return organizationEnabled(request) || !result.record ? result
     : { ...result, record: projectLegacyPaper(result.record) };
 }
@@ -140,8 +149,8 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   app.decorateRequest('identity', null);
   await app.register(cors, {
     origin: config.allowedOrigins.length ? config.allowedOrigins : false,
-    methods: ['GET', 'POST', 'PUT', 'DELETE'], allowedHeaders: ['Authorization', 'Content-Type', SYNC_FEATURE_HEADER],
-    exposedHeaders: ['Accept-Ranges'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE'], allowedHeaders: ['Authorization', 'Content-Type', SYNC_FEATURE_HEADER,...REMOTE_TASK_UPLOAD_HEADERS],
+    exposedHeaders: ['Accept-Ranges','X-PaperQuay-Artifact-Digest'],
     credentials: false, strictPreflight: true, maxAge: 600,
   });
   if (options.rateLimitEnabled !== false) {
@@ -196,7 +205,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   app.get('/v1/capabilities', { onRequest: enforceRateLimit }, async () => ({
     protocolVersion: 1,
     entitySchemas: Object.fromEntries(ENTITY_TYPES.map((type) => [type, [1]])),
-    features: { paperOrganization: 1, ...(config.cloudPdfEnabled ? { privatePdfStorage: 1 } : {}),
+    features: { paperOrganization: 1,richNotes:1,aiConversations:1,...(config.remoteTasksEnabled?{remoteTasks:1}:{}), ...(config.cloudPdfEnabled ? { privatePdfStorage: 1 } : {}),
       ...(config.desktopPdfEnabled ? { desktopPdfTransfer: 1 } : {}) },
     deviceBinding: 'oidc-session',
     limits: {
@@ -219,6 +228,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     ...(config.cloudPdfEnabled ? { cloudPdf: { maxFileBytes: SERVER_LIMITS.cloudPdfMaxFileBytes,
       maxAccountBytes: config.cloudPdfAccountBytes, maxCopies: SERVER_LIMITS.cloudPdfMaxCopies } } : {}),
     ...(config.desktopPdfEnabled ? { desktopPdf: desktopPdfCapability(config.desktopPdfStunUrls) } : {}),
+    ...(config.remoteTasksEnabled?{remoteTasks:REMOTE_TASK_CAPABILITY}:{}),
     tombstoneRetention: 'no-pruning-in-m1',
   }));
   app.post<{ Body: DeviceRegistration }>('/v1/devices', {
@@ -250,16 +260,15 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   app.post<{ Body: PushRequest }>('/v1/sync/push', {
     onRequest: authenticate, schema: { body: PUSH_REQUEST_SCHEMA, response: { 200: PUSH_RESPONSE_SCHEMA } },
   }, async (request) => {
-    const result = await repository.push(identity(request), request.body);
-    return organizationEnabled(request) ? result
-      : { ...result, results: result.results.map((item) => presentResult(request, item)) };
+    const result = await repository.push(identity(request), request.body,negotiatedFeatures(request));
+    return { ...result, results: result.results.map((item) => presentResult(request, item)) };
   });
   app.get<{ Querystring: { cursor?: string; limit?: string } }>('/v1/sync/pull', {
     onRequest: authenticate, schema: { querystring: paginationSchema, response: { 200: PULL_RESPONSE_SCHEMA } },
   }, async (request) => {
     const result = await repository.pull(identity(request), request.query.cursor, pageLimit(request.query.limit, SERVER_LIMITS.maxPullRecords));
-    return organizationEnabled(request) ? result
-      : { ...result, records: result.records.map((record) => projectLegacyPaper(record)) };
+    const records=result.records.filter(record=>supportsSyncRecord(negotiatedFeatures(request),record));
+    return {...result,records:organizationEnabled(request)?records:records.map(record=>projectLegacyPaper(record))};
   });
   app.get<{ Querystring: { cursor?: string; limit?: string } }>('/v1/conflicts', {
     onRequest: authenticate,
@@ -270,7 +279,9 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     } } },
   }, async (request) => {
     const result = await repository.listConflicts(identity(request), request.query.cursor, pageLimit(request.query.limit, SERVER_LIMITS.maxConflictRecords));
-    return organizationEnabled(request) ? result : { ...result, conflicts: result.conflicts.map((conflict) => ({
+    const conflicts=result.conflicts.filter(conflict=>supportsSyncRecord(negotiatedFeatures(request),conflict.attemptedOperation)
+      &&(!conflict.observedRecord||supportsSyncRecord(negotiatedFeatures(request),conflict.observedRecord))&&(!conflict.currentRecord||supportsSyncRecord(negotiatedFeatures(request),conflict.currentRecord)));
+    return organizationEnabled(request) ? {...result,conflicts} : { ...result, conflicts: conflicts.map((conflict) => ({
       ...conflict,
       attemptedOperation: projectLegacyPaper(conflict.attemptedOperation),
       observedRecord: conflict.observedRecord ? projectLegacyPaper(conflict.observedRecord) : null,
@@ -279,10 +290,11 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   });
   app.post<{ Params: { id: string }; Body: ResolveRequest }>('/v1/conflicts/:id/resolve', {
     onRequest: authenticate, schema: { params: idParams, body: resolveSchema, response: { 200: PUSH_RESULT_SCHEMA } },
-  }, async (request) => presentResult(request, await repository.resolveConflict(identity(request), request.params.id, request.body)));
+  }, async (request) => presentResult(request, await repository.resolveConflict(identity(request), request.params.id, request.body,negotiatedFeatures(request))));
   await registerCloudPdfRoutes(app, { enabled: config.cloudPdfEnabled, repository: options.cloudPdfRepository,
     sessions: repository, authenticate, transferTimeoutMs: options.cloudPdfTransferTimeoutMs });
   const desktop = await registerDesktopPdfRoutes(app, { enabled: config.desktopPdfEnabled, repository: options.desktopPdfRepository,
     authenticate, timings: options.desktopPdfTimings });
+  await registerRemoteTaskRoutes(app,{enabled:config.remoteTasksEnabled,repository:options.remoteTaskRepository,authenticate});
   return app;
 }

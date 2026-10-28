@@ -1,4 +1,6 @@
-export const ENTITY_TYPES = ['paper', 'attachmentVersion', 'note', 'annotation', 'readingPosition'] as const;
+import type {RichNoteData} from './richNote.ts';
+import type {AiConversationData,AiTemplateData} from '../../ai-core/src/conversation.ts';
+export const ENTITY_TYPES = ['paper', 'attachmentVersion', 'note', 'annotation', 'readingPosition', 'aiConversation', 'aiTemplate'] as const;
 export type EntityType = typeof ENTITY_TYPES[number];
 
 export interface PaperOrganization {
@@ -31,12 +33,13 @@ export interface AttachmentVersionData {
   pageCount: number | null;
 }
 
-export interface NoteData {
+export interface MarkdownNoteData {
   paperId: string | null;
   title: string;
   body: string;
   format: 'markdown';
 }
+export type NoteData=MarkdownNoteData|RichNoteData;
 
 export type PdfQuad = [number, number, number, number, number, number, number, number];
 export interface AnnotationAnchor {
@@ -73,6 +76,8 @@ export interface EntityDataMap {
   note: NoteData;
   annotation: AnnotationData;
   readingPosition: ReadingPositionData;
+  aiConversation: AiConversationData;
+  aiTemplate: AiTemplateData;
 }
 export type EntityData = EntityDataMap[EntityType];
 export type SyncMutation = 'put' | 'delete' | 'restore';

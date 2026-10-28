@@ -1,12 +1,14 @@
-import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type {
   EntityData,
   LocalEdit,
   NoteData,
+  MarkdownNoteData,
   PaperData,
   VisibleEntity,
 } from '../../../../packages/sync-core/src/index.ts';
 import { canonicalJson } from '../../../../packages/sync-core/src/index.ts';
+import { createRichNoteData, validateRichNoteData, type RichNoteData } from '../../../../packages/sync-core/src/richNote.ts';
 import { ClientError, describeError } from '../errors.ts';
 import type { WorkspaceController } from '../sync/workspace.ts';
 import { Icon } from './Icon.tsx';
@@ -24,6 +26,12 @@ const emptyPaper = (): PaperData => ({
 });
 const emptyNote = (): NoteData => ({ title: '', paperId: null, body: '', format: 'markdown' });
 const MarkdownPreview = lazy(() => import('./MarkdownPreview.tsx').then((module) => ({ default: module.MarkdownPreview })));
+const RichNoteEditor = lazy(() => import('./RichNoteEditor.tsx').then((module) => ({ default: module.RichNoteEditor })));
+const RichNotePreview = lazy(() => import('./RichNoteEditor.tsx').then((module) => ({ default: module.RichNotePreview })));
+const isRichNote = (value: PaperData | NoteData): value is RichNoteData => 'format' in value && value.format === 'tiptap-json';
+const RICH_INVALID = '结构笔记正文尚未通过完整校验，暂不可保存；请保留编辑器并修正内容。';
+const RICH_UNAVAILABLE = '当前账号未启用结构笔记写入，原内容已保留供查看。';
+let sessionNumber = 0;
 
 export function EntityEditor({
   type,
@@ -38,6 +46,8 @@ export function EntityEditor({
   organizationEnabled = false,
   onRead,
   defaultPaperId = null,
+  richNotesEnabled = false,
+  accountSessionKey = 'local',
 }: {
   type: 'paper' | 'note';
   entityId: string;
@@ -51,6 +61,8 @@ export function EntityEditor({
   organizationEnabled?: boolean;
   onRead?: () => void;
   defaultPaperId?: string | null;
+  richNotesEnabled?: boolean;
+  accountSessionKey?: string;
 }) {
   const [data, setData] = useState<PaperData | NoteData>(
     () => (entity?.data as PaperData | NoteData) ?? (type === 'paper' ? emptyPaper() : { ...emptyNote(), paperId: defaultPaperId }),
@@ -62,6 +74,11 @@ export function EntityEditor({
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [preview, setPreview] = useState(false);
+  const [richValid, setRichValid] = useState(() => !isRichNote((entity?.data as PaperData | NoteData) ?? emptyNote()));
+  const richValidity = useRef(richValid);
+  const liveData = useRef(data); liveData.current = data;
+  const capability = useRef(richNotesEnabled); capability.current = richNotesEnabled;
+  const renderSession = useMemo(() => ({ id: ++sessionNumber }), [type, entityId, controller, accountSessionKey]);
   const editorSession = useRef<object | null>(null);
   const editSequence = useRef(0);
   const savingSession = useRef<object | null>(null);
@@ -69,11 +86,14 @@ export function EntityEditor({
   const flushNote = useRef<() => void>(() => {});
   const remoteSignature = JSON.stringify(entity?.data ?? null);
   const changedWhileEditing = dirty && (entity?.revision ?? 0) !== baseRevision;
+  const rich = type === 'note' && isRichNote(data);
+  const richBlocked = rich && (!richNotesEnabled || !richValid);
+  const contentSessionKey = JSON.stringify([accountSessionKey, type, entityId, renderSession.id]);
 
   useLayoutEffect(() => {
     // Persistence may finish after navigation. Retire the old editor before its
     // callbacks can clear a replacement draft or navigate away from it.
-    const session = {};
+    const session = renderSession;
     editorSession.current = session;
     setData((entity?.data as PaperData | NoteData) ?? (type === 'paper' ? emptyPaper() : { ...emptyNote(), paperId: defaultPaperId }));
     setBaseRevision(entity?.revision ?? 0);
@@ -86,10 +106,12 @@ export function EntityEditor({
     setError(null);
     setSaved(false);
     setPreview(false);
+    const valid = !isRichNote((entity?.data as PaperData | NoteData) ?? emptyNote());
+    richValidity.current = valid; setRichValid(valid);
     return () => {
       if (editorSession.current === session) editorSession.current = null;
     };
-  }, [type, entityId, controller]);
+  }, [renderSession]);
   useEffect(() => {
     onDirty(dirty);
   }, [dirty, onDirty]);
@@ -106,10 +128,10 @@ export function EntityEditor({
     }
   }, [remoteSignature, entity?.revision, dirty]); // A changed remote version never replaces a dirty draft.
   useEffect(() => {
-    if (type !== 'note' || !dirty || saving || error || changedWhileEditing || entity?.deleted) return;
+    if (type !== 'note' || !dirty || saving || error || changedWhileEditing || entity?.deleted || richBlocked) return;
     const timer = setTimeout(() => flushNote.current(), 600);
     return () => clearTimeout(timer);
-  }, [type, dirty, saving, error, changedWhileEditing, entity?.deleted, data]);
+  }, [type, dirty, saving, error, changedWhileEditing, entity?.deleted, data, richBlocked]);
   useEffect(() => {
     if (type !== 'note') return;
     const onHidden = () => {
@@ -125,17 +147,52 @@ export function EntityEditor({
       globalThis.window?.removeEventListener?.('pagehide', onPageHide);
     };
   }, [type]);
-  function edit(update: Partial<PaperData & NoteData>) {
+  function edit(update: Partial<PaperData> & Partial<Pick<MarkdownNoteData, 'title' | 'paperId' | 'body'>>) {
+    if (editorSession.current !== renderSession || isRichNote(liveData.current) && (!capability.current || 'body' in update)) return;
     editSequence.current += 1;
-    setData((previous) => ({ ...previous, ...update }));
+    setData((previous) => ({ ...previous, ...update }) as PaperData|NoteData);
     setDirty(true);
     setSaved(false);
     setError(null);
   }
+  function richDirty(changed: boolean) {
+    if (!changed || editorSession.current !== renderSession || !capability.current || !isRichNote(liveData.current)) return;
+    editSequence.current += 1; setDirty(true); onDirty(true); setSaved(false); setError(null);
+  }
+  function richChanged(value: RichNoteData) {
+    if (editorSession.current !== renderSession || !capability.current || !isRichNote(liveData.current)) return;
+    try {
+      const next = validateRichNoteData(value);
+      editSequence.current += 1; setData(next); setDirty(true); setSaved(false); setError(null);
+    } catch { richValidity.current = false; setRichValid(false); setError(RICH_INVALID); }
+  }
+  function richValidityChanged(valid: boolean) {
+    if (editorSession.current !== renderSession || !isRichNote(liveData.current)) return;
+    richValidity.current = valid; setRichValid(valid);
+    if (valid) setError((previous) => previous === RICH_INVALID ? null : previous);
+  }
+  const canChooseFormat = type === 'note' && !entity && !dirty && ('body' in data) && data.body === ''
+    && (!isRichNote(data) || data.assets.length === 0 && JSON.stringify(data.document) === JSON.stringify({ type: 'doc', content: [{ type: 'paragraph', content: [] }] }));
+  function chooseFormat(format: 'markdown' | 'tiptap-json') {
+    if (editorSession.current !== renderSession || !canChooseFormat || !('body' in data) || format === data.format || format === 'tiptap-json' && !capability.current) return;
+    if (format === 'markdown') { setData({ paperId: data.paperId, title: data.title, body: '', format }); richValidity.current = true; setRichValid(true); }
+    else {
+      const timestamp = Date.now();
+      setData(createRichNoteData({ paperId: data.paperId, title: data.title, document: { type: 'doc', content: [{ type: 'paragraph', content: [] }] }, assets: [],
+        metadata: { type: 'standalone', anchors: [], tags: [], color: '#fef08a', isFavorite: false, isPinned: false,
+          linkedNoteIds: [], linkedPaperIds: [], createdAt: timestamp, updatedAt: timestamp, unresolvedReferences: [] } }));
+      richValidity.current = false; setRichValid(false);
+    }
+    setPreview(false); setError(null);
+  }
 
   async function save(revision = baseRevision, mutation: 'put' | 'restore' = 'put', automatic = false) {
     const session = editorSession.current;
-    if (!session || savingSession.current === session) return;
+    if (!session || session !== renderSession || savingSession.current === session) return;
+    if (isRichNote(data) && (!capability.current || !richValidity.current)) {
+      if (!automatic) setError(!capability.current ? RICH_UNAVAILABLE : RICH_INVALID);
+      return;
+    }
     if (!data.title.trim() && !(automatic && type === 'note')) {
       setError('请填写标题。');
       return;
@@ -155,7 +212,9 @@ export function EntityEditor({
               keywords: data.keywords.map((word) => word.trim()).filter(Boolean),
               ...(data.organization ? { organization: normalizeOrganization(data.organization) } : {}),
             }
-          : { ...data, title: data.title.trim() || '未命名笔记' };
+          : isRichNote(data) ? validateRichNoteData({ ...data, title: data.title.trim() || '未命名笔记',
+              metadata: { ...data.metadata, updatedAt: Math.max(Date.now(), data.metadata.createdAt, data.metadata.updatedAt) } })
+            : { ...data, title: data.title.trim() || '未命名笔记' };
       await controller.save(
         { entityType: type, entityId, mutation, data: normalized } as LocalEdit,
         revision,
@@ -186,7 +245,7 @@ export function EntityEditor({
   };
   async function remove() {
     const session = editorSession.current;
-    if (!session) return;
+    if (!session || session !== renderSession || isRichNote(data) && !capability.current) return;
     if (!window.confirm('将这条内容标记为已删除？同步后会影响此账号的其他设备。')) return;
     if (editorSession.current !== session) return;
     setSaving(true);
@@ -211,7 +270,7 @@ export function EntityEditor({
   }
   async function restore() {
     const session = editorSession.current;
-    if (!session) return;
+    if (!session || session !== renderSession || isRichNote(data) && !capability.current) return;
     if (!entity?.data) {
       setError('没有可恢复的内容。请从冲突中保留的版本恢复。');
       return;
@@ -244,7 +303,7 @@ export function EntityEditor({
         <button className="icon-button mobile-back" onClick={onBack} aria-label="返回列表">
           <Icon name="back" />
         </button>
-        <span className="eyebrow">{type === 'note' ? 'Markdown 笔记' : '文献信息'}</span>
+        <span className="eyebrow">{type === 'note' ? rich ? '结构笔记' : 'Markdown 笔记' : '文献信息'}</span>
         {type === 'paper' && entity && !entity.deleted && onRead && <button type="button" className="secondary"
           disabled={saving} onClick={onRead}>打开 PDF</button>}
         {entity && !entity.deleted && (
@@ -252,7 +311,7 @@ export function EntityEditor({
             className="icon-button danger-text"
             aria-label="删除此条内容"
             onClick={() => void remove()}
-            disabled={saving}
+            disabled={saving || rich && !richNotesEnabled}
           >
             <Icon name="trash" />
           </button>
@@ -266,7 +325,7 @@ export function EntityEditor({
           {entity.data ? (
             <>
               <h3>{(entity.data as PaperData | NoteData).title}</h3>
-              <button className="primary" onClick={() => void restore()} disabled={saving}>
+              <button className="primary" onClick={() => void restore()} disabled={saving || rich && !richNotesEnabled}>
                 恢复此版本
               </button>
             </>
@@ -282,7 +341,7 @@ export function EntityEditor({
             void save();
           }}
         >
-          <fieldset className="editor-fields" disabled={editingBlocked}>
+          <fieldset className="editor-fields" disabled={editingBlocked || rich && !richNotesEnabled}>
             <label className="sr-only" htmlFor="entity-title">
               {type === 'note' ? '笔记标题' : '文献标题'}
             </label>
@@ -297,6 +356,10 @@ export function EntityEditor({
             />
             {type === 'note' ? (
               <>
+                {!entity && <div className="note-mode-tabs" aria-label="新笔记格式">
+                  <button type="button" aria-pressed={!rich} disabled={!canChooseFormat} onClick={() => chooseFormat('markdown')}>Markdown 笔记</button>
+                  <button type="button" aria-pressed={rich} disabled={!canChooseFormat || !richNotesEnabled} onClick={() => chooseFormat('tiptap-json')}>结构笔记</button>
+                </div>}
                 <label className="field association-field">
                   关联文献
                   <select
@@ -324,9 +387,13 @@ export function EntityEditor({
                 </label>
                 <div className="note-mode-tabs" aria-label="笔记模式">
                   <button type="button" aria-pressed={!preview} onClick={() => setPreview(false)}>编辑</button>
-                  <button type="button" aria-pressed={preview} onClick={() => setPreview(true)}>预览</button>
+                  <button type="button" aria-pressed={preview} disabled={rich && !richValid} onClick={() => { if (!rich || richValidity.current) setPreview(true); }}>预览</button>
                 </div>
-                {preview ? <Suspense fallback={<p role="status">正在生成预览…</p>}><MarkdownPreview body={(data as NoteData).body} /></Suspense> : <textarea
+                {rich ? <Suspense fallback={<p role="status">正在打开结构笔记…</p>}>
+                  <div hidden={preview}><RichNoteEditor value={data as RichNoteData} onChange={richChanged} onDirtyChange={richDirty} onValidityChange={richValidityChanged}
+                    disabled={editingBlocked || preview || !richNotesEnabled} sessionKey={contentSessionKey} /></div>
+                  {preview && <RichNotePreview value={data as RichNoteData} sessionKey={`${contentSessionKey}:preview`} />}
+                </Suspense> : preview ? <Suspense fallback={<p role="status">正在生成预览…</p>}><MarkdownPreview body={(data as NoteData).body} /></Suspense> : <textarea
                   id="note-body"
                   className="markdown-input"
                   value={(data as NoteData).body}
@@ -335,6 +402,8 @@ export function EntityEditor({
                   placeholder="开始记录你的想法…支持 Markdown 文本。"
                   spellCheck={false}
                 />}
+                {!richNotesEnabled && <p className="muted">{rich ? RICH_UNAVAILABLE : '当前账号尚未启用结构笔记；Markdown 笔记可继续编辑。'}</p>}
+                {rich && !richValid && <p className="muted" role="status">正文尚未完成校验，保存和预览已暂停；未发送的草稿保留在编辑器中。</p>}
               </>
             ) : (
               <div className="metadata-fields">
@@ -414,12 +483,12 @@ export function EntityEditor({
               <p>你的草稿已保留在编辑框中。请比较当前内容后决定如何保存。</p>
               <details>
                 <summary>查看当前版本</summary>
-                <ContentPreview data={entity?.data ?? null} deleted={entity?.deleted} />
+                <ContentPreview data={entity?.data ?? null} deleted={entity?.deleted} sessionKey={`${contentSessionKey}:comparison`} />
               </details>
               <button
                 type="button"
                 className="secondary"
-                disabled={saving}
+                disabled={saving || richBlocked}
                 onClick={() => {
                   if (
                     window.confirm(
@@ -440,7 +509,7 @@ export function EntityEditor({
               {saving
                 ? '正在保存到此设备…'
                 : dirty
-                  ? type === 'note' && !changedWhileEditing && !error ? '等待自动保存…' : '尚未保存'
+                  ? richBlocked ? '正文暂不可保存，草稿已保留' : type === 'note' && !changedWhileEditing && !error ? '等待自动保存…' : '尚未保存'
                   : saved || entity
                     ? entityStatus(entity, hasConflict)
                     : '新建内容尚未保存'}
@@ -453,7 +522,7 @@ export function EntityEditor({
             <button
               type="submit"
               className="primary"
-              disabled={saving || changedWhileEditing || (!dirty && Boolean(entity))}
+              disabled={saving || changedWhileEditing || richBlocked || (!dirty && Boolean(entity))}
             >
               <Icon name="check" />
               保存
@@ -473,12 +542,18 @@ export function EntityEditor({
 export function ContentPreview({
   data,
   deleted = false,
+  sessionKey,
 }: {
   data: EntityData | null;
   deleted?: boolean;
+  sessionKey?: string;
 }) {
+  const previewSession = useMemo(() => `${sessionKey ?? 'content'}:${++sessionNumber}`, [data, sessionKey]);
   if (deleted) return <p className="muted">此版本已删除。</p>;
   if (!data) return <p className="muted">没有正文。</p>;
+  if ('format' in data && data.format === 'tiptap-json') return <>
+    <h4>{data.title}</h4><Suspense fallback={<p role="status">正在生成完整结构预览…</p>}><RichNotePreview value={data} sessionKey={previewSession} /></Suspense>
+  </>;
   if ('body' in data)
     return (
       <>

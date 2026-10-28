@@ -12,7 +12,10 @@ export type ClientErrorCode =
   | 'STORAGE_CORRUPT'
   | 'ACCOUNT_CHANGED'
   | 'ACCOUNT_STORAGE_LIMIT'
+  | 'AI_COLLECTION_LIMIT'
+  | 'REMOTE_REQUEST_PENDING'
   | 'SYNC_FAILED'
+  | 'SYNC_FEATURE_UNAVAILABLE'
   | 'NATIVE_NOT_READY'
   | 'CONFLICT_CHANGED'
   | 'EDIT_CHANGED'
@@ -35,7 +38,10 @@ const messages: Record<ClientErrorCode, string> = {
   STORAGE_CORRUPT: '此设备的缓存格式无法读取。请保留本地数据并联系维护者。',
   ACCOUNT_CHANGED: '账号已切换，本次同步已停止。',
   ACCOUNT_STORAGE_LIMIT: '账号同步存储额度已满。改动仍保存在此设备，请联系服务管理员处理额度后重试。',
+  AI_COLLECTION_LIMIT: '此账号最多保存50个同步会话和100个同步模板。请先删除不再需要的内容；原有内容已保留。',
+  REMOTE_REQUEST_PENDING: '上一条远程任务的创建结果尚未确认。请先重试同一请求或查询任务，再发起新的工作。',
   SYNC_FAILED: '同步未完成，请重试或查看待处理操作。',
+  SYNC_FEATURE_UNAVAILABLE:'当前账号服务尚未支持这类内容。已保存的内容与待同步操作会保留，请连接支持相应能力的服务后重试。',
   NATIVE_NOT_READY: '此安装包缺少所需原生组件，请使用完整构建的应用。',
   CONFLICT_CHANGED: '这条记录又有更新，请重新查看双方内容后解决冲突。',
   EDIT_CHANGED: '编辑期间收到新版本。你的草稿仍在，请查看当前版本后再保存。',
@@ -61,6 +67,7 @@ export function describeError(error: unknown): string {
 }
 
 export function errorFromResponse(status: number, serverCode?: string): ClientError {
+  if(serverCode==='FEATURE_NOT_NEGOTIATED')return new ClientError('SYNC_FEATURE_UNAVAILABLE');
   if (serverCode === 'DEVICE_REVOKED' || serverCode === 'SESSION_REVOKED')
     return new ClientError('SESSION_REVOKED');
   if (status === 401 || status === 403) return new ClientError('AUTH_REQUIRED');

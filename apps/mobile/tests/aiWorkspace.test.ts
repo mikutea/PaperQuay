@@ -7,6 +7,8 @@ import { AI_SECRET_KEY, LocalAiConfigStore, aiSecretNamespace, defaultAiProvider
 import type { AiProviderConfig, AiSaveContext, AiTransport, AiWorkspaceProps, PdfAiContext, PdfCitationTarget } from '../src/ai/types.ts';
 import { MemorySecretStore } from '../src/platform/secretStore.ts';
 import type { NoteData } from '../../../packages/sync-core/src/index.ts';
+import { createAiConversation, appendAiConversation } from '../../../packages/ai-core/src/conversation.ts';
+import { validateAiArchiveItem, type AiHistoryRecord } from '../src/ai/archiveTypes.ts';
 
 const KEY = 'ui-fixture-secret-never-live';
 const ACCOUNT = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -28,7 +30,7 @@ async function until(predicate: () => boolean, description: string): Promise<voi
   }
 }
 
-async function setup(options: { key?: boolean; config?: AiProviderConfig; context?: PdfAiContext; transport?: AiTransport; onSaveNote?: AiWorkspaceProps['onSaveNote'] } = {}) {
+async function setup(options: { key?: boolean; config?: AiProviderConfig; context?: PdfAiContext; transport?: AiTransport; onSaveNote?: AiWorkspaceProps['onSaveNote']; sync?:AiWorkspaceProps['sync'] } = {}) {
   const original = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
   const values = new Map<string, string>();
   const storage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); }, removeItem: (key: string) => { values.delete(key); } };
@@ -45,6 +47,7 @@ async function setup(options: { key?: boolean; config?: AiProviderConfig; contex
     } };
   const saved: { note: NoteData; source: AiSaveContext }[] = []; const jumps: PdfCitationTarget[] = [];
   let props: AiWorkspaceProps = { accountScope: SCOPE, context: options.context ?? CONTEXT, secretStore: secrets, transport,
+    sync:options.sync,
     onSaveNote: options.onSaveNote ?? (async (note, source) => { saved.push({ note, source }); }), onNavigateCitation: (target) => { jumps.push(target); } };
   const password = { value: '' };
   let renderer!: ReactTestRenderer;
@@ -261,4 +264,20 @@ test('a pending device-key save settles after model/context changes without leav
     assert.equal(await ui.secrets.get(await aiSecretNamespace(SCOPE, CONFIG), AI_SECRET_KEY), KEY);
     assert.equal(ui.requests.length, 0);
   } finally { release.resolve(); ui.close(); }
+});
+
+test('a full 24-turn synchronized conversation can be viewed but cannot issue a 25th paid request',async()=>{
+  const item=(n:number)=>validateAiArchiveItem({kind:'record',version:1,revision:1,id:crypto.randomUUID(),createdAt:`2026-10-28T00:00:${String(n*2).padStart(2,'0')}.000Z`,
+    updatedAt:`2026-10-28T00:00:${String(n*2+1).padStart(2,'0')}.000Z`,context:CONTEXT,action:'ask',question:'问题'+n,
+    provider:{id:CONFIG.id,endpoint:CONFIG.endpoint,model:CONFIG.model},result:{text:'已完成回答 [P2]',status:'complete',finishReason:'stop',usage:null,cost:'unknown',failure:null}}) as AiHistoryRecord;
+  let data=createAiConversation(item(0));for(let n=1;n<24;n++)data=appendAiConversation(data,item(n));
+  const ui=await setup({sync:{enabled:true,conversations:[{id:crypto.randomUUID(),revision:1,data,status:'synced',conflicted:false}],templates:[],
+    async saveConversation(){throw new Error('unexpected write');},async saveTemplate(){throw new Error('unexpected write');},async remove(){throw new Error('unexpected delete');}}});
+  try{
+    act(()=>ui.button(CONTEXT.label+' · 24 轮').props.onClick());
+    act(()=>ui.button('用已保存原文继续此会话').props.onClick());
+    assert.equal(ui.button('发送并解释').props.disabled,true);
+    await ui.submit();assert.equal(ui.requests.length,0);assert.match(text(ui.renderer.root),/此会话已达24轮上限/);
+    act(()=>ui.button('结束继续，另开问答').props.onClick());assert.equal(ui.button('发送并解释').props.disabled,false);
+  }finally{ui.close();}
 });

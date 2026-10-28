@@ -2,17 +2,18 @@ import { createHash, randomUUID } from 'node:crypto';
 import pg from 'pg';
 import type { PoolClient, PoolConfig } from 'pg';
 import {
-  validateOperation, validatePushRequest,
+  validateOperation, validatePushRequest,canonicalJson,LEGACY_SYNC_FEATURES,supportsSyncRecord,
 } from '../../packages/sync-core/src/index.ts';
 import type {
   AttachmentVersionData, EntityData, EntityType, PaperData, PullResponse, PushRequest, PushResponse,
-  PushResult, ReadingPositionData, SyncOperation, SyncRecord,
+  PushResult, ReadingPositionData, SyncOperation, SyncRecord,SyncFeatureSet,
 } from '../../packages/sync-core/src/index.ts';
 import type { VerifiedIdentity } from './auth.ts';
 import { CursorCodec } from './cursor.ts';
 import { ApiError, isTransientDatabaseError } from './errors.ts';
 import { checkedCloudPdfByteLimit, checkedRetainedByteLimit, SERVER_LIMITS } from './config.ts';
 import type { CloudPdfCopy, CloudPdfQuota, CloudPdfRepository, CloudPdfStatus, ConflictPage, DesktopPdfAccess, DesktopPdfRepository, DesktopPdfTarget, DesktopPdfVersionPage, Device, DevicePlatform, DeviceRegistration, ResolveRequest, SessionView, SyncRepository } from './types.ts';
+import {createRemoteTaskRepository,type RemoteTaskRepository} from './remote-task-store.ts';
 
 interface AccountRow {
   id: string; epoch: string; last_seq: string; last_conflict_seq: string; entity_count: number; receipt_count: number; retained_bytes: string;
@@ -164,8 +165,12 @@ export class PostgresSyncStore implements SyncRepository, CloudPdfRepository, De
   async ready(): Promise<boolean> {
     try {
       const result = await this.pool.query<{ version: string }>('SELECT version FROM paperquay.schema_migrations ORDER BY version');
-      return result.rows.map((row) => row.version).join(',') === '001_initial.sql,002_receipt_quota.sql,003_retained_bytes_quota.sql,004_private_cloud_pdfs.sql';
+      return result.rows.map((row) => row.version).join(',') === '001_initial.sql,002_receipt_quota.sql,003_retained_bytes_quota.sql,004_private_cloud_pdfs.sql,005_remote_tasks.sql,006_extended_sync_content.sql,007_remote_task_recovery.sql,008_remote_journal_holder.sql';
     } catch { return false; }
+  }
+
+  remoteTasks():RemoteTaskRepository{
+    return createRemoteTaskRepository({withAccount:(identity,work)=>this.withAccount(identity,false,context=>work(context))});
   }
 
   private async withAccount<T>(identity: VerifiedIdentity, create: boolean,
@@ -631,13 +636,17 @@ export class PostgresSyncStore implements SyncRepository, CloudPdfRepository, De
       // Notes survive removal of their bibliographic record and may still be edited.
       if (paper.deleted_at && operation.entityType !== 'note') return rejected(operation.opId, 'REFERENCE_DELETED');
     }
-    if (operation.entityType === 'annotation' || operation.entityType === 'readingPosition') {
+    if (operation.entityType === 'annotation' || operation.entityType === 'readingPosition' || operation.entityType==='aiConversation') {
       const location = operation.data;
       const attachment = await this.entity(context, 'attachmentVersion', location.attachmentVersionId);
       if (!attachment) return rejected(operation.opId, 'DEPENDENCY_NOT_READY', true);
       if (attachment.deleted_at) return rejected(operation.opId, 'REFERENCE_DELETED');
       const version = attachment.data as AttachmentVersionData;
       if (version.paperId !== location.paperId) return rejected(operation.opId, 'REFERENCE_MISMATCH');
+      if(operation.entityType==='aiConversation'){
+        if(version.sha256!==operation.data.sha256||version.pageCount!==null&&version.pageCount!==operation.data.context.totalPages)return rejected(operation.opId,'IMMUTABLE_VERSION_BINDING');
+        return undefined;
+      }
       const page = operation.entityType === 'annotation' ? operation.data.anchor.pageIndex : operation.data.pageIndex;
       const furthest = operation.entityType === 'readingPosition' ? operation.data.furthestPageIndex : page;
       if (version.pageCount !== null && (page >= version.pageCount || furthest >= version.pageCount)) return rejected(operation.opId, 'PAGE_OUT_OF_RANGE');
@@ -650,8 +659,10 @@ export class PostgresSyncStore implements SyncRepository, CloudPdfRepository, De
     return undefined;
   }
 
-  private async applyMutation(context: TransactionContext, operation: SyncOperation, preflight?: ResponsePreflight): Promise<PushResult> {
+  private async applyMutation(context: TransactionContext, operation: SyncOperation, preflight?: ResponsePreflight,features:SyncFeatureSet=LEGACY_SYNC_FEATURES): Promise<PushResult> {
     const existing = await this.entity(context, operation.entityType, operation.entityId);
+    if(!supportsSyncRecord(features,operation)||existing&&!supportsSyncRecord(features,{entityType:existing.entity_type,data:existing.data}))return rejected(operation.opId,'FEATURE_NOT_NEGOTIATED');
+    if(existing?.entity_type==='note'&&'format'in existing.data&&existing.data.format==='tiptap-json'&&operation.mutation!=='delete'&&operation.data&&'format'in operation.data&&operation.data.format!=='tiptap-json')return rejected(operation.opId,'RICH_NOTE_DOWNGRADE_FORBIDDEN');
     if (existing && operation.entityType === 'readingPosition' && existing.created_by_device_id !== context.device.id) {
       return rejected(operation.opId, 'CHECKPOINT_DEVICE_MISMATCH');
     }
@@ -677,6 +688,7 @@ export class PostgresSyncStore implements SyncRepository, CloudPdfRepository, De
         ? ['paperId', 'attachmentId', 'sha256', 'sizeBytes', 'mediaType']
         : (operation.entityType === 'annotation' || operation.entityType === 'readingPosition') ? ['paperId', 'attachmentVersionId'] : [];
       if (immutable.some((field) => before[field] !== after[field])) return rejected(operation.opId, 'IMMUTABLE_VERSION_BINDING');
+      if(operation.entityType==='aiConversation'&&canonicalJson(before.context)!==canonicalJson(after.context))return rejected(operation.opId,'IMMUTABLE_AI_SOURCE');
       if (operation.entityType === 'attachmentVersion' && before.pageCount !== null && before.pageCount !== after.pageCount) return rejected(operation.opId, 'IMMUTABLE_VERSION_BINDING');
       if (operation.entityType === 'readingPosition') {
         const previous = existing.data as ReadingPositionData;
@@ -690,6 +702,10 @@ export class PostgresSyncStore implements SyncRepository, CloudPdfRepository, De
     }
     const invalidReference = await this.validateReferences(context, operation);
     if (invalidReference) return invalidReference;
+    if((operation.entityType==='aiConversation'||operation.entityType==='aiTemplate')&&operation.mutation!=='delete'&&(!existing||existing.deleted_at)){
+      const count=await context.client.query<{count:string}>(`SELECT count(*) FROM paperquay.entities WHERE account_id=$1 AND entity_type=$2 AND deleted_at IS NULL`,[context.account.id,operation.entityType]);
+      if(Number(count.rows[0].count)>=(operation.entityType==='aiConversation'?50:100))return rejected(operation.opId,'AI_COLLECTION_LIMIT');
+    }
     if (!existing && operation.entityType === 'readingPosition' && operation.data) {
       const duplicate = await context.client.query(`SELECT 1 FROM paperquay.entities
         WHERE account_id = $1 AND entity_type = 'readingPosition' AND created_by_device_id = $2
@@ -705,7 +721,7 @@ export class PostgresSyncStore implements SyncRepository, CloudPdfRepository, De
     return { opId: operation.opId, status: 'applied', replayed: false, record };
   }
 
-  async push(identity: VerifiedIdentity, request: PushRequest): Promise<PushResponse> {
+  async push(identity: VerifiedIdentity, request: PushRequest,features:SyncFeatureSet=LEGACY_SYNC_FEATURES): Promise<PushResponse> {
     if (!validatePushRequest(request).ok) throw new ApiError('VALIDATION_FAILED');
     const results: PushResult[] = [];
     // Leave room for the envelope and small retryable results for every remaining
@@ -728,8 +744,10 @@ export class PostgresSyncStore implements SyncRepository, CloudPdfRepository, De
       try {
         const result = await this.withAccount(identity, false, async (context) => {
           if (context.device.id !== request.deviceId) throw new ApiError('DEVICE_SESSION_MISMATCH', 403);
+          if(!supportsSyncRecord(features,operation))return rejected(operation.opId,'FEATURE_NOT_NEGOTIATED');
           const hash = operationHash({ kind: 'push', operation });
           const previous = await this.receipt(context, operation.opId, hash);
+          if(previous?.record&&!supportsSyncRecord(features,previous.record))return rejected(operation.opId,'FEATURE_NOT_NEGOTIATED');
           if (!previous && !storageLimited && context.account.receipt_count >= SERVER_LIMITS.maxAccountReceipts) {
             const result = rejected(operation.opId, 'ACCOUNT_RECEIPT_LIMIT');
             checkResponseBudget(result);
@@ -740,7 +758,7 @@ export class PostgresSyncStore implements SyncRepository, CloudPdfRepository, De
           // New operations must not repeat large reads or rolled-back writes.
           const result = previous ?? (storageLimited
             ? rejected(operation.opId, 'ACCOUNT_STORAGE_LIMIT', true)
-            : await this.applyMutation(context, operation, checkResponseBudget));
+            : await this.applyMutation(context, operation, checkResponseBudget,features));
           // Replays and small rejections also need a check. For mutations this
           // rechecks the actual database result against the same budget.
           checkResponseBudget(result);
@@ -840,12 +858,12 @@ export class PostgresSyncStore implements SyncRepository, CloudPdfRepository, De
     });
   }
 
-  async resolveConflict(identity: VerifiedIdentity, conflictId: string, request: ResolveRequest): Promise<PushResult> {
+  async resolveConflict(identity: VerifiedIdentity, conflictId: string, request: ResolveRequest,features:SyncFeatureSet=LEGACY_SYNC_FEATURES): Promise<PushResult> {
     try {
       return await this.withAccount(identity, false, async (context) => {
         const hash = operationHash({ kind: 'resolve', conflictId, request });
         const previous = await this.receipt(context, request.opId, hash);
-        if (previous) return previous;
+        if (previous) return previous.record&&!supportsSyncRecord(features,previous.record)?rejected(request.opId,'FEATURE_NOT_NEGOTIATED'):previous;
         if (context.account.receipt_count >= SERVER_LIMITS.maxAccountReceipts) return rejected(request.opId, 'ACCOUNT_RECEIPT_LIMIT');
         this.requireStorageHeadroom(context);
         const found = await context.client.query<ConflictRow>(`SELECT id,seq,entity_type,entity_id,attempted_operation,observed_record,created_at,resolved_at
@@ -855,6 +873,7 @@ export class PostgresSyncStore implements SyncRepository, CloudPdfRepository, De
         if (conflict.resolved_at) return this.remember(context, hash, rejected(request.opId, 'CONFLICT_ALREADY_RESOLVED'));
         const current = await this.entity(context, conflict.entity_type, conflict.entity_id);
         if (!current) throw new ApiError('STORAGE_INVARIANT_FAILED', 500);
+        if(!supportsSyncRecord(features,conflict.attempted_operation)||!supportsSyncRecord(features,{entityType:current.entity_type,data:current.data}))return rejected(request.opId,'FEATURE_NOT_NEGOTIATED');
         if (Number(current.revision) !== request.expectedRevision) {
           return this.remember(context, hash, { opId: request.opId, status: 'conflict', replayed: false,
             conflictId, record: toRecord(current) });
@@ -875,7 +894,7 @@ export class PostgresSyncStore implements SyncRepository, CloudPdfRepository, De
             clientCreatedAt: new Date().toISOString(),
           } as SyncOperation;
           if (!validateOperation(operation).ok) return this.remember(context, hash, rejected(request.opId, 'VALIDATION_FAILED'));
-          result = await this.applyMutation(context, operation);
+          result = await this.applyMutation(context, operation,undefined,features);
         }
         if (result.status === 'applied') {
           // An already-deleted no-op still closes the conflict and needs its

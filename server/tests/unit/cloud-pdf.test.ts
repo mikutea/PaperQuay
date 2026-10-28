@@ -83,9 +83,9 @@ test('disabled capabilities preserve old clients and enabled capabilities expose
   const old = (await disabled.inject('/v1/capabilities')).json();
   assert.equal(old.pdfStorage, false);
   assert.equal(old.cloudPdf, undefined);
-  assert.deepEqual(old.features, { paperOrganization: 1 });
+  assert.deepEqual(old.features, { paperOrganization: 1,richNotes:1,aiConversations:1 });
   const current = (await enabled.inject('/v1/capabilities')).json();
-  assert.deepEqual(current.features, { paperOrganization: 1, privatePdfStorage: 1 });
+  assert.deepEqual(current.features, { paperOrganization: 1,richNotes:1,aiConversations:1, privatePdfStorage: 1 });
   assert.deepEqual(current.cloudPdf, { maxFileBytes: 64 * 1024 * 1024, maxAccountBytes: 1024 * 1024 * 1024, maxCopies: 512 });
   assert.equal(current.limits.maxRequestBytes, old.limits.maxRequestBytes, 'binary exception does not enlarge sync JSON requests');
   const response = await disabled.inject({ method: 'PUT', url: '/v1/cloud-pdfs/' + fake.target, headers: fake.headers(), payload: bytes });

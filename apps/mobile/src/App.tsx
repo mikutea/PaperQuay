@@ -33,6 +33,8 @@ import type { PdfAiContext, PdfCitationTarget } from './pdf/types.ts';
 import type { CloudPdfContext } from './pdf/cloudCopies.ts';
 import type { DesktopPdfContext } from './pdf/desktopCopies.ts';
 import { saveAiResultNote } from './integration/aiNotes.ts';
+import { createAiSyncBridge } from './integration/aiSync.ts';
+import type { RemoteTaskContext } from './remote/client.ts';
 import {
   decodeWorkspace,
   WorkspaceController,
@@ -49,6 +51,9 @@ const ReaderSheet = lazy(() => import('./components/ReaderSheet.tsx').then((modu
 const AiWorkspace = lazy(() => import('./components/AiWorkspace.tsx').then((module) => ({ default: module.AiWorkspace })));
 const LibraryTransferPanel = lazy(() => import('./components/LibraryTransferPanel.tsx').then((module) => ({ default: module.LibraryTransferPanel })));
 const CloudPdfLibrary = lazy(() => import('./components/CloudPdfPanel.tsx').then((module) => ({ default: module.CloudPdfLibrary })));
+const RemoteTaskPanel = lazy(() => import('./components/RemoteTaskPanel.tsx').then(module => ({ default: module.RemoteTaskPanel })));
+const ZoteroLibrarySheet = lazy(() => import('./components/ZoteroLibrarySheet.tsx').then(module => ({ default: module.ZoteroLibrarySheet })));
+const NoteExportPanel = lazy(() => import('./components/NoteExportPanel.tsx').then(module => ({ default: module.NoteExportPanel })));
 const COMPACT_READER_QUERY = '(max-width: 900px)';
 function compactReaderSnapshot() {
   return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
@@ -67,6 +72,7 @@ interface Runtime {
   secretStore?: SecretStore;
   cloudPdf?: CloudPdfContext;
   desktopPdf?: DesktopPdfContext;
+  remoteTasks?: RemoteTaskContext;
   dispose?: () => Promise<void>;
 }
 function initialConfig(): PublicConfigInput {
@@ -109,11 +115,15 @@ async function makeRuntime(input: PublicConfigInput): Promise<Runtime> {
     store,
     online: navigator.onLine,
     supportsPaperOrganization: () => api.supportsPaperOrganization,
+    supportsRichNotes:()=>api.supportsRichNotes,
+    supportsAiConversations:()=>api.supportsAiConversations,
     binding: { ...binding, prepare: (signal) => api.capabilities(signal) },
   });
   return { config, auth, controller, secretStore,
     cloudPdf: { apiBaseUrl: config.apiBaseUrl, getAccessToken: auth.getAccessToken, getCloudPdfCapability: () => api.cloudPdfCapability },
     desktopPdf: { apiBaseUrl: config.apiBaseUrl, getAccessToken: auth.getAccessToken, getDesktopPdfCapability: () => api.desktopPdfCapability },
+    remoteTasks: { apiBaseUrl: config.apiBaseUrl, getAccessToken: auth.getAccessToken, getCapability: () => api.remoteTaskCapability,
+      identityKey: () => JSON.stringify(auth.getSubject?.() ?? null) },
     dispose: async () => {
     controller.deactivate();
     await auth.dispose();
@@ -232,9 +242,15 @@ export function ConnectedApp({
   const [aiSettings, setAiSettings] = useState(false);
   const [transferOpen, setTransferOpen] = useState(false);
   const [cloudOpen, setCloudOpen] = useState(false);
+  const [remoteOpen, setRemoteOpen] = useState(false);
+  const [zoteroOpen, setZoteroOpen] = useState(false);
+  const [noteExportOpen, setNoteExportOpen] = useState(false);
+  const [parsedRemoteEpoch, setParsedRemoteEpoch] = useState(0);
   const transferScope = state.status === 'ready' && state.workspace
     ? JSON.stringify([state.workspace.sync.accountId, state.workspace.sync.deviceId, state.workspace.sync.generation]) : null;
   useEffect(() => { setCloudOpen(false); }, [transferScope, authSubjectKey]);
+  useEffect(() => { setRemoteOpen(false); }, [transferScope, authSubjectKey]);
+  useEffect(() => { setZoteroOpen(false); setNoteExportOpen(false); }, [transferScope, authSubjectKey]);
   const [dirty, setDirty] = useState(false);
   const [readerDirty, setReaderDirty] = useState(false);
   const editorUnsaved = useRef(false);
@@ -395,6 +411,8 @@ export function ConnectedApp({
   const notes = entities.filter((entity) => entity.entityType === 'note');
   const readingPaper = papers.find((paper) => paper.entityId === readingId && !paper.deleted);
   const scope = state.identity ? { apiBaseUrl: runtime.config.apiBaseUrl, accountId: state.identity.accountId } : null;
+  const aiSync = useMemo(() => scope ? createAiSyncBridge(controller, scope) : undefined,
+    [controller, state.workspace, state.status, scope?.accountId, scope?.apiBaseUrl]);
   const organizationEnabled = state.workspace?.paperOrganizationVersion === 1;
   function leaveReader() {
     if (!canLeave()) return;
@@ -577,6 +595,8 @@ export function ConnectedApp({
                 onDirty={dirtyChanged}
                 onConflicts={() => navigate('conflicts')}
                 organizationEnabled={organizationEnabled}
+                richNotesEnabled={controller.getContentCapabilities().richNotes}
+                accountSessionKey={JSON.stringify([runtime.config.apiBaseUrl, transferScope])}
                 onRead={selection.type === 'paper' ? () => openReader(selection.id) : undefined}
               />
             ) : (
@@ -597,6 +617,8 @@ export function ConnectedApp({
             <div className="reading-panel-tabs" aria-label="阅读工作区">
               <button className={readingPanel === 'notes' ? 'secondary active' : 'text-button'} aria-expanded={readingPanel === 'notes'} onClick={() => toggleReadingPanel('notes')}>阅读笔记</button>
               <button className={readingPanel === 'ai' ? 'secondary active' : 'text-button'} aria-expanded={readingPanel === 'ai'} onClick={() => toggleReadingPanel('ai')}>AI 助手</button>
+              <button type="button" className="text-button" onClick={() => setRemoteOpen(true)}>远程解析与索引</button>
+              <button type="button" className="text-button" onClick={() => setNoteExportOpen(true)}>导出笔记与批注</button>
             </div>
             <SyncStatus state={state} conflicts={conflictCount}
               onSync={() => void controller.syncNow()} onConflicts={() => navigate('conflicts')} />
@@ -608,10 +630,13 @@ export function ConnectedApp({
                 controller={controller} onBack={leaveReader} jumpTo={citationTarget ?? undefined}
                 cloudPdf={runtime.cloudPdf}
                 desktopPdf={runtime.desktopPdf}
+                parsedCacheEpoch={parsedRemoteEpoch}
                 accountCurrent={() => JSON.stringify(auth.getSubject?.() ?? null) === authSubjectKey}
                 compact={compactReader}
                 onOpenNotes={() => showReadingPanel('notes')}
                 onOpenAi={() => showReadingPanel('ai')}
+                onOpenRemoteTasks={() => setRemoteOpen(true)}
+                onExportNotes={() => setNoteExportOpen(true)}
                 onMobilePanelOpen={closeReadingPanel}
                 statusContent={<SyncStatus state={state} conflicts={conflictCount}
                   onSync={() => void controller.syncNow()} onConflicts={() => navigate('conflicts')} />}
@@ -634,6 +659,7 @@ export function ConnectedApp({
                 if (canLeave(editorUnsaved.current)) { setReadingNoteId(note.entityId); dirtyChanged(false); }
               }}>{(note.data as NoteData).title}</button>)}</div>
             {readingNoteId ? <EntityEditor key={`reading-note:${readingNoteId}`} type="note" entityId={readingNoteId}
+              richNotesEnabled={controller.getContentCapabilities().richNotes} accountSessionKey={JSON.stringify([runtime.config.apiBaseUrl, transferScope])}
               entity={notes.find((note) => note.entityId === readingNoteId)} defaultPaperId={readingId}
               papers={papers} controller={controller} hasConflict={hasEntityConflict(state.workspace!.sync, { entityType: 'note', entityId: readingNoteId })}
               onBack={() => { if (canLeave(editorUnsaved.current)) { setReadingNoteId(null); dirtyChanged(false); } }} onDirty={dirtyChanged}
@@ -644,7 +670,13 @@ export function ConnectedApp({
             keepMounted modal={compactReader} portalTarget={readingPanelHost} className="reading-ai-sheet">
           {openedReadingPanels.ai && runtime.secretStore && <aside className="reading-side" aria-label="阅读 AI 助手内容">
             <Suspense fallback={<p role="status">正在打开 AI 助手…</p>}><AiWorkspace accountScope={scope} context={aiContext} archiveEpoch={archiveEpochs[accountScopeKey(scope)] ?? 0}
-              secretStore={runtime.secretStore} onSaveNote={async (note, source) => {
+              secretStore={runtime.secretStore} sync={aiSync} onRestoreContext={context => {
+                const current = controller.getSnapshot();
+                const version = current.workspace ? listVisibleEntities(current.workspace.sync).find(entity => entity.entityType === 'attachmentVersion' && entity.entityId === context.attachmentVersionId && !entity.deleted) : null;
+                if (current.status !== 'ready' || current.identity?.accountId !== scope.accountId || context.paperId !== readingId || !version?.data || !('sha256' in version.data)
+                  || version.data.paperId !== context.paperId || version.data.sha256 !== context.sha256) throw new ClientError('EDIT_CHANGED');
+                liveAiContext.current = structuredClone(context); setAiContext(structuredClone(context));
+              }} onSaveNote={async (note, source) => {
                 await saveAiResultNote(controller, runtime.config.apiBaseUrl, () => liveAiContext.current, source, note);
               }} onNavigateCitation={(target) => {
                 const version = entities.find((entity) => entity.entityType === 'attachmentVersion' && entity.entityId === target.attachmentVersionId && !entity.deleted);
@@ -711,10 +743,21 @@ export function ConnectedApp({
           <button className="secondary" onClick={() => setCloudOpen(true)}>私有云 PDF</button>
           <p className="muted">查看当前账号的云副本与可用空间。</p>
         </section>}
+        {section === 'account' && scope && runtime.remoteTasks && <section className="account-ai-settings">
+          <button type="button" className="secondary" onClick={() => setRemoteOpen(true)}>远程解析与索引</button>
+          <p className="muted">选择同账号在线电脑执行，查询持久任务和实际产物用量。</p>
+        </section>}
+        {section === 'account' && scope && runtime.secretStore && <section className="account-ai-settings">
+          <button type="button" className="secondary" onClick={() => setZoteroOpen(true)}>Zotero 增量接入</button>
+          <p className="muted">读取个人库或群组库题录，比较变化后明确采用。</p>
+        </section>}
+        {section === 'account' && scope && <section className="account-ai-settings">
+          <button type="button" className="secondary" onClick={() => setNoteExportOpen(true)}>导出笔记、批注与引用</button>
+        </section>}
         {section === 'account' && scope && runtime.secretStore && <section className="account-ai-settings">
           <button className="secondary" onClick={() => setAiSettings(!aiSettings)}>{aiSettings ? '收起 AI 设置' : 'AI 提供商设置'}</button>
           {aiSettings && <Suspense fallback={<p role="status">正在打开设置…</p>}><AiWorkspace accountScope={scope} context={null} archiveEpoch={archiveEpochs[accountScopeKey(scope)] ?? 0}
-            secretStore={runtime.secretStore} onSaveNote={async () => { throw new ClientError('ACCOUNT_CHANGED'); }} onNavigateCitation={() => {}} /></Suspense>}
+            secretStore={runtime.secretStore} sync={aiSync} onSaveNote={async () => { throw new ClientError('ACCOUNT_CHANGED'); }} onNavigateCitation={() => {}} /></Suspense>}
         </section>}
         {section === 'conflicts' && (
           <ConflictsView
@@ -740,6 +783,25 @@ export function ConnectedApp({
         <LibraryTransferPanel key={transferScope} entities={entities} controller={controller} scopeKey={transferScope}
           accountCurrent={() => JSON.stringify(auth.getSubject?.() ?? null) === authSubjectKey}
           onClose={() => setTransferOpen(false)} />
+      </Suspense>}
+      {remoteOpen && transferScope && scope && runtime.remoteTasks && <Suspense fallback={<p role="status">正在打开远程任务…</p>}>
+        <RemoteTaskPanel key={`${transferScope}:${authSubjectKey}`} context={runtime.remoteTasks} scope={scope} scopeKey={transferScope}
+          controller={controller} entities={entities} accountCurrent={() => JSON.stringify(auth.getSubject?.() ?? null) === authSubjectKey}
+          onClose={() => setRemoteOpen(false)} onParsed={(versionId,digest) => {
+            const now = controller.getSnapshot().workspace?.sync;
+            if (!now || JSON.stringify([now.accountId,now.deviceId,now.generation]) !== transferScope) return;
+            invalidateAiContext({ attachmentVersionId: versionId, retainedDigest: digest }); setParsedRemoteEpoch(value => value + 1);
+          }} />
+      </Suspense>}
+      {zoteroOpen && transferScope && scope && runtime.secretStore && <Suspense fallback={<p role="status">正在打开 Zotero 来源…</p>}>
+        <ZoteroLibrarySheet key={`${transferScope}:${authSubjectKey}`} scope={scope} scopeKey={transferScope} controller={controller}
+          secretStore={runtime.secretStore} accountCurrent={() => JSON.stringify(auth.getSubject?.() ?? null) === authSubjectKey} onClose={() => setZoteroOpen(false)} />
+      </Suspense>}
+      {noteExportOpen && transferScope && <Suspense fallback={<p role="status">正在打开笔记导出…</p>}>
+        <ReaderSheet open title="导出笔记、批注与引用" onClose={() => setNoteExportOpen(false)}>
+          <NoteExportPanel entities={entities} initialPaperId={readingId} scopeKey={transferScope}
+            accountCurrent={() => JSON.stringify(auth.getSubject?.() ?? null) === authSubjectKey} />
+        </ReaderSheet>
       </Suspense>}
       <nav className="bottom-nav app-glass" aria-label="主导航">
         {nav}

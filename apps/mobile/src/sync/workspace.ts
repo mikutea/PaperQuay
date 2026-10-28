@@ -4,6 +4,7 @@ import {
   applyPushResults,
   applyRemoteConflictResolution,
   createAccountState,
+  canonicalJson,
   entityKey,
   getSyncContext,
   getVisibleEntity,
@@ -18,6 +19,7 @@ import {
   validateClientState,
   validateOperation,
   SyncStateError,
+  supportsSyncRecord,
   type AccountSyncState,
   type EntityData,
   type EntityType,
@@ -53,6 +55,10 @@ import {
   type ExternalLibrarySummary,
 } from '../library/externalLibrary.ts';
 import type { AccountStorage, AccountScope } from '../storage/accountStore.ts';
+import { validateRemoteTaskRequest, type RemoteTaskRequest } from '../../../../packages/sync-core/src/remoteTasks.ts';
+import { validateZoteroRefreshResult, type ZoteroRefreshResult } from '../library/zoteroRefresh.ts';
+import { validateZoteroLibraryState, updateZoteroCursor, zoteroCursor, type ZoteroLibraryState } from '../library/zoteroState.ts';
+import type { ZoteroLibraryConfig } from '../library/zoteroClient.ts';
 
 interface PendingResolution {
   request: ConflictResolution;
@@ -64,8 +70,13 @@ export interface StoredWorkspace {
   sync: AccountSyncState;
   pendingResolutions: Record<string, PendingResolution>;
   paperOrganizationVersion?: 1;
+  richNotesVersion?:1;
+  aiConversationsVersion?:1;
   /** Private to this account on this device; never part of the synchronization payload. */
   externalLibraries?: ExternalLibraryRegistry;
+  /** Durable, non-secret create intent. Replayed only on an explicit retry. */
+  remoteTaskIntent?: { version: 1; request: RemoteTaskRequest };
+  zoteroLibraries?: ZoteroLibraryState;
 }
 export interface WorkspaceSnapshot {
   status: 'signed-out' | 'binding' | 'ready' | 'error';
@@ -90,8 +101,9 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
 export function decodeWorkspace(value: unknown): StoredWorkspace {
   if (
     !isObject(value) ||
-    Object.keys(value).some((key) => !['sync', 'pendingResolutions', 'paperOrganizationVersion', 'externalLibraries'].includes(key)) ||
+    Object.keys(value).some((key) => !['sync', 'pendingResolutions', 'paperOrganizationVersion','richNotesVersion','aiConversationsVersion', 'externalLibraries','remoteTaskIntent','zoteroLibraries'].includes(key)) ||
     (value.paperOrganizationVersion !== undefined && value.paperOrganizationVersion !== 1) ||
+    (value.richNotesVersion!==undefined&&value.richNotesVersion!==1)||(value.aiConversationsVersion!==undefined&&value.aiConversationsVersion!==1)||
     !isObject(value.pendingResolutions) ||
     !validateClientState(value.sync).ok ||
     Object.keys(value.pendingResolutions).length > 10_000
@@ -100,6 +112,14 @@ export function decodeWorkspace(value: unknown): StoredWorkspace {
   if (value.externalLibraries !== undefined) {
     try { validateExternalLibraryRegistry(value.externalLibraries); }
     catch { throw new ClientError('STORAGE_CORRUPT'); }
+  }
+  if (value.remoteTaskIntent !== undefined) {
+    const intent = value.remoteTaskIntent;
+    if (!isObject(intent) || Object.keys(intent).sort().join(',') !== 'request,version' || intent.version !== 1) throw new ClientError('STORAGE_CORRUPT');
+    try { validateRemoteTaskRequest(intent.request); } catch { throw new ClientError('STORAGE_CORRUPT'); }
+  }
+  if (value.zoteroLibraries !== undefined) {
+    try { validateZoteroLibraryState(value.zoteroLibraries); } catch { throw new ClientError('STORAGE_CORRUPT'); }
   }
   for (const [conflictId, pending] of Object.entries(value.pendingResolutions)) {
     if (
@@ -182,6 +202,8 @@ export class WorkspaceController {
     remove?: () => Promise<void>;
   };
   private readonly supportsPaperOrganization: () => boolean;
+  private readonly supportsRichNotes:()=>boolean;
+  private readonly supportsAiConversations:()=>boolean;
   private confirmedPaperOrganization: boolean | undefined;
   private scope: AccountScope | null = null;
   private context: SyncContext | null = null;
@@ -200,6 +222,8 @@ export class WorkspaceController {
     makeId?: () => string;
     now?: () => string;
     supportsPaperOrganization?: () => boolean;
+    supportsRichNotes?:()=>boolean;
+    supportsAiConversations?:()=>boolean;
     binding?: WorkspaceController['binding'];
   }) {
     this.api = options.api;
@@ -209,6 +233,8 @@ export class WorkspaceController {
     this.now = options.now ?? (() => new Date().toISOString());
     this.binding = options.binding ?? {};
     this.supportsPaperOrganization = options.supportsPaperOrganization ?? (() => false);
+    this.supportsRichNotes=options.supportsRichNotes??(()=>false);
+    this.supportsAiConversations=options.supportsAiConversations??(()=>false);
     this.snapshot = {
       status: 'signed-out',
       identity: null,
@@ -228,6 +254,17 @@ export class WorkspaceController {
     return () => this.listeners.delete(listener);
   };
   getSnapshot = (): WorkspaceSnapshot => this.snapshot;
+  getContentCapabilities=(value=this.snapshot.workspace,allowOffline=true)=>{
+    const remembered=allowOffline&&(!this.snapshot.online||this.snapshot.needsLogin);
+    return{richNotes:this.supportsRichNotes()||Boolean(remembered&&value?.richNotesVersion),
+      aiConversations:this.supportsAiConversations()||Boolean(remembered&&value?.aiConversationsVersion)};
+  };
+  private supportedContent(item:{entityType:EntityType;entityId?:string;data:EntityData|null},value:StoredWorkspace|null=this.snapshot.workspace,allowOffline=false):boolean{
+    const features=this.getContentCapabilities(value,allowOffline);
+    if(!supportsSyncRecord(features,item))return false;
+    const current=item.entityId&&value?.sync.serverRecords[entityKey(item.entityType,item.entityId)];
+    return!current||supportsSyncRecord(features,current);
+  }
   private publish(update: Partial<WorkspaceSnapshot>): void {
     this.snapshot = { ...this.snapshot, ...update };
     for (const listener of this.listeners) listener();
@@ -358,6 +395,7 @@ export class WorkspaceController {
   private async activate(identity: AccountIdentity, epoch: number, offline: boolean, guard: () => boolean): Promise<void> {
     const scope = { apiBaseUrl: this.apiBaseUrl, accountId: identity.accountId };
     const organization = !offline && this.supportsPaperOrganization();
+    const richNotes=!offline&&this.supportsRichNotes(),aiConversations=!offline&&this.supportsAiConversations();
     const workspace = await this.store.update(
         scope,
         (previous) => {
@@ -367,19 +405,24 @@ export class WorkspaceController {
               sync: createAccountState(identity.accountId, identity.device.id),
               pendingResolutions: {},
               ...(organization ? { paperOrganizationVersion: 1 as const } : {}),
+              ...(richNotes?{richNotesVersion:1 as const}:{}),...(aiConversations?{aiConversationsVersion:1 as const}:{}),
             };
           }
           if (previous.sync.accountId !== identity.accountId)
             throw new ClientError('STORAGE_CORRUPT');
           const resumed = previous.sync.deviceId === identity.device.id
             ? resumeAfterRestart(previous.sync) : rebindDevice(previous.sync, identity.device.id);
+          const retained={...previous};
+          if(!offline&&!richNotes)delete retained.richNotesVersion;
+          if(!offline&&!aiConversations)delete retained.aiConversationsVersion;
           return {
-            ...previous,
+            ...retained,
             // Re-read the feed once when opting in. Existing records and all local
             // operations remain intact while equal-revision metadata is hydrated.
-            sync: organization && !previous.paperOrganizationVersion
+            sync: (organization && !previous.paperOrganizationVersion)||(richNotes&&!previous.richNotesVersion)||(aiConversations&&!previous.aiConversationsVersion)
               ? { ...resumed, cursor: null } : resumed,
             ...(organization ? { paperOrganizationVersion: 1 as const } : {}),
+            ...(richNotes?{richNotesVersion:1 as const}:{}),...(aiConversations?{aiConversationsVersion:1 as const}:{}),
           };
         },
         guard,
@@ -417,18 +460,19 @@ export class WorkspaceController {
   async save(
     edit: LocalEdit,
     expectedRevision?: number,
-    beforeCommit?: (state: Readonly<AccountSyncState>) => void,
+    beforeCommit?: (state: Readonly<AccountSyncState>, workspace?: Readonly<StoredWorkspace>) => void,
   ): Promise<void> {
     const epoch = this.epoch;
     try {
       await this.update(epoch, (value) => {
+        if(!this.supportedContent(edit,value,true))throw new ClientError('SYNC_FEATURE_UNAVAILABLE');
         if (
           expectedRevision !== undefined &&
           (getVisibleEntity(value.sync, edit.entityType, edit.entityId)?.revision ?? 0) !==
             expectedRevision
         )
           throw new ClientError('EDIT_CHANGED');
-        beforeCommit?.(value.sync);
+        beforeCommit?.(value.sync, value);
         return {
           ...value,
           sync: queueLocalEdit(value.sync, edit, {
@@ -445,6 +489,30 @@ export class WorkspaceController {
       if (epoch === this.epoch) this.publish({ error: safe });
       throw safe;
     }
+  }
+
+  async prepareRemoteTask(request: RemoteTaskRequest): Promise<RemoteTaskRequest> {
+    const captured = validateRemoteTaskRequest(request), epoch = this.epoch;
+    const updated = await this.update(epoch, value => {
+      if (value.remoteTaskIntent && canonicalJson(value.remoteTaskIntent.request) !== canonicalJson(captured))
+        throw new ClientError('REMOTE_REQUEST_PENDING');
+      const version = getVisibleEntity(value.sync, 'attachmentVersion', captured.versionId);
+      const versionData = version?.data && 'mediaType' in version.data ? version.data : null;
+      const paper = versionData ? getVisibleEntity(value.sync, 'paper', versionData.paperId) : null;
+      if (!version?.data || version.deleted || version.revision < 1 || !paper?.data || paper.deleted || paper.revision < 1)
+        throw new ClientError('EDIT_CHANGED');
+      return { ...value, remoteTaskIntent: { version: 1, request: captured } };
+    });
+    return updated.remoteTaskIntent!.request;
+  }
+
+  async clearRemoteTaskIntent(requestId: string): Promise<void> {
+    const epoch = this.epoch;
+    await this.update(epoch, value => {
+      if (value.remoteTaskIntent?.request.requestId !== requestId) return value;
+      const { remoteTaskIntent: _intent, ...remaining } = value;
+      return remaining;
+    });
   }
 
   async importLibrary(
@@ -466,6 +534,8 @@ export class WorkspaceController {
             value.paperOrganizationVersion === 1
           );
           if (plan.requiresPaperOrganization && !organizationSupported)
+            throw new ClientError('IMPORT_UNSUPPORTED');
+          if (plan.requiresRichNotes && !this.getContentCapabilities(value, true).richNotes)
             throw new ClientError('IMPORT_UNSUPPORTED');
           const imported = materializeLibraryImport(plan, this.makeId);
           const sync = queueLocalCreates(value.sync, imported.edits, imported.edits.map(() => ({
@@ -555,6 +625,50 @@ export class WorkspaceController {
     }
   }
 
+  getZoteroCursor(config: ZoteroLibraryConfig): number | null {
+    return zoteroCursor(this.snapshot.workspace?.zoteroLibraries, config);
+  }
+
+  async resetZoteroCursor(config: ZoteroLibraryConfig): Promise<void> {
+    const epoch = this.epoch;
+    await this.update(epoch, value => ({ ...value, zoteroLibraries: updateZoteroCursor(value.zoteroLibraries, config, null) }));
+  }
+
+  async adoptZoteroRefresh(result: ZoteroRefreshResult, decisions: readonly ExternalLibraryDecision[], reviewedSignature: string, reviewedScopeKey: string): Promise<ExternalLibrarySummary> {
+    const captured = validateZoteroRefreshResult(result), choices = structuredClone(decisions), epoch = this.epoch, context = this.context;
+    if (!context || reviewedScopeKey !== JSON.stringify([context.accountId, context.deviceId, context.generation])) throw new ClientError('ACCOUNT_CHANGED');
+    let summary: ExternalLibrarySummary | undefined;
+    try {
+      await this.update(epoch, value => {
+        if (zoteroCursor(value.zoteroLibraries, captured.config) !== captured.expectedCursor) throw new ClientError('IMPORT_CHANGED');
+        try {
+          const plan = planExternalLibraryImport(captured.snapshot, value.externalLibraries, externalLibraryEntities(value), choices);
+          if (plan.signature !== reviewedSignature) throw new ClientError('IMPORT_CHANGED');
+          const imported = materializeExternalLibraryImport(plan, this.makeId);
+          const sync = queueLocalPuts(value.sync, imported.edits, imported.edits.map(() => ({ opId: this.makeId(), clientCreatedAt: this.now() })));
+          const zoteroLibraries = updateZoteroCursor(value.zoteroLibraries, captured.config, captured.nextCursor);
+          summary = imported.summary;
+          return { ...value, sync, externalLibraries: imported.newRegistry, zoteroLibraries };
+        } catch (error) {
+          if (error instanceof ClientError) throw error;
+          if (error instanceof SyncStateError && error.code === 'LOCAL_CAPACITY_EXCEEDED' || error instanceof ExternalLibraryError && error.code === 'REGISTRY_TOO_LARGE') throw new ClientError('IMPORT_CAPACITY');
+          if (error instanceof SyncStateError && ['TARGET_HAS_PENDING_EDITS','RESTORE_REQUIRED'].includes(error.code)) throw new ClientError('IMPORT_CHANGED');
+          throw new ClientError('IMPORT_INVALID');
+        }
+      });
+      if (!this.snapshot.needsLogin) void this.syncNow();
+      return summary!;
+    } catch (error) {
+      this.assertBinding(epoch);
+      const safe = error instanceof ClientError ? error : new ClientError('STORAGE_FAILED');
+      if (safe.code === 'IMPORT_CHANGED' && this.scope) {
+        const latest = await this.store.read(this.scope); this.assertBinding(epoch);
+        if (latest && this.context && sameContext(getSyncContext(latest.sync), this.context)) this.publish({ workspace: latest });
+      }
+      this.publish({ error: safe }); throw safe;
+    }
+  }
+
   setOnline(online: boolean): void {
     this.publish({ online });
     if (online) void this.syncNow();
@@ -577,7 +691,7 @@ export class WorkspaceController {
         this.publish({ syncing: false });
         if (
           !this.snapshot.error &&
-          this.snapshot.workspace?.sync.outbox.some((entry) => entry.status === 'queued')
+          this.snapshot.workspace?.sync.outbox.some((entry) => entry.status === 'queued'&&this.supportedContent(entry.operation))
         )
           queueMicrotask(() => {
             if (this.epoch === epoch) void this.syncNow();
@@ -606,7 +720,7 @@ export class WorkspaceController {
       };
       for (let sent = 0; sent < 100; sent += 1) {
         const resolution = Object.entries(this.snapshot.workspace!.pendingResolutions).find(
-          ([, pending]) => canAttempt(pending.request.opId),
+          ([, pending]) => canAttempt(pending.request.opId)&&this.supportedContent({entityType:pending.entityType,entityId:pending.entityId,data:'data'in pending.request?pending.request.data:null}),
         );
         if (resolution) {
           const [conflictId, pending] = resolution;
@@ -659,7 +773,7 @@ export class WorkspaceController {
         await this.update(epoch, (value) => {
           const index = value.sync.outbox.findIndex((entry) => {
             if (entry.status !== 'queued' && entry.status !== 'uncertain') return false;
-            return canAttempt(entry.operation.opId);
+            return canAttempt(entry.operation.opId)&&this.supportedContent(entry.operation,value);
           });
           if (index < 0) return value;
           // Reorder whole entries only; attempted operation identities and payloads
@@ -738,6 +852,7 @@ export class WorkspaceController {
       await this.update(epoch, (value) => {
         let sync = value.sync;
         for (const conflict of Object.values(sync.conflicts)) {
+          if(!this.supportedContent(conflict.attempted,value))continue;
           if (!open.has(conflict.conflictId) && !value.pendingResolutions[conflict.conflictId]) {
             sync = applyRemoteConflictResolution(sync, context, {
               conflictId: conflict.conflictId,
@@ -765,6 +880,8 @@ export class WorkspaceController {
               this.snapshot.workspace!.sync.outbox.some(
                 (entry) => entry.status === 'queued' || entry.status === 'uncertain',
               )));
+        const unsupportedPending=this.snapshot.workspace!.sync.outbox.some(entry=>!this.supportedContent(entry.operation))
+          ||Object.values(this.snapshot.workspace!.pendingResolutions).some(pending=>!this.supportedContent({entityType:pending.entityType,entityId:pending.entityId,data:'data'in pending.request?pending.request.data:null}));
         this.publish({
           conflicts,
           devices,
@@ -777,7 +894,7 @@ export class WorkspaceController {
                   : 'SYNC_FAILED',
                 true,
               )
-            : null,
+            : unsupportedPending?new ClientError('SYNC_FEATURE_UNAVAILABLE'):null,
         });
       }
     } catch (error) {
@@ -942,6 +1059,7 @@ export class WorkspaceController {
           },
           pendingResolutions: {},
           ...(this.supportsPaperOrganization() ? { paperOrganizationVersion: 1 as const } : {}),
+          ...(this.supportsRichNotes()?{richNotesVersion:1 as const}:{}),...(this.supportsAiConversations()?{aiConversationsVersion:1 as const}:{}),
         }),
         () => this.sameBinding(epoch),
       );

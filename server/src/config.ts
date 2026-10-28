@@ -16,6 +16,7 @@ export interface ServerConfig {
   maxAccountRetainedBytes: number;
   cloudPdfEnabled: boolean;
   desktopPdfEnabled: boolean;
+  remoteTasksEnabled?:boolean;
   desktopPdfStunUrls: string[];
   cloudPdfAccountBytes: number;
   requestsPerMinute: number;
@@ -169,6 +170,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   if (!['0', '1'].includes(cloudPdfEnabled)) throw new ApiError('CONFIGURATION_INVALID', 500);
   const desktopPdfEnabled = env.PAPERQUAY_DESKTOP_PDF_ENABLED ?? '0';
   if (!['0', '1'].includes(desktopPdfEnabled)) throw new ApiError('CONFIGURATION_INVALID', 500);
+  const remoteTasksEnabled=env.PAPERQUAY_REMOTE_TASKS_ENABLED??'0';
+  if(!['0','1'].includes(remoteTasksEnabled))throw new ApiError('CONFIGURATION_INVALID',500);
   return {
     host, port, databaseUrl, oidcIssuer, oidcAudience, oidcClientIds, allowedOrigins, cursorSecret,
     bodyLimitBytes: SERVER_LIMITS.bodyLimitBytes,
@@ -177,6 +180,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     maxAccountRetainedBytes: checkedRetainedByteLimit(Number(env.PAPERQUAY_MAX_ACCOUNT_RETAINED_BYTES ?? SERVER_LIMITS.maxAccountRetainedBytes)),
     cloudPdfEnabled: cloudPdfEnabled === '1',
     desktopPdfEnabled: desktopPdfEnabled === '1',
+    remoteTasksEnabled:remoteTasksEnabled==='1',
     desktopPdfStunUrls: checkedDesktopPdfStunUrls(env.PAPERQUAY_DESKTOP_PDF_STUN_URLS),
     cloudPdfAccountBytes: checkedCloudPdfByteLimit(Number(env.PAPERQUAY_CLOUD_PDF_ACCOUNT_BYTES ?? SERVER_LIMITS.cloudPdfAccountBytes)),
     requestsPerMinute, trustedProxyIps: trustedProxyIps(env.PAPERQUAY_TRUSTED_PROXY_IPS),

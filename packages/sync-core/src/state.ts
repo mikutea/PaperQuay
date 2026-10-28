@@ -146,7 +146,7 @@ function sameIntent(operation: SyncOperation | PendingEdit, pending: PendingEdit
 }
 
 function hasPendingLinkedNote(state: AccountSyncState, paperId: string): boolean {
-  const references = (pending: SyncOperation | PendingEdit): boolean => pending.entityType === 'note' && pending.data?.paperId === paperId;
+  const references = (pending: SyncOperation | PendingEdit): boolean => (pending.entityType === 'note' || pending.entityType === 'aiConversation') && pending.data?.paperId === paperId;
   // An attempted note must finish with its original payload before an unlink
   // overlay can run, so both the original operation and its successor matter.
   return state.outbox.some((entry) => references(entry.operation)) || Object.values(state.overlays).some(references);

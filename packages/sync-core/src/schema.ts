@@ -1,5 +1,7 @@
 import { ENTITY_TYPES } from './types.ts';
 import type { EntityType } from './types.ts';
+import {RICH_NOTE_DATA_SCHEMA} from './richNote.ts';
+import {AI_CONVERSATION_DATA_SCHEMA,AI_TEMPLATE_DATA_SCHEMA} from '../../ai-core/src/conversation.ts';
 
 export const UUID_PATTERN = '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$';
 export const ISO_TIMESTAMP_PATTERN = '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,3})?(?:Z|[+-]\\d{2}:\\d{2})$';
@@ -77,7 +79,9 @@ export const ENTITY_DATA_SCHEMAS: Record<EntityType, JsonSchema> = {
     fileName: { type: 'string', minLength: 1, maxLength: SYNC_LIMITS.maxFileNameLength, pattern: '^(?!\\.{1,2}$)[^/\\\\:\\x00-\\x1f\\x7f]+$' },
     pageCount: nullable(integer(1)),
   }),
-  note: object({ paperId: nullable(uuid), title: text(SYNC_LIMITS.maxTitleLength), body: text(SYNC_LIMITS.maxNoteBodyLength), format: { const: 'markdown' } }),
+  note: {oneOf:[object({ paperId: nullable(uuid), title: text(SYNC_LIMITS.maxTitleLength), body: text(SYNC_LIMITS.maxNoteBodyLength), format: { const: 'markdown' } }),RICH_NOTE_DATA_SCHEMA]},
+  aiConversation:AI_CONVERSATION_DATA_SCHEMA,
+  aiTemplate:AI_TEMPLATE_DATA_SCHEMA,
   annotation: object({
     paperId: uuid,
     attachmentVersionId: uuid,

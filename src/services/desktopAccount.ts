@@ -1,5 +1,6 @@
 import { invoke } from '../platform/electron/core';
 import { listen } from '../platform/electron/event';
+import { flushReaderConfigWrites } from './readerConfig';
 
 export interface DesktopAccountConfig {
   apiBaseUrl: string;
@@ -32,6 +33,15 @@ export interface DesktopAccountStatus {
   transfers: { transferId: string; attachmentVersionId: string; status: 'reading' | 'connecting' | 'sending'; sizeBytes: number;
     transport?: 'webrtc-data-v1' | 'http-relay-v1'; candidateType?: 'host' | 'srflx' | 'prflx' | 'unknown' }[];
   errorCode: string | null;
+  remoteTasks?: DesktopRemoteTaskStatus;
+}
+export interface DesktopRemoteTaskStatus {
+  enabled: boolean; running: boolean; busy: boolean; errorCode: string | null;
+  configurationToken: string | null;
+  capability: { protocolVersion: 1; transport: 'persistent-jobs-v1'; maxArtifactBytes: number; maxAccountArtifactBytes: number;
+    maxActive: number; maxQueued: number; maxRetained: number; maxReceipts: number; maxProfiles: number; leaseSeconds: number; providerPresenceSeconds: number } | null;
+  profiles: { id: string; revision: number; digest: string; kind: 'parse' | 'index'; model: string }[];
+  unavailable: { parse?: string; index?: string };
 }
 export interface DesktopPdfCandidate {
   localPaperId: string; localAttachmentId: string; title: string; fileName: string; sizeBytes: number;
@@ -57,5 +67,10 @@ export const desktopAccount = {
   exportParsed: (bindingId: string) => invoke<{ status: 'cancelled' | 'exported'; blockCount?: number; assetCount?: number }>(
     'desktop_provider_export_parsed', { bindingId }),
   cancel: (transferId: string) => invoke<DesktopAccountStatus>('desktop_provider_cancel', { transferId }),
+  setRemoteTasksEnabled: async (enabled: boolean, configurationToken?: string) => {
+    if (enabled) await flushReaderConfigWrites();
+    return invoke<DesktopAccountStatus>('desktop_remote_tasks_set_enabled', enabled ? { enabled: true, consent: true, configurationToken } : { enabled: false });
+  },
+  clearCompletedRemoteJournals: () => invoke<{ removed: number; status: DesktopAccountStatus }>('desktop_remote_tasks_clear_completed', { confirmed: true }),
   onChanged: (listener: () => void) => listen('desktop-account:changed', listener),
 };

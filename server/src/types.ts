@@ -1,5 +1,6 @@
 import type { AttachmentVersionData, EntityData, EntityType, PullResponse, PushRequest, PushResponse, PushResult, SyncOperation, SyncRecord } from '../../packages/sync-core/src/index.ts';
 import type { VerifiedIdentity } from './auth.ts';
+import type {SyncFeatureSet} from '../../packages/sync-core/src/features.ts';
 
 export type DevicePlatform = 'web' | 'windows' | 'macos' | 'linux' | 'ios' | 'android';
 export interface DeviceRegistration { name: string; platform: DevicePlatform }
@@ -77,9 +78,9 @@ export interface SyncRepository {
   me(identity: VerifiedIdentity): Promise<SessionView>;
   listDevices(identity: VerifiedIdentity): Promise<{ devices: Device[] }>;
   revokeDevice(identity: VerifiedIdentity, deviceId: string): Promise<{ revoked: true; deviceId: string }>;
-  push(identity: VerifiedIdentity, request: PushRequest): Promise<PushResponse>;
+  push(identity: VerifiedIdentity, request: PushRequest, features?:SyncFeatureSet): Promise<PushResponse>;
   pull(identity: VerifiedIdentity, cursor: string | undefined, limit: number): Promise<PullResponse>;
   listConflicts(identity: VerifiedIdentity, cursor: string | undefined, limit: number): Promise<ConflictPage>;
-  resolveConflict(identity: VerifiedIdentity, conflictId: string, request: ResolveRequest): Promise<PushResult>;
+  resolveConflict(identity: VerifiedIdentity, conflictId: string, request: ResolveRequest, features?:SyncFeatureSet): Promise<PushResult>;
   ready(): Promise<boolean>;
 }

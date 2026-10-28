@@ -835,8 +835,10 @@ export function PaperReader(props: PaperReaderProps) {
         setPanel(null);
       }}>
         {compact && feedback}
+        {panel === 'parsed' && props.onOpenRemoteTasks && <div className="pr-panel-content"><button type="button" className="secondary" onClick={props.onOpenRemoteTasks}>由在线电脑生成解析或索引</button></div>}
+        {panel === 'annotations' && props.onExportNotes && <div className="pr-panel-content"><button type="button" className="secondary" onClick={props.onExportNotes}>导出笔记与批注</button></div>}
         {panel === 'parsed' && (loaded ? <Suspense fallback={<p className="pr-panel-content" role="status">正在打开解析阅读…</p>}>
-          <ParsedDocumentPanel key={`${scopeKey}:${loaded.version.entityId}:${loaded.version.data.sha256}`} scope={scope}
+          <ParsedDocumentPanel key={`${scopeKey}:${loaded.version.entityId}:${loaded.version.data.sha256}:${props.parsedCacheEpoch ?? 0}`} scope={scope}
             version={loaded.version} pageCount={loaded.pdf.pageCount} pdfPageIndex={pageIndex}
             isCurrent={() => {
               try {

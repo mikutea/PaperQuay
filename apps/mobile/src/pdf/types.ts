@@ -54,10 +54,13 @@ export interface PaperReaderProps {
   compact?: boolean;
   onOpenNotes?: () => void;
   onOpenAi?: () => void;
+  onOpenRemoteTasks?: () => void;
+  onExportNotes?: () => void;
   onMobilePanelOpen?: () => void;
   statusContent?: ReactNode;
   cloudPdf?: CloudPdfContext;
   desktopPdf?: DesktopPdfContext;
+  parsedCacheEpoch?: number;
   accountCurrent?: () => boolean;
 }
 

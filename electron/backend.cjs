@@ -10,6 +10,7 @@ const { createReviewCommands } = require('./backend/reviewCommands.cjs');
 const { createUpdateCommands } = require('./backend/updateCommands.cjs');
 const { createRadarController } = require('./backend/radarCommands.cjs');
 const { createDesktopAccountCommands } = require('./backend/desktopAccountCommands.cjs');
+const { createRichNoteExportCommands } = require('./backend/richNoteExport.cjs');
 
 function toErrorMessage(error) {
   return error instanceof Error ? error.message : String(error);
@@ -106,6 +107,7 @@ function createBackend({ app, libraryLocation }) {
     }
   } });
 
+  const richNoteExport = createRichNoteExportCommands(context);
   const commands = {
     ...fileCommands,
     ...createLibraryCommands(context),
@@ -117,6 +119,7 @@ function createBackend({ app, libraryLocation }) {
     ...createUpdateCommands(context),
     ...radar.commands,
     ...desktopAccount.commands,
+    ...richNoteExport.commands,
     ...(libraryLocation ? {
       library_location_status: () => libraryLocation.status(),
       library_location_select: () => libraryLocation.selectExisting(),
@@ -128,6 +131,7 @@ function createBackend({ app, libraryLocation }) {
     authorizeLocalRead: context.authorizeLocalRead,
     stopDesktopProvider: () => desktopAccount.stopProvider(),
     close() {
+      richNoteExport.close();
       desktopAccount.close();
       radar.close();
       noteStore.close();
@@ -141,7 +145,12 @@ function createBackend({ app, libraryLocation }) {
         throw new Error(`Unsupported Electron command: ${command}`);
       }
 
-      return handler(args ?? {}, event);
+      const same = (value) => typeof value === 'string' && (process.platform === 'win32' ? require('node:path').resolve(value).toLowerCase() : require('node:path').resolve(value));
+      const configWrite = command === 'write_text_file' && [appPaths.configPath, appPaths.legacyConfigPath].filter(Boolean).some((file) => same(file) === same(args?.path));
+      if (configWrite) await desktopAccount.configurationWillChange(String(args?.content ?? ''));
+      const result = await handler(args ?? {}, event);
+      if (configWrite) await desktopAccount.configurationDidChange();
+      return result;
     },
   };
 }

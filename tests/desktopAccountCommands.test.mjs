@@ -18,10 +18,151 @@ const CONFIG = { apiBaseUrl: 'https://sync.example.test', oidcIssuer: 'https://l
 const PDF = Buffer.from('%PDF-1.7\n1 0 obj << /Type /Catalog >> endobj\nfixture bytes\n%%EOF\n');
 const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
+const REMOTE_CAPABILITY = { protocolVersion: 1, transport: 'persistent-jobs-v1', maxArtifactBytes: 16777216, maxAccountArtifactBytes: 67108864,
+  maxActive: 1, maxQueued: 16, maxRetained: 200, maxReceipts: 2000, maxProfiles: 8, leaseSeconds: 60, providerPresenceSeconds: 45 };
 async function until(condition) {
   const deadline = Date.now() + 5000;
   while (!condition()) { if (Date.now() > deadline) assert.fail('Timed out waiting for test condition'); await new Promise((resolve) => setTimeout(resolve, 5)); }
 }
+async function remoteFixture(t, { blockSubmission = false, beforeRevision } = {}) {
+  const fixtures = await import('./remoteTaskFixtures.mjs'); const f = await fixture(t);
+  const secure = { isEncryptionAvailable: () => true, getSelectedStorageBackend: () => 'synthetic-os',
+    encryptString: (value) => Buffer.from(Buffer.from(value).toString('base64')), decryptString: (value) => Buffer.from(value.toString(), 'base64').toString() };
+  const submitted = deferred(), closed = deferred(); let dataId, uploads = 0, submissions = 0, publicProfiles = [], claimed = false, task, worker, manager, loseCompletion = false;
+  const upstream = await fixtures.server(t, async (request, response) => {
+    if (request.url.startsWith('/file-urls/batch')) {
+      submissions++;
+      dataId = JSON.parse(await fixtures.body(request)).files[0].data_id;
+      if (blockSubmission) { response.once('close', closed.resolve); submitted.resolve(); return; }
+      return fixtures.json(response, { code: 0, data: { batch_id: 'actual-command-batch', file_urls: [upstream.base + '/upload'] } });
+    }
+    if (request.url === '/upload') { assert.deepEqual(await fixtures.body(request), PDF); uploads++; response.end(); return; }
+    if (request.url.startsWith('/extract-results/batch/')) return fixtures.json(response, { code: 0, data: { extract_result: [{ data_id: dataId, state: 'done', full_zip_url: upstream.base + '/zip' }] } });
+    response.end(Buffer.from('synthetic-zip-input-to-injected-converter'));
+  });
+  const config = { settings: { mineruApiBaseUrl: upstream.base }, secrets: { mineruApiToken: 'PRIVATE_COMMAND_MINERU_KEY' } };
+  f.service.onRoute = async (url, options, body) => {
+    if (url.origin === upstream.base) return fetch(url.href, options);
+    if (url.pathname === '/v1/capabilities') return Response.json({ protocolVersion: 1, features: { desktopPdfTransfer: 1, remoteTasks: 1 },
+      desktopPdf: { transport: 'http-relay-v1', maxFileBytes: 67108864, requestTtlMs: 30000, pollTimeoutMs: 20000 }, remoteTasks: REMOTE_CAPABILITY });
+    if (url.pathname === '/v1/remote-tasks/provider') {
+      if (options.method === 'PUT') { publicProfiles = body.profiles; return Response.json({ provider: {} }); }
+      if (task?.state === 'running') task.state = 'interrupted'; return Response.json({ disabled: true });
+    }
+    if (url.pathname === '/v1/remote-tasks/provider/claim') {
+      if (claimed) return Response.json({ claim: null }); claimed = true;
+      const binding = manager.getStatus().bindings[0], timestamp = new Date().toISOString();
+      if (!task) task = { id: randomUUID(), kind: 'parse', state: 'running', target: { paperId: binding.paperId, attachmentVersionId: binding.attachmentVersionId,
+        paperRevision: 1, versionRevision: 1, sha256: binding.sha256, sizeBytes: binding.sizeBytes, pageCount: null, fileName: binding.fileName },
+      providerDeviceId: f.service.deviceId, recoveryProviderDeviceId: null, profile: publicProfiles[0], indexSourceDigest: null, attempt: 1,
+      createdAt: timestamp, updatedAt: timestamp, leaseExpiresAt: new Date(Date.now() + 60000).toISOString(), failure: null, artifact: null };
+      task.state = 'running';
+      return Response.json({ claim: { task, lease: { attempt: task.attempt, fence } } });
+    }
+    if (url.pathname.endsWith('/heartbeat')) return Response.json({ task });
+    if (url.pathname.endsWith('/recovery-confirm')) { task.recoveryProviderDeviceId = task.providerDeviceId; return Response.json({ task }); }
+    if (url.pathname.endsWith('/complete')) {
+      assert.equal(options.headers['Content-Type'], 'application/octet-stream'); assert.equal(options.headers['X-PaperQuay-Remote-Fence'], fence);
+      const parsed = await fixtures.core.decodeParsedDocument(new Uint8Array(body)); assert.equal(parsed.document.pdf.sha256, digest(PDF));
+      if (loseCompletion) { loseCompletion = false; throw new Error('SYNTHETIC_COMPLETION_RESPONSE_LOSS'); }
+      task.state = 'succeeded'; task.artifact = { digest: digest(body), sizeBytes: body.length, mediaType: 'application/json' };
+      return Response.json({ task, replayed: false });
+    }
+    if (url.pathname.endsWith('/fail')) { task.state = body.code === 'EXTERNAL_OUTCOME_UNKNOWN' ? 'interrupted' : 'failed'; task.failure = body.code; return Response.json({ task }); }
+  };
+  let fence = randomUUID();
+  const revisions = beforeRevision ? require('../electron/backend/desktopRemoteTasks.cjs').createCredentialRevisionStore(
+    path.join(path.dirname(f.appPaths.configPath), 'account-sync', 'remote-tasks', 'credential-revisions'), { secure }) : null;
+  const managerOptions = { core: { ...require('../electron/generated/desktopSyncCore.cjs'), ...fixtures.core }, remoteTasks: {
+    secure, manual: true, readConfiguration: async () => structuredClone(config),
+    ...(revisions ? { revisions: { update: async (...args) => { await beforeRevision(); return revisions.update(...args); }, devices: (scope) => revisions.devices(scope) } } : {}),
+    timings: { guardMs: 5, presenceMs: 100, heartbeatMs: 40, pollMs: 5 },
+    createWorker(options) { worker = require('../electron/backend/remoteTaskWorker.cjs').createRemoteTaskWorker(options); return worker; },
+    materialize: async ({ task: target }) => Buffer.from(JSON.stringify({ format: 'paperquay-parsed-document', version: 1, paperId: target.target.paperId,
+      attachmentVersionId: target.target.attachmentVersionId, pdf: { sha256: digest(PDF), sizeBytes: PDF.length, pageCount: 1 }, parser: { name: 'mineru', model: 'vlm' },
+      blocks: [{ id: 'p0', pageIndex: 0, kind: 'text', text: 'Command bridge fixture.' }], assets: [] })),
+  } };
+  manager = f.create(managerOptions);
+  await f.login(manager); await f.publish(manager);
+  const enable = () => manager.commands.desktop_remote_tasks_set_enabled({ enabled: true, consent: true, configurationToken: manager.getStatus().remoteTasks.configurationToken });
+  return { ...f, get manager() { return manager; }, config, upstream, submitted, closed, enable, worker: () => worker, uploads: () => uploads,
+    submissions: () => submissions, task: () => task, loseCompletion: () => { loseCompletion = true; },
+    async restartAndReassign() {
+      const oldDeviceId = f.service.deviceId;
+      manager.close(); await manager.settled(); f.service.deviceId = randomUUID();
+      task.providerDeviceId = f.service.deviceId; task.recoveryProviderDeviceId = oldDeviceId; task.attempt++; task.state = 'queued'; task.failure = null;
+      claimed = false; fence = randomUUID(); manager = f.create(managerOptions); await f.login(manager, false);
+    } };
+}
+
+test('remote command bridge stays off until consent, reads selected SQLite mapping bytes and clears only completed journals', async (t) => {
+  const f = await remoteFixture(t);
+  assert.equal(f.manager.getStatus().enabled, false, 'remote processing does not depend on enabling the separate PDF relay');
+  assert.equal(f.manager.getStatus().remoteTasks.enabled, false);
+  await assert.rejects(f.manager.commands.desktop_remote_tasks_set_enabled({ enabled: true, consent: true,
+    configurationToken: f.manager.getStatus().remoteTasks.configurationToken, pdfPath: '//unapproved.invalid/private.pdf' }), { code: 'DESKTOP_ARGUMENT_INVALID' });
+  await f.enable(); assert.equal(f.manager.getStatus().remoteTasks.enabled, true);
+  assert.equal(f.manager.getStatus().errorCode, null);
+  const result = await f.worker().runOnce(); assert.equal(result.state, 'succeeded', JSON.stringify(result)); assert.equal(f.uploads(), 1);
+  const publicBody = f.service.calls.filter((item) => item.url.includes('/v1/remote-tasks/provider') && item.method === 'PUT').map((item) => JSON.stringify(item.body)).join('');
+  assert.equal(publicBody.includes('PRIVATE_COMMAND_MINERU_KEY'), false); assert.equal(publicBody.includes(f.upstream.base), false);
+  await assert.rejects(f.manager.commands.desktop_remote_tasks_clear_completed({ confirmed: true }), { code: 'REMOTE_WORKER_BUSY' });
+  await f.manager.commands.desktop_remote_tasks_set_enabled({ enabled: false });
+  assert.equal((await f.manager.commands.desktop_remote_tasks_clear_completed({ confirmed: true })).removed, 1);
+  assert.deepEqual(fs.readFileSync(f.attachment.storedPath), PDF); assert.equal(f.task().state, 'succeeded');
+});
+for (const change of ['sign-out', 'unbind', 'configuration']) {
+  test(`remote command bridge aborts the actual submission and withdraws scoped presence on ${change}`, async (t) => {
+    const f = await remoteFixture(t, { blockSubmission: true }); await f.enable(); const active = f.worker().runOnce(); await f.submitted.promise;
+    if (change === 'sign-out') await f.manager.commands.desktop_account_sign_out();
+    else if (change === 'unbind') await f.manager.commands.desktop_provider_unbind({ bindingId: f.manager.getStatus().bindings[0].bindingId });
+    else { const changed = structuredClone(f.config); changed.secrets.mineruApiToken = 'NEW_PRIVATE_KEY'; await f.manager.configurationWillChange(JSON.stringify(changed)); }
+    await active; await f.closed.promise; await f.manager.settled();
+    assert.equal(f.manager.getStatus().remoteTasks.enabled, false);
+    assert.ok(f.service.calls.some((item) => item.method === 'DELETE' && item.url === CONFIG.apiBaseUrl + '/v1/remote-tasks/provider'));
+    assert.deepEqual(fs.readFileSync(f.attachment.storedPath), PDF);
+  });
+}
+test('new desktop sid explicitly reassigns a received artifact with stable private credentials and no new upstream submission', async (t) => {
+  const f = await remoteFixture(t); await f.enable(); f.loseCompletion();
+  assert.equal((await f.worker().runOnce()).state, 'interrupted'); assert.equal(f.submissions(), 1);
+  await f.restartAndReassign(); assert.equal(f.manager.getStatus().remoteTasks.enabled, false);
+  await f.enable(); assert.equal((await f.worker().runOnce()).state, 'succeeded');
+  assert.equal(f.submissions(), 1); assert.equal(f.uploads(), 1);
+  await f.manager.commands.desktop_remote_tasks_set_enabled({ enabled: false });
+  assert.equal((await f.manager.commands.desktop_remote_tasks_clear_completed({ confirmed: true })).removed, 2, 'both confirmed copies are clearable across private session history');
+});
+test('new desktop sid preserves an unknown submission and refuses a fresh paid request', async (t) => {
+  const f = await remoteFixture(t, { blockSubmission: true }); await f.enable();
+  const active = f.worker().runOnce(); await f.submitted.promise; await f.manager.commands.desktop_remote_tasks_set_enabled({ enabled: false });
+  await active; await f.closed.promise; await f.restartAndReassign(); await f.enable();
+  assert.equal((await f.worker().runOnce()).errorCode, 'EXTERNAL_OUTCOME_UNKNOWN'); assert.equal(f.submissions(), 1);
+});
+test('shutdown retains the real profile writer lock until an in-flight private credential revision finishes', async (t) => {
+  const entered = deferred(), release = deferred(); let block = false;
+  const f = await remoteFixture(t, { beforeRevision: async () => { if (block) { entered.resolve(); await release.promise; } } });
+  const old = f.manager; f.config.secrets.mineruApiToken = 'CHANGED_PRIVATE_KEY'; block = true;
+  const refresh = old.configurationDidChange(); await entered.promise; old.close();
+  let second;
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const fixtures = await import('./remoteTaskFixtures.mjs'); second = f.create({ core: { ...require('../electron/generated/desktopSyncCore.cjs'), ...fixtures.core } });
+    await second.commands.desktop_account_sign_in(); await second.settled();
+    assert.equal(second.getStatus().errorCode, 'DESKTOP_ACCOUNT_IN_USE'); assert.equal(second.getStatus().account, null);
+  } finally { release.resolve(); }
+  await refresh; await old.settled(); await second.commands.desktop_account_sign_in(); await second.settled();
+  assert.equal(second.getStatus().auth.status, 'signed-in');
+});
+test('remote processing honors cloud-egress approval for only the explicitly selected attachment', async (t) => {
+  const f = await remoteFixture(t); let checked = 0;
+  f.context.authorizeCloudParsePath = async (library, source) => {
+    checked++; assert.equal(source, f.attachment.storedPath); assert.equal(library.papers.length, 1);
+    assert.equal(library.papers[0].attachments.length, 1); assert.equal(library.papers[0].attachments[0].id, f.attachment.id);
+    throw new Error('SYNTHETIC_CLOUD_APPROVAL_DENIED');
+  };
+  await f.enable(); assert.equal((await f.worker().runOnce()).errorCode, 'DESKTOP_SOURCE_NOT_APPROVED');
+  assert.equal(checked, 1); assert.equal(f.submissions(), 0); assert.equal(f.uploads(), 0);
+});
 
 test('parsed export derives its source and account IDs from the current binding and forwards only the native event', async (t) => {
   const f = await fixture(t); let prepared = 0, saved = 0;
@@ -102,7 +243,7 @@ function fakeService() {
       version: { entityId: version.entityId, revision: version.revision, data: structuredClone(version.data) } };
   };
   service.fetch = async (input, options = {}) => {
-    const url = new URL(input), body = options.body && options.headers['Content-Type'] === 'application/json' ? JSON.parse(options.body) : options.body;
+    const url = new URL(input), body = options.body && options.headers?.['Content-Type'] === 'application/json' ? JSON.parse(options.body) : options.body;
     calls.push({ url: url.href, method: options.method, body });
     const intercepted = await service.onRoute?.(url, options, body);
     if (intercepted) return intercepted;

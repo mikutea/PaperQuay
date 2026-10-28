@@ -41,7 +41,7 @@ test('organization metadata is negotiated consistently for pull, push and every 
   fake.repository.resolveConflict = async () => result;
   const app = await buildApp({ config: testConfig(), repository: fake.repository, verifyToken: async () => identity(), rateLimitEnabled: false });
   t.after(() => app.close());
-  assert.deepEqual((await app.inject({ method: 'GET', url: '/v1/capabilities' })).json().features, { paperOrganization: 1 });
+  assert.deepEqual((await app.inject({ method: 'GET', url: '/v1/capabilities' })).json().features, { paperOrganization: 1,richNotes:1,aiConversations:1 });
   for (const enabled of [false, true]) {
     const headers = enabled ? { [SYNC_FEATURE_HEADER]: `unknown, ${PAPER_ORGANIZATION_FEATURE}` } : {};
     const pull = (await app.inject({ method: 'GET', url: '/v1/sync/pull', headers })).json();

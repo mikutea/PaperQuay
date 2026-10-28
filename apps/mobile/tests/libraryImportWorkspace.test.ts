@@ -7,7 +7,8 @@ import {
 } from '../../../packages/sync-core/src/index.ts';
 import type { AccountIdentity } from '../src/api.ts';
 import { ClientError } from '../src/errors.ts';
-import { planLibraryImport, type LibraryArchive } from '../src/library/libraryTransfer.ts';
+import { planLibraryImport, exportLibraryArchive, type LibraryArchive } from '../src/library/libraryTransfer.ts';
+import { createRichNoteData } from '../../../packages/sync-core/src/richNote.ts';
 import { AccountStore, type AccountStorage } from '../src/storage/accountStore.ts';
 import { decodeWorkspace, WorkspaceController, type StoredWorkspace } from '../src/sync/workspace.ts';
 
@@ -64,7 +65,7 @@ class Api {
 
 function setup(t: TestContext, options: {
   api?: Api; factory?: IDBFactory; databaseName?: string; online?: boolean;
-  organization?: () => boolean; makeId?: () => string;
+  organization?: () => boolean; rich?: () => boolean; makeId?: () => string;
   binding?: { key?: () => string | null; read?: () => Promise<AccountIdentity | null> };
   wrap?: (store: AccountStore<StoredWorkspace>) => AccountStorage<StoredWorkspace>;
 } = {}) {
@@ -73,7 +74,7 @@ function setup(t: TestContext, options: {
   const store = new AccountStore({ decode: decodeWorkspace, indexedDB: factory, databaseName });
   const controller = new WorkspaceController({ api, apiBaseUrl: scope().apiBaseUrl, store: options.wrap?.(store) ?? store,
     online: options.online ?? false, now: () => NOW, makeId: options.makeId,
-    supportsPaperOrganization: options.organization, binding: options.binding,
+    supportsPaperOrganization: options.organization, supportsRichNotes: options.rich, binding: options.binding,
   });
   t.after(async () => { controller.deactivate(); await store.close(); });
   return { api, factory, databaseName, store, controller };
@@ -88,6 +89,47 @@ function linkedEntities(workspace: StoredWorkspace) {
   assert.equal((notes[0].data as NoteData).paperId, papers[0].entityId);
   return { paper: papers[0], note: notes[0] };
 }
+function richArchive(): LibraryArchive {
+  const data = createRichNoteData({ paperId: id(10), title: 'Rich imported note', document: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: '完整结构', marks: [{ type: 'bold' }] }] }] },
+    assets: [], metadata: { type: 'standalone', anchors: [], tags: ['rich'], color: '#fef08a', isFavorite: false, isPinned: false,
+      linkedNoteIds: [], linkedPaperIds: [], createdAt: 100, updatedAt: 200, unresolvedReferences: [] } });
+  const common = { revision: 1, deleted: false, pending: false, status: 'synced' as const };
+  return exportLibraryArchive([{ ...common, entityType: 'paper', entityId: id(10), data: paperData() },
+    { ...common, entityType: 'note', entityId: id(11), data },
+    { ...common, entityType: 'note', entityId: id(12), data: { paperId: null, title: 'Plain', body: 'Markdown', format: 'markdown' } }]).archive;
+}
+
+test('mixed rich imports require current capability atomically, deselected rich notes do not gate plain creates', async (t) => {
+  const f = setup(t); await f.controller.bind('A'); const input = richArchive(), before = await f.store.read(scope());
+  const plan = review(f.controller, input);
+  await assert.rejects(f.controller.importLibrary(input, undefined, plan.signature), { code: 'IMPORT_UNSUPPORTED' });
+  assert.deepEqual(await f.store.read(scope()), before);
+  const selection = ['paper:p1', 'note:n2'], plain = review(f.controller, input, selection);
+  await f.controller.importLibrary(input, selection, plain.signature);
+  const saved = await f.store.read(scope()); assert.equal(listVisibleEntities(saved!.sync).length, 2);
+  assert.equal((listVisibleEntities(saved!.sync, 'note')[0].data as NoteData).format, 'markdown');
+});
+
+test('rich capability is rechecked inside the queued account transaction before any creates', async (t) => {
+  let supported = true, pause = false; const entered = deferred(), release = deferred();
+  const f = setup(t, { online: true, rich: () => supported, wrap: (store) => ({
+    read: (key) => store.read(key), remove: (key) => store.remove(key), close: () => store.close(),
+    update: async (key, reducer, guard) => { if (pause) { entered.resolve(); await release.promise; } return store.update(key, reducer, guard); },
+  }) });
+  await f.controller.bind('A'); const input = richArchive(), signature = review(f.controller, input).signature, before = await f.store.read(scope());
+  pause = true; const pending = f.controller.importLibrary(input, undefined, signature); await entered.promise;
+  supported = false; release.resolve(); await assert.rejects(pending, { code: 'IMPORT_UNSUPPORTED' });
+  assert.deepEqual(await f.store.read(scope()), before); assert.equal(f.api.requests.length, 0);
+});
+
+test('a remembered rich-note capability allows lossless offline import without stripping structures', async (t) => {
+  let supported = true; const f = setup(t, { rich: () => supported }); await f.controller.bind('A');
+  supported = false; f.controller.setOnline(false);
+  const input = richArchive(), plan = review(f.controller, input); await f.controller.importLibrary(input, undefined, plan.signature);
+  const saved = (await f.store.read(scope()))!, notes = listVisibleEntities(saved.sync, 'note');
+  assert.equal(notes.length, 2); assert.equal(notes.filter((note) => (note.data as NoteData).format === 'tiptap-json').length, 1);
+  assert.equal(saved.richNotesVersion, 1); assert.equal(f.api.requests.length, 0);
+});
 
 test('a complete paper-note import publishes and starts automatic synchronization only after COMMIT', async (t) => {
   const f = setup(t, { online: true }); await f.controller.bind('A');

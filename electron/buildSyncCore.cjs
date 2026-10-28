@@ -37,3 +37,20 @@ try {
   if (fs.existsSync(parsedTemporary)) fs.unlinkSync(parsedTemporary);
 }
 process.stdout.write('Built desktop parsed document converter.\n');
+
+// A separate pure entry point shares the mobile v2 exchange boundary without
+// importing renderer stores, Electron IPC or Capacitor into the main process.
+const richOutput = path.join(directory, 'desktopRichNoteArchive.cjs');
+const rich = esbuild.buildSync({
+  entryPoints: [path.join(__dirname, '..', 'src', 'services', 'portableRichNoteArchive.ts')],
+  bundle: true, platform: 'node', format: 'cjs', target: 'node22',
+  write: false, sourcemap: false, legalComments: 'none',
+});
+const richTemporary = path.join(directory, `.desktopRichNoteArchive-${randomUUID()}.tmp`);
+try {
+  fs.writeFileSync(richTemporary, rich.outputFiles[0].contents, { flag: 'wx' });
+  fs.renameSync(richTemporary, richOutput);
+} finally {
+  if (fs.existsSync(richTemporary)) fs.unlinkSync(richTemporary);
+}
+process.stdout.write('Built desktop saved rich note archive converter.\n');

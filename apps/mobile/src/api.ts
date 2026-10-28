@@ -5,6 +5,7 @@ import {
   validateSyncRecord,
   SYNC_FEATURE_HEADER,
   PAPER_ORGANIZATION_FEATURE,
+  RICH_NOTES_FEATURE,AI_CONVERSATIONS_FEATURE,
   type EntityType,
   type PullResponse,
   type PushRequest,
@@ -20,6 +21,7 @@ import { ClientError, errorFromResponse } from './errors.ts';
 import { getPlatformCapabilities } from './platform.ts';
 import type { CloudPdfCapability } from './pdf/cloudCopies.ts';
 import { isDesktopPdfCapability, type DesktopPdfCapability } from './pdf/desktopCopies.ts';
+import { validateRemoteTaskCapability, type RemoteTaskCapability } from '../../../packages/sync-core/src/remoteTasks.ts';
 
 export interface DeviceSession {
   id: string;
@@ -137,8 +139,11 @@ async function boundedJson(response: Response): Promise<unknown> {
 
 export class SyncApi {
   supportsPaperOrganization = false;
+  supportsRichNotes=false;
+  supportsAiConversations=false;
   cloudPdfCapability: CloudPdfCapability | null = null;
   desktopPdfCapability: DesktopPdfCapability | null = null;
+  remoteTaskCapability: RemoteTaskCapability | null = null;
   private readonly baseUrl: string;
   private readonly getToken: () => Promise<string>;
   private readonly fetcher: typeof fetch;
@@ -176,7 +181,9 @@ export class SyncApi {
         headers: {
           Authorization: `Bearer ${token}`,
           Accept: 'application/json',
-          ...(this.supportsPaperOrganization ? { [SYNC_FEATURE_HEADER]: PAPER_ORGANIZATION_FEATURE } : {}),
+          ...((this.supportsPaperOrganization||this.supportsRichNotes||this.supportsAiConversations)?{[SYNC_FEATURE_HEADER]:[
+            ...(this.supportsPaperOrganization?[PAPER_ORGANIZATION_FEATURE]:[]),...(this.supportsRichNotes?[RICH_NOTES_FEATURE]:[]),
+            ...(this.supportsAiConversations?[AI_CONVERSATIONS_FEATURE]:[])].join(', ')}:{}),
           ...(data === undefined ? {} : { 'Content-Type': 'application/json' }),
         },
         redirect: 'error',
@@ -215,11 +222,19 @@ export class SyncApi {
   }
 
   async capabilities(signal: AbortSignal): Promise<{ paperOrganization: boolean }> {
+    this.supportsRichNotes=false;this.supportsAiConversations=false;
     this.cloudPdfCapability = null;
     this.desktopPdfCapability = null;
+    this.remoteTaskCapability = null;
     const body = await this.request('/v1/capabilities', signal);
     if (!isObject(body) || body.protocolVersion !== 1) throw new ClientError('INVALID_RESPONSE');
     this.supportsPaperOrganization = isObject(body.features) && body.features.paperOrganization === 1;
+    this.supportsRichNotes=isObject(body.features)&&body.features.richNotes===1;
+    this.supportsAiConversations=isObject(body.features)&&body.features.aiConversations===1;
+    if (isObject(body.features) && body.features.remoteTasks === 1) {
+      try { this.remoteTaskCapability = validateRemoteTaskCapability(body.remoteTasks); }
+      catch { throw new ClientError('INVALID_RESPONSE'); }
+    }
     let desktopCapability: DesktopPdfCapability | null = null;
     if (isObject(body.features) && body.features.desktopPdfTransfer === 1) {
       const limits = body.desktopPdf;

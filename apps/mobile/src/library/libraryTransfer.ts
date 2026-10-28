@@ -3,6 +3,8 @@ import {
   validateEntityData, validateJsonSchema,
   type JsonSchema, type LocalEdit, type NoteData, type PaperData, type ValidationIssue, type VisibleEntity,
 } from '../../../../packages/sync-core/src/index.ts';
+import { RICH_NOTE_DATA_SCHEMA, validateRichNoteData, remapRichNoteReferences,
+  type RichNoteData } from '../../../../packages/sync-core/src/richNote.ts';
 
 export const LIBRARY_TRANSFER_LIMITS = Object.freeze({
   maxBytes: 4 * 1024 * 1024,
@@ -12,11 +14,23 @@ export const LIBRARY_TRANSFER_LIMITS = Object.freeze({
   maxIdAttempts: 32,
 });
 
+export interface LibraryMarkdownNote { ref: string; sourceId?: string; paperRef: string | null; paperSourceId?: string | null; title: string; body: string; format: 'markdown' }
+export interface LibraryRichNote extends Omit<RichNoteData, 'paperId'> { ref: string; sourceId?: string; paperRef: string | null; paperSourceId?: string | null }
+export type LibraryArchiveNote = LibraryMarkdownNote | LibraryRichNote;
+export interface LibraryDesktopExportReport {
+  source: 'desktop-saved-notes'; sourceIds: 'export-only-aliases'; scope: 'selected-saved-notes';
+  requestedNotes: number;
+  skipped: { entityType: 'paper' | 'note'; index: number; code: string }[];
+  aliases: { entityType: 'paper' | 'note'; sourceId: string; originalId: string }[];
+}
 export interface LibraryArchive {
   format: 'paperquay-library';
-  version: 1;
-  papers: { ref: string; data: PaperData }[];
-  notes: { ref: string; paperRef: string | null; title: string; body: string; format: 'markdown' }[];
+  version: 1 | 2;
+  /** v2 sourceId is a source identity used solely for explicit in-package binding. */
+  papers: { ref: string; data: PaperData; sourceId?: string }[];
+  notes: LibraryArchiveNote[];
+  /** Diagnostic source keys are package-local aliases, never target identities. */
+  exportReport?: LibraryDesktopExportReport;
 }
 export type LibraryBlockedReason = 'MISSING_PAPER' | 'PAPER_NOT_SELECTED' | 'AMBIGUOUS_PAPER';
 export type LibraryImportAssociation =
@@ -53,6 +67,7 @@ export interface LibraryImportPlan {
   /** Contains private user content. Compare in memory only; never log or persist this value. */
   signature: string;
   requiresPaperOrganization: boolean;
+  requiresRichNotes: boolean;
 }
 export interface LibraryExportSummary {
   papers: number;
@@ -61,7 +76,7 @@ export interface LibraryExportSummary {
   omittedDeleted: number;
   omittedUnsupported: number;
   conflicted: number;
-  scope: 'visible-saved-library-and-markdown';
+  scope: 'visible-saved-library-and-markdown' | 'visible-saved-library-and-rich-notes';
 }
 export type LibraryTransferErrorCode =
   | 'INVALID_JSON' | 'UNSUPPORTED_FORMAT' | 'INVALID_ARCHIVE' | 'ARCHIVE_TOO_LARGE'
@@ -94,6 +109,37 @@ const archiveSchema = object({
     body: { type: 'string', maxLength: SYNC_LIMITS.maxNoteBodyLength }, format: { const: 'markdown' },
   }) },
 });
+const sourceId: JsonSchema = { type: 'string', pattern: UUID_PATTERN };
+const exportReportSchema: JsonSchema = object({
+  source: { const: 'desktop-saved-notes' }, sourceIds: { const: 'export-only-aliases' }, scope: { const: 'selected-saved-notes' },
+  requestedNotes: { type: 'integer', minimum: 1, maximum: LIBRARY_TRANSFER_LIMITS.maxNotes },
+  skipped: { type: 'array', maxItems: LIBRARY_TRANSFER_LIMITS.maxItems, items: object({
+    entityType: { enum: ['paper', 'note'] }, index: { type: 'integer', minimum: 0, maximum: LIBRARY_TRANSFER_LIMITS.maxItems - 1 },
+    code: { type: 'string', pattern: '^[A-Z][A-Z0-9_]{0,79}$' },
+  }) },
+  aliases: { type: 'array', maxItems: LIBRARY_TRANSFER_LIMITS.maxItems, items: object({
+    entityType: { enum: ['paper', 'note'] }, sourceId,
+    originalId: { type: 'string', minLength: 1, maxLength: 512 },
+  }) },
+});
+const markdownV2 = object({ ref: noteRef, sourceId, paperRef: { anyOf: [{ type: 'null' }, paperRef] }, paperSourceId: { anyOf: [{ type: 'null' }, sourceId] },
+  title: { type: 'string', maxLength: SYNC_LIMITS.maxTitleLength }, body: { type: 'string', maxLength: SYNC_LIMITS.maxNoteBodyLength }, format: { const: 'markdown' } });
+const { paperId: _richPaperId, ...richProperties } = RICH_NOTE_DATA_SCHEMA.properties!;
+const archiveV2Schema = object({ format: { const: 'paperquay-library' }, version: { const: 2 },
+  papers: { type: 'array', maxItems: LIBRARY_TRANSFER_LIMITS.maxPapers, items: object({ ref: paperRef, sourceId, data: ENTITY_DATA_SCHEMAS.paper }) },
+  notes: { type: 'array', maxItems: LIBRARY_TRANSFER_LIMITS.maxNotes, items: { oneOf: [markdownV2,
+    object({ ref: noteRef, sourceId, paperRef: { anyOf: [{ type: 'null' }, paperRef] }, paperSourceId: { anyOf: [{ type: 'null' }, sourceId] }, ...richProperties })] } },
+});
+archiveV2Schema.properties!.exportReport = exportReportSchema;
+export function richLibraryNoteData(note: LibraryRichNote): RichNoteData {
+  const fields = new Set(['ref', 'sourceId', 'paperRef', 'paperSourceId', 'title', 'body', 'format', 'document', 'metadata', 'assets']);
+  if (!dataOnly(note) || Reflect.ownKeys(note).some((key) => {
+    const descriptor = Object.getOwnPropertyDescriptor(note, key);
+    return typeof key !== 'string' || !fields.has(key) || !descriptor?.enumerable || !('value' in descriptor);
+  })) throw new LibraryTransferError('INVALID_ARCHIVE');
+  return validateRichNoteData({ paperId: null, title: note.title, body: note.body, format: note.format,
+    document: note.document, metadata: note.metadata, assets: note.assets });
+}
 
 function checkBytes(text: string): void {
   if (text.length > LIBRARY_TRANSFER_LIMITS.maxBytes
@@ -108,10 +154,10 @@ function cloneJson<T>(value: T): T {
 }
 
 function checkedArchive(value: unknown): LibraryArchive {
-  const checked = validateJsonSchema<LibraryArchive>(archiveSchema, value);
+  const checked = validateJsonSchema<LibraryArchive>({ oneOf: [archiveSchema, archiveV2Schema] }, value);
   if (!checked.ok) {
-    const unsupported = checked.issues.some((issue) => (issue.path === '$.format' || issue.path === '$.version')
-      && issue.code === 'INVALID_CONSTANT');
+    const unsupported = dataOnly(value) && (value.format !== undefined && value.format !== 'paperquay-library'
+      || value.version !== undefined && value.version !== 1 && value.version !== 2);
     throw new LibraryTransferError(unsupported ? 'UNSUPPORTED_FORMAT' : 'INVALID_ARCHIVE', checked.issues);
   }
   const archive = checked.value;
@@ -119,14 +165,47 @@ function checkedArchive(value: unknown): LibraryArchive {
     throw new LibraryTransferError('INVALID_ARCHIVE', [{ path: '$', code: 'TOO_MANY_ITEMS' }]);
   }
   for (const [field, values] of [['papers', archive.papers], ['notes', archive.notes]] as const) {
-    const refs = new Set<string>();
+    const refs = new Set<string>(), sources = new Set<string>();
     for (let index = 0; index < values.length; index++) {
       if (refs.has(values[index].ref)) {
         throw new LibraryTransferError('INVALID_ARCHIVE', [{ path: `$.${field}[${index}].ref`, code: 'DUPLICATE_REF' }]);
       }
       refs.add(values[index].ref);
+      if (archive.version === 2) {
+        const id = values[index].sourceId!;
+        if (sources.has(id)) throw new LibraryTransferError('INVALID_ARCHIVE', [{ path: `$.${field}[${index}].sourceId`, code: 'DUPLICATE_SOURCE_ID' }]);
+        sources.add(id);
+      }
     }
   }
+  if (archive.version === 2) {
+    const papers = new Map(archive.papers.map((paper) => [paper.ref, paper.sourceId]));
+    for (const note of archive.notes) {
+      if (note.paperRef === null ? note.paperSourceId !== null : typeof note.paperSourceId !== 'string'
+        || papers.has(note.paperRef) && papers.get(note.paperRef) !== note.paperSourceId)
+        throw new LibraryTransferError('INVALID_ARCHIVE', [{ path: '$.notes', code: 'INCONSISTENT_PAPER_REFERENCE' }]);
+    }
+    if (archive.exportReport) {
+      const report = archive.exportReport, aliases = new Set<string>(), originalIds = new Set<string>(), skippedNotes = new Set<number>(), skippedKeys = new Set<string>();
+      for (const entry of report.skipped) {
+        const key = `${entry.entityType}:${entry.index}`;
+        if (skippedKeys.has(key) || entry.entityType === 'note' && entry.index >= report.requestedNotes) throw new LibraryTransferError('INVALID_ARCHIVE');
+        skippedKeys.add(key); if (entry.entityType === 'note') skippedNotes.add(entry.index);
+      }
+      if (report.requestedNotes !== archive.notes.length + skippedNotes.size) throw new LibraryTransferError('INVALID_ARCHIVE');
+      for (const alias of report.aliases) {
+        const key = `${alias.entityType}:${alias.sourceId}`, values = alias.entityType === 'paper' ? archive.papers : archive.notes;
+        const originalKey = `${alias.entityType}:${alias.originalId}`;
+        if (aliases.has(key) || originalIds.has(originalKey) || !values.some((entry) => entry.sourceId === alias.sourceId)
+          || alias.originalId.trim() !== alias.originalId || /[\\/\x00-\x1f\x7f]/.test(alias.originalId)
+          || /^(?:(?:standalone|file|https?):|[a-z]:)/i.test(alias.originalId)) throw new LibraryTransferError('INVALID_ARCHIVE');
+        aliases.add(key); originalIds.add(originalKey);
+      }
+      if (aliases.size !== archive.papers.length + archive.notes.length) throw new LibraryTransferError('INVALID_ARCHIVE');
+    }
+  }
+  try { for (const note of archive.notes) if (note.format === 'tiptap-json') richLibraryNoteData(note); }
+  catch { throw new LibraryTransferError('INVALID_ARCHIVE', [{ path: '$.notes', code: 'INVALID_RICH_NOTE' }]); }
   const serialized = canonicalJson(archive);
   checkBytes(serialized);
   return JSON.parse(serialized) as LibraryArchive;
@@ -136,7 +215,7 @@ function checkedArchive(value: unknown): LibraryArchive {
 export function parseLibraryArchive(text: string): LibraryArchive {
   if (typeof text !== 'string') throw new LibraryTransferError('INVALID_JSON');
   checkBytes(text);
-  // Limit parser work before JSON.parse. The v1 schema never needs more than six levels.
+  // The rich document has its own stricter recursive grammar and budget.
   let depth = 0; let quoted = false; let escaped = false;
   for (const character of text) {
     if (quoted) {
@@ -146,7 +225,7 @@ export function parseLibraryArchive(text: string): LibraryArchive {
     } else if (character === '"') quoted = true;
     else if (character === '{' || character === '[') {
       depth++;
-      if (depth > 16) throw new LibraryTransferError('INVALID_ARCHIVE', [{ path: '$', code: 'MAX_DEPTH' }]);
+      if (depth > 40) throw new LibraryTransferError('INVALID_ARCHIVE', [{ path: '$', code: 'MAX_DEPTH' }]);
     } else if (character === '}' || character === ']') depth--;
   }
   let value: unknown;
@@ -204,7 +283,7 @@ function checkedExisting(entities: readonly VisibleEntity[]): ExistingEntity[] {
 const byId = (left: ExistingEntity, right: ExistingEntity) => left.entityId < right.entityId ? -1 : left.entityId > right.entityId ? 1 : 0;
 
 /** Exports only the saved local visible projection, never a sync snapshot or a complete backup. */
-export function exportLibraryArchive(entities: readonly VisibleEntity[]): {
+export function exportLibraryArchive(entities: readonly VisibleEntity[], options: { version?: 2; exportReport?: LibraryDesktopExportReport } = {}): {
   archive: LibraryArchive; json: string; summary: LibraryExportSummary;
 } {
   const existing = checkedExisting(entities);
@@ -221,12 +300,15 @@ export function exportLibraryArchive(entities: readonly VisibleEntity[]): {
   }
   // Dangling associations receive fresh local refs too; source UUIDs never enter the file.
   const refs = new Map([...referencedPaperIds].sort().map((id, index) => [id, `p${index + 1}`]));
-  const archive = checkedArchive({ format: 'paperquay-library', version: 1,
-    papers: papers.map((entity) => ({ ref: refs.get(entity.entityId)!, data: entity.data as PaperData })),
+  const rich = notes.some((entity) => (entity.data as NoteData).format === 'tiptap-json'), version2 = rich || options.version === 2;
+  if (options.exportReport && !version2) throw new LibraryTransferError('INVALID_ARCHIVE');
+  const archive = checkedArchive({ format: 'paperquay-library', version: version2 ? 2 : 1,
+    ...(options.exportReport ? { exportReport: options.exportReport } : {}),
+    papers: papers.map((entity) => ({ ref: refs.get(entity.entityId)!, ...(version2 ? { sourceId: entity.entityId } : {}), data: entity.data as PaperData })),
     notes: notes.map((entity, index) => {
       const data = entity.data as NoteData;
-      return { ref: `n${index + 1}`, paperRef: data.paperId === null ? null : refs.get(data.paperId)!,
-        title: data.title, body: data.body, format: data.format };
+      const { paperId, ...content } = data;
+      return { ref: `n${index + 1}`, ...(version2 ? { sourceId: entity.entityId, paperSourceId: paperId } : {}), paperRef: paperId === null ? null : refs.get(paperId)!, ...content };
     }),
   });
   const json = JSON.stringify(archive, null, 2);
@@ -240,7 +322,7 @@ export function exportLibraryArchive(entities: readonly VisibleEntity[]): {
     omittedDeleted: existing.filter((entity) => entity.deleted).length,
     omittedUnsupported: existing.filter((entity) => !entity.deleted && entity.entityType !== 'paper' && entity.entityType !== 'note').length,
     conflicted: [...papers, ...notes].filter((entity) => entity.status === 'conflict').length,
-    scope: 'visible-saved-library-and-markdown',
+    scope: rich ? 'visible-saved-library-and-rich-notes' : 'visible-saved-library-and-markdown',
   };
   return { archive, json, summary };
 }
@@ -268,7 +350,12 @@ function paperFingerprint(data: PaperData): string {
   const { organization: _organization, ...metadata } = data;
   return doi === null ? `data:${canonicalJson(metadata)}` : `doi:${doi}`;
 }
-const noteFingerprint = (association: string, title: string, body: string) => canonicalJson([association, title, body, 'markdown']);
+// Exact rich structure, metadata, assets and reference identities are compared.
+// Different namespaces may conservatively remain separate copies; plain text,
+// labels or title alone must never collapse distinct links or formatting.
+const noteFingerprint = (association: string, data: NoteData | LibraryArchiveNote) => data.format === 'markdown'
+  ? canonicalJson([association, data.title, data.body, 'markdown'])
+  : canonicalJson([association, data.title, data.format, data.document, data.metadata, data.assets]);
 const paperKey = (ref: string) => `paper:${ref}`;
 const noteKey = (ref: string) => `note:${ref}`;
 function addToIndex<T>(index: Map<string, T[]>, key: string, value: T): void {
@@ -348,12 +435,12 @@ export function planLibraryImport(archive: LibraryArchive, existing: readonly Vi
     const data = entity.data as NoteData;
     const linked = data.paperId === null ? null : papersById.get(data.paperId);
     const token = data.paperId === null ? 'none' : linked ? paperFingerprint(linked.data as PaperData) : `missing-existing:${data.paperId}`;
-    addToIndex(savedNotes, noteFingerprint(token, data.title, data.body), entity);
+    addToIndex(savedNotes, noteFingerprint(token, data), entity);
   }
   const sourceNotes = new Map<string, string[]>();
   for (const note of source.notes) {
     const token = note.paperRef === null ? 'none' : sourceFingerprints.get(note.paperRef) ?? `missing-source:${note.paperRef}`;
-    const fingerprint = noteFingerprint(token, note.title, note.body);
+    const fingerprint = noteFingerprint(token, note);
     const previous = sourceNotes.get(fingerprint) ?? [];
     const matches = savedNotes.get(fingerprint) ?? [];
     const duplicate: LibraryImportRow['duplicate'] = matches.length || previous.length ? {
@@ -387,6 +474,7 @@ export function planLibraryImport(archive: LibraryArchive, existing: readonly Vi
     skipped: rows.filter((row) => !row.selected).length,
   };
   const requiresPaperOrganization = source.papers.some((paper) => chosen.has(paperKey(paper.ref)) && paper.data.organization !== undefined);
+  const requiresRichNotes = source.notes.some((note) => chosen.has(noteKey(note.ref)) && note.format === 'tiptap-json');
   const relevant = new Set<string>();
   for (const row of rows) {
     for (const id of row.duplicate?.existingIds ?? []) relevant.add(`${row.entityType}:${id}`);
@@ -399,15 +487,17 @@ export function planLibraryImport(archive: LibraryArchive, existing: readonly Vi
       const leftKey = `${left.entityType}:${left.entityId}`; const rightKey = `${right.entityType}:${right.entityId}`;
       return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
     });
-  const signature = canonicalJson({ archive: source, rows, summary, requiresPaperOrganization, current });
-  const plan = freezeTree({ archive: source, rows, summary, signature, requiresPaperOrganization });
-  plans.set(plan, { occupiedIds: new Set(saved.map((entity) => entity.entityId)) });
+  const signature = canonicalJson({ archive: source, rows, summary, requiresPaperOrganization, requiresRichNotes, current });
+  const plan = freezeTree({ archive: source, rows, summary, signature, requiresPaperOrganization, requiresRichNotes });
+  const occupiedIds = new Set(saved.map((entity) => entity.entityId));
+  if (source.version === 2) for (const item of [...source.papers, ...source.notes]) occupiedIds.add(item.sourceId!);
+  plans.set(plan, { occupiedIds });
   return plan;
 }
 
 /** Produces fresh creates only. This function does not persist, sync, or mutate the source. */
 export function materializeLibraryImport(plan: LibraryImportPlan, createId: () => string): {
-  edits: LocalEdit[]; summary: LibraryImportSummary; requiresPaperOrganization: boolean;
+  edits: LocalEdit[]; summary: LibraryImportSummary; requiresPaperOrganization: boolean; requiresRichNotes: boolean;
 } {
   const internal = plans.get(plan);
   if (!internal) throw new LibraryTransferError('INVALID_PLAN');
@@ -429,6 +519,8 @@ export function materializeLibraryImport(plan: LibraryImportPlan, createId: () =
     occupied.add(allocated); ids.set(row.key, allocated);
   }
   const rows = new Map(plan.rows.map((row) => [row.key, row]));
+  const sourcePapers = new Map(plan.archive.papers.filter((paper) => paper.sourceId && ids.has(paperKey(paper.ref))).map((paper) => [paper.sourceId!, ids.get(paperKey(paper.ref))!]));
+  const sourceNotes = new Map(plan.archive.notes.filter((note) => note.sourceId && ids.has(noteKey(note.ref))).map((note) => [note.sourceId!, ids.get(noteKey(note.ref))!]));
   const edits: LocalEdit[] = [];
   for (const paper of plan.archive.papers) {
     const id = ids.get(paperKey(paper.ref));
@@ -443,8 +535,11 @@ export function materializeLibraryImport(plan: LibraryImportPlan, createId: () =
     else if (linked.kind === 'existing-paper') paperId = linked.entityId;
     else if (linked.kind === 'new-paper' && ids.has(linked.paperKey)) paperId = ids.get(linked.paperKey)!;
     else throw new LibraryTransferError('BLOCKED_ASSOCIATION');
-    const data: NoteData = { paperId, title: note.title, body: note.body, format: note.format };
+    let data: NoteData;
+    try { data = note.format === 'markdown' ? { paperId, title: note.title, body: note.body, format: 'markdown' }
+      : remapRichNoteReferences(richLibraryNoteData(note), (kind, id) => kind === 'paper' ? sourcePapers.get(id) ?? null : kind === 'note' ? sourceNotes.get(id) ?? null : null, { paperId }); }
+    catch { throw new LibraryTransferError('INVALID_ARCHIVE', [{ path: '$.notes', code: 'UNSUPPORTED_REFERENCE_REMAP' }]); }
     edits.push({ entityType: 'note', entityId: id, mutation: 'put', data });
   }
-  return { edits, summary: { ...plan.summary }, requiresPaperOrganization: plan.requiresPaperOrganization };
+  return { edits, summary: { ...plan.summary }, requiresPaperOrganization: plan.requiresPaperOrganization, requiresRichNotes: plan.requiresRichNotes };
 }

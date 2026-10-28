@@ -56,6 +56,18 @@ function errorLabel(code: string | undefined | null, l: ReaderPreferencesLocaliz
     DESKTOP_PDF_TIMEOUT: ['本次取文件已超时，可以重新尝试。', 'This transfer timed out. Try again.'],
     LIBRARY_CHANGED: ['文库已变化，请重新检查可读取的文件。', 'The library changed. Review the available files.'],
     NETWORK_ERROR: ['暂时无法连接服务，请检查网络后重试。', 'Cannot reach the service. Check your connection and retry.'],
+    EXTERNAL_OUTCOME_UNKNOWN: ['外部服务是否受理尚不确定，已停止重发。请先核对服务记录。', 'The external outcome is unknown. Resubmission stopped; check the service records first.'],
+    SOURCE_UNAVAILABLE: ['无法取得与任务摘要一致的 PDF 或已验证解析包。请检查当前关联版本，向量任务需先完成解析。', 'The PDF or verified parse does not match this task. Check the linked version; indexing requires a completed matching parse.'],
+    PROFILE_CHANGED: ['服务配置或私有凭据已变化，旧任务已停止。请检查设置后重新确认。', 'Service configuration or private credentials changed. The old execution stopped; review settings and confirm again.'],
+    REMOTE_CONFIGURATION_CHANGED: ['服务配置已变化，任务已停止。请检查设置后重新确认开启。', 'Service configuration changed. Tasks stopped; review settings before enabling again.'],
+    REMOTE_BINDING_CHANGED: ['账号、文库或关联文件已变化，任务已停止。', 'The account, library or linked files changed. Tasks stopped.'],
+    REMOTE_MINERU_CACHE_FULL: ['远程解析缓存已达到本机容量限制。请在缓存管理中处理，再显式恢复任务。', 'Remote parse storage reached its local limit. Manage cache storage, then explicitly resume the task.'],
+    REMOTE_JOURNAL_FULL: ['本机执行记录已达到容量限制。请先停止任务并清理已完成记录。', 'Local execution journals reached their limit. Stop tasks and clear completed journals.'],
+    REMOTE_JOURNAL_CORRUPT: ['本机执行记录无法验证，已停止重发，避免重复计费。', 'A local execution journal could not be verified. Resubmission stopped to avoid duplicate charges.'],
+    REMOTE_CREDENTIAL_STORAGE_UNAVAILABLE: ['无法保存本机安全记录，请检查存储空间和系统加密。暂不能开启远程任务。', 'Private local records cannot be saved. Check disk space and OS encryption before enabling remote tasks.'],
+    REMOTE_TASKS_DISABLED: ['当前服务尚未开启远程任务。', 'Remote tasks are disabled on this service.'],
+    REMOTE_TASK_LEASE_CHANGED: ['执行租约已变化，本机处理已停止。请查看账号中的任务状态。', 'The execution lease changed. Local work stopped; check the account task status.'],
+    REMOTE_TASK_ARTIFACT_LIMIT: ['结果超过任务容量限制，未上传，请缩小处理范围或检查服务输出。', 'The result exceeds the task limit and was not uploaded. Reduce the scope or inspect the service output.'],
   };
   const value = labels[code];
   return value ? l(...value) : l('操作未完成，请检查登录、服务连接和所选文件后重试。', 'The operation did not complete. Check your sign-in, connection, and selected file.');
@@ -78,6 +90,8 @@ export function ReaderPreferencesDesktopAccountSection({ l }: { l: ReaderPrefere
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState('');
+  const [remoteConsent, setRemoteConsent] = useState(false);
+  const [clearRemoteConfirmed, setClearRemoteConfirmed] = useState(false);
   const alive = useRef(false);
   const sequence = useRef(0);
   const initialized = useRef(false);
@@ -119,6 +133,8 @@ export function ReaderPreferencesDesktopAccountSection({ l }: { l: ReaderPrefere
     finally { if (alive.current) setPending(false); }
   };
   const signedIn = status?.auth.status === 'signed-in' && !!status.account;
+  const remote = status?.remoteTasks;
+  useEffect(() => { setRemoteConsent(false); setClearRemoteConfirmed(false); }, [status?.account?.accountId, remote?.configurationToken]);
   const signingIn = status?.auth.status === 'signing-in';
   const busy = pending || !!status?.busy;
   const candidate = candidates.find((item) => `${item.localPaperId}:${item.localAttachmentId}` === candidateKey);
@@ -194,6 +210,38 @@ export function ReaderPreferencesDesktopAccountSection({ l }: { l: ReaderPrefere
             : l('正在通过临时中继发送 PDF', 'Sending PDF through the temporary relay')} · {sizeLabel(transfer.sizeBytes)}</p>
         <button type="button" className={buttonClass} onClick={() => void run(() => desktopAccount.cancel(transfer.transferId))}>{l('取消传输', 'Cancel transfer')}</button>
       </div>)}
+    </SettingsField>
+
+    <SettingsField label={l('远程解析与向量任务', 'Remote parse and vector tasks')}
+      description={l('仅处理下方已关联的 PDF，使用本机当前保存的 MinerU 与 embedding 服务。这会发送 PDF 或解析文本，并可能产生服务费用；重启后保持关闭。', 'Only linked PDFs below are processed, using the MinerU and embedding services saved on this computer. PDFs or parsed text are sent and service charges may apply. This stays off after restart.')}>
+      <div data-desktop-remote-tasks className="space-y-3">
+        <div role="status" className="text-sm text-[var(--pq-text)]">{remote?.enabled
+          ? remote.busy ? l('正在处理远程任务', 'Processing a remote task') : l('已开启，正在等待同账号任务', 'Enabled, waiting for your account’s tasks')
+          : l('已关闭', 'Disabled')}</div>
+        <ul className="space-y-1 text-xs text-[var(--pq-text-muted)]">
+          {remote?.profiles.map((profile) => <li key={profile.id}>{profile.kind === 'parse' ? l('解析', 'Parse') : l('向量索引', 'Vector index')} · {profile.model}</li>)}
+        </ul>
+        {!remote?.profiles.some((profile) => profile.kind === 'parse') ? <p className="text-xs text-[var(--pq-text-muted)]">{l('请先在模型设置中保存 MinerU 凭据。', 'Save MinerU credentials in model settings first.')}</p> : null}
+        {!remote?.profiles.some((profile) => profile.kind === 'index') ? <p className="text-xs text-[var(--pq-text-muted)]">{remote?.unavailable.index === 'REMOTE_INDEX_INPUT_UNSUPPORTED'
+          ? l('远程向量暂支持 plain 输入，请检查 embedding 设置。', 'Remote indexing currently supports plain input. Check embedding settings.')
+          : l('向量任务需要已保存的 embedding 凭据、模型和明确维度。', 'Indexing requires saved embedding credentials, a model, and an explicit dimension.')}</p> : null}
+        <p className="text-xs leading-5 text-[var(--pq-text-muted)]">{l('向量任务只接受与目标版本一致的已验证解析包。停止会中止本机等待及后续请求；已受理的云任务可能仍继续并计费。', 'Indexing requires a verified parsed package for the exact file version. Stopping aborts local waiting and further requests; cloud work already accepted may continue and incur charges.')}</p>
+        {!remote?.enabled ? <label className="flex items-start gap-2 text-xs leading-5 text-[var(--pq-text-muted)]"><input type="checkbox" checked={remoteConsent} onChange={(event) => setRemoteConsent(event.target.checked)} />
+          {l('允许使用当前服务处理所选文献，并已了解内容发送与费用。', 'Allow these services to process selected papers; I understand the data transfer and possible charges.')}</label> : null}
+        <button type="button" role="switch" aria-checked={!!remote?.enabled} aria-label={l('允许远程解析与向量任务', 'Allow remote parse and vector tasks')}
+          className={buttonClass} disabled={!remote?.enabled && (!signedIn || !remote?.capability || !remote.profiles.length || !hasPublished || busy || !!remote.busy || !remoteConsent)}
+          onClick={() => { const next = !remote?.enabled; setRemoteConsent(false); void run(() => desktopAccount.setRemoteTasksEnabled(next, remote?.configurationToken || undefined)); }}>
+          {remote?.enabled ? l('停止远程任务', 'Stop remote tasks') : l('开启远程任务', 'Enable remote tasks')}</button>
+        {signedIn && !remote?.capability ? <p className="text-xs text-[var(--pq-text-muted)]">{l('当前服务尚未开启远程任务。', 'Remote tasks are disabled on this service.')}</p> : null}
+        {remote?.errorCode ? <p role="alert" className="text-xs leading-5 text-[var(--pq-error)]">{errorLabel(remote.errorCode, l)}</p> : null}
+        <details className="rounded-xl border border-[var(--pq-border)] p-3"><summary className="cursor-pointer text-xs text-[var(--pq-text-muted)]">{l('清理本机已完成任务记录', 'Clear completed local task journals')}</summary>
+          <p className="mt-2 text-xs leading-5 text-[var(--pq-text-muted)]">{l('仅清理当前账号、服务和文库已完成的执行记录及其本机结果副本。保留 PDF、解析缓存、旧索引和服务端结果。请先停止远程任务。', 'Only completed execution journals and their local result copies for this account, service and library are cleared. PDFs, parsed caches, existing indexes and server results remain. Stop remote tasks first.')}</p>
+          <label className="mt-2 flex items-start gap-2 text-xs text-[var(--pq-text-muted)]"><input type="checkbox" checked={clearRemoteConfirmed} onChange={(event) => setClearRemoteConfirmed(event.target.checked)} />{l('确认清理已完成的本机执行记录', 'Confirm clearing completed local journals')}</label>
+          <button type="button" className={`${buttonClass} mt-2`} disabled={!signedIn || !!remote?.enabled || !!remote?.busy || busy || !clearRemoteConfirmed}
+            onClick={() => { setClearRemoteConfirmed(false); void run(async () => { const result = await desktopAccount.clearCompletedRemoteJournals();
+              if (alive.current) setNotice(l(`已清理 ${result.removed} 条本机执行记录。`, `Cleared ${result.removed} local task journals.`)); }); }}>{l('清理已完成记录', 'Clear completed journals')}</button>
+        </details>
+      </div>
     </SettingsField>
 
     <SettingsField label={l('添加可读取的 PDF', 'Add an available PDF')} description={l('先在文库中导入文件，再选择需要在其他设备上读取的附件。只同步选中文献的题录和附件版本。', 'Import a PDF into the library, then select the attachment to read on your other devices. Only the selected paper’s metadata and file version are synced.')}>

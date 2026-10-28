@@ -11,6 +11,7 @@ import { AiSseParser, KeyRedactor, actualAiUsage } from '../src/ai/stream.ts';
 import { boundedAiLimits } from '../src/ai/transport.ts';
 import { AI_LIMITS, type AiAccountScope, type AiLimits, type AiProviderConfig, type AiTransport, type PdfAiContext, type SecretStore } from '../src/ai/types.ts';
 import { MemorySecretStore } from '../src/platform/secretStore.ts';
+import { createAiConversation } from '../../../packages/ai-core/src/conversation.ts';
 
 const KEY = 'fixture-secret-only-not-a-live-credential';
 const ACCOUNT = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -55,6 +56,28 @@ function generate(client: AiClient, config: AiProviderConfig, extra: Partial<Par
   return client.generate({ accountScope: SCOPE, config, context: prepareAiContext(pdfContext()), action: 'explain', question: '', onText: () => {}, ...extra });
 }
 function code(expected: string) { return (error: unknown) => error instanceof AiError && error.code === expected && !JSON.stringify(error).includes(KEY); }
+
+test('real HTTP continuation sends exact completed prior turns and common source once, rejecting changed source or budget before another paid request', async () => {
+  const bodies: Record<string, any>[] = [];
+  await provider(async (request, response) => {
+    bodies.push(await requestBody(request)); response.setHeader('Content-Type', 'application/json');
+    response.end(JSON.stringify(completion(`回答${bodies.length} [P2]`)));
+  }, async endpoint => {
+    const { client, config } = await configured(endpoint); config.stream = false;
+    const controller = new AiSessionController(client); controller.bind(SCOPE, config, pdfContext());
+    await controller.start('ask', '第一轮问题');
+    const conversation = createAiConversation(controller.historyRecord(controller.getSnapshot().result!.requestId));
+    await controller.start('ask', '第二轮问题', conversation);
+    assert.equal(bodies.length, 2); assert.deepEqual(bodies[1].messages.map((value: any) => value.role), ['system', 'user', 'assistant', 'user']);
+    assert.match(bodies[1].messages[1].content, /第一轮问题/); assert.equal(bodies[1].messages[2].content, '回答1 [P2]');
+    assert.equal(JSON.stringify(bodies[1].messages).split(pdfContext().pages[0].text).length - 1, 1);
+    const changed = { ...conversation, context: { ...conversation.context, pages: [{ pageIndex: 1, text: 'changed text' }] } };
+    await assert.rejects(generate(client, config, { action: 'ask', question: '第三轮', conversation: changed }), code('CONTEXT_INVALID'));
+    const limited = await configured(endpoint, { requestBytes: 512 }); limited.config.stream = false;
+    await assert.rejects(generate(limited.client, limited.config, { action: 'ask', question: '第三轮', conversation }), code('INPUT_TOO_LARGE'));
+    assert.equal(bodies.length, 2); controller.dispose();
+  });
+});
 
 test('provider URLs reject credential/query/fragment and non-HTTP ambiguities; public settings isolate accounts and services', async () => {
   assert.equal(canonicalAiEndpoint('HTTPS://Example.COM:443/v1///'), 'https://example.com/v1');

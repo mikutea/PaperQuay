@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { AiArchivePanel } from './AiArchivePanel.tsx';
+import { AiSyncPanel } from './AiSyncPanel.tsx';
+import type { AiSyncEntry } from '../integration/aiSync.ts';
+import type { AiConversationData } from '../../../../packages/ai-core/src/conversation.ts';
+import { AI_CONVERSATION_LIMITS } from '../../../../packages/ai-core/src/conversation.ts';
 import { AiClient } from '../ai/client.ts';
 import { AI_ACTION_LABELS, aiResultNote, prepareAiContext } from '../ai/context.ts';
 import { AiSessionController } from '../ai/controller.ts';
@@ -36,6 +40,8 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
   const [hasKeyDraft, setHasKeyDraft] = useState(false);
   const [saving, setSaving] = useState(false);
   const [visibleRequestId, setVisibleRequestId] = useState<string | null>(null);
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const requestConversations = useRef(new Map<string, AiSyncEntry<AiConversationData> | undefined>());
   const password = useRef<HTMLInputElement>(null);
   const lifecycle = useRef(0);
   const secretAbort = useRef<AbortController | null>(null);
@@ -57,6 +63,33 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
   }, [config]);
   const contextIdentity = prepared.context?.identity ?? (props.context ? 'invalid' : 'missing');
   const configIdentity = JSON.stringify(config);
+  const conversation = props.sync?.conversations.find(entry => entry.id === conversationId);
+  const conversationFull = Boolean(conversation && conversation.data.turns.length >= AI_CONVERSATION_LIMITS.turns);
+  useEffect(() => {
+    if (conversationId && (!conversation || prepareAiContext(conversation.data.context).identity !== contextIdentity)) setConversationId(null);
+  }, [conversationId, conversation, contextIdentity]);
+  const selectConversation = (entry: AiSyncEntry<AiConversationData> | null) => {
+    if (controller.getSnapshot().busy) return;
+    if (entry) {
+      if (!props.onRestoreContext && prepareAiContext(entry.data.context).identity !== contextIdentity) throw new AiError('CONTEXT_INVALID');
+      props.onRestoreContext?.(structuredClone(entry.data.context));
+    }
+    setConversationId(entry?.id ?? null); setLocalFailure(null); setNotice('');
+  };
+  const continuationFor = useCallback((requestId: string) => requestConversations.current.get(requestId), []);
+  function startGeneration() {
+    if (conversationFull) { setLocalFailure({ code: 'CONVERSATION_LIMIT' }); return; }
+    if (!saveConfig(true)) return;
+    const previous = controller.getSnapshot().result?.requestId;
+    const captured = conversation ? structuredClone(conversation) : undefined;
+    setVisibleRequestId(null); setNotice('');
+    void controller.start(action, question, captured?.data);
+    const requestId = controller.getSnapshot().result?.requestId;
+    if (requestId && requestId !== previous) {
+      requestConversations.current.set(requestId, captured);
+      while (requestConversations.current.size > 4) requestConversations.current.delete(requestConversations.current.keys().next().value!);
+    }
+  }
 
   useLayoutEffect(() => () => {
     lifecycle.current++; secretAbort.current?.abort(); controller.dispose();
@@ -166,7 +199,7 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
     <details className="ai-settings" open={settingsOpen} onToggle={(event) => setSettingsOpen(event.currentTarget.open)}>
       <summary>模型服务 <span>{config.model || '尚未选择模型'}</span></summary>
       <div className="ai-settings-content">
-        <p className="ai-muted">直接连接你配置的模型服务。只有点击测试或发送才会联网；密钥与本机问答记录不进入文库同步。</p>
+        <p className="ai-muted">直接连接你配置的模型服务。只有点击测试或发送才会请求模型；密钥保留在本设备。同步会话需单独明确保存。</p>
         <label htmlFor={id + '-endpoint'}>API 基础地址</label>
         <input id={id + '-endpoint'} type="url" inputMode="url" autoCapitalize="none" autoCorrect="off" spellCheck={false}
           placeholder="https://api.example.com/v1" value={config.endpoint} onChange={(event) => editConfig({ endpoint: event.target.value })} />
@@ -220,7 +253,9 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
       </> : <p className="ai-muted">{describeAiError(prepared.failure ?? { code: 'CONTEXT_MISSING' })}</p>}
     </div>
 
-    <form className="ai-composer" onSubmit={(event) => { event.preventDefault(); setNotice(''); if (saveConfig(true)) { setVisibleRequestId(null); void controller.start(action, question); } }}>
+    {conversation && <p className="ai-notice" role="status">正在继续“{conversation.data.title}”：将发送已保存原文与此前 {conversation.data.turns.filter(turn => turn.result.status === 'complete').length} 轮完整问答。原文范围改变会结束本次继续。</p>}
+    {conversationFull && <p role="status" className="ai-warning">此会话已达24轮上限。请在“同步会话与模板”中结束继续后另开问答。</p>}
+    <form className="ai-composer" onSubmit={(event) => { event.preventDefault(); startGeneration(); }}>
       <div className="ai-action-picker" aria-label="选择辅助任务">{(Object.keys(AI_ACTION_LABELS) as AiAction[]).map((item) =>
         <button key={item} type="button" aria-pressed={action === item} disabled={busy} onClick={() => setAction(item)}>{AI_ACTION_LABELS[item]}</button>)}</div>
       <label htmlFor={id + '-question'}>{action === 'ask' ? '你的问题' : '补充要求（选填）'}</label>
@@ -231,7 +266,7 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
           // cancel() publishes synchronously. Prevent this click from submitting if React replaces the control.
           event.preventDefault(); controller.cancel();
         }}>取消{snapshot.busy === 'probe' ? '测试' : '生成'}</button>
-          : <button key="send" type="submit" className="primary" disabled={!context || !parsed?.model || secretBusy || (config.requiresKey && keyState !== 'present') || (action === 'ask' && !question.trim())}>发送并{actionName}</button>}
+          : <button key="send" type="submit" className="primary" disabled={conversationFull || !context || !parsed?.model || secretBusy || (config.requiresKey && keyState !== 'present') || (action === 'ask' && !question.trim())}>发送并{actionName}</button>}
       </div>
       {config.requiresKey && keyState === 'missing' && <p className="ai-field-help">请先在“模型服务”中保存本设备的 API 密钥。</p>}
     </form>
@@ -255,6 +290,10 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
       <div className="ai-usage"><span>{result.usage ? `输入 ${result.usage.promptTokens} · 输出 ${result.usage.completionTokens} · 合计 ${result.usage.totalTokens} tokens` : '用量未知：服务商尚未返回完整统计'}</span><span>费用未知，以服务商账单为准</span></div>
       <button type="button" className="secondary" disabled={!result.text.trim() || result.status === 'running' || saving} onClick={() => void saveNote(result.requestId)}>{saving ? '正在保存…' : result.status === 'complete' ? '保存为文献笔记' : '将部分结果保存为笔记'}</button>
     </section>}
+    <AiSyncPanel key={`sync:${props.archiveEpoch ?? 0}`} bridge={props.sync} draft={archiveDraft}
+      currentResult={result?.status === 'running' ? null : result} busy={busy} activeId={conversationId}
+      captureRecord={captureRecord} continuationFor={continuationFor} onSelect={selectConversation}
+      onSaved={setConversationId} onApplyDraft={applyArchiveDraft} onNavigateCitation={props.onNavigateCitation} />
     <AiArchivePanel accountScope={props.accountScope} resetEpoch={props.archiveEpoch} currentContext={props.context} contextIdentity={prepared.context?.identity ?? null}
       currentResult={result?.status === 'running' ? null : result} busy={busy} draft={archiveDraft}
       captureRecord={captureRecord} canCaptureRecord={canCaptureRecord} onApplyDraft={applyArchiveDraft}
