@@ -71,6 +71,7 @@ export class AiSessionController {
         sha256: context.source.sha256, label: context.source.label, scope: context.source.scope,
         scopeLabel: context.scopeLabel, pageIndices: [...context.pageIndices], characters: context.characters,
         completeDocument: context.completeDocument,
+        ...(context.source.textSource ? { textSource: { ...context.source.textSource } } : {}),
       },
       text: '', status: 'running', finishReason: null, usage: null, cost: 'unknown', failure: null,
       citations: [], unverifiedPageNumbers: [],
@@ -116,6 +117,7 @@ export class AiSessionController {
     return {
       accountScope: { ...this.#scope }, requestId, paperId: result.source.paperId,
       attachmentVersionId: result.source.attachmentVersionId, sha256: result.source.sha256,
+      ...(result.source.textSource ? { parsedPackageDigest: result.source.textSource.packageDigest } : {}),
     };
   }
   hasResult(requestId: string): boolean {

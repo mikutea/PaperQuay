@@ -32,7 +32,7 @@ import { filterPapers, organizationOf, readingStatusLabels } from './library/org
 import type { PdfAiContext, PdfCitationTarget } from './pdf/types.ts';
 import type { CloudPdfContext } from './pdf/cloudCopies.ts';
 import type { DesktopPdfContext } from './pdf/desktopCopies.ts';
-import { assertAiNoteTarget } from './integration/aiNotes.ts';
+import { saveAiResultNote } from './integration/aiNotes.ts';
 import {
   decodeWorkspace,
   WorkspaceController,
@@ -258,7 +258,12 @@ export function ConnectedApp({
     unsaved.current = editorUnsaved.current || value;
     setReaderDirty(value);
   }, []);
-  const invalidateAiContext = useCallback(() => {
+  const invalidateAiContext = useCallback((parsedChange?: { attachmentVersionId: string; retainedDigest: string | null }) => {
+    if (parsedChange) {
+      const current = liveAiContext.current;
+      if (!current?.textSource || current.attachmentVersionId !== parsedChange.attachmentVersionId
+        || current.textSource.packageDigest === parsedChange.retainedDigest) return;
+    }
     liveAiContext.current = null; setAiContext(null); setCitationTarget(null);
   }, []);
   const closeReadingPanel = useCallback(() => setReadingPanel(null), []);
@@ -639,8 +644,7 @@ export function ConnectedApp({
           {openedReadingPanels.ai && runtime.secretStore && <aside className="reading-side" aria-label="阅读 AI 助手内容">
             <Suspense fallback={<p role="status">正在打开 AI 助手…</p>}><AiWorkspace accountScope={scope} context={aiContext}
               secretStore={runtime.secretStore} onSaveNote={async (note, source) => {
-                assertAiNoteTarget(controller.getSnapshot(), runtime.config.apiBaseUrl, liveAiContext.current, source, note);
-                await controller.save({ entityType: 'note', entityId: crypto.randomUUID(), mutation: 'put', data: note });
+                await saveAiResultNote(controller, runtime.config.apiBaseUrl, () => liveAiContext.current, source, note);
               }} onNavigateCitation={(target) => {
                 const version = entities.find((entity) => entity.entityType === 'attachmentVersion' && entity.entityId === target.attachmentVersionId && !entity.deleted);
                 if (!version?.data || !('paperId' in version.data) || version.data.paperId !== readingId || !('sha256' in version.data) || version.data.sha256 !== target.sha256) {

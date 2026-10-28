@@ -2,8 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { decodeParsedDocument, PARSED_LIMITS, ParsedDocumentError, type ParsedDocumentPackage } from '../../../../packages/sync-core/src/parsedDocument.ts';
 import { getParsedCache } from '../parsed/cache.ts';
 import { prepareParsedAssets, type ParsedAssets } from '../parsed/assets.ts';
+import { createParsedAiContext } from '../parsed/aiContext.ts';
+import { AiError, describeAiError } from '../ai/errors.ts';
 import { accountScopeKey, type AccountScope } from '../storage/accountStore.ts';
-import type { PdfVersion } from '../pdf/types.ts';
+import type { PdfAiContext, PdfVersion } from '../pdf/types.ts';
 import { PdfError, throwIfAborted } from '../pdf/errors.ts';
 import { registerPdfTask, waitForPdfTask } from '../pdf/tasks.ts';
 import { ParsedDocumentView } from './ParsedDocumentView.tsx';
@@ -13,6 +15,8 @@ interface Task { signal: AbortSignal; check(): void; guard(): boolean }
 export interface ParsedDocumentPanelProps {
   scope: AccountScope; version: PdfVersion; pageCount: number; pdfPageIndex: number;
   isCurrent(): boolean; onJump(pageIndex: number): void;
+  onAskAi?(context: PdfAiContext): void;
+  onPackageChange?(retainedDigest: string | null): void;
 }
 
 export function assertParsedTarget(document: ParsedDocumentPackage, version: PdfVersion, pageCount: number): void {
@@ -22,6 +26,9 @@ export function assertParsedTarget(document: ParsedDocumentPackage, version: Pdf
 }
 
 function message(error: unknown): string {
+  if (error instanceof AiError) return error.code === 'CONTEXT_INVALID'
+    ? '解析包关联已变化，或包含无法完整转换成发送文字的内容。请核对原文、改选页面或重新导入。'
+    : describeAiError(error);
   if (error instanceof ParsedDocumentError) {
     if (error.code === 'PACKAGE_LIMIT') return '解析包超过大小或内容上限，请在桌面缩减后重新导出。';
     if (error.code === 'HASH_UNAVAILABLE') return '此环境不能校验解析包，请使用受支持的安全连接。';
@@ -52,6 +59,7 @@ export default function ParsedDocumentPanel(props: ParsedDocumentPanelProps) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [reloadNeeded, setReloadNeeded] = useState(false);
   const [pageIndex, setPageIndex] = useState(props.pdfPageIndex);
   const [pageInput, setPageInput] = useState(String(props.pdfPageIndex + 1));
   const [offset, setOffset] = useState(0);
@@ -78,20 +86,35 @@ export default function ParsedDocumentPanel(props: ParsedDocumentPanelProps) {
     }
   }, []);
 
+  const committed = useCallback((before: Ready | null, digest: string | null, task: Task) => {
+    // A transaction may have committed before cancellation can abort it. Report
+    // that durable change even when the task's UI lifetime has already ended.
+    latest.current.onPackageChange?.(digest);
+    if (!task.guard() && resources.current === before) {
+      resources.current?.assets.release(); resources.current = null;
+      if (mounted.current) { setReady(null); setReloadNeeded(true); }
+    }
+  }, []);
+
   const adopt = useCallback(async (value: { document: ParsedDocumentPackage; digest: string }, task: Task, save: boolean) => {
     task.check(); assertParsedTarget(value.document, version, pageCount);
     const assets = await prepareParsedAssets(value.document, task.signal);
     let accepted = false;
     try {
       task.check();
-      if (save) await cache.put(scope, value, { signal: task.signal, guard: task.guard });
+      if (save) {
+        const before = resources.current;
+        await cache.put(scope, value, { signal: task.signal, guard: task.guard });
+        committed(before, value.digest, task);
+      }
       task.check();
       const next = { ...value, assets };
       resources.current?.assets.release(); resources.current = next; accepted = true;
-      setReady(next); setOffset(0);
+      setReady(next); setReloadNeeded(false); setOffset(0);
+      if (!save) latest.current.onPackageChange?.(value.digest);
       setNotice(save ? '解析包已保存到此账号的本机缓存，可离线重开。' : '已读取本机解析缓存。');
     } finally { if (!accepted) assets.release(); }
-  }, [cache, scope, version, pageCount]);
+  }, [cache, scope, version, pageCount, committed]);
   const liveAdopt = useRef(adopt); liveAdopt.current = adopt;
 
   useEffect(() => {
@@ -128,6 +151,19 @@ export default function ParsedDocumentPanel(props: ParsedDocumentPanelProps) {
     const value = await decodeParsedDocument(bytes); task.check();
     await liveAdopt.current(value, task, true);
   });
+  const ask = (kind: 'page' | 'document') => {
+    const snapshot = resources.current;
+    if (!snapshot || !latest.current.onAskAi) return;
+    const selectedPage = pageIndex;
+    void run('正在准备解析文本…', async (task) => {
+      task.check();
+      const context = await createParsedAiContext(snapshot, version, pageCount,
+        kind === 'page' ? { scope: 'page', pageIndex: selectedPage } : { scope: 'document' });
+      task.check();
+      if (resources.current !== snapshot) throw new PdfError('VERSION_MISMATCH');
+      latest.current.onAskAi?.(context);
+    });
+  };
 
   return <div className="pr-panel-content parsed-panel">
     <p className="pr-muted">导入桌面为此 PDF 导出的解析包，查看公式、表格和插图。解析包只保存在本设备当前账号中。</p>
@@ -138,8 +174,9 @@ export default function ParsedDocumentPanel(props: ParsedDocumentPanelProps) {
       <button type="button" disabled={Boolean(busy)} onClick={() => {
         if (!window.confirm('清理此 PDF 在本设备的解析缓存？原始 PDF、笔记和导出的解析包文件会保留。')) return;
         void run('正在清理解析缓存…', async (task) => {
-          await cache.remove(scope, version.entityId, { signal: task.signal, guard: task.guard }); task.check();
-          resources.current?.assets.release(); resources.current = null; setReady(null); setNotice('本机解析缓存已清理。');
+          const before = resources.current;
+          await cache.remove(scope, version.entityId, { signal: task.signal, guard: task.guard }); committed(before, null, task); task.check();
+          resources.current?.assets.release(); resources.current = null; setReady(null); setReloadNeeded(false); setNotice('本机解析缓存已清理。');
         });
       }}>清理此版本解析缓存</button>
     </div>
@@ -148,8 +185,9 @@ export default function ParsedDocumentPanel(props: ParsedDocumentPanelProps) {
       <button type="button" disabled={Boolean(busy)} onClick={() => {
         if (!window.confirm('清除此账号在本设备的全部解析包？PDF、笔记、文库与原导出文件会保留。')) return;
         void run('正在清理解析缓存…', async (task) => {
-          await cache.clear(scope, { signal: task.signal, guard: task.guard }); task.check();
-          resources.current?.assets.release(); resources.current = null; setReady(null); setNotice('此账号的本机解析缓存已清理。');
+          const before = resources.current;
+          await cache.clear(scope, { signal: task.signal, guard: task.guard }); committed(before, null, task); task.check();
+          resources.current?.assets.release(); resources.current = null; setReady(null); setReloadNeeded(false); setNotice('此账号的本机解析缓存已清理。');
         });
       }}>清除此账号的全部解析缓存</button>
     </details>
@@ -157,6 +195,11 @@ export default function ParsedDocumentPanel(props: ParsedDocumentPanelProps) {
       <span>{busy || error || notice}</span>{busy && <button type="button" onClick={() => active.current?.abort()}>取消解析操作</button>}
     </div>}
     {ready ? <>
+      {props.onAskAi && <section className="parsed-ai" aria-label="用解析文本询问 AI">
+        <p className="pr-muted">先查看将发送的文字，再在 AI 助手中点击发送。图片只提供文字和题注，请以 PDF 原文核对识别结果。</p>
+        <div className="parsed-actions"><button type="button" disabled={Boolean(busy)} onClick={() => ask('page')}>用本页解析文本提问</button>
+          <button type="button" disabled={Boolean(busy)} onClick={() => ask('document')}>用解析包文本提问</button></div>
+      </section>}
       <div className="parsed-page-controls"><button type="button" aria-label="上一解析页" disabled={!pageIndex} onClick={() => choosePage(pageIndex - 1)}>‹</button>
         <form onSubmit={(event) => { event.preventDefault(); choosePage(Number(pageInput) - 1); }}>
           <label>解析页 <input inputMode="numeric" aria-label="解析页码" value={pageInput}
@@ -171,6 +214,13 @@ export default function ParsedDocumentPanel(props: ParsedDocumentPanelProps) {
         <span>{offset + 1}–{Math.min(offset + 40, blockCount)} / {blockCount}</span>
         <button type="button" disabled={offset + 40 >= blockCount} onClick={() => setOffset((value) => value + 40)}>下一段</button></nav>}
       <p className="pr-muted parsed-boundary">解析块定位到原文页。请以 PDF 原文核对内容与版式。</p>
-    </> : !busy && <div className="parsed-empty"><h4>此版本还没有解析包</h4><p>在桌面完成解析后，进入「设置 → 账号与在线文件」，为已关联的 PDF 导出解析包。旧缓存若缺少版本证据，需要重新解析。</p></div>}
+    </> : !busy && (reloadNeeded ? <div className="parsed-empty"><h4>解析缓存已变更</h4>
+      <p>操作已完成存储后才收到取消。重新载入以查看本机实际保留的内容。</p>
+      <button type="button" onClick={() => void run('正在重新载入解析缓存…', async (task) => {
+        const value = await cache.read(scope, version, pageCount, { signal: task.signal, guard: task.guard }); task.check();
+        if (value) await liveAdopt.current(value, task, false);
+        else { setReloadNeeded(false); setNotice('此版本的本机解析缓存已清理。'); }
+      })}>重新载入解析缓存</button></div>
+      : <div className="parsed-empty"><h4>此版本还没有解析包</h4><p>在桌面完成解析后，进入「设置 → 账号与在线文件」，为已关联的 PDF 导出解析包。旧缓存若缺少版本证据，需要重新解析。</p></div>)}
   </div>;
 }

@@ -207,7 +207,7 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
       {context ? <>
         <p className="ai-context-title">{context.source.label}</p>
         <div className="ai-context-facts"><span>第 {context.pageIndices.map((page) => page + 1).join('、')} 页</span><span>{context.characters.toLocaleString()} 字符</span><span>{(context.bytes / 1024).toFixed(1)} KiB</span></div>
-        <p className="ai-field-help">{context.completeDocument ? '已取得各页可提取文本；图像和未识别的扫描内容不在本次输入中。' : '仅根据这里列出的文字作答，不代表已阅读全文。'}</p>
+        <p className="ai-field-help">{context.coverageDescription}</p>
         <details className="ai-context-preview"><summary>查看将发送的原文</summary>{context.source.pages.map((page) => <div key={page.pageIndex}><h4>第 {page.pageIndex + 1} 页</h4><pre>{page.text || '此页没有可提取文本。'}</pre></div>)}</details>
       </> : <p className="ai-muted">{describeAiError(prepared.failure ?? { code: 'CONTEXT_MISSING' })}</p>}
     </div>
@@ -238,6 +238,7 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
     {result && <section className="ai-result" aria-label="模型结果" aria-busy={result.status === 'running'}>
       <div className="ai-result-heading"><h3>{showingPrevious ? '上一次 · ' : ''}{AI_ACTION_LABELS[result.action]}结果</h3><span role="status">{result.status === 'running' ? '正在接收…' : result.status === 'complete' ? '响应完成' : result.status === 'failed' ? '未取得结果' : '部分结果'}</span></div>
       <p className="ai-result-source">{result.source.label} · {result.source.scopeLabel} · 第 {result.source.pageIndices.map((page) => page + 1).join('、')} 页<br />版本 {result.source.attachmentVersionId.slice(0, 8)} · SHA-256 {result.source.sha256.slice(0, 8)} · {result.model}</p>
+      {result.source.textSource && <p className="ai-field-help">文字来自导入解析包（摘要 {result.source.textSource.packageDigest.slice(0, 12)}），未发送图片像素；请核对 PDF 原文。</p>}
       <pre className="ai-output">{result.text || (result.status === 'running' ? '正在等待模型响应…' : '服务没有返回可显示的文字。')}</pre>
       {!!result.citations.length && <div className="ai-citations" aria-label="本次文本的引用页面"><span>返回原文</span>{result.citations.map((citation) => <button key={citation.pageNumber} type="button" className="secondary"
         onClick={() => { if (controller.hasResult(result.requestId)) props.onNavigateCitation(citation.target); }}>第 {citation.pageNumber} 页</button>)}</div>}

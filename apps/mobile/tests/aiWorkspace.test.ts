@@ -28,7 +28,7 @@ async function until(predicate: () => boolean, description: string): Promise<voi
   }
 }
 
-async function setup(options: { key?: boolean; config?: AiProviderConfig; transport?: AiTransport; onSaveNote?: AiWorkspaceProps['onSaveNote'] } = {}) {
+async function setup(options: { key?: boolean; config?: AiProviderConfig; context?: PdfAiContext; transport?: AiTransport; onSaveNote?: AiWorkspaceProps['onSaveNote'] } = {}) {
   const original = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
   const values = new Map<string, string>();
   const storage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); }, removeItem: (key: string) => { values.delete(key); } };
@@ -44,7 +44,7 @@ async function setup(options: { key?: boolean; config?: AiProviderConfig; transp
       return input.method === 'GET' ? new Response(JSON.stringify({ data: [{ id: 'ui-fixture' }] })) : jsonResponse('<img src=x onerror=alert(1)> 引用 [P2]，未知 [P99]。' + KEY);
     } };
   const saved: { note: NoteData; source: AiSaveContext }[] = []; const jumps: PdfCitationTarget[] = [];
-  let props: AiWorkspaceProps = { accountScope: SCOPE, context: CONTEXT, secretStore: secrets, transport,
+  let props: AiWorkspaceProps = { accountScope: SCOPE, context: options.context ?? CONTEXT, secretStore: secrets, transport,
     onSaveNote: options.onSaveNote ?? (async (note, source) => { saved.push({ note, source }); }), onNavigateCitation: (target) => { jumps.push(target); } };
   const password = { value: '' };
   let renderer!: ReactTestRenderer;
@@ -103,6 +103,28 @@ test('workspace performs no automatic model request; explicit question, result, 
     assert.equal(JSON.stringify(ui.saved).includes(KEY), false);
     assert.equal(JSON.stringify([...ui.values]).includes(KEY), false);
     assert.ok(text(ui.renderer.root).includes('已保存为文献笔记'));
+  } finally { ui.close(); }
+});
+
+test('parsed context preview, transmitted text and saved note retain their distinct source metadata', async () => {
+  const textSource = { kind: 'parsed-document' as const, packageDigest: 'd'.repeat(64), parserName: 'mineru' as const, parserModel: 'vlm' };
+  const context = { ...CONTEXT, complete: false, textSource };
+  const ui = await setup({ context });
+  try {
+    assert.equal(ui.requests.length, 0);
+    assert.match(text(ui.renderer.root), /当前页解析文本/); assert.match(text(ui.renderer.root), /OCR/);
+    assert.match(text(ui.renderer.root), /不发送图片像素/);
+    await ui.submit(); await until(() => text(ui.renderer.root).includes('响应完成'), 'parsed response');
+    assert.equal(ui.requests.length, 1);
+    const sent = JSON.stringify(JSON.parse(ui.requests[0].body!).messages);
+    assert.ok(sent.includes(CONTEXT.pages[0].text)); assert.match(sent, /OCR/);
+    assert.ok(!sent.includes(textSource.packageDigest));
+    await act(async () => { ui.button('保存为文献笔记').props.onClick(); await tick(); });
+    assert.equal(ui.saved.length, 1); assert.ok(ui.saved[0].note.body.includes(textSource.packageDigest));
+    assert.match(ui.saved[0].note.body, /导入的 MinerU 解析包/);
+    await ui.update({ context: { ...context, textSource: { ...textSource, packageDigest: 'e'.repeat(64) } } });
+    assert.equal(ui.renderer.root.findAllByProps({ 'aria-label': '模型结果' }).length, 0);
+    assert.equal(ui.requests.length, 1);
   } finally { ui.close(); }
 });
 

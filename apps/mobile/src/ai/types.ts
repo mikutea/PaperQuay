@@ -55,6 +55,7 @@ export interface PreparedAiContext {
   identity: string;
   scopeLabel: string;
   completeDocument: boolean;
+  coverageDescription: string;
   characters: number;
   bytes: number;
   pageIndices: number[];
@@ -88,6 +89,7 @@ export interface AiSourceSummary {
   pageIndices: number[];
   characters: number;
   completeDocument: boolean;
+  textSource?: PdfAiContext['textSource'];
 }
 export interface AiCitation { pageNumber: number; target: PdfCitationTarget }
 export interface AiResult {
@@ -118,6 +120,7 @@ export interface AiSaveContext {
   paperId: string;
   attachmentVersionId: string;
   sha256: string;
+  parsedPackageDigest?: string;
 }
 export interface AiWorkspaceProps {
   accountScope: AiAccountScope;

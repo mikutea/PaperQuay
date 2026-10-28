@@ -18,7 +18,11 @@ class Element {
   get isConnected(): boolean { return this === this.ownerDocument.body || Boolean(this.parentElement?.isConnected); }
   append(child: Element) { child.parentElement = this; this.children.push(child); return child; }
   contains(other: Element): boolean { for (let node: Element | null = other; node; node = node.parentElement) if (node === this) return true; return false; }
-  setAttribute(name: string, value: string) { this.attributes.set(name, value); }
+  setAttribute(name: string, value: string) {
+    if (name === 'aria-hidden' && value === 'true' && this.contains(this.ownerDocument.activeElement))
+      this.ownerDocument.hiddenFocused.push(this);
+    this.attributes.set(name, value);
+  }
   getAttribute(name: string) { return this.attributes.get(name) ?? null; }
   removeAttribute(name: string) { this.attributes.delete(name); }
   matches(selector: string) { return selector === ':disabled' && this.disabled; }
@@ -37,6 +41,7 @@ class Element {
 class DocumentStub extends EventTarget {
   readonly body = new Element(this);
   activeElement: Element = this.body;
+  readonly hiddenFocused: Element[] = [];
   readonly defaultView = { HTMLElement: Element, getComputedStyle: () => ({ visibility: 'visible' }) };
 }
 function fixture() {
@@ -74,6 +79,12 @@ test('a nested portal isolates sibling branches without disabling its own ancest
   assert.equal(env.reader.getAttribute('inert'), null); assert.equal(env.navigation.getAttribute('aria-hidden'), 'false');
   assert.equal(env.document.body.style.overflow, 'auto'); assert.equal(env.document.activeElement, env.opener);
   assert.deepEqual(env.opener.focusOptions, { preventScroll: true });
+});
+
+test('opening a sheet moves focus before applying aria-hidden to its opener branch', () => {
+  const env = fixture();
+  try { assert.equal(env.document.hiddenFocused.length, 0); }
+  finally { env.restore(); }
 });
 
 test('Tab loops through visible enabled controls, focus escape is contained, and Escape closes only the modal', () => {
@@ -156,6 +167,8 @@ test('keepMounted preserves child state across hiding and responsive modal chang
   act(() => renderer.root.findByType('input').props.onChange({ target: { value: 'unsaved draft' } }));
   act(() => renderer.update(sheet(false, true)));
   assert.equal(renderer.root.findByProps({ 'data-reader-sheet': 'true' }).props.hidden, true);
+  assert.equal(renderer.root.findByProps({ 'data-reader-sheet': 'true' }).props['aria-hidden'], undefined);
+  assert.equal(renderer.root.findByProps({ 'data-reader-sheet': 'true' }).props.inert, '');
   assert.equal(renderer.root.findByType('input').props.value, 'unsaved draft');
   act(() => renderer.update(sheet(true, false)));
   assert.equal(renderer.root.findByProps({ role: 'region' }).props['aria-modal'], undefined);

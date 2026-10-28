@@ -845,7 +845,20 @@ export function PaperReader(props: PaperReaderProps) {
                 assertPdfTarget(controller.getSnapshot().workspace?.sync, paper.entityId, loaded.version, loaded.pdf.pageCount);
                 return true;
               } catch { return false; }
-            }} onJump={(index) => { goTo(index); if (compact) setPanel(null); }} />
+            }} onJump={(index) => { goTo(index); if (compact) setPanel(null); }}
+            onPackageChange={(retainedDigest) => {
+              if (current.current === loaded && mounted.current && sameReaderIdentity(controller, loaded.identity))
+                invalidateContext.current?.({ attachmentVersionId: loaded.version.entityId, retainedDigest });
+            }}
+            onAskAi={onAskAi ? (context) => {
+              if (current.current !== loaded || !mounted.current || (props.accountCurrent && !props.accountCurrent())
+                || !sameReaderIdentity(controller, loaded.identity)) throw new PdfError('ACCOUNT_CHANGED');
+              assertPdfTarget(controller.getSnapshot().workspace?.sync, paper.entityId, loaded.version, loaded.pdf.pageCount);
+              if (context.paperId !== paper.entityId || context.attachmentVersionId !== loaded.version.entityId
+                || context.sha256 !== loaded.version.data.sha256 || context.totalPages !== loaded.pdf.pageCount) throw new PdfError('VERSION_MISMATCH');
+              if (compactView.current) setPanel(null);
+              onAskAi(context); props.onOpenAi?.();
+            } : undefined} />
         </Suspense> : <p className="pr-panel-content">请先打开需要核对的 PDF。</p>)}
         {panel === 'more' && <div className="pr-panel-content pr-options">
           {loaded && <section className="pr-option-section" aria-label="阅读显示"><h3>阅读显示</h3>

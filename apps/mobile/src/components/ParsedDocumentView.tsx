@@ -5,6 +5,7 @@ import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import katex from 'katex';
 import type { ParsedBlock, ParsedDocumentPackage } from '../../../../packages/sync-core/src/parsedDocument.ts';
+import { resolveParsedBlocks } from '../parsed/resolve.ts';
 
 const mathOptions = { trust: false, maxExpand: 100, maxSize: 10, strict: 'error' as const, throwOnError: false };
 const remarkPlugins = [remarkGfm, remarkMath];
@@ -66,27 +67,7 @@ export function ParsedDocumentView({ document, pageIndex, offset, urls, onJump }
 }) {
   // Continuations may carry only sourceBlockId. Resolve content without moving
   // the continuation's identity or navigation target to the source page.
-  const resolved = useMemo(() => {
-    const originals = new Map(document.blocks.map((block) => [block.id, block]));
-    const complete = new Map<string, ParsedBlock>();
-    for (const block of document.blocks) {
-      const chain: ParsedBlock[] = []; const seen = new Set<string>();
-      let current: ParsedBlock | undefined = block;
-      while (current && !complete.has(current.id) && !seen.has(current.id)) {
-        seen.add(current.id); chain.push(current);
-        current = current.sourceBlockId ? originals.get(current.sourceBlockId) : undefined;
-      }
-      for (let index = chain.length - 1; index >= 0; index--) {
-        const own = chain[index], source = own.sourceBlockId ? complete.get(own.sourceBlockId) : undefined;
-        complete.set(own.id, source ? { ...source, ...own, text: own.text || source.text,
-          markdown: own.markdown || source.markdown, latex: own.latex || source.latex,
-          table: own.table ?? source.table, assetId: own.assetId ?? source.assetId,
-          caption: own.caption || source.caption, footnote: own.footnote || source.footnote,
-        } : own);
-      }
-    }
-    return document.blocks.map((block) => complete.get(block.id)!);
-  }, [document]);
+  const resolved = useMemo(() => resolveParsedBlocks(document), [document]);
   const blocks = useMemo(() => resolved.filter((block) => block.pageIndex === pageIndex), [resolved, pageIndex]);
   return <div className="parsed-blocks" aria-label={`第 ${pageIndex + 1} 页解析内容`}>
     {blocks.length ? blocks.slice(offset, offset + 40).map((block) => <Block key={block.id} block={block}

@@ -35,3 +35,6 @@
 .parsed-empty { padding: 1rem 0; line-height: 1.8; }
 .parsed-empty h4 { margin: 0 0 .5rem; }
 .parsed-boundary { font-size: .78rem; }
+.parsed-ai { display: grid; gap: .6rem; border-block: 1px solid var(--border, #d8dedb); padding: .75rem 0; }
+.parsed-ai p { margin: 0; font-size: .85rem; line-height: 1.7; }
+.parsed-ai button { max-width: 100%; white-space: normal; }

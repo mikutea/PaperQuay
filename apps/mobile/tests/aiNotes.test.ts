@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { IDBFactory } from 'fake-indexeddb';
 import { createAccountState, entityKey, getVisibleEntity, queueLocalEdit, validateClientState,
   type AttachmentVersionData, type NoteData, type PaperData, type SyncRecord } from '../../../packages/sync-core/src/index.ts';
 import type { AiSaveContext } from '../src/ai/types.ts';
 import { ClientError } from '../src/errors.ts';
-import { assertAiNoteTarget } from '../src/integration/aiNotes.ts';
+import { assertAiNoteTarget, saveAiResultNote } from '../src/integration/aiNotes.ts';
 import type { PdfAiContext } from '../src/pdf/types.ts';
-import type { WorkspaceSnapshot } from '../src/sync/workspace.ts';
+import { decodeWorkspace, WorkspaceController, type WorkspaceSnapshot } from '../src/sync/workspace.ts';
+import { AccountStore } from '../src/storage/accountStore.ts';
 
 const ACCOUNT = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const PAPER = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
@@ -58,6 +60,68 @@ test('AI note persistence accepts the exact live account/service/paper/version/h
   const value = fixture(); const before = structuredClone(value);
   assert.doesNotThrow(() => check(value));
   assert.deepEqual(value, before);
+});
+
+test('parsed AI note persistence requires the exact currently selected parsed package digest', () => {
+  const value = fixture();
+  value.context!.complete = false;
+  value.context!.textSource = { kind: 'parsed-document', packageDigest: 'd'.repeat(64), parserName: 'mineru', parserModel: 'vlm' };
+  value.source.parsedPackageDigest = 'd'.repeat(64);
+  assert.doesNotThrow(() => check(value));
+  value.context!.textSource.packageDigest = 'e'.repeat(64);
+  assert.throws(() => check(value), changed);
+  value.context!.textSource.packageDigest = 'd'.repeat(64);
+  delete value.source.parsedPackageDigest;
+  assert.throws(() => check(value), changed);
+  value.source.parsedPackageDigest = 'd'.repeat(64); delete value.context!.textSource;
+  assert.throws(() => check(value), changed);
+});
+
+test('queued AI result saves recheck live parsed identity and transaction state before writing IndexedDB', async (t) => {
+  for (const change of ['replacement', 'cleared', 'transaction-version', 'unchanged'] as const) await t.test(change, async (t) => {
+    const value = fixture();
+    value.context!.complete = false;
+    value.context!.textSource = { kind: 'parsed-document', packageDigest: 'd'.repeat(64), parserName: 'mineru', parserModel: 'vlm' };
+    value.source.parsedPackageDigest = 'd'.repeat(64);
+    const scope = { apiBaseUrl: API, accountId: ACCOUNT };
+    const store = new AccountStore({ decode: decodeWorkspace, indexedDB: new IDBFactory() });
+    t.after(() => store.close());
+    await store.update(scope, () => value.snapshot.workspace!);
+    const controller = new WorkspaceController({ store, apiBaseUrl: API, online: false, now: () => NOW,
+      binding: { key: () => 'synthetic-ai-note' }, api: {
+        async register() { return value.snapshot.identity!; },
+        async push() { throw new Error('Unexpected offline push'); },
+        async pull() { throw new Error('Unexpected offline pull'); },
+        async devices() { return []; },
+        async conflicts() { return { conflicts: [], nextCursor: 'done', hasMore: false }; },
+        async resolveConflict() { throw new Error('Unexpected conflict resolution'); }, async revokeDevice() {},
+      } });
+    await controller.bind('AI note guard');
+    assert.equal(controller.getSnapshot().status, 'ready');
+    const update = store.update.bind(store);
+    let enter!: () => void, release!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    t.mock.method(store, 'update', async (...args: Parameters<typeof store.update>) => {
+      enter(); await gate; return update(...args);
+    });
+    const saving = saveAiResultNote(controller, API, () => value.context, value.source, value.note);
+    const settled = change === 'unchanged' ? saving : assert.rejects(saving, changed);
+    await entered;
+    if (change === 'replacement') value.context!.textSource!.packageDigest = 'e'.repeat(64);
+    else if (change === 'cleared') value.context = null;
+    else if (change === 'transaction-version') {
+      await update(scope, current => ({ ...current!, sync: queueLocalEdit(current!.sync,
+        { entityType: 'attachmentVersion', entityId: VERSION, mutation: 'put', data: { ...attachmentData, sha256: 'e'.repeat(64) } },
+        { opId: crypto.randomUUID(), clientCreatedAt: NOW }) }));
+      assert.equal((getVisibleEntity(controller.getSnapshot().workspace!.sync, 'attachmentVersion', VERSION)?.data as AttachmentVersionData).sha256, HASH);
+    }
+    release(); await settled;
+    const stored = await store.read(scope);
+    const notes = stored!.sync.outbox.filter(entry => entry.operation.entityType === 'note');
+    assert.equal(notes.length, change === 'unchanged' ? 1 : 0);
+    if (change === 'unchanged') assert.deepEqual(notes[0].operation.data, value.note);
+  });
 });
 
 test('AI note persistence rejects any account, service, paper, version or content-hash mismatch', () => {

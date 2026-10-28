@@ -10,6 +10,13 @@ import type { WorkspaceController } from '../sync/workspace.ts';
 import type { CloudPdfContext } from './cloudCopies.ts';
 import type { DesktopPdfContext } from './desktopCopies.ts';
 
+export interface ParsedAiTextSource {
+  kind: 'parsed-document';
+  packageDigest: string;
+  parserName: 'mineru';
+  parserModel: string;
+}
+
 export interface PdfAiContext {
   paperId: string;
   attachmentVersionId: string;
@@ -20,6 +27,8 @@ export interface PdfAiContext {
   /** True only when every page in the explicitly selected scope was extracted. */
   complete: boolean;
   label: string;
+  /** Imported text is distinct from PDF text extraction; images are never attached. */
+  textSource?: ParsedAiTextSource;
 }
 
 export interface PdfCitationTarget {
@@ -41,7 +50,7 @@ export interface PaperReaderProps {
   onAskAi?: (context: PdfAiContext) => void;
   jumpTo?: PdfCitationTarget;
   onDirtyChange?: (dirty: boolean) => void;
-  onContextInvalidated?: () => void;
+  onContextInvalidated?: (parsedChange?: { attachmentVersionId: string; retainedDigest: string | null }) => void;
   compact?: boolean;
   onOpenNotes?: () => void;
   onOpenAi?: () => void;

@@ -106,6 +106,27 @@ test('scope claims require full coverage; UTF-8 limits and page citations bind t
   assert.equal(actualAiUsage({ prompt_tokens: 3, completion_tokens: 2, total_tokens: 99 }), null);
 });
 
+test('parsed source identity stays explicit, never claims the whole article or invents coordinate anchors', () => {
+  const textSource = { kind: 'parsed-document' as const, packageDigest: 'd'.repeat(64), parserName: 'mineru' as const, parserModel: 'vlm' };
+  const input = pdfContext({ complete: false, textSource });
+  const context = prepareAiContext(input);
+  assert.equal(context.scopeLabel, '当前页解析文本'); assert.equal(context.completeDocument, false);
+  assert.match(context.coverageDescription, /OCR/); assert.match(context.coverageDescription, /不发送图片像素/);
+  const prompt = JSON.stringify(buildAiMessages(context, 'explain', ''));
+  assert.match(prompt, /OCR/); assert.match(prompt, /不代表已阅读全文/);
+  assert.ok(!prompt.includes(textSource.packageDigest) && !prompt.includes(VERSION));
+  const changed = prepareAiContext({ ...input, textSource: { ...textSource, packageDigest: 'e'.repeat(64) } });
+  assert.notEqual(changed.identity, context.identity);
+  assert.throws(() => prepareAiContext({ ...input, complete: true }), code('CONTEXT_INVALID'));
+  assert.throws(() => prepareAiContext({ ...input, textSource: { ...textSource, packageDigest: 'bad' } }), code('CONTEXT_INVALID'));
+  assert.throws(() => prepareAiContext({ ...input, textSource: { ...textSource, unexpected: true } } as PdfAiContext), code('CONTEXT_INVALID'));
+  assert.throws(() => prepareAiContext({ ...input, pages: [{ ...input.pages[0], anchor: { pageIndex: 1,
+    coordinateSpace: 'pdf-crop-box-unrotated-normalized', quads: [], quote: null } }] }), code('CONTEXT_INVALID'));
+  assert.deepEqual(citedPages('解析结果 [P2]、未知 [P1]', context, 'parsed-result').citations.map(row => row.target), [
+    { requestId: 'parsed-result', attachmentVersionId: VERSION, sha256: HASH, pageIndex: 1 },
+  ]);
+});
+
 test('redactor handles overlapping prefixes and credentials split between every character', () => {
   for (const secret of ['ababaca', KEY, 'aaab', 'a']) {
     const redactor = new KeyRedactor(secret);

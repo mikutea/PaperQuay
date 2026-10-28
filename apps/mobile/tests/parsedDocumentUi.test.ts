@@ -10,7 +10,7 @@ import ParsedDocumentPanel, { assertParsedTarget } from '../src/components/Parse
 import { getParsedCache, type ParsedCacheOptions, type VerifiedParsedDocument } from '../src/parsed/cache.ts';
 import type { AccountScope } from '../src/storage/accountStore.ts';
 import { prepareParsedAssets } from '../src/parsed/assets.ts';
-import type { PdfVersion } from '../src/pdf/types.ts';
+import type { PdfAiContext, PdfVersion } from '../src/pdf/types.ts';
 import { cancelPdfTasks } from '../src/pdf/tasks.ts';
 import { PdfError } from '../src/pdf/errors.ts';
 
@@ -72,7 +72,7 @@ test('continuation chains render the original table, equation and image on the c
   assert.match(html, /E=mc\^2/); assert.match(html, /查看 PDF 第 1 页/); assert.doesNotMatch(html, /查看 PDF 第 2 页/);
 });
 
-async function mount(t: TestContext, corrupt = false) {
+async function mount(t: TestContext, corrupt = false, ai = false) {
   for (const [name, value] of Object.entries({ indexedDB: new IDBFactory(), window: { confirm: () => true } })) {
     const original = Object.getOwnPropertyDescriptor(globalThis, name);
     Object.defineProperty(globalThis, name, { configurable: true, value });
@@ -81,6 +81,8 @@ async function mount(t: TestContext, corrupt = false) {
   const cache = getParsedCache(), initial = await verifyParsedDocument(fixture());
   const scope = { apiBaseUrl: 'https://sync.example.invalid', accountId: crypto.randomUUID() };
   const stored = { current: initial, writes: 0 }; let current = true; const jumps: number[] = [];
+  const aiContexts: PdfAiContext[] = [];
+  const changes: (string | null)[] = [];
   t.mock.method(cache, 'read', async () => { if (corrupt) throw new PdfError('CACHE_CORRUPT'); return stored.current; });
   t.mock.method(cache, 'put', async (_scope: AccountScope, value: VerifiedParsedDocument, options: ParsedCacheOptions) => {
     if (!options.guard?.() || options.signal?.aborted) throw new PdfError('ACCOUNT_CHANGED');
@@ -90,6 +92,8 @@ async function mount(t: TestContext, corrupt = false) {
   let renderer!: ReactTestRenderer;
   await act(async () => { renderer = create(createElement(ParsedDocumentPanel, {
     scope, version: version(), pageCount: 2, pdfPageIndex: 0, isCurrent: () => current, onJump: (page) => jumps.push(page),
+    ...(ai ? { onAskAi: (context: PdfAiContext) => { aiContexts.push(context); } } : {}),
+    onPackageChange: (digest: string | null) => { changes.push(digest); },
   })); });
   t.after(() => { act(() => renderer.unmount()); });
   await until(() => corrupt ? renderer.root.findAllByProps({ role: 'alert' }).length > 0
@@ -99,8 +103,45 @@ async function mount(t: TestContext, corrupt = false) {
     const file = { size: raw.byteLength, arrayBuffer: () => bytes ?? Promise.resolve(raw.buffer) };
     await act(async () => { renderer.root.findByProps({ 'aria-label': '导入解析包', type: 'file' }).props.onChange({ currentTarget: { files: [file], value: 'fixture.json' } }); });
   }
-  return { renderer, cache, stored, scope, jumps, upload, invalidate: () => { current = false; } };
+  return { renderer, cache, stored, scope, jumps, aiContexts, changes, upload, invalidate: () => { current = false; } };
 }
+
+test('parsed AI entry prepares only the explicitly selected page or package and preserves cache', async (t) => {
+  const model = await mount(t, false, true);
+  assert.equal(model.aiContexts.length, 0);
+  await act(async () => { button(model.renderer, '用本页解析文本提问').props.onClick(); });
+  await until(() => model.aiContexts.length === 1);
+  assert.equal(model.aiContexts[0].scope, 'page');
+  assert.deepEqual(model.aiContexts[0].pages.map(page => page.pageIndex), [0]);
+  assert.equal(model.aiContexts[0].textSource?.packageDigest, model.stored.current.digest);
+  assert.equal(model.aiContexts[0].complete, false);
+  await until(() => !button(model.renderer, '用解析包文本提问').props.disabled);
+  await act(async () => { button(model.renderer, '用解析包文本提问').props.onClick(); });
+  await until(() => model.aiContexts.length === 2);
+  assert.equal(model.aiContexts[1].scope, 'document');
+  assert.deepEqual(model.aiContexts[1].pages.map(page => page.pageIndex), [0, 1]);
+  assert.equal(model.stored.writes, 0);
+});
+
+test('cancelled or account-invalidated asynchronous parsed context preparation cannot hand off text', async (t) => {
+  const model = await mount(t, false, true);
+  const original = crypto.subtle.digest.bind(crypto.subtle);
+  let gate = deferred<void>(); let started = false;
+  t.mock.method(crypto.subtle, 'digest', async (algorithm: AlgorithmIdentifier, data: BufferSource) => {
+    started = true; await gate.promise; return original(algorithm, data);
+  });
+  await act(async () => { button(model.renderer, '用解析包文本提问').props.onClick(); });
+  await until(() => started);
+  await act(async () => { button(model.renderer, '取消解析操作').props.onClick(); gate.resolve(); });
+  await until(() => !button(model.renderer, '用解析包文本提问').props.disabled);
+  assert.equal(model.aiContexts.length, 0);
+  gate = deferred<void>(); started = false;
+  await act(async () => { button(model.renderer, '用解析包文本提问').props.onClick(); });
+  await until(() => started);
+  model.invalidate(); gate.resolve();
+  await until(() => !button(model.renderer, '用解析包文本提问').props.disabled);
+  assert.equal(model.aiContexts.length, 0); assert.equal(model.stored.writes, 0);
+});
 
 test('replacement becomes visible only after cache commit; a wrong version preserves the last valid package', async (t) => {
   const model = await mount(t), gate = deferred<void>();
@@ -108,11 +149,13 @@ test('replacement becomes visible only after cache commit; a wrong version prese
   const next = fixture(); next.blocks[0].text = 'Replacement'; next.blocks[0].markdown = 'Replacement';
   await model.upload(next); await flush();
   assert.match(text(model.renderer.root), /Original parsed/); assert.doesNotMatch(text(model.renderer.root), /Replacement/);
+  assert.equal(model.changes.length, 1);
   gate.resolve(); await until(() => text(model.renderer.root).includes('解析包已保存'));
   assert.match(text(model.renderer.root), /Replacement/);
   await model.upload({ ...next, attachmentVersionId: id(8) });
   await until(() => text(model.renderer.root).includes('版本不一致'));
   assert.equal(model.stored.writes, 1); assert.match(text(model.renderer.root), /Replacement/);
+  assert.deepEqual(model.changes, [model.changes[0], model.stored.current.digest]);
 });
 
 test('cancelled or account-invalidated file reads never persist and retain the previous valid display', async (t) => {
@@ -136,6 +179,41 @@ test('storage failure leaves the previous package visible and account cleanup re
   assert.match(text(model.renderer.root), /Original parsed/); assert.doesNotMatch(text(model.renderer.root), /Uncommitted/);
   await act(async () => { cancelPdfTasks(model.scope); });
   assert.doesNotMatch(text(model.renderer.root), /Original parsed/);
+});
+
+test('a successful cache commit acknowledged after cancellation retires the old AI source and permits explicit reload', async (t) => {
+  const model = await mount(t, false, true), gate = deferred<void>(); let committed = false;
+  t.mock.method(model.cache, 'put', async (_scope: AccountScope, value: VerifiedParsedDocument) => {
+    model.stored.current = value; model.stored.writes++; committed = true; await gate.promise;
+  });
+  const replacement = fixture(); replacement.blocks[0].text = 'Committed replacement'; replacement.blocks[0].markdown = 'Committed replacement';
+  await model.upload(replacement); await until(() => committed);
+  await act(async () => { button(model.renderer, '取消解析操作').props.onClick(); });
+  await until(() => text(model.renderer.root).includes('已取消'));
+  gate.resolve();
+  await until(() => model.changes.includes(model.stored.current.digest));
+  assert.doesNotMatch(text(model.renderer.root), /Original parsed/);
+  assert.equal(model.renderer.root.findAllByType('button').some(node => text(node) === '用本页解析文本提问'), false);
+  await act(async () => { button(model.renderer, '重新载入解析缓存').props.onClick(); });
+  await until(() => text(model.renderer.root).includes('Committed replacement'));
+});
+
+test('committed remove and account clear also invalidate text when cancellation precedes their acknowledgment', async (t) => {
+  for (const method of ['remove', 'clear'] as const) await t.test(method, async (t) => {
+    const model = await mount(t, false, true), gate = deferred<void>(); let committed = false;
+    t.mock.method(model.cache, method, async () => { committed = true; await gate.promise; });
+    const label = method === 'remove' ? '清理此版本解析缓存' : '清除此账号的全部解析缓存';
+    await act(async () => { button(model.renderer, label).props.onClick(); });
+    await until(() => committed);
+    await act(async () => { button(model.renderer, '取消解析操作').props.onClick(); });
+    await until(() => text(model.renderer.root).includes('已取消'));
+    gate.resolve(); await until(() => model.changes.includes(null));
+    assert.doesNotMatch(text(model.renderer.root), /Original parsed/);
+    t.mock.method(model.cache, 'read', async () => null);
+    await act(async () => { button(model.renderer, '重新载入解析缓存').props.onClick(); });
+    await until(() => text(model.renderer.root).includes('此版本还没有解析包'));
+    assert.equal(model.aiContexts.length, 0);
+  });
 });
 
 test('parsed paging and block navigation preserve page indices', async (t) => {

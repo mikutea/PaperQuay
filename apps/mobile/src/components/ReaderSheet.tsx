@@ -29,7 +29,12 @@ function isolateSheet(document: Document, state: ModalState) {
     if (!before.hadClass) element.classList.remove('reader-sheet-background');
   }
   state.blocked.clear();
-  let branch = state.stack[state.stack.length - 1]?.parentElement;
+  const top = state.stack[state.stack.length - 1];
+  // Move focus out of the opener branch before hiding it from accessibility.
+  // All previous inert branches have been restored, so a newly stacked sheet
+  // can receive focus without disturbing an editor already inside that sheet.
+  if (top && !top.contains(document.activeElement)) top.focus({ preventScroll: true });
+  let branch = top?.parentElement;
   // A custom portal can live deep in the app. Block siblings at every level, never its ancestors.
   while (branch && branch !== document.body) {
     const parent = branch.parentElement;
@@ -104,7 +109,8 @@ export function activateReaderSheet(dialog: HTMLElement, onClose: () => void): (
   document.addEventListener('wheel', outsideInput, { capture: true, passive: false });
   // A fresh sheet announces its title without opening the keyboard. A responsive transition
   // retains focus already inside the panel, including an editor and its text selection.
-  if (!opener || !dialog.contains(opener) || !visible(opener)) focus(dialog);
+  const focused = document.activeElement as HTMLElement | null;
+  if (!focused || !dialog.contains(focused) || !visible(focused)) focus(dialog);
   return () => {
     const wasTop = isTop();
     document.removeEventListener('keydown', keydown, true);
@@ -157,7 +163,7 @@ export function ReaderSheet({ open, title, onClose, children, className = '', ke
   }, [open, modal, target]);
   if (!open && !keepMounted) return null;
   const content = <div className={`reader-sheet-overlay${modal ? '' : ' reader-sheet-inline'}`}
-    hidden={!open} aria-hidden={!open || undefined} {...(!open ? { inert: '' } : {})}
+    hidden={!open} {...(!open ? { inert: '' } : {})}
     data-reader-sheet="true"
     onPointerDown={(event) => { backdropPointer.current = modal && event.target === event.currentTarget ? event.pointerId : null; }}
     onPointerUp={(event) => {

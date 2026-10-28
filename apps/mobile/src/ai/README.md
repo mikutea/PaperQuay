@@ -1,4 +1,6 @@
-# M2 独立阅读辅助接口
+# M2 / M3 独立阅读辅助接口
+
+解析包上下文使用可选 `textSource`（kind、packageDigest、parserName、parserModel），必须 `complete:false` 且无坐标锚点。`prepareAiContext` 保留该来源并生成独立 coverageDescription；controller identity 包含摘要，结果与 `AiSaveContext.parsedPackageDigest` 也保留摘要。App 通过 `saveAiResultNote` 在点击与实际事务中复验实时来源。操作边界见 `docs/mobile-sync/parsed-ai.md`。
 
 本模块直接请求用户配置的 OpenAI Chat Completions 兼容服务。业务同步服务和桌面不参与模型请求。只有明确点击“发送”或“测试连接”才发起请求；M2 不持久化或同步 AI 会话。
 
