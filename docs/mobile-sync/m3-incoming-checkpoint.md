@@ -1,5 +1,7 @@
 # M3 系统分享续作检查点 · 2026-10-29
 
+> 本文保留前一轮结果。随后经用户授权安装 SDK/JDK，已补上 Android 原生构建、MuMu 系统分享及 Native 持久化证据，见 [Android 续作检查点](m3-android-checkpoint.md)。下文「未取得 SDK」描述的是该轮当时状态。
+
 从本地 f6bb2dd7990bed4d81a7f93733857da179bc68aa 继续，新增 LIB-03 系统分享接收与账号内导入。分支 feat/mobile-reading-ai-m2；本轮仅本地开发与提交，没有推送、合并、安装、发布或生产部署。M3 仍未完成，M4 未进入。
 
 | 范围 | 本轮实际结果 | 适用限制 |

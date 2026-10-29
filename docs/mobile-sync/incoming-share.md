@@ -1,6 +1,6 @@
 # 系统分享接收与账号导入
 
-2026-10-29：新增 Android SEND 接收、iOS 文档打开和 Share Extension，以及账号页的「处理系统分享」。本轮补上 LIB-03 的原生入口与本机导入流程；原生编译、OS 提供方和真机行为仍待验收。
+2026-10-29：新增 Android SEND 接收、iOS 文档打开和 Share Extension，以及账号页的「处理系统分享」。本轮补上 LIB-03 的原生入口与本机导入流程；Android 编译、MuMu 真实跨应用分享和 Native 持久化已通过，见 [Android 检查点](m3-android-checkpoint.md)；iOS 编译、真实文件提供方与四类实机仍待验收。
 
 ## 从系统分享走到文库
 
