@@ -7,6 +7,8 @@ const config: CapacitorConfig = {
   android: { allowMixedContent: false, webContentsDebuggingEnabled: false },
   ios: { webContentsDebuggingEnabled: false },
   plugins: {
+    // Android keeps native safe-area/IME handling without early DOM CSS injection.
+    SystemBars: { insetsHandling: 'native' },
     // Standard fetch preserves cancellation, redirect rejection and incremental SSE chunks.
     // IdP, sync and model endpoints must allow the documented Capacitor WebView origins.
     CapacitorHttp: { enabled: false },

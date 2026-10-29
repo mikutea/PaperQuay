@@ -1,5 +1,31 @@
 # Android 原生构建与 MuMu 检查点 · 2026-10-29
 
+## 续作：系统栏注入与真实键盘遮挡
+
+从 30391f985aa39ded690f85ddb539b2eeb24c1b6a 继续，运行时只将 Capacitor 8.5.3 支持的 Android 专用 SystemBars.insetsHandling 设为 native。应用只使用标准 env(safe-area-inset-*)，没有依赖 SDK 注入的 --safe-area-inset-*。原生安全区与 IME padding 保留，跳过 document.documentElement 尚未建立时的 CSS 注入；没有改 SDK、关闭 insets 或降低 WebView 安全配置。
+
+| 检查 | 本轮结果 |
+| --- | --- |
+| 修复前日志 | 首轮 css 模式复现 3 条注入异常；第二次未出现，属于时序性错误，不声称每次必现 |
+| 实际 Native 布局 | 修复前后各 6 个状态全部通过，所有原生窗口几何完全相同；生产配置页、实际 Native bridge、安全上下文、无框架覆盖层、无横向溢出 |
+| 真实遮挡键盘 | MuMu 默认输入法仅报告 visible=true、imeBottom=0，该轮不能计作避让验收。另用离线受控 Android InputMethodService，产生 420px / 280dp 实际遮挡；横竖屏聚焦字段可见，输入在旋转后保留 |
+| 窗口恢复 | 竖屏 WebView 高度 1564→1144→1564px；横屏 864→444→864px，关闭键盘后恢复；修改前后的值逐项一致 |
+| 修复后日志 | native 模式完整布局回归与随后实际 OS 冷启动分享均为 0 条注入错误；未覆盖现代 WebView 或真机全部启动情形 |
+| 实际冷分享 | 接收方进程不存在时，独立 UID 来源分享 50B Markdown；提供方 open-md 从4到5，原文完整入箱，配置页正常启动 |
+| 完整回归 | 根项目928/928、移动935/935，两端TypeScript/Vite通过；正式Native分享Bridge 1项/3.661秒通过；Gradle明确重跑2个JUnit方法，实际440项断言通过 |
+| APK 差异 | 对18,398,799B候选包逐条 ZIP 比对，唯一改变条目 assets/capacitor.config.json；Manifest、DEX、Native库、Web资源字节均不变。SHA-256 1e0e2e708f8c5c9deb2156a6f31b73cadf8dd048bb0000d8122c1c4dfd419223 |
+
+QA 键盘没有读取输入、记录、持久化或联网代码；只用于本轮专用 MuMu2。启用前备份 default/enabled input methods 和硬键盘显示设置，完成后已精确恢复原值并卸载该 QA 包。原实例0/1未改动。临时 instrumentation 探针不进入产品源码或最终测试包。
+
+本轮仍在 Windows / MuMu Android12(API32) / WebView110 验证。输入法是受控夹具，不代表真实输入法产品或实机验收；现代 WebView140+、刘海/手势导航、真实系统生命周期、四类实机和 Xcode 仍待补。实际 HTTP/OIDC 服务链仍受既有自动审批阻塞，未尝试重启或绕过。M3未完成、M4未进入。
+
+证据在任务目录 qa/m3/20261029/android-insets/：geometry-comparison.json、baseline/result.json、baseline-occluding/result.json、native-occluding/result.json、cold-share-result.json、candidate-package.json、ime-state-before.json、ime-restored.json，以及实际截图和本轮回归日志。截图路径/ABI/默认模式均来自真实 Native 和生产 DOM，没有注入虚假 viewport。
+
+## 前一轮：原生构建与数据持久化
+
+以下保留 30391f9 之前那一轮的原始范围、产物和限制。该轮运行时代码未变；上方续作已修改系统栏配置。
+
+
 从本地 52e55e551ad34654ee048ecd9a90ed7841db2393 继续。用户授权安装所需开发工具并尝试 MuMu。本轮补上 Android 原生编译、真实跨 UID 系统分享、Native SQLite 和系统安全存储证据；产品变更为两个正式 Android 测试入口及文档，没有修改已提交的运行时实现。M3 仍未完成，M4 未进入。
 
 | 范围 | 实际结果 | 适用边界 |

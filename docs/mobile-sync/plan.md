@@ -51,3 +51,5 @@ M2 接入本机 PDF 和可直接读取的公开链接；M3 新增管理员显式
 
 
 2026-10-29 续作：LIB-03 已增加系统分享接收、本机待处理和同账号事务回执；本地界面/持久化与自动化通过。Android 完整原生构建、MuMu 跨应用分享与 Native SQLite/系统安全存储进程恢复已通过；Xcode/签名、真实 OS 提供方、四类实机及此前阻塞的实际服务链未验收；M3 仍进行中，M4 未进入。见 [系统分享检查点](m3-incoming-checkpoint.md) 与 [Android 检查点](m3-android-checkpoint.md)。
+
+2026-10-29 Android 续作：使用 SDK 支持的原生 insets 模式修复早期系统栏 CSS 注入异常；MuMu实际横竖屏、420px受控键盘遮挡/恢复、输入保留及冷启动分享通过。候选APK仅配置条目改变；现代WebView、真实输入法产品与四类实机仍待验收，见 [Android检查点](m3-android-checkpoint.md)。
