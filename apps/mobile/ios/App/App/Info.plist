@@ -79,5 +79,87 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
+
+    <key>CFBundleDocumentTypes</key>
+    <array>
+      <dict>
+        <key>CFBundleTypeName</key>
+        <string>PaperQuay text and bibliography</string>
+        <key>CFBundleTypeRole</key>
+        <string>Viewer</string>
+        <key>LSHandlerRank</key>
+        <string>Alternate</string>
+        <key>LSItemContentTypes</key>
+        <array>
+          <string>public.json</string>
+          <string>net.daringfireball.markdown</string>
+          <string>dev.paperquay.bibliography.bibtex</string>
+          <string>dev.paperquay.bibliography.ris</string>
+        </array>
+      </dict>
+    </array>
+    <key>UTImportedTypeDeclarations</key>
+    <array>
+      <dict>
+        <key>UTTypeIdentifier</key>
+        <string>net.daringfireball.markdown</string>
+        <key>UTTypeDescription</key>
+        <string>Markdown</string>
+        <key>UTTypeConformsTo</key>
+        <array>
+          <string>public.plain-text</string>
+        </array>
+        <key>UTTypeTagSpecification</key>
+        <dict>
+          <key>public.filename-extension</key>
+          <array>
+            <string>md</string>
+            <string>markdown</string>
+          </array>
+          <key>public.mime-type</key>
+          <string>text/markdown</string>
+        </dict>
+      </dict>
+      <dict>
+        <key>UTTypeIdentifier</key>
+        <string>dev.paperquay.bibliography.bibtex</string>
+        <key>UTTypeDescription</key>
+        <string>BibTeX bibliography</string>
+        <key>UTTypeConformsTo</key>
+        <array>
+          <string>public.plain-text</string>
+        </array>
+        <key>UTTypeTagSpecification</key>
+        <dict>
+          <key>public.filename-extension</key>
+          <array>
+            <string>bib</string>
+            <string>bibtex</string>
+          </array>
+          <key>public.mime-type</key>
+          <string>application/x-bibtex</string>
+        </dict>
+      </dict>
+      <dict>
+        <key>UTTypeIdentifier</key>
+        <string>dev.paperquay.bibliography.ris</string>
+        <key>UTTypeDescription</key>
+        <string>RIS bibliography</string>
+        <key>UTTypeConformsTo</key>
+        <array>
+          <string>public.plain-text</string>
+        </array>
+        <key>UTTypeTagSpecification</key>
+        <dict>
+          <key>public.filename-extension</key>
+          <array>
+            <string>ris</string>
+          </array>
+          <key>public.mime-type</key>
+          <string>application/x-research-info-systems</string>
+        </dict>
+      </dict>
+    </array>
+
 </dict>
 </plist>

@@ -11,3 +11,5 @@ import './components/richNoteEditor.css';
 import './theme.css';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(<App />);
+
+import './components/incomingShare.css';

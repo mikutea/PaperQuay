@@ -3,7 +3,7 @@ import type { NoteData, PaperData, VisibleEntity } from '../../../../packages/sy
 import { ClientError, describeError } from '../errors.ts';
 import {
   exportLibraryArchive, LIBRARY_TRANSFER_LIMITS, LibraryTransferError, parseLibraryArchive, planLibraryImport,
-  richLibraryNoteData, type LibraryArchive, type LibraryImportRow, type LibraryArchiveNote,
+  richLibraryNoteData, type LibraryArchive, type LibraryImportRow, type LibraryArchiveNote, type LibraryImportSummary,
 } from '../library/libraryTransfer.ts';
 import { remapRichNoteReferences } from '../../../../packages/sync-core/src/richNote.ts';
 import { ContentPreview } from './EntityEditor.tsx';
@@ -12,6 +12,8 @@ import { BibliographyTransferError, exportBibliography, parseBibliography,
   type BibliographyFormat, type BibliographyWarning } from '../library/bibliographyTransfer.ts';
 import { DoiLookupError, lookupDoi, type DoiLookupErrorCode, type DoiLookupWarning } from '../library/doiLookup.ts';
 import { exportFilename, exportTextFile, FileExportError } from '../platform/exportFile.ts';
+import { assertPreparedIncomingShareSource, type PreparedSource } from '../library/incomingShare.ts';
+import { IncomingReceiptError, peekIncomingReceipt, prepareIncomingImport } from '../library/incomingReceipt.ts';
 import type { WorkspaceController } from '../sync/workspace.ts';
 import { ReaderSheet } from './ReaderSheet.tsx';
 import { ExternalLibraryPanel } from './ExternalLibraryPanel.tsx';
@@ -20,6 +22,7 @@ import './libraryTransfer.css';
 import './externalLibrary.css';
 
 interface Props {
+  incomingSource?: PreparedSource;
   entities: readonly VisibleEntity[];
   controller: WorkspaceController;
   scopeKey: string;
@@ -35,6 +38,9 @@ export function libraryTransferScope(controller: WorkspaceController): string | 
 }
 
 function message(error: unknown): string {
+  if (error instanceof IncomingReceiptError) return error.code === 'FULL'
+    ? describeError(new ClientError('IMPORT_RECEIPT_FULL')) : error.code === 'CHANGED'
+    ? '这项分享或导入选择已有变化，请关闭面板后重新预览。' : '无法完整核对这项分享，尚未保存。请返回待处理箱重试。';
   if (error instanceof ClientError) return error.code === 'IMPORT_UNSUPPORTED' ? '当前账号尚未启用所选内容的同步能力，请更新服务后重新比较。' : describeError(error);
   if (error instanceof FileExportError) {
     if (error.code === 'CHANGED') return '账号已变化，请关闭此面板后重试。';
@@ -183,18 +189,20 @@ function ArchiveNotePreview({ note }: { note: LibraryArchiveNote }) {
     {data && <ContentPreview data={data} sessionKey={`file-note:${note.ref}`} />}</details>;
 }
 
-export function LibraryTransferPanel({ entities, controller, scopeKey, accountCurrent, onClose }: Props) {
+export function LibraryTransferPanel({ entities, controller, scopeKey, accountCurrent, onClose, incomingSource }: Props) {
+  if (incomingSource) assertPreparedIncomingShareSource(incomingSource);
   const [tab, setTab] = useState<'import' | 'export' | 'external'>('import');
-  const [archive, setArchive] = useState<LibraryArchive | null>(null);
-  const [filename, setFilename] = useState('');
+  const [archive, setArchive] = useState<LibraryArchive | null>(() => incomingSource?.archive ?? null);
+  const [filename, setFilename] = useState(incomingSource?.sourceName ?? '');
   const [selection, setSelection] = useState<readonly string[] | undefined>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [noteId, setNoteId] = useState('');
-  const [sourceMode, setSourceMode] = useState<'file' | 'doi'>('file');
-  const [doi, setDoi] = useState('');
-  const [warnings, setWarnings] = useState<string[]>([]);
+  const [sourceMode, setSourceMode] = useState<'file' | 'doi'>(incomingSource && incomingSource.kind !== 'archive' ? 'doi' : 'file');
+  const [doi, setDoi] = useState(incomingSource?.doi ?? '');
+  const [lookedUpDoi, setLookedUpDoi] = useState<string | null>(null);
+  const [warnings, setWarnings] = useState<string[]>(() => bibliographyWarnings(incomingSource?.warnings ?? []));
   const [bibliographyFormat, setBibliographyFormat] = useState<BibliographyFormat>('bibtex');
   const [paperId, setPaperId] = useState('');
   const alive = useRef(true);
@@ -211,6 +219,11 @@ export function LibraryTransferPanel({ entities, controller, scopeKey, accountCu
     alive.current = false; operation.current++; queryAbort.current?.abort(); importImages.current?.close();
   }; }, []);
   const current = () => alive.current && accountCurrent() && libraryTransferScope(controller) === scopeKey;
+  let savedIncoming: LibraryImportSummary | null = null, incomingReceiptError: string | null = null;
+  if (incomingSource) {
+    try { savedIncoming = peekIncomingReceipt(controller.getSnapshot().workspace?.incomingReceipts ?? [], incomingSource); }
+    catch (cause) { incomingReceiptError = message(cause); }
+  }
   const planned = useMemo(() => {
     if (!archive) return null;
     try { return { plan: planLibraryImport(archive, entities, selection), error: null }; }
@@ -243,7 +256,7 @@ export function LibraryTransferPanel({ entities, controller, scopeKey, accountCu
     setTab(next); setError(null); setFeedback(null);
   }
   async function readFile(file?: File) {
-    if (!file || busyRef.current || !current()) return;
+    if (incomingSource || !file || busyRef.current || !current()) return;
     const request = ++operation.current;
     busyRef.current = true; setBusy(true); setError(null); setFeedback(null); setArchive(null); setSelection(undefined); setWarnings([]);
     try {
@@ -266,14 +279,15 @@ export function LibraryTransferPanel({ entities, controller, scopeKey, accountCu
     }
   }
   async function queryDoi() {
-    if (busyRef.current || !current()) return;
+    if (busyRef.current || !current() || savedIncoming || incomingReceiptError) return;
     const request = ++operation.current;
+    setLookedUpDoi(null);
     const abort = new AbortController(); queryAbort.current = abort;
     busyRef.current = true; setBusy(true); setError(null); setFeedback(null); setArchive(null); setSelection(undefined); setWarnings([]);
     try {
       const result = await lookupDoi(doi, { signal: abort.signal });
       if (!current() || operation.current !== request || abort.signal.aborted) return;
-      setFilename(`Crossref · ${result.source.doi}`); setArchive(result.archive);
+      setFilename(`Crossref · ${result.source.doi}`); setArchive(result.archive); setLookedUpDoi(result.source.doi);
       setWarnings(result.warnings.map(doiWarningMessage));
     } catch (cause) { if (current() && operation.current === request && !abort.signal.aborted) setError(message(cause)); }
     finally {
@@ -288,7 +302,7 @@ export function LibraryTransferPanel({ entities, controller, scopeKey, accountCu
     busyRef.current = false; setBusy(false); setError(null); setFeedback('已取消查询。');
   }
   function changeSource(next: 'file' | 'doi') {
-    if (busyRef.current) return;
+    if (incomingSource || busyRef.current) return;
     setSourceMode(next); setArchive(null); setSelection(undefined); setWarnings([]); setError(null); setFeedback(null);
   }
   function toggle(row: LibraryImportRow) {
@@ -298,7 +312,7 @@ export function LibraryTransferPanel({ entities, controller, scopeKey, accountCu
     setSelection([...keys]); setError(null); setFeedback(null);
   }
   async function confirmImport() {
-    if (!plan || busyRef.current || !current()) return;
+    if (!plan || busyRef.current || !current() || savedIncoming || incomingReceiptError) return;
     if (plan.requiresRichNotes && !controller.getContentCapabilities().richNotes) { setError('当前账号尚未启用结构笔记同步，请取消选择结构笔记或更新服务。'); return; }
     busyRef.current = true; setBusy(true); setError(null); setFeedback(null);
     try {
@@ -309,7 +323,11 @@ export function LibraryTransferPanel({ entities, controller, scopeKey, accountCu
         finally { pool.close(); if (importImages.current === pool) importImages.current = null; }
       }
       if (!current()) return;
-      const result = await controller.importLibrary(plan.archive, selection, plan.signature);
+      const incoming = incomingSource ? await prepareIncomingImport(incomingSource, plan.archive, selection, {
+        current, ...(incomingSource.kind === 'unsupported' ? { manualDoi: lookedUpDoi ?? '' } : {}),
+      }) : undefined;
+      if (!current()) return;
+      const result = await controller.importLibrary(incoming?.archive ?? plan.archive, incoming ? incoming.selection ?? undefined : selection, plan.signature, incoming);
       if (!current()) return;
       setArchive(null); setSelection(undefined); setWarnings([]);
       setFeedback(`已保存 ${result.selectedPapers} 篇文献、${result.selectedNotes} 条笔记到此设备，联网后继续同步。`);
@@ -337,16 +355,25 @@ export function LibraryTransferPanel({ entities, controller, scopeKey, accountCu
     finally { busyRef.current = false; if (alive.current) setBusy(false); }
   }
   const selected = plan ? plan.summary.selectedPapers + plan.summary.selectedNotes : 0;
-  return <ReaderSheet open title="导入与导出" onClose={onClose} className="library-transfer-sheet">
+  return <ReaderSheet open title={incomingSource ? "确认本次分享" : "导入与导出"} onClose={onClose} className="library-transfer-sheet">
     <div className="library-transfer">
-      <div className="transfer-tabs" role="group" aria-label="文件操作">
+      {!incomingSource && <div className="transfer-tabs" role="group" aria-label="文件操作">
         <button type="button" aria-pressed={tab === 'import'} disabled={busy} onClick={() => changeTab('import')}>导入</button>
         <button type="button" aria-pressed={tab === 'export'} disabled={busy} onClick={() => changeTab('export')}>导出</button>
         <button type="button" aria-pressed={tab === 'external'} disabled={busy} onClick={() => changeTab('external')}>外部文库</button>
-      </div>
+      </div>}
       {tab === 'import' ? <>
-        <section className="transfer-intro">
-          {!archive && <div className="transfer-source-tabs" role="group" aria-label="导入来源">
+        {incomingSource && <section aria-label="分享来源" className="transfer-intro">
+          <h3>{incomingSource.sourceName}</h3>
+          <p className="muted">本次内容已绑定当前账号。确认保存后，原文仍留在待处理箱，可返回后手动移除。</p>
+          {incomingSource.kind === 'unsupported' && <><p>{incomingSource.reason}</p>
+            <details><summary>查看原始文字</summary><pre className="incoming-share-text">{incomingSource.sourceText?.slice(0, 5000)}</pre></details>
+            <p className="transfer-hint">可从原文核对并填写一个 DOI，再明确查询。普通网页不会自动读取。</p></>}
+          {savedIncoming && <p role="status">这项分享此前已保存到当前账号：{savedIncoming.selectedPapers} 篇文献、{savedIncoming.selectedNotes} 条笔记。无需重复导入。</p>}
+          {incomingReceiptError && <p role="alert">{incomingReceiptError}</p>}
+        </section>}
+        {!savedIncoming && !incomingReceiptError && <section className="transfer-intro">
+          {!incomingSource && !archive && <div className="transfer-source-tabs" role="group" aria-label="导入来源">
             <button type="button" aria-pressed={sourceMode === 'file'} disabled={busy} onClick={() => changeSource('file')}>文件</button>
             <button type="button" aria-pressed={sourceMode === 'doi'} disabled={busy} onClick={() => changeSource('doi')}>DOI 查询</button>
           </div>}
@@ -356,7 +383,7 @@ export function LibraryTransferPanel({ entities, controller, scopeKey, accountCu
             aria-label="选择导入文件" onChange={(event) => {
               const file = event.currentTarget.files?.[0]; event.currentTarget.value = ''; void readFile(file);
             }} />
-          {(sourceMode === 'file' || archive) && <div className={archive ? 'transfer-source' : undefined}>
+          {!incomingSource && (sourceMode === 'file' || archive) && <div className={archive ? 'transfer-source' : undefined}>
             {archive && <p className="transfer-filename">{filename}</p>}
             <button type="button" className="secondary" disabled={busy} onClick={() => sourceMode === 'file' ? input.current?.click() : changeSource('doi')}>
               {archive ? sourceMode === 'file' ? '更换文件' : '重新查询' : '选择文件'}</button>
@@ -364,14 +391,14 @@ export function LibraryTransferPanel({ entities, controller, scopeKey, accountCu
           {!archive && sourceMode === 'file' && <p className="transfer-hint">UTF-8 文本，每次最多 4 MB、500 篇文献和 500 条笔记。</p>}
           {!archive && sourceMode === 'doi' && <form className="transfer-doi" onSubmit={(event) => { event.preventDefault(); void queryDoi(); }}>
             <div className="field"><label htmlFor={doiInputId}>DOI 或 DOI 链接</label>
-              <input id={doiInputId} value={doi} onChange={(event) => setDoi(event.target.value)} maxLength={2048}
+              <input id={doiInputId} value={doi} onChange={(event) => { setDoi(event.target.value); setLookedUpDoi(null); }} readOnly={incomingSource?.kind === 'doi'} maxLength={2048}
                 placeholder="10.… 或 https://doi.org/…" spellCheck={false} autoCapitalize="none" autoComplete="off" disabled={busy} /></div>
             <p className="transfer-hint">点击查询会将这个 DOI 发送到 Crossref。查询结果需确认后才会加入文库。</p>
             <div className="transfer-doi-actions"><button type="submit" className="primary" disabled={busy || !doi.trim()}>{busy ? '正在查询…' : '查询 DOI'}</button>
               {busy && queryAbort.current && <button type="button" className="secondary" onClick={cancelQuery}>取消查询</button>}</div>
           </form>}
-        </section>
-        {plan && <section className="transfer-preview" aria-label="导入预览">
+        </section>}
+        {plan && !savedIncoming && !incomingReceiptError && <section className="transfer-preview" aria-label="导入预览">
           <h3>预览导入</h3>
           <p>选中 {plan.summary.selectedPapers} 篇文献、{plan.summary.selectedNotes} 条笔记；跳过 {plan.summary.skipped} 项。</p>
           <p className="transfer-hint">重复项默认跳过；勾选后另存副本，也会保留文件中的分类。</p>

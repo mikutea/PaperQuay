@@ -1,0 +1,14 @@
+.incoming-share-panel { padding: 16px 20px 24px; min-width: 0; }
+.incoming-share-panel > p { line-height: 1.6; overflow-wrap: anywhere; }
+.incoming-share-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 12px 0; }
+.incoming-share-actions button { min-height: 44px; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.incoming-share-list { list-style: none; padding: 0; margin: 16px 0; }
+.incoming-share-list > li { display: grid; gap: 6px; padding: 16px 0; min-width: 0; border-bottom: 1px solid var(--line); }
+.incoming-share-list strong, .incoming-share-list span { overflow-wrap: anywhere; }
+.incoming-share-list .incoming-share-actions { margin: 2px 0 0; }
+.incoming-share-notice, .incoming-share-confirm, .incoming-share-preview { padding: 14px; margin: 16px 0; border: 1px solid var(--line); border-radius: 14px; background: var(--reader-control-fill); }
+.incoming-share-confirm h3, .incoming-share-preview h3 { font-size: 1rem; margin: 0 0 8px; overflow-wrap: anywhere; }
+.incoming-share-panel .muted { font-size: .875rem; line-height: 1.55; }
+@media (max-width: 380px) { .incoming-share-panel { padding-inline: 16px; } }
+
+.incoming-share-text { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 18rem; overflow: auto; font-size: .875rem; line-height: 1.6; }

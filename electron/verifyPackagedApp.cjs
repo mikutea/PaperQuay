@@ -15,7 +15,8 @@ if (!fs.existsSync(resolvedArchivePath)) {
   throw new Error(`Packaged app archive not found: ${resolvedArchivePath}`);
 }
 
-const extractionRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'paperquay-package-smoke-'));
+const extractionParent = fs.realpathSync.native(os.tmpdir());
+const extractionRoot = fs.mkdtempSync(path.join(extractionParent, 'paperquay-package-smoke-'));
 
 try {
   asar.extractAll(resolvedArchivePath, extractionRoot);
@@ -79,5 +80,9 @@ try {
     `Packaged PaperQuay ${packageJson.version} resolved document, desktop sync, and OIDC dependencies successfully.\n`,
   );
 } finally {
-  fs.rmSync(extractionRoot, { recursive: true, force: true });
+  const resolvedExtraction = fs.realpathSync.native(extractionRoot);
+  if (path.dirname(resolvedExtraction) !== extractionParent || !path.basename(resolvedExtraction).startsWith('paperquay-package-smoke-')) {
+    throw new Error('Refusing to clean an unexpected package verification directory.');
+  }
+  fs.rmSync(resolvedExtraction, { recursive: true, force: true });
 }

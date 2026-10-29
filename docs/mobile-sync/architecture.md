@@ -142,3 +142,6 @@ Zotero 增量仅请求固定官方 API，分页、删除列表和最终版本须
 - [PostgreSQL 行锁](https://www.postgresql.org/docs/current/explicit-locking.html)：事务与账号内提交序列。
 - [Fastify Schema 验证](https://fastify.dev/docs/latest/Reference/Validation-and-Serialization/)：服务端固定 schema 与输入输出限制。
 - [PDF.js 加载参数](https://mozilla.github.io/pdf.js/api/draft/module-pdfjsLib.html)：Range、自动预取与 streaming 边界。
+
+
+2026-10-29 系统分享采用 Native 本机 inbox → 首次读取认领账号 → 生产本地格式校验 → 明确查询/预览 → Workspace 原子导入与回执。原文不自动进入同步；owner 使用稳定服务/账号键的 SHA-256，回执仅存在本机账号存储。完整契约与损坏/容量/重复语义见 [系统分享设计](incoming-share.md)。

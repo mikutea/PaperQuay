@@ -45,6 +45,15 @@ import {
   type LibraryImportSummary,
 } from '../library/libraryTransfer.ts';
 import {
+  appendIncomingReceipt,
+  assertPreparedIncomingImport,
+  findIncomingReceipt,
+  IncomingReceiptError,
+  validateIncomingReceipts,
+  type IncomingImportReceipt,
+  type PreparedIncomingImport,
+} from '../library/incomingReceipt.ts';
+import {
   ExternalLibraryError,
   materializeExternalLibraryImport,
   planExternalLibraryImport,
@@ -77,6 +86,8 @@ export interface StoredWorkspace {
   /** Durable, non-secret create intent. Replayed only on an explicit retry. */
   remoteTaskIntent?: { version: 1; request: RemoteTaskRequest };
   zoteroLibraries?: ZoteroLibraryState;
+  /** Account-local receipts commit with imported entities and their outbox entries. */
+  incomingReceipts?: IncomingImportReceipt[];
 }
 export interface WorkspaceSnapshot {
   status: 'signed-out' | 'binding' | 'ready' | 'error';
@@ -101,7 +112,7 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
 export function decodeWorkspace(value: unknown): StoredWorkspace {
   if (
     !isObject(value) ||
-    Object.keys(value).some((key) => !['sync', 'pendingResolutions', 'paperOrganizationVersion','richNotesVersion','aiConversationsVersion', 'externalLibraries','remoteTaskIntent','zoteroLibraries'].includes(key)) ||
+    Object.keys(value).some((key) => !['sync', 'pendingResolutions', 'paperOrganizationVersion','richNotesVersion','aiConversationsVersion', 'externalLibraries','remoteTaskIntent','zoteroLibraries','incomingReceipts'].includes(key)) ||
     (value.paperOrganizationVersion !== undefined && value.paperOrganizationVersion !== 1) ||
     (value.richNotesVersion!==undefined&&value.richNotesVersion!==1)||(value.aiConversationsVersion!==undefined&&value.aiConversationsVersion!==1)||
     !isObject(value.pendingResolutions) ||
@@ -120,6 +131,9 @@ export function decodeWorkspace(value: unknown): StoredWorkspace {
   }
   if (value.zoteroLibraries !== undefined) {
     try { validateZoteroLibraryState(value.zoteroLibraries); } catch { throw new ClientError('STORAGE_CORRUPT'); }
+  }
+  if (value.incomingReceipts !== undefined) {
+    try { validateIncomingReceipts(value.incomingReceipts); } catch { throw new ClientError('STORAGE_CORRUPT'); }
   }
   for (const [conflictId, pending] of Object.entries(value.pendingResolutions)) {
     if (
@@ -519,13 +533,30 @@ export class WorkspaceController {
     archive: LibraryArchive,
     selection: readonly string[] | undefined,
     reviewedSignature: string,
+    incoming?: PreparedIncomingImport,
   ): Promise<LibraryImportSummary> {
     const epoch = this.epoch;
     let summary: LibraryImportSummary | undefined;
     try {
       await this.update(epoch, (value) => {
         try {
-          const plan = planLibraryImport(archive, listVisibleEntities(value.sync), selection);
+          const request = incoming === undefined ? undefined : assertPreparedIncomingImport(incoming);
+          // Prepared inputs are detached and deeply frozen. Do not let a caller
+          // attach a receipt to a different archive or selection after review.
+          if (request && (archive !== request.archive || selection !== (request.selection ?? undefined)))
+            throw new ClientError('IMPORT_CHANGED');
+          if (request) {
+            // A committed request is authoritative even after local duplicates,
+            // capabilities or the old review signature have changed.
+            const previous = findIncomingReceipt(value.incomingReceipts ?? [], request);
+            if (previous) {
+              this.assertBinding(epoch);
+              summary = previous;
+              return value;
+            }
+          }
+          const plan = planLibraryImport(request?.archive ?? archive, listVisibleEntities(value.sync),
+            request ? request.selection ?? undefined : selection);
           if (typeof reviewedSignature !== 'string' || plan.signature !== reviewedSignature)
             throw new ClientError('IMPORT_CHANGED');
           const organizationSupported = this.supportsPaperOrganization() || (
@@ -541,13 +572,18 @@ export class WorkspaceController {
           const sync = queueLocalCreates(value.sync, imported.edits, imported.edits.map(() => ({
             opId: this.makeId(), clientCreatedAt: this.now(),
           })));
+          const incomingReceipts = request
+            ? appendIncomingReceipt(value.incomingReceipts ?? [], request, imported.summary) : undefined;
           this.assertBinding(epoch);
           summary = imported.summary;
-          return { ...value, sync };
+          return { ...value, sync, ...(incomingReceipts ? { incomingReceipts } : {}) };
         } catch (error) {
           // AccountStore deliberately hides arbitrary reducer failures. Preserve
           // import-specific, input-free errors before that storage boundary.
           if (error instanceof ClientError) throw error;
+          if (error instanceof IncomingReceiptError)
+            throw new ClientError(error.code === 'CHANGED' ? 'IMPORT_CHANGED'
+              : error.code === 'FULL' ? 'IMPORT_RECEIPT_FULL' : 'IMPORT_INVALID');
           if (error instanceof SyncStateError && error.code === 'LOCAL_CAPACITY_EXCEEDED')
             throw new ClientError('IMPORT_CAPACITY');
           throw new ClientError('IMPORT_INVALID');

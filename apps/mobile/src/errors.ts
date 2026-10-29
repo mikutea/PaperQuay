@@ -22,7 +22,8 @@ export type ClientErrorCode =
   | 'IMPORT_CHANGED'
   | 'IMPORT_INVALID'
   | 'IMPORT_UNSUPPORTED'
-  | 'IMPORT_CAPACITY';
+  | 'IMPORT_CAPACITY'
+  | 'IMPORT_RECEIPT_FULL';
 
 const messages: Record<ClientErrorCode, string> = {
   CONFIG_MISSING: '请先配置账号服务地址和客户端标识。',
@@ -48,6 +49,7 @@ const messages: Record<ClientErrorCode, string> = {
   IMPORT_CHANGED: '文库或导入选择已有变化，请重新预览并确认后导入。',
   IMPORT_INVALID: '导入内容或文献关联无效，本次没有保存任何条目。请检查文件后重试。',
   IMPORT_UNSUPPORTED: '当前无法确认文献分类可完整同步，本次没有保存任何条目。请连接支持分类的账号服务后重试。',
+  IMPORT_RECEIPT_FULL: '当前账号已达到本机分享导入回执上限，未保存本次内容。待处理原文仍保留；可关闭面板后使用普通文件导入。',
   IMPORT_CAPACITY: '本地文库、来源映射或待同步队列容量不足，本次没有保存任何条目。请先同步或减少导入数量。',
 };
 

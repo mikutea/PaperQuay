@@ -33,6 +33,20 @@
                 <data android:scheme="dev.paperquay.mobile" android:host="auth" android:path="/logout" />
             </intent-filter>
 
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+                <data android:mimeType="application/json" />
+                <data android:mimeType="text/markdown" />
+                <data android:mimeType="application/x-bibtex" />
+                <data android:mimeType="application/bibtex" />
+                <data android:mimeType="text/x-bibtex" />
+                <data android:mimeType="application/x-research-info-systems" />
+                <data android:mimeType="application/ris" />
+                <data android:mimeType="text/ris" />
+            </intent-filter>
+
         </activity>
 
         <provider

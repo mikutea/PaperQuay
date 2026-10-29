@@ -41,6 +41,8 @@ import {
   type StoredWorkspace,
   type WorkspaceSnapshot,
 } from './sync/workspace.ts';
+import { getIncomingShareClient } from './platform/incomingShare.ts';
+import { assertPreparedIncomingShareSource, type PreparedSource } from './library/incomingShare.ts';
 import { entityStatus, hasEntityConflict } from './viewState.ts';
 
 const CONFIG_KEY = 'paperquay.mobile.public-config.v1';
@@ -50,6 +52,7 @@ const PaperReader = lazy(() => import('./components/PaperReader.tsx').then((modu
 const ReaderSheet = lazy(() => import('./components/ReaderSheet.tsx').then((module) => ({ default: module.ReaderSheet })));
 const AiWorkspace = lazy(() => import('./components/AiWorkspace.tsx').then((module) => ({ default: module.AiWorkspace })));
 const LibraryTransferPanel = lazy(() => import('./components/LibraryTransferPanel.tsx').then((module) => ({ default: module.LibraryTransferPanel })));
+const IncomingSharePanel = lazy(() => import('./components/IncomingSharePanel.tsx').then(module => ({ default: module.IncomingSharePanel })));
 const CloudPdfLibrary = lazy(() => import('./components/CloudPdfPanel.tsx').then((module) => ({ default: module.CloudPdfLibrary })));
 const RemoteTaskPanel = lazy(() => import('./components/RemoteTaskPanel.tsx').then(module => ({ default: module.RemoteTaskPanel })));
 const ZoteroLibrarySheet = lazy(() => import('./components/ZoteroLibrarySheet.tsx').then(module => ({ default: module.ZoteroLibrarySheet })));
@@ -241,6 +244,8 @@ export function ConnectedApp({
   const [citationTarget, setCitationTarget] = useState<PdfCitationTarget | null>(null);
   const [aiSettings, setAiSettings] = useState(false);
   const [transferOpen, setTransferOpen] = useState(false);
+  const [incomingOpen, setIncomingOpen] = useState<string | null>(null);
+  const [incomingSelection, setIncomingSelection] = useState<{ source: PreparedSource; scope: string; subject: string } | null>(null);
   const [cloudOpen, setCloudOpen] = useState(false);
   const [remoteOpen, setRemoteOpen] = useState(false);
   const [zoteroOpen, setZoteroOpen] = useState(false);
@@ -285,7 +290,7 @@ export function ConnectedApp({
   }, []);
   const closeReadingPanel = useCallback(() => setReadingPanel(null), []);
   useLayoutEffect(() => { liveAiContext.current = aiContext; }, [aiContext]);
-  useEffect(() => { setTransferOpen(false); }, [transferScope, authSubjectKey]);
+  useEffect(() => { setTransferOpen(false); setIncomingOpen(null); setIncomingSelection(null); }, [transferScope, authSubjectKey]);
 
   useEffect(() => {
     let current = true;
@@ -359,7 +364,7 @@ export function ConnectedApp({
   function navigate(next: Section) {
     if (!canLeave()) return;
     setSection(next);
-    setTransferOpen(false);
+    setTransferOpen(false); setIncomingOpen(null); setIncomingSelection(null);
     setCloudOpen(false);
     setSelection(null);
     setReadingId(null);
@@ -411,6 +416,11 @@ export function ConnectedApp({
   const notes = entities.filter((entity) => entity.entityType === 'note');
   const readingPaper = papers.find((paper) => paper.entityId === readingId && !paper.deleted);
   const scope = state.identity ? { apiBaseUrl: runtime.config.apiBaseUrl, accountId: state.identity.accountId } : null;
+  const incomingOwner = scope ? accountScopeKey(scope) : null;
+  const incomingKey = JSON.stringify([transferScope, authSubjectKey]);
+  const incomingClient = useMemo(() => incomingOwner ? getIncomingShareClient(incomingOwner) : null, [incomingOwner]);
+  const incomingSource = incomingSelection?.scope === transferScope && incomingSelection.subject === authSubjectKey
+    ? incomingSelection.source : undefined;
   const aiSync = useMemo(() => scope ? createAiSyncBridge(controller, scope) : undefined,
     [controller, state.workspace, state.status, scope?.accountId, scope?.apiBaseUrl]);
   const organizationEnabled = state.workspace?.paperOrganizationVersion === 1;
@@ -567,7 +577,7 @@ export function ConnectedApp({
               conflicts={conflictCount}
               onSelect={select}
               onCreate={(type) => select(type, crypto.randomUUID())}
-              onTransfer={() => setTransferOpen(true)}
+              onTransfer={() => { setIncomingSelection(null); setTransferOpen(true); }}
               onSync={() => void controller.syncNow()}
               onConflicts={() => navigate('conflicts')}
             />
@@ -751,6 +761,10 @@ export function ConnectedApp({
           <button type="button" className="secondary" onClick={() => setZoteroOpen(true)}>Zotero 增量接入</button>
           <p className="muted">读取个人库或群组库题录，比较变化后明确采用。</p>
         </section>}
+        {section === 'account' && scope && incomingClient?.available && <section className="account-ai-settings">
+          <button type="button" className="secondary" onClick={() => { if (canLeave()) setIncomingOpen(incomingKey); }}>处理系统分享</button>
+          <p className="muted">预览本机收到的文字与书目文件，再选择是否加入当前账号。</p>
+        </section>}
         {section === 'account' && scope && <section className="account-ai-settings">
           <button type="button" className="secondary" onClick={() => setNoteExportOpen(true)}>导出笔记、批注与引用</button>
         </section>}
@@ -779,10 +793,22 @@ export function ConnectedApp({
           accountCurrent={() => JSON.stringify(auth.getSubject?.() ?? null) === authSubjectKey}
           onClose={() => setCloudOpen(false)} />
       </Suspense>}
-      {transferOpen && transferScope && <Suspense fallback={<p className="loading-message" role="status">正在打开导入与导出…</p>}>
-        <LibraryTransferPanel key={transferScope} entities={entities} controller={controller} scopeKey={transferScope}
+      {incomingOpen === incomingKey && transferScope && incomingOwner && incomingClient?.available && <Suspense fallback={<p role="status">正在打开待处理分享…</p>}>
+        <IncomingSharePanel key={incomingKey} scopeKey={transferScope} ownerKey={incomingOwner} inbox={incomingClient}
           accountCurrent={() => JSON.stringify(auth.getSubject?.() ?? null) === authSubjectKey}
-          onClose={() => setTransferOpen(false)} />
+          onClose={() => setIncomingOpen(null)} onReview={(source) => {
+            const sync = controller.getSnapshot().workspace?.sync;
+            if (!sync || JSON.stringify([sync.accountId,sync.deviceId,sync.generation]) !== transferScope
+              || JSON.stringify(auth.getSubject?.() ?? null) !== authSubjectKey) return;
+            assertPreparedIncomingShareSource(source);
+            setIncomingSelection({ source, scope: transferScope, subject: authSubjectKey });
+            setIncomingOpen(null); setTransferOpen(true);
+          }} />
+      </Suspense>}
+      {transferOpen && transferScope && (!incomingSelection || incomingSource) && <Suspense fallback={<p className="loading-message" role="status">正在打开导入与导出…</p>}>
+        <LibraryTransferPanel key={`${transferScope}:${authSubjectKey}:${incomingSource?.digest ?? 'file'}`} incomingSource={incomingSource} entities={entities} controller={controller} scopeKey={transferScope}
+          accountCurrent={() => JSON.stringify(auth.getSubject?.() ?? null) === authSubjectKey}
+          onClose={() => { setTransferOpen(false); setIncomingSelection(null); }} />
       </Suspense>}
       {remoteOpen && transferScope && scope && runtime.remoteTasks && <Suspense fallback={<p role="status">正在打开远程任务…</p>}>
         <RemoteTaskPanel key={`${transferScope}:${authSubjectKey}`} context={runtime.remoteTasks} scope={scope} scopeKey={transferScope}
