@@ -16,11 +16,12 @@ const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 
 /** No individual conversion or repeated continuation can grow an unbounded string. */
 class TextBuffer {
+  constructor(private readonly limit:number=AI_LIMITS.contextBytes){}
   private readonly chunks: string[] = [];
   bytes = 0;
   add(value: string): void {
     this.bytes += encoder.encode(value).byteLength;
-    if (this.bytes > AI_LIMITS.contextBytes) throw new AiError('CONTEXT_TOO_LARGE');
+    if (this.bytes > this.limit) throw new AiError('CONTEXT_TOO_LARGE');
     this.chunks.push(value);
   }
   value(): string { return this.chunks.join(''); }
@@ -54,9 +55,9 @@ function assertTextMath(value: string): void {
 
 /** The AST owns link/image boundaries, including reference-style links. Never
  * inspect URL/title/definition fields, and never silently drop visible raw HTML. */
-function markdownText(value: string): string {
+function markdownText(value: string, maxBytes:number=AI_LIMITS.contextBytes): string {
   const tree = fromMarkdown(value, { extensions: [math()], mdastExtensions: [mathFromMarkdown()] });
-  const output = new TextBuffer(); let visible = false, count = 0;
+  const output = new TextBuffer(maxBytes); let visible = false, count = 0;
   const stack: { node: MarkdownNode; depth: number; closing?: string }[] = [{ node: tree as MarkdownNode, depth: 0 }];
   while (stack.length) {
     const item = stack.pop()!;
@@ -94,7 +95,7 @@ function markdownText(value: string): string {
   return visible ? output.value().trim() : '';
 }
 
-function blockText(block: ParsedBlock, convert: (value: string) => string): string {
+function blockText(block: ParsedBlock, convert: (value: string) => string, maxBytes:number=AI_LIMITS.contextBytes): string {
   const parts: string[] = [], seen = new Set<string>();
   const add = (value: string | undefined) => {
     if (!value) return;
@@ -111,7 +112,7 @@ function blockText(block: ParsedBlock, convert: (value: string) => string): stri
       text: convert(cell.text), header: cell.header, rowSpan: cell.rowSpan, colSpan: cell.colSpan,
     })) }));
     if (caption || rows.some((row) => row.cells.some((cell) => Boolean(cell.text)))) {
-      const output = new TextBuffer(); output.add('[table]\n');
+      const output = new TextBuffer(maxBytes); output.add('[table]\n');
       if (caption) output.add('caption: ' + caption + '\n');
       for (const [rowIndex, row] of rows.entries()) {
         output.add('[' + row.section + '] row ' + (rowIndex + 1) + '\n');
@@ -128,7 +129,7 @@ function blockText(block: ParsedBlock, convert: (value: string) => string): stri
     if (!parts.length) add(block.text);
   }
   add(block.caption); add(block.footnote);
-  const output = new TextBuffer();
+  const output = new TextBuffer(maxBytes);
   for (const part of parts) { if (output.bytes) output.add('\n\n'); output.add(part); }
   return output.value();
 }
@@ -194,3 +195,7 @@ export async function createParsedAiContext(
     textSource: { kind: 'parsed-document', packageDigest: verified.digest, parserName: 'mineru', parserModel: document.parser.model },
   };
 }
+
+/** Text-only extraction for explicit review captures; URLs and image bytes stay out of prompts. */
+export function parsedMarkdownText(value:string):string{return markdownText(value,8*1024*1024);}
+export function parsedBlockText(block:ParsedBlock):string{return blockText(block,parsedMarkdownText,8*1024*1024);}

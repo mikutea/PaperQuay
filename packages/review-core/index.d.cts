@@ -27,6 +27,7 @@ export interface ReviewCore {
  collectInternalCitationIds(text:string):string[];
  prepareReviewDocxData(value:ReviewJsonDraft,outputLanguage?:string):Record<string,any>;
  reviewDraftToMarkdown(value:ReviewJsonDraft,outputLanguage?:string):string;
+ renderPreparedReviewMarkdown(value:Record<string,any>,outputLanguage?:string):string;
  parseReviewMarkdownBlocks(value:string,options?:Record<string,unknown>):{kind:string;text:string;[key:string]:unknown}[];
  defaultReviewTemplateBuffer(outputLanguage?:string):Uint8Array;
  validateReviewDocxBuffer(bytes:Uint8Array,options?:{markdown?:string;strictContent?:boolean;expectedTitle?:string;expectedSectionHeadings?:string[]}):ReviewWordValidation;

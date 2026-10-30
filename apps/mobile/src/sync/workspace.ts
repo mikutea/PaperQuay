@@ -1,3 +1,4 @@
+import {validateReviewProject,assertReviewSourcesCurrent,type ReviewProject} from '../review/model.ts';
 import {
   applyConflictResolution,
   applyPullPage,
@@ -93,6 +94,8 @@ export interface StoredWorkspace {
   /** Private local batch ledger; every server request ID survives restart. */
   remoteBatch?: RemoteBatch;
   zoteroLibraries?: ZoteroLibraryState;
+  /** One private literature-review project and its paid-call checkpoint; never synchronized. */
+  reviewProject?: ReviewProject;
   /** Account-local receipts commit with imported entities and their outbox entries. */
   incomingReceipts?: IncomingImportReceipt[];
 }
@@ -119,7 +122,7 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
 export function decodeWorkspace(value: unknown): StoredWorkspace {
   if (
     !isObject(value) ||
-    Object.keys(value).some((key) => !['sync', 'pendingResolutions', 'paperOrganizationVersion','richNotesVersion','aiConversationsVersion', 'externalLibraries','remoteTaskIntent','remoteBatch','zoteroLibraries','incomingReceipts'].includes(key)) ||
+    Object.keys(value).some((key) => !['sync', 'pendingResolutions', 'paperOrganizationVersion','richNotesVersion','aiConversationsVersion', 'externalLibraries','remoteTaskIntent','remoteBatch','zoteroLibraries','incomingReceipts','reviewProject'].includes(key)) ||
     (value.paperOrganizationVersion !== undefined && value.paperOrganizationVersion !== 1) ||
     (value.richNotesVersion!==undefined&&value.richNotesVersion!==1)||(value.aiConversationsVersion!==undefined&&value.aiConversationsVersion!==1)||
     !isObject(value.pendingResolutions) ||
@@ -140,6 +143,7 @@ export function decodeWorkspace(value: unknown): StoredWorkspace {
     try { validateRemoteBatch(value.remoteBatch); } catch { throw new ClientError('STORAGE_CORRUPT'); }
     if (value.remoteTaskIntent !== undefined) throw new ClientError('STORAGE_CORRUPT');
   }
+  if(value.reviewProject!==undefined){try{validateReviewProject(value.reviewProject);}catch{throw new ClientError('STORAGE_CORRUPT');}}
   if (value.zoteroLibraries !== undefined) {
     try { validateZoteroLibraryState(value.zoteroLibraries); } catch { throw new ClientError('STORAGE_CORRUPT'); }
   }
@@ -537,6 +541,21 @@ export class WorkspaceController {
     });
     if (created && !this.snapshot.needsLogin) void this.syncNow();
     return created;
+  }
+
+  /** Exact revision comparison prevents stale editor/cancel callbacks and competing tabs from overwriting work. */
+  async saveReviewProject(input:ReviewProject,expected:{id:string;revision:number}|null,guard:()=>boolean=()=>true):Promise<ReviewProject>{
+    const project=validateReviewProject(input),epoch=this.epoch;
+    const next=await this.update(epoch,value=>{
+      if(!guard())throw new ClientError('ACCOUNT_CHANGED');
+      const current=value.reviewProject;
+      if(expected===null){if(current||project.revision!==1)throw new ClientError('EDIT_CHANGED');}
+      else if(!current||current.id!==expected.id||current.revision!==expected.revision||project.id!==current.id||project.revision!==current.revision+1)throw new ClientError('EDIT_CHANGED');
+      try{assertReviewSourcesCurrent(project,value.sync);}catch{throw new ClientError('EDIT_CHANGED');}return {...value,reviewProject:project};
+    });return next.reviewProject!;
+  }
+  async clearReviewProject(id:string,revision:number,guard:()=>boolean=()=>true):Promise<void>{
+    const epoch=this.epoch;await this.update(epoch,value=>{if(!guard())throw new ClientError('ACCOUNT_CHANGED');if(value.reviewProject?.id!==id||value.reviewProject.revision!==revision)throw new ClientError('EDIT_CHANGED');const{reviewProject:_project,...rest}=value;return rest;});
   }
 
   async prepareRemoteTask(request: RemoteTaskRequest): Promise<RemoteTaskRequest> {

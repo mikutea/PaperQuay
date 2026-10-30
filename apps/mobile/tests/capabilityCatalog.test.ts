@@ -13,7 +13,7 @@ test('unread declarations do not become disabled services, live PCs or a verifie
 });
 test('declaration support never proves every remote profile, file, capacity or unimplemented M4 function',()=>{
  const e=enabled();assert.match(row(e,'AI-06').reason,/解析配置 1 个、索引配置 0 个/);assert.equal(row(e,'AI-06').state,'conditional');
- assert.equal(row(e,'PAR-02').state,'partial');assert.match(row(e,'PAR-02').reason,/Agent.*尚未接入/);for(const id of ['PAR-03','PAR-04','OPS-02','OPS-03','OPS-06']){assert.equal(row(e,id).state,'planned');assert.equal(row(e,id).action,undefined);}
+ assert.equal(row(e,'PAR-03').state,'partial');assert.equal(row(e,'PAR-03').action,'review');assert.match(row(e,'PAR-03').reason,/真实外部模型.*待完成/);assert.equal(row(e,'PAR-02').state,'partial');assert.match(row(e,'PAR-02').reason,/Agent.*尚未接入/);for(const id of ['PAR-04','OPS-02','OPS-03','OPS-06']){assert.equal(row(e,id).state,'planned');assert.equal(row(e,id).action,undefined);}
  assert.equal(row(e,'AI-07').state,'partial');assert.match(row(e,'AI-07').reason,/不能由一个地址推断/);
 });
 test('presence expires at the observed TTL even with far-future server timestamps, and a backwards clock is never online proof',()=>{
@@ -23,7 +23,7 @@ test('presence expires at the observed TTL even with far-future server timestamp
 test('offline, expired login, unsupported service and absent runtime each give distinct actionable reasons',()=>{
  const e=enabled();e.online=false;assert.match(row(e,'PAR-05').reason,/离线/);assert.equal(row(e,'PAR-05').action,undefined);assert.equal(row(e,'LIB-01').state,'available');
  e.online=true;e.needsLogin=true;assert.match(row(e,'PDF-04').reason,/登录已过期/);assert.equal(row(e,'PDF-04').action,undefined);e.needsLogin=false;e.inspection.service!.cloudPdf=null;assert.match(row(e,'PDF-04').reason,/服务尚未开放/);
- e.remoteClient=false;e.modelRuntime=false;assert.match(row(e,'AI-06').reason,/未提供远程任务客户端/);for(const id of ['AI-01','AI-02','AI-03','AI-04','AI-05','PAR-02'])assert.equal(row(e,id).action,undefined);
+ e.remoteClient=false;e.modelRuntime=false;assert.match(row(e,'AI-06').reason,/未提供远程任务客户端/);for(const id of ['AI-01','AI-02','AI-03','AI-04','AI-05','PAR-02','PAR-03'])assert.equal(row(e,id).action,undefined);
 });
 test('old batch endpoints preserve single task recovery and missing WebRTC preserves declared relay fallback',()=>{
  const e=enabled();e.inspection.batch='unsupported';assert.equal(row(e,'PAR-05').state,'partial');assert.match(row(e,'PAR-05').reason,/单份.*仍可查询/);assert.equal(row(e,'PAR-05').action,'remote');assert.match(row(e,'PDF-03').reason,/未声明直连/);

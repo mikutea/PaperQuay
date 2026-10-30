@@ -24,7 +24,7 @@ export interface ExportRuntime {
   id: () => string;
 }
 
-export function exportFilename(title: string, extension: 'md' | 'json' | 'bib' | 'ris'): string {
+export function exportFilename(title: string, extension: 'md' | 'json' | 'bib' | 'ris' | 'docx'): string {
   const stem = title.normalize('NFC').replace(/[<>:"/\\|?*\u0000-\u001f\u007f]/g, '-')
     .replace(/^\.+|[.\s]+$/g, '').trim().slice(0, 80).replace(/[.\s]+$/g, '') || 'PaperQuay';
   const safeStem = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(stem) ? `PaperQuay-${stem}` : stem;

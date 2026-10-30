@@ -81,6 +81,7 @@ const CloudPdfLibrary = lazy(() => import('./components/CloudPdfPanel.tsx').then
 const CapabilitySheet = lazy(() => import('./components/CapabilitySheet.tsx').then(module => ({default:module.CapabilitySheet})));
 const RemoteTaskPanel = lazy(() => import('./components/RemoteTaskPanel.tsx').then(module => ({ default: module.RemoteTaskPanel })));
 const ZoteroLibrarySheet = lazy(() => import('./components/ZoteroLibrarySheet.tsx').then(module => ({ default: module.ZoteroLibrarySheet })));
+const ReviewWorkspace = lazy(() => import('./components/ReviewWorkspace.tsx').then(module => ({ default: module.ReviewWorkspace })));
 const ResearchWorkspace = lazy(() => import('./components/ResearchWorkspace.tsx').then(module => ({ default: module.ResearchWorkspace })));
 const NoteExportPanel = lazy(() => import('./components/NoteExportPanel.tsx').then(module => ({ default: module.NoteExportPanel })));
 const COMPACT_READER_QUERY = '(max-width: 900px)';
@@ -310,12 +311,13 @@ export function ConnectedApp({
   const [zoteroOpen, setZoteroOpen] = useState(false);
   const [noteExportOpen, setNoteExportOpen] = useState(false);
   const [researchOpen, setResearchOpen] = useState(false);
+  const [reviewOpen,setReviewOpen]=useState(false);
   const [parsedRemoteEpoch, setParsedRemoteEpoch] = useState(0);
   const transferScope = state.status === 'ready' && state.workspace
     ? JSON.stringify([state.workspace.sync.accountId, state.workspace.sync.deviceId, state.workspace.sync.generation]) : null;
   useEffect(() => { setCloudOpen(false); }, [transferScope, authSubjectKey]);
   useEffect(() => { setRemoteOpen(false); setCapabilityOpen(null); }, [transferScope, authSubjectKey]);
-  useEffect(() => { setZoteroOpen(false); setNoteExportOpen(false); setResearchOpen(false); }, [transferScope, authSubjectKey]);
+  useEffect(() => { setZoteroOpen(false); setNoteExportOpen(false); setResearchOpen(false);setReviewOpen(false); }, [transferScope, authSubjectKey]);
   const [dirty, setDirty] = useState(false);
   const [readerDirty, setReaderDirty] = useState(false);
   const editorUnsaved = useRef(false);
@@ -834,6 +836,7 @@ export function ConnectedApp({
         </section>}
         {section === 'account' && scope && runtime.secretStore && <section className="account-ai-settings">
           <button type="button" className="secondary" onClick={() => { if (canLeave()) setResearchOpen(true); }}>多篇文献问答</button>
+          <button type="button" className="secondary" onClick={()=>{if(canLeave())setReviewOpen(true);}}>文献综述</button>
           <p className="muted">选择多篇题录摘要或已核验解析片段，核对后发送，引用与结果可保存。</p>
         </section>}
         {section === 'account' && scope && runtime.secretStore && <section className="account-ai-settings">
@@ -856,6 +859,7 @@ export function ConnectedApp({
           />
         )}
       </main>
+      {reviewOpen&&transferScope&&scope&&runtime.secretStore&&<Suspense fallback={<p className="loading-message" role="status">正在打开综述工作区…</p>}><ReviewWorkspace key={transferScope+':'+authSubjectKey} scope={scope} scopeKey={transferScope} controller={controller} secretStore={runtime.secretStore} accountCurrent={()=>JSON.stringify(auth.getSubject?.()??null)===authSubjectKey} onClose={()=>setReviewOpen(false)}/></Suspense>}
       {researchOpen && transferScope && scope && runtime.secretStore && <Suspense fallback={<p className="loading-message" role="status">正在打开多篇问答…</p>}>
         <ResearchWorkspace key={transferScope+':'+authSubjectKey} scope={scope} scopeKey={transferScope} controller={controller} secretStore={runtime.secretStore}
           accountCurrent={() => JSON.stringify(auth.getSubject?.() ?? null) === authSubjectKey} onClose={() => setResearchOpen(false)} />
@@ -887,7 +891,8 @@ export function ConnectedApp({
         if(snapshot.status!=='ready'||!sync||JSON.stringify([sync.accountId,sync.deviceId,sync.generation])!==transferScope||JSON.stringify(auth.getSubject?.()??null)!==authSubjectKey||!canLeave())return;
         setCapabilityOpen(null);
         if(['library','notes','sync','conflicts'].includes(action)){navigate(action==='sync'?'account':action as Section);return;}
-        if(action==='transfer')setTransferOpen(true);else if(action==='incoming')setIncomingOpen(incomingKey);else if(action==='cloud')setCloudOpen(true);else if(action==='remote')setRemoteOpen(true);else if(action==='zotero')setZoteroOpen(true);else if(action==='research')setResearchOpen(true);else if(action==='ai-settings')setAiSettings(true);else if(action==='exports')setNoteExportOpen(true);
+        if(action==='transfer')setTransferOpen(true);else if(action==='incoming')setIncomingOpen(incomingKey);else if(action==='cloud')setCloudOpen(true);else if(action==='remote')setRemoteOpen(true);else if(action==='zotero')setZoteroOpen(true);else if(action==='review'){setReviewOpen(true);return;}
+        if(action==='research')setResearchOpen(true);else if(action==='ai-settings')setAiSettings(true);else if(action==='exports')setNoteExportOpen(true);
       }}/></Suspense>}
       {remoteOpen && transferScope && scope && runtime.remoteTasks && <Suspense fallback={<p role="status">正在打开远程任务…</p>}>
         <RemoteTaskPanel key={`${transferScope}:${authSubjectKey}`} context={runtime.remoteTasks} scope={scope} scopeKey={transferScope}
