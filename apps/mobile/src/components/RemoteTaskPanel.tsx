@@ -8,6 +8,7 @@ import { ClientError, describeError } from '../errors.ts';
 import { RemoteTaskClient, RemoteTaskError, describeRemoteTaskError, type RemoteTaskContext } from '../remote/client.ts';
 import type { WorkspaceController } from '../sync/workspace.ts';
 import { ReaderSheet } from './ReaderSheet.tsx';
+import { RemoteTaskBatchPanel } from './RemoteTaskBatchPanel.tsx';
 import './remoteTasks.css';
 
 interface Props {
@@ -33,6 +34,7 @@ export function RemoteTaskPanel(props:Props){
   const snapshot=useSyncExternalStore(props.controller.subscribe,props.controller.getSnapshot,props.controller.getSnapshot);
   const mounted=useRef(false),generation=useRef(0),inFlight=useRef(false),abort=useRef<AbortController|null>(null);
   const [providers,setProviders]=useState<RemoteTaskProvider[]>([]),[tasks,setTasks]=useState<RemoteTask[]>([]),[quota,setQuota]=useState<RemoteTaskQuota|null>(null);
+  const [batchBusy,setBatchBusy]=useState(false);
   const [busy,setBusy]=useState(''),[error,setError]=useState(''),[notice,setNotice]=useState('');
   const [versionId,setVersionId]=useState(''),[choice,setChoice]=useState(''),[parseId,setParseId]=useState('');
   const [recoveryChoices,setRecoveryChoices]=useState<Record<string,string>>({});
@@ -130,10 +132,13 @@ export function RemoteTaskPanel(props:Props){
         <div><dt>服务端产物</dt><dd>{(quota.artifactBytes/1048576).toFixed(2)}/{(quota.maxArtifactBytes/1048576).toFixed(0)} MiB</dd></div><div><dt>幂等回执</dt><dd>{quota.receipts}/{quota.maxReceipts}</dd></div></dl>}
       {intent&&<section className="remote-intent" aria-label="尚未确认的远程请求"><h3>上一条创建请求尚未确认</h3><p>已在本机保存请求 {intent.request.requestId.slice(0,8)}。重试使用相同 ID，不会自动新建另一笔任务。</p>
         <div className="remote-actions"><button type="button" className="secondary" disabled={Boolean(busy)||!enabled} onClick={()=>void run('正在重试同一请求…',task=>send(intent.request,task))}>重试同一创建请求</button>
-          <button type="button" className="text-button" disabled={Boolean(busy)} onClick={()=>{
+          <button type="button" className="text-button" disabled={Boolean(busy)||batchBusy} onClick={()=>{
             if(window.confirm('仅移除此设备的未确认请求记录？服务端可能已创建任务，请先查询任务列表；此操作不会取消后台任务。'))void run('正在清理本机请求记录…',async task=>{await props.controller.clearRemoteTaskIntent(intent.request.requestId);task.check();setNotice('本机未确认记录已移除。服务端任务仍需单独查询或取消。');});
           }}>移除本机未确认记录</button></div></section>}
-      <fieldset disabled={Boolean(busy)||!enabled||Boolean(intent)} className="remote-create"><legend>明确选择一份文件</legend>
+      <RemoteTaskBatchPanel controller={props.controller} client={client} providers={providers} tasks={tasks} versions={versions} enabled={enabled} parentBusy={Boolean(busy)} current={current} onBusy={setBatchBusy} onTask={(task,usage)=>{
+        setTasks(previous=>{const old=previous.find(row=>row.id===task.id);return old&&old.updatedAt>task.updatedAt?previous:[task,...previous.filter(row=>row.id!==task.id)];});if(usage)setQuota(usage);
+      }}/>
+      <fieldset disabled={Boolean(busy)||batchBusy||!enabled||Boolean(intent)||Boolean(snapshot.workspace?.remoteBatch)} className="remote-create"><legend>明确选择一份文件</legend>
         <label htmlFor={id+'-version'}>文献版本</label><select id={id+'-version'} value={versionId} onChange={event=>{setVersionId(event.target.value);setParseId('');}}><option value="">选择已同步的 PDF 版本</option>{versions.map(value=>{
           const data=value.data as AttachmentVersionData,paper=props.entities.find(paper=>paper.entityType==='paper'&&paper.entityId===data.paperId&&!paper.deleted);
           return <option key={value.entityId} value={value.entityId}>{(paper?.data as PaperData|undefined)?.title??'当前不可用文献'} · {data.fileName} · {data.sha256.slice(0,8)}</option>;
@@ -151,15 +156,15 @@ export function RemoteTaskPanel(props:Props){
         {task.artifact&&<p className="muted">产物 {(task.artifact.sizeBytes/1024).toFixed(1)} KiB · SHA-256 {task.artifact.digest.slice(0,12)}</p>}
         {['failed','cancelled','interrupted'].includes(task.state)&&<div className="remote-recovery">
           <label htmlFor={id+'-recovery-'+task.id}>恢复所用电脑会话</label>
-          <select id={id+'-recovery-'+task.id} value={recoveryChoices[task.id]??''} disabled={Boolean(busy)} onChange={event=>setRecoveryChoices(previous=>({...previous,[task.id]:event.target.value}))}>
+          <select id={id+'-recovery-'+task.id} value={recoveryChoices[task.id]??''} disabled={Boolean(busy)||batchBusy} onChange={event=>setRecoveryChoices(previous=>({...previous,[task.id]:event.target.value}))}>
             <option value="">沿用原电脑会话 {task.providerDeviceId.slice(0,8)}</option>
             {recoverable.map(value=><option key={value.key} value={value.key}>{snapshot.devices.find(device=>device.id===value.provider.deviceId)?.name??'在线电脑'} {value.provider.deviceId.slice(0,8)} · {value.profile.model}</option>)}
           </select><p className="muted">电脑重登录后可选择它的新会话；同一台电脑还须保留原执行记录。另一台电脑没有旧记录时会拒绝恢复。</p>
         </div>}
-        <div className="remote-actions">{active(task)?<button type="button" className="secondary" disabled={Boolean(busy)||task.state==='cancel_requested'} onClick={()=>update(task,'cancel')}>请求取消</button>:<>
-          {['failed','cancelled','interrupted'].includes(task.state)&&<button type="button" className="secondary" disabled={Boolean(busy)} onClick={()=>update(task,'resume')}>明确恢复此任务</button>}
-          {task.state==='succeeded'&&<button type="button" className="secondary" disabled={Boolean(busy)} onClick={()=>download(task)}>{task.kind==='parse'?'核验并保存解析包到本机':'核验并导出索引文件'}</button>}
-          <button type="button" className="text-button danger-text" disabled={Boolean(busy)} onClick={()=>remove(task)}>清理任务与服务端产物</button></>}</div></li>;
+        <div className="remote-actions">{active(task)?<button type="button" className="secondary" disabled={Boolean(busy)||batchBusy||task.state==='cancel_requested'} onClick={()=>update(task,'cancel')}>请求取消</button>:<>
+          {['failed','cancelled','interrupted'].includes(task.state)&&<button type="button" className="secondary" disabled={Boolean(busy)||batchBusy} onClick={()=>update(task,'resume')}>明确恢复此任务</button>}
+          {task.state==='succeeded'&&<button type="button" className="secondary" disabled={Boolean(busy)||batchBusy} onClick={()=>download(task)}>{task.kind==='parse'?'核验并保存解析包到本机':'核验并导出索引文件'}</button>}
+          <button type="button" className="text-button danger-text" disabled={Boolean(busy)||batchBusy} onClick={()=>remove(task)}>清理任务与服务端产物</button></>}</div></li>;
       })}</ol>
       {busy&&<p role="status">{busy} <button type="button" className="text-button" onClick={()=>abort.current?.abort()}>停止本次等待</button></p>}
       {error&&<p role="alert" className="inline-error">{error}</p>}{notice&&<p role="status">{notice}</p>}

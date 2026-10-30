@@ -165,7 +165,7 @@ export class PostgresSyncStore implements SyncRepository, CloudPdfRepository, De
   async ready(): Promise<boolean> {
     try {
       const result = await this.pool.query<{ version: string }>('SELECT version FROM paperquay.schema_migrations ORDER BY version');
-      return result.rows.map((row) => row.version).join(',') === '001_initial.sql,002_receipt_quota.sql,003_retained_bytes_quota.sql,004_private_cloud_pdfs.sql,005_remote_tasks.sql,006_extended_sync_content.sql,007_remote_task_recovery.sql,008_remote_journal_holder.sql';
+      return result.rows.map((row) => row.version).join(',') === '001_initial.sql,002_receipt_quota.sql,003_retained_bytes_quota.sql,004_private_cloud_pdfs.sql,005_remote_tasks.sql,006_extended_sync_content.sql,007_remote_task_recovery.sql,008_remote_journal_holder.sql,009_remote_request_cancellation.sql';
     } catch { return false; }
   }
 

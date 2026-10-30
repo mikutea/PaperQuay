@@ -315,3 +315,48 @@ test('an unclaimed task can transfer after revocation without a nonexistent old 
   await withAccount(f.who,({client,account})=>client.query("UPDATE paperquay.remote_tasks SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE account_id=$1 AND id=$2",[account.id,task.id]));
   await assert.rejects(repository.confirmRecovery(login,task.id,next.lease),{code:'REMOTE_TASK_LEASE_CHANGED'});
 });
+
+
+test('request lookup is non-creating and a durable cancellation reservation prevents every late create replay',async()=>{
+ const f=await fixture();const before=await repository.listTasks(f.who);
+ assert.deepEqual(await repository.lookupRequest(f.who,f.request.requestId),{requestId:f.request.requestId,status:'absent',task:null});assert.deepEqual((await repository.listTasks(f.who)).quota,before.quota);
+ const status=await repository.cancelRequest(f.who,f.request.requestId);assert.deepEqual(status,{requestId:f.request.requestId,status:'cancelled',task:null});
+ const restarted=createRemoteTaskRepository({withAccount});assert.deepEqual(await restarted.lookupRequest(f.who,f.request.requestId),status);assert.deepEqual(await restarted.cancelRequest(f.who,f.request.requestId),status);
+ await assert.rejects(restarted.createTask(f.who,f.request),{code:'REMOTE_TASK_REQUEST_CANCELLED'});
+ await assert.rejects(restarted.createTask(f.who,{...f.request,versionId:randomUUID()}),{code:'REMOTE_TASK_REQUEST_CANCELLED'});
+ const usage=(await restarted.listTasks(f.who)).quota;assert.equal(usage.receipts,1);assert.equal(usage.retained,0);assert.equal((await restarted.claimTask(f.desktop)).claim,null);
+});
+test('cancelling a known request uses its actual deduplicated job, retaining task and receipt truth',async()=>{
+ const f=await fixture(),first=await repository.createTask(f.who,f.request),secondRequest={...f.request,requestId:randomUUID()},second=await repository.createTask(f.who,secondRequest);
+ assert.equal(second.deduplicated,true);assert.equal(second.task.id,first.task.id);
+ const found=await repository.lookupRequest(f.who,secondRequest.requestId);assert.equal(found.status,'known');assert.equal(found.task!.id,first.task.id);
+ const cancelled=await repository.cancelRequest(f.who,secondRequest.requestId);assert.equal(cancelled.task!.state,'cancelled');assert.equal(cancelled.task!.id,first.task.id);
+ assert.equal((await repository.createTask(f.who,f.request)).task.state,'cancelled');assert.equal((await repository.claimTask(f.desktop)).claim,null);
+ await repository.deleteTask(f.who,first.task.id);const removed={requestId:secondRequest.requestId,status:'removed',task:null};assert.deepEqual(await repository.lookupRequest(f.who,secondRequest.requestId),removed);assert.deepEqual(await repository.cancelRequest(f.who,secondRequest.requestId),removed);
+ await assert.rejects(repository.createTask(f.who,secondRequest),{code:'REMOTE_TASK_GONE'});
+});
+test('request cancellation fences a running job through the existing worker cancellation path',async()=>{
+ const f=await fixture(),created=await repository.createTask(f.who,f.request),claim=(await repository.claimTask(f.desktop)).claim!;assert.equal(claim.task.id,created.task.id);
+ const cancelled=await repository.cancelRequest(f.who,f.request.requestId);assert.equal(cancelled.task!.state,'cancel_requested');
+ const heartbeat=await repository.heartbeatTask(f.desktop,created.task.id,claim.lease);assert.equal(heartbeat.task.state,'cancelled');
+ const again=await repository.cancelRequest(f.who,f.request.requestId);assert.equal(again.task!.state,'cancelled');
+});
+test('request IDs stay private to their account even when another account cancels the same UUID',async()=>{
+ const a=await fixture(),b=await fixture();const created=await repository.createTask(a.who,a.request);
+ assert.equal((await repository.lookupRequest(b.who,a.request.requestId)).status,'absent');assert.equal((await repository.cancelRequest(b.who,a.request.requestId)).status,'cancelled');
+ const owner=await repository.lookupRequest(a.who,a.request.requestId);assert.equal(owner.task!.id,created.task.id);assert.equal(owner.task!.state,'queued');
+});
+test('account-locked create/cancel races never leave a job queued after cancellation returns',async()=>{
+ for(let i=0;i<8;i++){
+  const f=await fixture();const actions=i%2?[repository.createTask(f.who,f.request),repository.cancelRequest(f.who,f.request.requestId)]:[repository.cancelRequest(f.who,f.request.requestId),repository.createTask(f.who,f.request)];
+  const results=await Promise.allSettled(actions);for(const result of results)if(result.status==='rejected')assert.equal((result.reason as ApiError).code,'REMOTE_TASK_REQUEST_CANCELLED');
+  const final=await repository.lookupRequest(f.who,f.request.requestId);assert(final.status==='cancelled'||final.status==='known'&&final.task!.state==='cancelled');
+  const state=await repository.listTasks(f.who);assert.equal(state.quota.receipts,1);assert.equal(state.quota.queued,0);assert.equal(state.quota.active,0);assert.equal((await repository.claimTask(f.desktop)).claim,null);
+ }
+});
+test('the database forbids turning a cancellation reservation into a job and grants no reservation UPDATE permission',async()=>{
+ const f=await fixture(),cancelledId=randomUUID();await repository.cancelRequest(f.who,cancelledId);const created=await repository.createTask(f.who,f.request);
+ await assert.rejects(withAccount(f.who,({client,account})=>client.query('UPDATE paperquay.remote_task_requests SET job_id=$3 WHERE account_id=$1 AND request_id=$2',[account.id,cancelledId,created.task.id])),{code:'23514'});
+ await withAccount(f.who,async({client})=>{const row=(await client.query("SELECT has_column_privilege(current_user,'paperquay.remote_task_requests','cancelled_before_create','UPDATE') AS can_update")).rows[0];assert.equal(row.can_update,false);});
+ assert.equal((await repository.lookupRequest(f.who,cancelledId)).status,'cancelled');assert.equal((await repository.getTask(f.who,created.task.id)).task.state,'queued');
+});

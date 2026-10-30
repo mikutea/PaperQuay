@@ -92,6 +92,10 @@ export async function registerRemoteTaskRoutes(app: FastifyInstance, options: Re
     remote.post('/v1/remote-tasks/jobs', { onRequest, bodyLimit: 4096, schema },
       (request) => repository().createTask(currentIdentity(request), checked(() => validateRemoteTaskRequest(request.body))));
     remote.get('/v1/remote-tasks/jobs', { onRequest, schema }, (request) => repository().listTasks(currentIdentity(request)));
+    remote.get<{ Params: { id: string } }>('/v1/remote-tasks/requests/:id', { onRequest, schema: jobSchema },
+      request => repository().lookupRequest(currentIdentity(request),request.params.id));
+    remote.post<{ Params: { id: string } }>('/v1/remote-tasks/requests/:id/cancel', { onRequest, bodyLimit:512, schema: { ...jobSchema, body: emptyBody } },
+      request => repository().cancelRequest(currentIdentity(request),request.params.id));
     remote.get<{ Params: { id: string } }>('/v1/remote-tasks/jobs/:id', { onRequest, schema: jobSchema },
       (request) => repository().getTask(currentIdentity(request), request.params.id));
     remote.delete<{ Params: { id: string } }>('/v1/remote-tasks/jobs/:id', { onRequest, schema: jobSchema },

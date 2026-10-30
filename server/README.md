@@ -268,3 +268,11 @@ node --test --test-concurrency=1 tests/integration/*.test.ts
 私有副本新增真实数据库回归验证独立配额、512/513 份边界、SHA-256 数据库约束、账号隔离、墓碑、撤销、删除 generation 和故障回滚。真实回环 HTTP 连接验证部分上传期间的删除/撤销、主动中断、准入等待期间断连、绝对截止时间，以及暂停读取 64 MiB 下载时服务器响应确实未 finish、同账号第二下载被拒绝、断开后传输槽可复用。测试使用合成 PDF 标记内容；它们不声称真实论文的完整语义解析。截止时间测试通过仅限 AppOptions 的测试入口缩短等待，普通进程环境仍固定为 45 秒。
 
 在线桌面取回另有真实 PostgreSQL 隔离、撤销、元数据分页和版本变化回归，以及无需数据库的真实回环 HTTP 流测试。后者覆盖末块等待最终授权、双向断线、取消后的晚到上传、设备撤销、固定截止时间、哈希失败，以及暂停读取 64 MiB 时服务端响应未完成、上游未整份读入、应用缓冲有界且传输槽仍占用。Windows TCP 发送缓冲可能接纳整份客户端写入，因此测试不把客户端 `write` 完成误当作服务端完整接收。生产公网代理、真实手机到桌面的链路和进程重启后的交互仍需单独验收。
+
+## 批次请求回执与取消预留（M4）
+
+启用既有远程任务后，新增加 `GET /v1/remote-tasks/requests/:id` 和 `POST /v1/remote-tasks/requests/:id/cancel`（请求体 `{}`）。二者均需既有Bearer、注册会话和当前账号授权；不会创建或恢复执行任务。响应为 `{requestId,status,task}`，status是absent、known、cancelled（创建前已预留取消）或removed（旧任务已清理）；只有known带闭合任务DTO。查询未知ID不保存回执。
+
+取消与创建共用账号锁。known沿用单任务取消规则；absent写入取消预留，随后以该ID创建返回 `REMOTE_TASK_REQUEST_CANCELLED` /410；removed与cancelled均可幂等重试。取消去重请求会影响其共用任务；运行中仍为cancel_requested，直到执行者确认，不承诺外部费用退还。取消预留与普通创建回执共同计入既有2000条上限，不自动清除或重开。跨账号同UUID独立隔离。
+
+升级先应用 `009_remote_request_cancellation.sql`；增加非空默认false字段及取消预留不得指向任务的约束，既有回执不变。ready检查要求009，不回退到“部分就绪”。runtime继续只有SELECT/INSERT与UPDATE(job_id)，不授予更新取消标记的权限；新写入的域分离摘要也使旧二进制对取消预留的迟到创建失败。迁移前备份、维护窗口及正式部署仍需相应流程；本轮只迁移专用测试库。

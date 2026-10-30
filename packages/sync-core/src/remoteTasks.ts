@@ -15,6 +15,12 @@ export interface RemoteTaskRequest {
   requestId: string; kind: RemoteTaskKind; versionId: string; providerDeviceId: string;
   profileRef: RemoteProfileRef; indexSourceDigest?: string;
 }
+/** Request-ID status is read without creating or resuming a paid job. */
+export interface RemoteTaskRequestStatus {
+  requestId: string;
+  status: 'absent' | 'known' | 'cancelled' | 'removed';
+  task: RemoteTask | null;
+}
 export interface RemoteTaskResume { providerDeviceId?: string; profileRef?: RemoteProfileRef }
 export interface RemoteTaskTarget {
   paperId: string; attachmentVersionId: string; paperRevision: number; versionRevision: number;
@@ -165,8 +171,7 @@ export function validateRemoteTaskQuota(value: unknown): RemoteTaskQuota {
 }
 export function validateRemoteTask(value: unknown): RemoteTask {
   const input = object(value, ['id','kind','state','target','providerDeviceId','profile','indexSourceDigest','recoveryProviderDeviceId','attempt','createdAt','updatedAt','leaseExpiresAt','failure','artifact']);
-  const target = object(input.target, ['paperId','attachmentVersionId','paperRevision','versionRevision','sha256','sizeBytes','pageCount','fileName']);
-  const fileName = string(target.fileName, 255); if (/[\\/:]/.test(fileName)) invalid();
+  const target = validateRemoteTaskTarget(input.target);
   const selectedKind = kind(input.kind), profile = validateRemoteTaskProfiles([input.profile])[0];
   if (profile.kind !== selectedKind || !['queued','running','succeeded','failed','cancel_requested','cancelled','interrupted'].includes(input.state as string)) invalid();
   const failureCodes = ['EXECUTION_FAILED','SOURCE_UNAVAILABLE','PROFILE_CHANGED','EXTERNAL_OUTCOME_UNKNOWN','LEASE_EXPIRED','SESSION_REVOKED','VERSION_CHANGED'];
@@ -174,9 +179,7 @@ export function validateRemoteTask(value: unknown): RemoteTask {
   const artifact = input.artifact === null ? null : object(input.artifact, ['digest','sizeBytes','mediaType']);
   if (artifact && artifact.mediaType !== 'application/json') invalid();
   const result: RemoteTask = { id: uuid(input.id), kind: selectedKind, state: input.state as RemoteTaskState,
-    target: { paperId: uuid(target.paperId), attachmentVersionId: uuid(target.attachmentVersionId), paperRevision: int(target.paperRevision,1,Number.MAX_SAFE_INTEGER),
-      versionRevision: int(target.versionRevision,1,Number.MAX_SAFE_INTEGER), sha256: hash(target.sha256), sizeBytes: int(target.sizeBytes,1,64*1024*1024),
-      pageCount: target.pageCount === null ? null : int(target.pageCount,1,2000), fileName },
+    target,
     providerDeviceId: uuid(input.providerDeviceId), profile, indexSourceDigest: selectedKind === 'index' ? hash(input.indexSourceDigest) : null,
     recoveryProviderDeviceId: input.recoveryProviderDeviceId===null?null:uuid(input.recoveryProviderDeviceId),
     attempt: int(input.attempt,0,REMOTE_TASK_LIMITS.attempts), createdAt: timestamp(input.createdAt), updatedAt: timestamp(input.updatedAt),
@@ -269,4 +272,19 @@ export async function decodeRemoteIndexArtifact(bytes: Uint8Array): Promise<{ do
   }
   const canonical = encoder.encode(JSON.stringify(document));
   return { document, digest: await remoteTaskSha256(canonical), bytes: canonical };
+}
+
+export function validateRemoteTaskTarget(value: unknown): RemoteTaskTarget {
+  const target = object(value, ['paperId','attachmentVersionId','paperRevision','versionRevision','sha256','sizeBytes','pageCount','fileName']);
+  const fileName = string(target.fileName, 255); if (/[\\/:]/.test(fileName)) invalid();
+  return { paperId: uuid(target.paperId), attachmentVersionId: uuid(target.attachmentVersionId),
+    paperRevision: int(target.paperRevision,1,Number.MAX_SAFE_INTEGER), versionRevision: int(target.versionRevision,1,Number.MAX_SAFE_INTEGER),
+    sha256: hash(target.sha256), sizeBytes: int(target.sizeBytes,1,64*1024*1024), pageCount: target.pageCount===null?null:int(target.pageCount,1,2000), fileName };
+}
+export function validateRemoteTaskRequestStatus(value: unknown): RemoteTaskRequestStatus {
+  const input = object(value, ['requestId','status','task']);
+  if (!['absent','known','cancelled','removed'].includes(input.status as string)) invalid();
+  const task = input.task===null?null:validateRemoteTask(input.task);
+  if ((input.status==='known') !== (task!==null)) invalid();
+  return { requestId: uuid(input.requestId), status: input.status as RemoteTaskRequestStatus['status'], task };
 }

@@ -39,6 +39,9 @@ import type {
   ServerConflict,
   SyncApi,
 } from '../api.ts';
+import { validateRemoteBatch, validateRemoteBatchDraft, remoteBatchIdentity, assertRemoteBatchTarget, remoteBatchReceipt,
+  stopRemoteBatch as stoppedRemoteBatch, canClearRemoteBatch, type RemoteBatch, type RemoteBatchFailure } from '../remote/batch.ts';
+import { validateRemoteTaskId, validateRemoteTaskRequestStatus, type RemoteTaskRequestStatus } from '../../../../packages/sync-core/src/remoteTasks.ts';
 import { ClientError } from '../errors.ts';
 import {
   materializeLibraryImport,
@@ -87,6 +90,8 @@ export interface StoredWorkspace {
   externalLibraries?: ExternalLibraryRegistry;
   /** Durable, non-secret create intent. Replayed only on an explicit retry. */
   remoteTaskIntent?: { version: 1; request: RemoteTaskRequest };
+  /** Private local batch ledger; every server request ID survives restart. */
+  remoteBatch?: RemoteBatch;
   zoteroLibraries?: ZoteroLibraryState;
   /** Account-local receipts commit with imported entities and their outbox entries. */
   incomingReceipts?: IncomingImportReceipt[];
@@ -114,7 +119,7 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
 export function decodeWorkspace(value: unknown): StoredWorkspace {
   if (
     !isObject(value) ||
-    Object.keys(value).some((key) => !['sync', 'pendingResolutions', 'paperOrganizationVersion','richNotesVersion','aiConversationsVersion', 'externalLibraries','remoteTaskIntent','zoteroLibraries','incomingReceipts'].includes(key)) ||
+    Object.keys(value).some((key) => !['sync', 'pendingResolutions', 'paperOrganizationVersion','richNotesVersion','aiConversationsVersion', 'externalLibraries','remoteTaskIntent','remoteBatch','zoteroLibraries','incomingReceipts'].includes(key)) ||
     (value.paperOrganizationVersion !== undefined && value.paperOrganizationVersion !== 1) ||
     (value.richNotesVersion!==undefined&&value.richNotesVersion!==1)||(value.aiConversationsVersion!==undefined&&value.aiConversationsVersion!==1)||
     !isObject(value.pendingResolutions) ||
@@ -130,6 +135,10 @@ export function decodeWorkspace(value: unknown): StoredWorkspace {
     const intent = value.remoteTaskIntent;
     if (!isObject(intent) || Object.keys(intent).sort().join(',') !== 'request,version' || intent.version !== 1) throw new ClientError('STORAGE_CORRUPT');
     try { validateRemoteTaskRequest(intent.request); } catch { throw new ClientError('STORAGE_CORRUPT'); }
+  }
+  if (value.remoteBatch !== undefined) {
+    try { validateRemoteBatch(value.remoteBatch); } catch { throw new ClientError('STORAGE_CORRUPT'); }
+    if (value.remoteTaskIntent !== undefined) throw new ClientError('STORAGE_CORRUPT');
   }
   if (value.zoteroLibraries !== undefined) {
     try { validateZoteroLibraryState(value.zoteroLibraries); } catch { throw new ClientError('STORAGE_CORRUPT'); }
@@ -533,6 +542,7 @@ export class WorkspaceController {
   async prepareRemoteTask(request: RemoteTaskRequest): Promise<RemoteTaskRequest> {
     const captured = validateRemoteTaskRequest(request), epoch = this.epoch;
     const updated = await this.update(epoch, value => {
+      if (value.remoteBatch) throw new ClientError('REMOTE_REQUEST_PENDING');
       if (value.remoteTaskIntent && canonicalJson(value.remoteTaskIntent.request) !== canonicalJson(captured))
         throw new ClientError('REMOTE_REQUEST_PENDING');
       const version = getVisibleEntity(value.sync, 'attachmentVersion', captured.versionId);
@@ -551,6 +561,71 @@ export class WorkspaceController {
       if (value.remoteTaskIntent?.request.requestId !== requestId) return value;
       const { remoteTaskIntent: _intent, ...remaining } = value;
       return remaining;
+    });
+  }
+
+  async createRemoteBatch(input: RemoteBatch, guard: () => boolean = () => true): Promise<RemoteBatch> {
+    const captured = validateRemoteBatchDraft(input), epoch = this.epoch;
+    const next = await this.update(epoch, value => {
+      if (!guard()) throw new ClientError('ACCOUNT_CHANGED');
+      if (value.remoteTaskIntent) throw new ClientError('REMOTE_REQUEST_PENDING');
+      if (value.remoteBatch) {
+        if (remoteBatchIdentity(value.remoteBatch) !== remoteBatchIdentity(captured)) throw new ClientError('REMOTE_REQUEST_PENDING');
+        return value;
+      }
+      try { for (const item of captured.items) assertRemoteBatchTarget(value.sync,item); }
+      catch { throw new ClientError('EDIT_CHANGED'); }
+      return {...value,remoteBatch:captured};
+    });
+    return next.remoteBatch!;
+  }
+  private async updateRemoteBatch(id: string, change: (batch: RemoteBatch, sync: Readonly<AccountSyncState>) => RemoteBatch,
+    guard: () => boolean): Promise<RemoteBatch> {
+    validateRemoteTaskId(id); const epoch = this.epoch;
+    const next = await this.update(epoch,value=>{
+      if (!guard() || !value.remoteBatch || value.remoteBatch.id!==id) throw new ClientError('ACCOUNT_CHANGED');
+      let batch:RemoteBatch;
+      try { batch=validateRemoteBatch(change(value.remoteBatch,value.sync)); }
+      catch(error){if(error instanceof ClientError)throw error;throw new ClientError('EDIT_CHANGED');}
+      return {...value,remoteBatch:batch};
+    });
+    return next.remoteBatch!;
+  }
+  async markRemoteBatchAttempt(id:string,requestId:string,guard:()=>boolean=()=>true):Promise<RemoteBatch>{
+    validateRemoteTaskId(requestId);
+    return this.updateRemoteBatch(id,(batch,sync)=>{
+      const index=batch.items.findIndex(i=>i.request.requestId===requestId),item=batch.items[index];
+      if(batch.cancelRequested||!item||!['pending','uncertain'].includes(item.state))throw new ClientError('EDIT_CHANGED');
+      assertRemoteBatchTarget(sync,item);
+      return {...batch,items:batch.items.map((i,n)=>n===index?{...i,state:'uncertain',failure:null}:i)};
+    },guard);
+  }
+  async acknowledgeRemoteBatchRequest(id:string,input:RemoteTaskRequestStatus,cancelAcknowledged=false,guard:()=>boolean=()=>true):Promise<RemoteBatch>{
+    const status=validateRemoteTaskRequestStatus(input);
+    return this.updateRemoteBatch(id,batch=>{
+      const index=batch.items.findIndex(i=>i.request.requestId===status.requestId);if(index<0)throw new ClientError('EDIT_CHANGED');
+      const current=batch.items[index],updated=remoteBatchReceipt(current,status,batch.profile);
+      if(cancelAcknowledged&&!batch.cancelRequested)throw new ClientError('EDIT_CHANGED');
+      if(updated.taskId&&current.taskId&&updated.taskId!==current.taskId)throw new ClientError('EDIT_CHANGED');
+      return {...batch,items:batch.items.map((i,n)=>n===index?{...updated,cancelAcknowledged:updated.cancelAcknowledged||cancelAcknowledged}:i)};
+    },guard);
+  }
+  async recordRemoteBatchFailure(id:string,requestId:string,failure:RemoteBatchFailure,guard:()=>boolean=()=>true):Promise<RemoteBatch>{
+    validateRemoteTaskId(requestId);
+    return this.updateRemoteBatch(id,batch=>{
+      const item=batch.items.find(i=>i.request.requestId===requestId);if(!item)throw new ClientError('EDIT_CHANGED');
+      return {...batch,items:batch.items.map(i=>i===item&&i.state==='uncertain'?{...i,failure}:i)};
+    },guard);
+  }
+  async stopRemoteBatch(id:string,guard:()=>boolean=()=>true):Promise<RemoteBatch>{
+    return this.updateRemoteBatch(id,batch=>stoppedRemoteBatch(batch),guard);
+  }
+  async clearRemoteBatch(id:string,guard:()=>boolean=()=>true):Promise<void>{
+    validateRemoteTaskId(id);const epoch=this.epoch;
+    await this.update(epoch,value=>{
+      if(!guard()||value.remoteBatch?.id!==id)throw new ClientError('ACCOUNT_CHANGED');
+      if(!canClearRemoteBatch(value.remoteBatch))throw new ClientError('REMOTE_REQUEST_PENDING');
+      const {remoteBatch:_batch,...remaining}=value;return remaining;
     });
   }
 

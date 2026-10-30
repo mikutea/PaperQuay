@@ -92,3 +92,22 @@ test('a lost creation response can replay the same immutable request after expli
   replay=true;const result=await client.create(request);assert.equal(result.task.providerDeviceId,newProvider);assert.equal(result.task.recoveryProviderDeviceId,old);
   holder=null;assert.equal((await client.create(request)).task.recoveryProviderDeviceId,null);assert.deepEqual(received,[request,request,request]);
 });
+
+test('request lookup and cancellation use scoped read/cancel endpoints without a creation POST, preserve IDs and reject mismatched receipts',async t=>{
+ const id=randomUUID(),calls:{method:string;url:string}[]=[],task=job();let bad=false;
+ const base=await serve(t,async(req,res)=>{calls.push({method:req.method!,url:req.url!});assert.equal(req.headers.authorization,'Bearer '+key);
+  if(req.method==='POST')assert.deepEqual(await body(req),{});json(res,{requestId:bad?randomUUID():id,status:req.method==='POST'?'cancelled':'known',task:req.method==='POST'?null:task});});
+ const client=new RemoteTaskClient(context(base));assert.equal((await client.lookupRequest(id)).task!.id,task.id);assert.equal((await client.cancelRequest(id)).status,'cancelled');
+ assert.deepEqual(calls,[{method:'GET',url:'/v1/remote-tasks/requests/'+id},{method:'POST',url:'/v1/remote-tasks/requests/'+id+'/cancel'}]);
+ bad=true;await assert.rejects(client.lookupRequest(id),expected('INVALID_RESPONSE'));await assert.rejects(client.cancelRequest(id),expected('INVALID_RESPONSE'));
+});
+test('old service endpoints fail batch capability explicitly while absent/cancelled/removed are closed non-creating receipts',async()=>{
+ const id=randomUUID();for(const status of ['absent','cancelled','removed']){
+  const client=new RemoteTaskClient(context('https://sync.example.invalid'),async()=>Response.json({requestId:id,status,task:null}));assert.equal((await client.lookupRequest(id)).status,status);
+  if(status==='absent')await assert.rejects(client.cancelRequest(id),expected('INVALID_RESPONSE'));
+ }
+ const old=new RemoteTaskClient(context('https://sync.example.invalid'),async()=>Response.json({error:{code:'NOT_FOUND'}},{status:404}));
+ await assert.rejects(old.lookupRequest(id),expected('BATCH_UNSUPPORTED'));await assert.rejects(old.cancelRequest(id),expected('BATCH_UNSUPPORTED'));
+ const reserved=new RemoteTaskClient(context('https://sync.example.invalid'),async()=>Response.json({error:{code:'REMOTE_TASK_REQUEST_CANCELLED'}},{status:410}));
+ await assert.rejects(reserved.create({requestId:id,kind:'parse',versionId:randomUUID(),providerDeviceId:randomUUID(),profileRef:{id:profile.id,revision:1,digest:profile.digest}}),expected('REQUEST_CANCELLED'));
+});

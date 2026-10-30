@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import test from 'node:test';
 import Fastify from 'fastify';
 import { decodeRemoteIndexArtifact, decodeRemoteTaskJson, REMOTE_TASK_LIMITS, validateRemoteIndexArtifact,
-  validateRemoteTaskFailure, validateRemoteTaskLease, validateRemoteTaskProfiles, validateRemoteTaskRequest } from '../../../packages/sync-core/src/remoteTasks.ts';
+  validateRemoteTaskFailure, validateRemoteTaskLease, validateRemoteTaskProfiles, validateRemoteTaskRequest, validateRemoteTaskRequestStatus } from '../../../packages/sync-core/src/remoteTasks.ts';
 import type { RemoteIndexArtifact, RemoteTaskRequest } from '../../../packages/sync-core/src/remoteTasks.ts';
 import { ApiError } from '../../src/errors.ts';
 import { REMOTE_TASK_CAPABILITY, registerRemoteTaskRoutes } from '../../src/remote-tasks.ts';
@@ -131,4 +131,22 @@ test('binary transfer admission is bounded per account until in-flight work sett
   assert.equal((await f.app.inject({ method: 'POST', url, headers, payload: Buffer.from('{}') })).statusCode, 429);
   release(); assert.equal((await first).statusCode, 200);
   assert.equal((await f.app.inject({ method: 'POST', url, headers, payload: Buffer.from('{}') })).statusCode, 200);
+});
+
+
+test('request-ID routes authenticate, reject private payloads and use validated account-scoped IDs',async t=>{
+ const id=randomUUID(),seen:string[]=[];
+ const f=await fixture(true,{lookupRequest:async(who,id)=>{assert.deepEqual(who,f.who);seen.push('lookup:'+id);return{requestId:id,status:'absent',task:null};},
+   cancelRequest:async(who,id)=>{assert.deepEqual(who,f.who);seen.push('cancel:'+id);return{requestId:id,status:'cancelled',task:null};}});t.after(()=>f.app.close());
+ assert.equal((await f.app.inject('/v1/remote-tasks/requests/'+id)).statusCode,401);
+ assert.equal((await f.app.inject({method:'POST',url:'/v1/remote-tasks/requests/'+id+'/cancel',headers:f.headers,payload:{endpoint:'https://private.test'}})).statusCode,400);
+ assert.equal((await f.app.inject({method:'GET',url:'/v1/remote-tasks/requests/not-a-uuid',headers:f.headers})).statusCode,400);
+ const status=await f.app.inject({method:'GET',url:'/v1/remote-tasks/requests/'+id,headers:f.headers});assert.deepEqual(status.json(),{requestId:id,status:'absent',task:null});
+ const cancelled=await f.app.inject({method:'POST',url:'/v1/remote-tasks/requests/'+id+'/cancel',headers:f.headers,payload:{}});assert.deepEqual(cancelled.json(),{requestId:id,status:'cancelled',task:null});
+ assert.deepEqual(seen,['lookup:'+id,'cancel:'+id]);
+});
+test('request status contracts reject mismatched status/task pairs, accessors and transport authority',()=>{
+ const status={requestId:randomUUID(),status:'absent',task:null};assert.deepEqual(validateRemoteTaskRequestStatus(status),status);
+ for(const changed of [{...status,status:'known'},{...status,status:'unknown'},{...status,task:{}},{...status,token:'private'}])assert.throws(()=>validateRemoteTaskRequestStatus(changed));
+ let invoked=false;assert.throws(()=>validateRemoteTaskRequestStatus(Object.defineProperty({...status},'status',{enumerable:true,get(){invoked=true;return'absent';}})));assert.equal(invoked,false);
 });

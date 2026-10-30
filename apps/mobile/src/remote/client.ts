@@ -1,7 +1,7 @@
 import {
   decodeRemoteIndexArtifact, REMOTE_TASK_LIMITS, validateRemoteTask, validateRemoteTaskId,
-  validateRemoteTaskProvider, validateRemoteTaskQuota, validateRemoteTaskRequest, validateRemoteTaskResume,
-  type RemoteTask, type RemoteTaskCapability, type RemoteTaskProvider, type RemoteTaskQuota, type RemoteTaskRequest, type RemoteTaskResume,
+  validateRemoteTaskProvider, validateRemoteTaskQuota, validateRemoteTaskRequest, validateRemoteTaskResume, validateRemoteTaskRequestStatus,
+  type RemoteTask, type RemoteTaskCapability, type RemoteTaskProvider, type RemoteTaskQuota, type RemoteTaskRequest, type RemoteTaskRequestStatus, type RemoteTaskResume,
 } from '../../../../packages/sync-core/src/remoteTasks.ts';
 import { decodeParsedDocument } from '../../../../packages/sync-core/src/parsedDocument.ts';
 import { normalizeServiceUrl } from '../config.ts';
@@ -13,8 +13,9 @@ export interface RemoteTaskContext {
   identityKey?(): string | null;
 }
 export type RemoteTaskErrorCode = 'DISABLED' | 'CHANGED' | 'CANCELLED' | 'TIMEOUT' | 'NETWORK' | 'INVALID_RESPONSE' | 'AUTH_REQUIRED'
-  | 'RATE_LIMITED' | 'PROVIDER_UNAVAILABLE' | 'PROFILE_CHANGED' | 'VERSION_UNAVAILABLE' | 'CAPACITY' | 'ACTIVE' | 'REMOVED' | 'FAILED';
+  | 'BATCH_UNSUPPORTED' | 'REQUEST_CANCELLED' | 'RATE_LIMITED' | 'PROVIDER_UNAVAILABLE' | 'PROFILE_CHANGED' | 'VERSION_UNAVAILABLE' | 'CAPACITY' | 'ACTIVE' | 'REMOVED' | 'FAILED';
 const descriptions: Record<RemoteTaskErrorCode,string> = {
+  BATCH_UNSUPPORTED:'此同步服务尚不支持安全的批次请求查询与取消，请升级服务后再使用批次。', REQUEST_CANCELLED:'此创建请求已被取消，服务不会以该请求再次创建任务。',
   DISABLED:'此同步服务尚未启用远程任务。', CHANGED:'账号、文库或任务目标已变化，此次操作已停止。', CANCELLED:'本次读取已取消；已创建的后台任务仍可在任务列表中查询。',
   TIMEOUT:'连接超时。任务创建结果可能尚未确认，请查询任务或重试同一请求。', NETWORK:'无法连接同步服务。任务创建结果可能尚未确认，请查询任务或重试同一请求。',
   INVALID_RESPONSE:'服务返回的任务或产物不完整，未采用该结果。', AUTH_REQUIRED:'登录已过期或已被撤销，请重新登录后查询任务。',
@@ -72,6 +73,7 @@ function httpError(status:number,code:unknown):RemoteTaskError{
   if(typeof code==='string'&&['REMOTE_TASK_VERSION_UNAVAILABLE','REMOTE_TASK_VERSION_CHANGED','REMOTE_TASK_SOURCE_UNAVAILABLE','REMOTE_TASK_TARGET_UNSUPPORTED','REMOTE_TASK_ARTIFACT_TARGET_MISMATCH'].includes(code))return new RemoteTaskError('VERSION_UNAVAILABLE');
   if(typeof code==='string'&&/^(REMOTE_TASK_(?:QUEUE_FULL|HISTORY_FULL|ARTIFACT_QUOTA)|ACCOUNT_STORAGE_LIMIT)$/.test(code))return new RemoteTaskError('CAPACITY');
   if(code==='REMOTE_TASK_ACTIVE')return new RemoteTaskError('ACTIVE');
+  if(code==='REMOTE_TASK_REQUEST_CANCELLED')return new RemoteTaskError('REQUEST_CANCELLED');
   if(code==='REMOTE_TASK_GONE')return new RemoteTaskError('REMOVED');
   if(status===429)return new RemoteTaskError('RATE_LIMITED');return new RemoteTaskError('FAILED');
 }
@@ -98,6 +100,7 @@ export class RemoteTaskClient {
       if(response.redirected||response.type==='opaqueredirect'||response.status>=300&&response.status<400||response.url&&response.url!==url){void response.body?.cancel().catch(()=>undefined);throw new RemoteTaskError('INVALID_RESPONSE');}
       if(!response.ok){
         let code:unknown;try{const data=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(await readBytes(response,16384,guard)));code=data?.error?.code;}catch{guard.check();}
+        if(response.status===404&&path.startsWith('/v1/remote-tasks/requests/'))throw new RemoteTaskError('BATCH_UNSUPPORTED');
         throw httpError(response.status,code);
       }
       const result=await decode(response,guard);guard.check();return result;
@@ -131,6 +134,16 @@ export class RemoteTaskClient {
         ||task.profile.id!==request.profileRef.id||task.profile.revision!==request.profileRef.revision||task.profile.digest!==request.profileRef.digest
         ||task.indexSourceDigest!==(request.indexSourceDigest??null))throw new RemoteTaskError('INVALID_RESPONSE');
       return{task,replayed:value.replayed,deduplicated:value.deduplicated,quota};
+    });
+  }
+  lookupRequest(id:string,options:RemoteTaskCall={}):Promise<RemoteTaskRequestStatus>{
+    validateRemoteTaskId(id);return this.json('/v1/remote-tasks/requests/'+id,'GET',undefined,options,value=>{
+      const status=validateRemoteTaskRequestStatus(value);if(status.requestId!==id)throw new RemoteTaskError('INVALID_RESPONSE');return status;
+    });
+  }
+  cancelRequest(id:string,options:RemoteTaskCall={}):Promise<RemoteTaskRequestStatus>{
+    validateRemoteTaskId(id);return this.json('/v1/remote-tasks/requests/'+id+'/cancel','POST',{},options,value=>{
+      const status=validateRemoteTaskRequestStatus(value);if(status.requestId!==id||status.status==='absent')throw new RemoteTaskError('INVALID_RESPONSE');return status;
     });
   }
   update(id:string,action:'cancel'|'resume',options:RemoteTaskCall={},resume:RemoteTaskResume={}):Promise<RemoteTask>{

@@ -5,7 +5,7 @@ import { canonicalJson } from '../../packages/sync-core/src/validation.ts';
 import { decodeRemoteIndexArtifact, REMOTE_TASK_LIMITS, validateRemoteTaskFailure, validateRemoteTaskId,
   validateRemoteTaskLease, validateRemoteTaskProfiles, validateRemoteTaskRequest, validateRemoteTaskResume } from '../../packages/sync-core/src/remoteTasks.ts';
 import type { RemoteTask, RemoteTaskArtifact, RemoteTaskClaim, RemoteTaskFailure, RemoteTaskFailureCode, RemoteTaskLease,
-  RemoteTaskProfile, RemoteTaskProvider, RemoteTaskQuota, RemoteTaskRequest, RemoteTaskResume, RemoteTaskState, RemoteTaskTarget } from '../../packages/sync-core/src/remoteTasks.ts';
+  RemoteTaskProfile, RemoteTaskProvider, RemoteTaskQuota, RemoteTaskRequest, RemoteTaskRequestStatus, RemoteTaskResume, RemoteTaskState, RemoteTaskTarget } from '../../packages/sync-core/src/remoteTasks.ts';
 import type { VerifiedIdentity } from './auth.ts';
 import { ApiError } from './errors.ts';
 
@@ -17,6 +17,8 @@ export interface RemoteTaskRepository {
   withdrawProvider(identity: VerifiedIdentity): Promise<{ disabled: true }>;
   listProviders(identity: VerifiedIdentity): Promise<{ providers: RemoteTaskProvider[] }>;
   createTask(identity: VerifiedIdentity, input: RemoteTaskRequest): Promise<{ task: RemoteTask; replayed: boolean; deduplicated: boolean; quota: RemoteTaskQuota }>;
+  lookupRequest(identity: VerifiedIdentity, requestId: string): Promise<RemoteTaskRequestStatus>;
+  cancelRequest(identity: VerifiedIdentity, requestId: string): Promise<RemoteTaskRequestStatus>;
   listTasks(identity: VerifiedIdentity): Promise<{ tasks: RemoteTask[]; quota: RemoteTaskQuota }>;
   getTask(identity: VerifiedIdentity, id: string): Promise<{ task: RemoteTask }>;
   cancelTask(identity: VerifiedIdentity, id: string): Promise<{ task: RemoteTask }>;
@@ -148,6 +150,21 @@ async function finish(context: RemoteTaskTransaction, id: string, state: RemoteT
     updated_at=clock_timestamp() WHERE account_id=$1 AND id=$2`, [context.account.id, id, state, failure]);
   return present(await job(context, id));
 }
+async function cancelJob(context: RemoteTaskTransaction, id: string): Promise<RemoteTask> {
+  const row = await job(context, id);
+  if (row.state === 'queued') return finish(context, id, 'cancelled', null);
+  if (row.state === 'running') await context.client.query("UPDATE paperquay.remote_tasks SET state='cancel_requested',updated_at=clock_timestamp() WHERE account_id=$1 AND id=$2", [context.account.id,id]);
+  return present(await job(context,id));
+}
+async function requestStatus(context: RemoteTaskTransaction, requestId: string): Promise<RemoteTaskRequestStatus> {
+  const result = await context.client.query<{job_id:string|null;cancelled_before_create:boolean}>(
+    'SELECT job_id,cancelled_before_create FROM paperquay.remote_task_requests WHERE account_id=$1 AND request_id=$2', [context.account.id,requestId]);
+  const row = result.rows[0];
+  if (!row) return {requestId,status:'absent',task:null};
+  if (row.cancelled_before_create) return {requestId,status:'cancelled',task:null};
+  if (!row.job_id) return {requestId,status:'removed',task:null};
+  return {requestId,status:'known',task:present(await job(context,row.job_id))};
+}
 export function createRemoteTaskRepository(options: { withAccount: RemoteTaskAccountRunner }): RemoteTaskRepository {
   if (typeof options.withAccount !== 'function') throw new ApiError('CONFIGURATION_INVALID', 500);
   const run = options.withAccount;
@@ -187,9 +204,10 @@ export function createRemoteTaskRepository(options: { withAccount: RemoteTaskAcc
       const input = validateRemoteTaskRequest(value); const inputDigest = sha(JSON.stringify(input));
       return run(identity, async (context) => {
         await sweep(context);
-        const receipt = await context.client.query<{ input_digest: string; job_id: string | null }>(`SELECT input_digest,job_id FROM paperquay.remote_task_requests
+        const receipt = await context.client.query<{ input_digest: string; job_id: string | null; cancelled_before_create: boolean }>(`SELECT input_digest,job_id,cancelled_before_create FROM paperquay.remote_task_requests
           WHERE account_id=$1 AND request_id=$2`, [context.account.id, input.requestId]);
         if (receipt.rows[0]) {
+          if (receipt.rows[0].cancelled_before_create) throw new ApiError('REMOTE_TASK_REQUEST_CANCELLED', 410);
           if (receipt.rows[0].input_digest !== inputDigest) throw new ApiError('REMOTE_TASK_REQUEST_REUSED', 409);
           if (!receipt.rows[0].job_id) throw new ApiError('REMOTE_TASK_GONE', 410);
           return { task: present(await job(context, receipt.rows[0].job_id)), replayed: true, deduplicated: receipt.rows[0].job_id !== input.requestId, quota: await quota(context) };
@@ -214,6 +232,25 @@ export function createRemoteTaskRepository(options: { withAccount: RemoteTaskAcc
         return { task: present(await job(context, id)), replayed: false, deduplicated: Boolean(existing.rows[0]), quota: await quota(context) };
       });
     },
+    async lookupRequest(identity, value) {
+      const id=validateRemoteTaskId(value);
+      return run(identity,async context=>{await sweep(context);return requestStatus(context,id);});
+    },
+    async cancelRequest(identity, value) {
+      const id=validateRemoteTaskId(value);
+      return run(identity,async context=>{
+        await sweep(context);const status=await requestStatus(context,id);
+        if(status.status==='known')return {...status,task:await cancelJob(context,status.task!.id)};
+        if(status.status!=='absent')return status;
+        const usage=await quota(context);
+        if(usage.receipts>=usage.maxReceipts)throw new ApiError('REMOTE_TASK_HISTORY_FULL',409);
+        // The account lock serializes this reservation with createTask. The
+        // digest also fails closed if a pre-migration binary is rolled back.
+        const digest=sha('paperquay.remote-task.cancel-before-create.v1:'+id);
+        await context.client.query('INSERT INTO paperquay.remote_task_requests(account_id,request_id,input_digest,job_id,cancelled_before_create) VALUES($1,$2,$3,NULL,true)',[context.account.id,id,digest]);
+        return {requestId:id,status:'cancelled' as const,task:null};
+      });
+    },
     async listTasks(identity) {
       return run(identity, async (context) => {
         await sweep(context);
@@ -227,13 +264,7 @@ export function createRemoteTaskRepository(options: { withAccount: RemoteTaskAcc
     },
     async cancelTask(identity, value) {
       const id = validateRemoteTaskId(value);
-      return run(identity, async (context) => {
-        await sweep(context); const row = await job(context, id);
-        if (row.state === 'queued') return { task: await finish(context, id, 'cancelled', null) };
-        if (row.state === 'running') await context.client.query(`UPDATE paperquay.remote_tasks SET state='cancel_requested',updated_at=clock_timestamp()
-          WHERE account_id=$1 AND id=$2`, [context.account.id, id]);
-        return { task: present(await job(context, id)) };
-      });
+      return run(identity, async context => { await sweep(context); return {task:await cancelJob(context,id)}; });
     },
     async resumeTask(identity, value, options = {}) {
       const id = validateRemoteTaskId(value), input = validateRemoteTaskResume(options);
