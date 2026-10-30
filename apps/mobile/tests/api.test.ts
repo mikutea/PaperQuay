@@ -249,3 +249,29 @@ test('optional desktop direct capability has fixed bounds and only adopts the co
   body = { ...enabled, desktopPdf: { ...limits, direct: undefined } };
   await api.capabilities(signal); assert.equal(api.desktopPdfCapability?.direct, undefined);
 });
+
+
+test('feature inspection atomically refreshes complete public settings and returns a detached snapshot',async()=>{
+ let checks=0;const body={protocolVersion:1,features:{paperOrganization:1,richNotes:1,aiConversations:1,privatePdfStorage:1},pdfStorage:true,cloudPdf:{maxFileBytes:1024,maxAccountBytes:2048,maxCopies:2}};
+ const api=new SyncApi('https://sync.example.test',async()=>'opaque-test-token',async(url,options)=>{checks++;assert.equal(String(url),'https://sync.example.test/v1/capabilities');assert.equal(options!.method,'GET');return json(body);});
+ const result=await api.inspectCapabilities(new AbortController().signal);assert.equal(checks,1);assert.equal(result.richNotes,true);assert.equal(api.supportsAiConversations,false,'inspection cannot enable schemas without the workspace cursor transition');assert.deepEqual(api.cloudPdfCapability,body.cloudPdf);
+ result.cloudPdf!.maxCopies=99;assert.equal(api.cloudPdfCapability!.maxCopies,2);
+});
+test('a failed, malformed or cancelled inspection preserves active operational capabilities',async()=>{
+ let body:any={protocolVersion:1,features:{paperOrganization:1,richNotes:1}};
+ const api=new SyncApi('https://sync.example.test',async()=>'opaque-test-token',async()=>json(body));const signal=new AbortController().signal;await api.capabilities(signal);
+ body={protocolVersion:1,features:{privatePdfStorage:1},pdfStorage:true,cloudPdf:{maxFileBytes:0}};await assert.rejects(api.inspectCapabilities(signal),{code:'INVALID_RESPONSE'});assert.equal(api.supportsPaperOrganization,true);assert.equal(api.supportsRichNotes,true);
+ const aborted=new AbortController();aborted.abort();await assert.rejects(api.inspectCapabilities(aborted.signal),{code:'ACCOUNT_CHANGED'});assert.equal(api.supportsRichNotes,true);
+});
+test('newer feature inspections and binding negotiation supersede late responses without merging different generations',async()=>{
+ for(const firstMethod of ['inspectCapabilities','capabilities'] as const){let release!:(response:Response)=>void,started!:()=>void,calls=0;const ready=new Promise<void>(r=>started=r);
+  const api=new SyncApi('https://sync.example.test',async()=>'opaque-test-token',async()=>{if(++calls===1){started();return new Promise<Response>(r=>release=r);}return json({protocolVersion:1,features:{richNotes:1}});});
+  const old=assert.rejects(api[firstMethod](new AbortController().signal),{code:'ACCOUNT_CHANGED'});await ready;await api.inspectCapabilities(new AbortController().signal);release(json({protocolVersion:1,features:{paperOrganization:1}}));await old;
+  assert.equal(api.supportsPaperOrganization,false);assert.equal(api.supportsRichNotes,false);
+ }
+});
+test('identity changes or an aborted late token cannot commit feature inspection settings',async()=>{
+ let identityKey='A',release!:(value:string)=>void,sent=0;const token=new Promise<string>(r=>release=r),controller=new AbortController();
+ const api=new SyncApi('https://sync.example.test',()=>token,async()=>{sent++;return json({protocolVersion:1,features:{richNotes:1}});},()=>identityKey);
+ const pending=assert.rejects(api.inspectCapabilities(controller.signal),{code:'ACCOUNT_CHANGED'});identityKey='B';controller.abort();release('opaque-test-token');await pending;assert.equal(sent,0);assert.equal(api.supportsRichNotes,false);
+});

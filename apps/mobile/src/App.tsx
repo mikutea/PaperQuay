@@ -18,7 +18,8 @@ import {
   type PendingEdit,
   type VisibleEntity,
 } from '../../../packages/sync-core/src/index.ts';
-import { SyncApi, type ServerConflict } from './api.ts';
+import { SyncApi, type ServerConflict, type ServiceCapabilitySnapshot } from './api.ts';
+import type { FeatureAction } from './capabilities/catalog.ts';
 import { createAuthSession, type AuthSession } from './auth/oidc.ts';
 import { parseAppConfig, type AppConfig, type PublicConfigInput } from './config.ts';
 import { ContentPreview, EntityEditor } from './components/EntityEditor.tsx';
@@ -77,6 +78,7 @@ const AiWorkspace = lazy(() => import('./components/AiWorkspace.tsx').then((modu
 const LibraryTransferPanel = lazy(() => import('./components/LibraryTransferPanel.tsx').then((module) => ({ default: module.LibraryTransferPanel })));
 const IncomingSharePanel = lazy(() => import('./components/IncomingSharePanel.tsx').then(module => ({ default: module.IncomingSharePanel })));
 const CloudPdfLibrary = lazy(() => import('./components/CloudPdfPanel.tsx').then((module) => ({ default: module.CloudPdfLibrary })));
+const CapabilitySheet = lazy(() => import('./components/CapabilitySheet.tsx').then(module => ({default:module.CapabilitySheet})));
 const RemoteTaskPanel = lazy(() => import('./components/RemoteTaskPanel.tsx').then(module => ({ default: module.RemoteTaskPanel })));
 const ZoteroLibrarySheet = lazy(() => import('./components/ZoteroLibrarySheet.tsx').then(module => ({ default: module.ZoteroLibrarySheet })));
 const ResearchWorkspace = lazy(() => import('./components/ResearchWorkspace.tsx').then(module => ({ default: module.ResearchWorkspace })));
@@ -100,6 +102,7 @@ interface Runtime {
   cloudPdf?: CloudPdfContext;
   desktopPdf?: DesktopPdfContext;
   remoteTasks?: RemoteTaskContext;
+  inspectCapabilities?(signal:AbortSignal):Promise<ServiceCapabilitySnapshot>;
   dispose?: () => Promise<void>;
 }
 function initialConfig(): PublicConfigInput {
@@ -146,7 +149,7 @@ async function makeRuntime(input: PublicConfigInput): Promise<Runtime> {
     supportsAiConversations:()=>api.supportsAiConversations,
     binding: { ...binding, prepare: (signal) => api.capabilities(signal) },
   });
-  return { config, auth, controller, secretStore,
+  return { config, auth, controller, secretStore, inspectCapabilities:signal=>api.inspectCapabilities(signal),
     cloudPdf: { apiBaseUrl: config.apiBaseUrl, getAccessToken: auth.getAccessToken, getCloudPdfCapability: () => api.cloudPdfCapability },
     desktopPdf: { apiBaseUrl: config.apiBaseUrl, getAccessToken: auth.getAccessToken, getDesktopPdfCapability: () => api.desktopPdfCapability },
     remoteTasks: { apiBaseUrl: config.apiBaseUrl, getAccessToken: auth.getAccessToken, getCapability: () => api.remoteTaskCapability,
@@ -303,6 +306,7 @@ export function ConnectedApp({
   const [incomingSelection, setIncomingSelection] = useState<{ source: PreparedSource; scope: string; subject: string } | null>(null);
   const [cloudOpen, setCloudOpen] = useState(false);
   const [remoteOpen, setRemoteOpen] = useState(false);
+  const [capabilityOpen,setCapabilityOpen]=useState<string|null>(null);
   const [zoteroOpen, setZoteroOpen] = useState(false);
   const [noteExportOpen, setNoteExportOpen] = useState(false);
   const [researchOpen, setResearchOpen] = useState(false);
@@ -310,7 +314,7 @@ export function ConnectedApp({
   const transferScope = state.status === 'ready' && state.workspace
     ? JSON.stringify([state.workspace.sync.accountId, state.workspace.sync.deviceId, state.workspace.sync.generation]) : null;
   useEffect(() => { setCloudOpen(false); }, [transferScope, authSubjectKey]);
-  useEffect(() => { setRemoteOpen(false); }, [transferScope, authSubjectKey]);
+  useEffect(() => { setRemoteOpen(false); setCapabilityOpen(null); }, [transferScope, authSubjectKey]);
   useEffect(() => { setZoteroOpen(false); setNoteExportOpen(false); setResearchOpen(false); }, [transferScope, authSubjectKey]);
   const [dirty, setDirty] = useState(false);
   const [readerDirty, setReaderDirty] = useState(false);
@@ -812,6 +816,7 @@ export function ConnectedApp({
           <button className="secondary" onClick={() => setCloudOpen(true)}>私有云 PDF</button>
           <p className="muted">查看当前账号的云副本与可用空间。</p>
         </section>}
+        {section === 'account' && scope && <section className="account-ai-settings"><button type="button" className="secondary" onClick={()=>setCapabilityOpen(incomingKey)}>功能与可用性</button><p className="muted">查看本机、服务与电脑的能力、准备条件和回退方式。</p></section>}
         {section === 'account' && scope && runtime.remoteTasks && <section className="account-ai-settings">
           <button type="button" className="secondary" onClick={() => setRemoteOpen(true)}>远程解析与索引</button>
           <p className="muted">选择同账号在线电脑执行，查询持久任务和实际产物用量。</p>
@@ -877,6 +882,13 @@ export function ConnectedApp({
           accountCurrent={() => JSON.stringify(auth.getSubject?.() ?? null) === authSubjectKey}
           onClose={() => { setTransferOpen(false); setIncomingSelection(null); }} />
       </Suspense>}
+      {capabilityOpen===incomingKey&&transferScope&&scope&&<Suspense fallback={<p role="status">正在打开功能清单…</p>}><CapabilitySheet key={incomingKey} runtime={runtime} controller={controller} scope={scope} scopeKey={transferScope} incomingShare={Boolean(incomingClient?.available)} current={()=>JSON.stringify(auth.getSubject?.()??null)===authSubjectKey} onClose={()=>setCapabilityOpen(null)} onNavigate={(action:FeatureAction)=>{
+        const snapshot=controller.getSnapshot(),sync=snapshot.workspace?.sync;
+        if(snapshot.status!=='ready'||!sync||JSON.stringify([sync.accountId,sync.deviceId,sync.generation])!==transferScope||JSON.stringify(auth.getSubject?.()??null)!==authSubjectKey||!canLeave())return;
+        setCapabilityOpen(null);
+        if(['library','notes','sync','conflicts'].includes(action)){navigate(action==='sync'?'account':action as Section);return;}
+        if(action==='transfer')setTransferOpen(true);else if(action==='incoming')setIncomingOpen(incomingKey);else if(action==='cloud')setCloudOpen(true);else if(action==='remote')setRemoteOpen(true);else if(action==='zotero')setZoteroOpen(true);else if(action==='research')setResearchOpen(true);else if(action==='ai-settings')setAiSettings(true);else if(action==='exports')setNoteExportOpen(true);
+      }}/></Suspense>}
       {remoteOpen && transferScope && scope && runtime.remoteTasks && <Suspense fallback={<p role="status">正在打开远程任务…</p>}>
         <RemoteTaskPanel key={`${transferScope}:${authSubjectKey}`} context={runtime.remoteTasks} scope={scope} scopeKey={transferScope}
           controller={controller} entities={entities} accountCurrent={() => JSON.stringify(auth.getSubject?.() ?? null) === authSubjectKey}

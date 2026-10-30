@@ -137,7 +137,12 @@ async function boundedJson(response: Response): Promise<unknown> {
   }
 }
 
+export interface ServiceCapabilitySnapshot {
+  paperOrganization:boolean;richNotes:boolean;aiConversations:boolean;
+  cloudPdf:CloudPdfCapability|null;desktopPdf:DesktopPdfCapability|null;remoteTasks:RemoteTaskCapability|null;
+}
 export class SyncApi {
+  private capabilityGeneration=0;
   supportsPaperOrganization = false;
   supportsRichNotes=false;
   supportsAiConversations=false;
@@ -222,11 +227,13 @@ export class SyncApi {
   }
 
   async capabilities(signal: AbortSignal): Promise<{ paperOrganization: boolean }> {
+    const generation=++this.capabilityGeneration;
     this.supportsRichNotes=false;this.supportsAiConversations=false;
     this.cloudPdfCapability = null;
     this.desktopPdfCapability = null;
     this.remoteTaskCapability = null;
     const body = await this.request('/v1/capabilities', signal);
+    if(generation!==this.capabilityGeneration)throw new ClientError('ACCOUNT_CHANGED');
     if (!isObject(body) || body.protocolVersion !== 1) throw new ClientError('INVALID_RESPONSE');
     this.supportsPaperOrganization = isObject(body.features) && body.features.paperOrganization === 1;
     this.supportsRichNotes=isObject(body.features)&&body.features.richNotes===1;
@@ -256,6 +263,20 @@ export class SyncApi {
     }
     this.desktopPdfCapability = desktopCapability;
     return { paperOrganization: this.supportsPaperOrganization };
+  }
+
+  /** Read through a detached client; a failed/cancelled inspection never changes
+   * transport capabilities used by an in-flight operation. Metadata schema opt-ins
+   * remain owned by workspace binding, which also resets its pull cursor. */
+  async inspectCapabilities(signal:AbortSignal):Promise<ServiceCapabilitySnapshot>{
+    const generation=++this.capabilityGeneration,identityKey=this.getIdentityKey?.();
+    const probe=new SyncApi(this.baseUrl,this.getToken,this.fetcher,this.getIdentityKey);
+    await probe.capabilities(signal);
+    if(signal.aborted||generation!==this.capabilityGeneration||identityKey!==this.getIdentityKey?.())throw new ClientError('ACCOUNT_CHANGED');
+    const snapshot:ServiceCapabilitySnapshot={paperOrganization:probe.supportsPaperOrganization,richNotes:probe.supportsRichNotes,aiConversations:probe.supportsAiConversations,
+      cloudPdf:probe.cloudPdfCapability,desktopPdf:probe.desktopPdfCapability,remoteTasks:probe.remoteTaskCapability};
+    this.cloudPdfCapability=structuredClone(snapshot.cloudPdf);this.desktopPdfCapability=structuredClone(snapshot.desktopPdf);this.remoteTaskCapability=structuredClone(snapshot.remoteTasks);
+    return structuredClone(snapshot);
   }
 
   async register(name: string, signal: AbortSignal): Promise<AccountIdentity> {

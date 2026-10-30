@@ -894,6 +894,7 @@ strong {
   margin: 0;
   list-style: none;
 }
+.device-list .text-button { min-width: 44px; }
 .device-list li {
   display: flex;
   align-items: center;
