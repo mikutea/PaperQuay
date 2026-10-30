@@ -82,3 +82,5 @@ test('bounded JSON cancels an oversized body before reading and limits streamed 
   assert.equal(cancelled, true);
   await assert.rejects(readBoundedJson(new Response(' '.repeat(4 * 1024 * 1024))), /too large/);
 });
+
+test('default public list query spacing respects the observed Crossref one-request-per-second limit',async()=>{const times=[];await searchTopic(config({sources:['crossref'],queries:['first','second']}),{},{fetchImpl:async()=>{times.push(performance.now());return response({message:{items:[],'total-results':0}});}});assert.equal(times.length,2);assert.ok(times[1]-times[0]>=1000,'Default list queries must not exceed one per second');});

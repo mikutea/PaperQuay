@@ -81,6 +81,7 @@ const CloudPdfLibrary = lazy(() => import('./components/CloudPdfPanel.tsx').then
 const CapabilitySheet = lazy(() => import('./components/CapabilitySheet.tsx').then(module => ({default:module.CapabilitySheet})));
 const RemoteTaskPanel = lazy(() => import('./components/RemoteTaskPanel.tsx').then(module => ({ default: module.RemoteTaskPanel })));
 const ZoteroLibrarySheet = lazy(() => import('./components/ZoteroLibrarySheet.tsx').then(module => ({ default: module.ZoteroLibrarySheet })));
+const RadarWorkspace = lazy(()=>import('./components/RadarWorkspace.tsx').then(module=>({default:module.RadarWorkspace})));
 const KnowledgeGraphSheet = lazy(()=>import('./components/KnowledgeGraphSheet.tsx').then(module=>({default:module.KnowledgeGraphSheet})));
 const ReviewWorkspace = lazy(() => import('./components/ReviewWorkspace.tsx').then(module => ({ default: module.ReviewWorkspace })));
 const ResearchWorkspace = lazy(() => import('./components/ResearchWorkspace.tsx').then(module => ({ default: module.ResearchWorkspace })));
@@ -314,12 +315,13 @@ export function ConnectedApp({
   const [researchOpen, setResearchOpen] = useState(false);
   const [reviewOpen,setReviewOpen]=useState(false);
   const [graphOpen,setGraphOpen]=useState(false);
+  const [radarOpen,setRadarOpen]=useState(false);
   const [parsedRemoteEpoch, setParsedRemoteEpoch] = useState(0);
   const transferScope = state.status === 'ready' && state.workspace
     ? JSON.stringify([state.workspace.sync.accountId, state.workspace.sync.deviceId, state.workspace.sync.generation]) : null;
   useEffect(() => { setCloudOpen(false); }, [transferScope, authSubjectKey]);
   useEffect(() => { setRemoteOpen(false); setCapabilityOpen(null); }, [transferScope, authSubjectKey]);
-  useEffect(() => { setZoteroOpen(false); setNoteExportOpen(false); setResearchOpen(false);setReviewOpen(false);setGraphOpen(false); }, [transferScope, authSubjectKey]);
+  useEffect(() => { setZoteroOpen(false); setNoteExportOpen(false); setResearchOpen(false);setReviewOpen(false);setGraphOpen(false);setRadarOpen(false); }, [transferScope, authSubjectKey]);
   const [dirty, setDirty] = useState(false);
   const [readerDirty, setReaderDirty] = useState(false);
   const editorUnsaved = useRef(false);
@@ -862,6 +864,7 @@ export function ConnectedApp({
           />
         )}
       </main>
+      {radarOpen&&transferScope&&scope&&<Suspense fallback={<p role="status">正在打开文献雷达…</p>}><RadarWorkspace key={transferScope+':'+authSubjectKey} controller={controller} scope={scope} scopeKey={transferScope} secretStore={runtime.secretStore} accountCurrent={()=>JSON.stringify(auth.getSubject?.()??null)===authSubjectKey} onClose={()=>setRadarOpen(false)} onOpen={paperId=>{const s=controller.getSnapshot(),sync=s.workspace?.sync;if(s.status!=='ready'||!sync||JSON.stringify([sync.accountId,sync.deviceId,sync.generation])!==transferScope||JSON.stringify(auth.getSubject?.()??null)!==authSubjectKey||!canLeave()||!listVisibleEntities(sync).some(e=>e.entityType==='paper'&&e.entityId===paperId&&!e.deleted&&e.data))return;setRadarOpen(false);openReader(paperId);}}/></Suspense>}
       {graphOpen&&transferScope&&<Suspense fallback={<p role="status">正在打开知识图谱…</p>}><KnowledgeGraphSheet key={transferScope+':'+authSubjectKey} controller={controller} scopeKey={transferScope} accountCurrent={()=>JSON.stringify(auth.getSubject?.()??null)===authSubjectKey} onClose={()=>setGraphOpen(false)} onOpen={node=>{const s=controller.getSnapshot(),sync=s.workspace?.sync;if(s.status!=='ready'||!sync||JSON.stringify([sync.accountId,sync.deviceId,sync.generation])!==transferScope||JSON.stringify(auth.getSubject?.()??null)!==authSubjectKey||!canLeave())return;const type=node.type==='paper'?'paper':node.type==='note'?'note':null,id=type==='paper'?node.paperId:node.noteId;if(!type||!id||!listVisibleEntities(sync).some(e=>!e.deleted&&e.data&&e.entityType===type&&e.entityId===id))return;setGraphOpen(false);if(type==='paper')openReader(id);else{setSection('notes');setSelection({type:'note',id});}}}/></Suspense>}
       {reviewOpen&&transferScope&&scope&&runtime.secretStore&&<Suspense fallback={<p className="loading-message" role="status">正在打开综述工作区…</p>}><ReviewWorkspace key={transferScope+':'+authSubjectKey} scope={scope} scopeKey={transferScope} controller={controller} secretStore={runtime.secretStore} accountCurrent={()=>JSON.stringify(auth.getSubject?.()??null)===authSubjectKey} onClose={()=>setReviewOpen(false)}/></Suspense>}
       {researchOpen && transferScope && scope && runtime.secretStore && <Suspense fallback={<p className="loading-message" role="status">正在打开多篇问答…</p>}>
@@ -895,7 +898,7 @@ export function ConnectedApp({
         if(snapshot.status!=='ready'||!sync||JSON.stringify([sync.accountId,sync.deviceId,sync.generation])!==transferScope||JSON.stringify(auth.getSubject?.()??null)!==authSubjectKey||!canLeave())return;
         setCapabilityOpen(null);
         if(['library','notes','sync','conflicts'].includes(action)){navigate(action==='sync'?'account':action as Section);return;}
-        if(action==='transfer')setTransferOpen(true);else if(action==='incoming')setIncomingOpen(incomingKey);else if(action==='cloud')setCloudOpen(true);else if(action==='remote')setRemoteOpen(true);else if(action==='zotero')setZoteroOpen(true);else if(action==='graph'){setGraphOpen(true);return;}else if(action==='review'){setReviewOpen(true);return;}
+        if(action==='transfer')setTransferOpen(true);else if(action==='incoming')setIncomingOpen(incomingKey);else if(action==='cloud')setCloudOpen(true);else if(action==='remote')setRemoteOpen(true);else if(action==='zotero')setZoteroOpen(true);else if(action==='radar'){setRadarOpen(true);return;}else if(action==='graph'){setGraphOpen(true);return;}else if(action==='review'){setReviewOpen(true);return;}
         if(action==='research')setResearchOpen(true);else if(action==='ai-settings')setAiSettings(true);else if(action==='exports')setNoteExportOpen(true);
       }}/></Suspense>}
       {remoteOpen && transferScope && scope && runtime.remoteTasks && <Suspense fallback={<p role="status">正在打开远程任务…</p>}>

@@ -1,3 +1,6 @@
+import{validateRadarState,type RadarState}from'../radar/model.ts';
+import{materializeRadarAdoption,validateRadarAdoption,type RadarAdoptionPlan,type RadarAdoptionResult}from'../radar/adoption.ts';
+import{RadarError}from'../radar/config.ts';
 import {validateReviewProject,assertReviewSourcesCurrent,type ReviewProject} from '../review/model.ts';
 import {
   applyConflictResolution,
@@ -96,6 +99,8 @@ export interface StoredWorkspace {
   zoteroLibraries?: ZoteroLibraryState;
   /** One private literature-review project and its paid-call checkpoint; never synchronized. */
   reviewProject?: ReviewProject;
+  /** Account-local radar configuration/results; library adoption still uses the synchronization outbox. */
+  radarState?: RadarState;
   /** Account-local receipts commit with imported entities and their outbox entries. */
   incomingReceipts?: IncomingImportReceipt[];
 }
@@ -122,7 +127,7 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
 export function decodeWorkspace(value: unknown): StoredWorkspace {
   if (
     !isObject(value) ||
-    Object.keys(value).some((key) => !['sync', 'pendingResolutions', 'paperOrganizationVersion','richNotesVersion','aiConversationsVersion', 'externalLibraries','remoteTaskIntent','remoteBatch','zoteroLibraries','incomingReceipts','reviewProject'].includes(key)) ||
+    Object.keys(value).some((key) => !['sync', 'pendingResolutions', 'paperOrganizationVersion','richNotesVersion','aiConversationsVersion', 'externalLibraries','remoteTaskIntent','remoteBatch','zoteroLibraries','incomingReceipts','reviewProject','radarState'].includes(key)) ||
     (value.paperOrganizationVersion !== undefined && value.paperOrganizationVersion !== 1) ||
     (value.richNotesVersion!==undefined&&value.richNotesVersion!==1)||(value.aiConversationsVersion!==undefined&&value.aiConversationsVersion!==1)||
     !isObject(value.pendingResolutions) ||
@@ -143,6 +148,7 @@ export function decodeWorkspace(value: unknown): StoredWorkspace {
     try { validateRemoteBatch(value.remoteBatch); } catch { throw new ClientError('STORAGE_CORRUPT'); }
     if (value.remoteTaskIntent !== undefined) throw new ClientError('STORAGE_CORRUPT');
   }
+  if(value.radarState!==undefined){try{validateRadarState(value.radarState);}catch{throw new ClientError('STORAGE_CORRUPT');}}
   if(value.reviewProject!==undefined){try{validateReviewProject(value.reviewProject);}catch{throw new ClientError('STORAGE_CORRUPT');}}
   if (value.zoteroLibraries !== undefined) {
     try { validateZoteroLibraryState(value.zoteroLibraries); } catch { throw new ClientError('STORAGE_CORRUPT'); }
@@ -556,6 +562,15 @@ export class WorkspaceController {
   }
   async clearReviewProject(id:string,revision:number,guard:()=>boolean=()=>true):Promise<void>{
     const epoch=this.epoch;await this.update(epoch,value=>{if(!guard())throw new ClientError('ACCOUNT_CHANGED');if(value.reviewProject?.id!==id||value.reviewProject.revision!==revision)throw new ClientError('EDIT_CHANGED');const{reviewProject:_project,...rest}=value;return rest;});
+  }
+
+  async refreshRadarState():Promise<RadarState|null>{const next=await this.update(this.epoch,value=>value);return next.radarState??null;}
+  async saveRadarState(input:RadarState,expectedRevision:number|null,guard:()=>boolean=()=>true):Promise<RadarState>{
+    const radar=validateRadarState(input),epoch=this.epoch;const next=await this.update(epoch,value=>{if(!guard())throw new ClientError('ACCOUNT_CHANGED');if(expectedRevision===null){if(value.radarState||radar.revision!==1)throw new ClientError('EDIT_CHANGED');}else if(!value.radarState||value.radarState.revision!==expectedRevision||radar.revision!==expectedRevision+1)throw new ClientError('EDIT_CHANGED');return{...value,radarState:radar};});return next.radarState!;
+  }
+  async adoptRadarCandidate(input:RadarAdoptionPlan,guard:()=>boolean=()=>true):Promise<RadarAdoptionResult>{
+    const plan=validateRadarAdoption(input),epoch=this.epoch;let result!:RadarAdoptionResult,changed=false;
+    await this.update(epoch,value=>{if(!guard())throw new ClientError('ACCOUNT_CHANGED');if(!value.radarState)throw new ClientError('EDIT_CHANGED');let materialized;try{const supported=this.supportsPaperOrganization()||Boolean((!this.snapshot.online||this.snapshot.needsLogin)&&value.paperOrganizationVersion===1);materialized=materializeRadarAdoption(value.radarState,externalLibraryEntities(value),plan,Date.parse(this.now()),supported);}catch(error){if(error instanceof RadarError)throw new ClientError(error.code==='UNSUPPORTED'?'SYNC_FEATURE_UNAVAILABLE':'EDIT_CHANGED');throw error;}result=materialized.result;changed=Boolean(materialized.edit);return{...value,radarState:materialized.state,sync:materialized.edit?queueLocalEdit(value.sync,materialized.edit,{opId:plan.id,clientCreatedAt:this.now()}):value.sync};});if(changed&&!this.snapshot.needsLogin)void this.syncNow();return result;
   }
 
   async prepareRemoteTask(request: RemoteTaskRequest): Promise<RemoteTaskRequest> {

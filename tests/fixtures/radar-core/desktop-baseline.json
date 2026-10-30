@@ -1,0 +1,1941 @@
+{
+  "cases": [
+    {
+      "name": "normalizeTopic",
+      "args": [
+        {
+          "name": "Synthetic topic",
+          "queries": [
+            "retrieval",
+            "evidence"
+          ],
+          "includeTerms": [
+            "evidence",
+            "研究"
+          ],
+          "excludeTerms": [
+            "exclude"
+          ],
+          "priorityTerms": [
+            "method"
+          ],
+          "methodTerms": [
+            "randomized"
+          ],
+          "sources": [
+            "crossref",
+            "openalex"
+          ],
+          "lookbackDays": 90,
+          "intervalHours": 24,
+          "enabled": false,
+          "weights": {
+            "relevance": 40,
+            "priority": 30,
+            "methods": 20,
+            "recency": 10
+          }
+        },
+        {
+          "id": "topic-prior",
+          "revision": 1,
+          "sources": [
+            "crossref",
+            "openalex"
+          ],
+          "queries": [
+            "retrieval",
+            "evidence"
+          ],
+          "intervalHours": 24,
+          "lastAttemptAt": null,
+          "lastSuccessAt": null,
+          "nextRunAt": null,
+          "lastRun": null,
+          "retryAt": null
+        }
+      ],
+      "expected": {
+        "id": "topic-prior",
+        "revision": 2,
+        "name": "Synthetic topic",
+        "queries": [
+          "retrieval",
+          "evidence"
+        ],
+        "sources": [
+          "crossref",
+          "openalex"
+        ],
+        "lookbackDays": 90,
+        "intervalHours": 24,
+        "enabled": false,
+        "includeTerms": [
+          "evidence",
+          "研究"
+        ],
+        "excludeTerms": [
+          "exclude"
+        ],
+        "priorityTerms": [
+          "method"
+        ],
+        "methodTerms": [
+          "randomized"
+        ],
+        "weights": {
+          "relevance": 40,
+          "priority": 30,
+          "methods": 20,
+          "recency": 10
+        },
+        "lastAttemptAt": null,
+        "lastSuccessAt": null,
+        "nextRunAt": null,
+        "lastRun": null,
+        "retryAt": null
+      }
+    },
+    {
+      "name": "normalizeTopic",
+      "args": [
+        {
+          "name": "Synthetic topic",
+          "queries": [
+            "changed"
+          ],
+          "includeTerms": [
+            "evidence",
+            "研究"
+          ],
+          "excludeTerms": [
+            "exclude"
+          ],
+          "priorityTerms": [
+            "method"
+          ],
+          "methodTerms": [
+            "randomized"
+          ],
+          "sources": [
+            "openalex"
+          ],
+          "lookbackDays": 90,
+          "intervalHours": 24,
+          "enabled": false,
+          "weights": {
+            "relevance": 40,
+            "priority": 30,
+            "methods": 20,
+            "recency": 10
+          }
+        },
+        {
+          "id": "topic-prior",
+          "revision": 2,
+          "name": "Synthetic topic",
+          "queries": [
+            "retrieval",
+            "evidence"
+          ],
+          "sources": [
+            "crossref",
+            "openalex"
+          ],
+          "lookbackDays": 90,
+          "intervalHours": 24,
+          "enabled": false,
+          "includeTerms": [
+            "evidence",
+            "研究"
+          ],
+          "excludeTerms": [
+            "exclude"
+          ],
+          "priorityTerms": [
+            "method"
+          ],
+          "methodTerms": [
+            "randomized"
+          ],
+          "weights": {
+            "relevance": 40,
+            "priority": 30,
+            "methods": 20,
+            "recency": 10
+          },
+          "lastAttemptAt": 1793404800000,
+          "lastSuccessAt": null,
+          "nextRunAt": 1793404801000,
+          "lastRun": {
+            "reports": [
+              {
+                "source": "crossref",
+                "retryAt": 1793404804000
+              },
+              {
+                "source": "openalex",
+                "retryAt": 1793404802000
+              }
+            ]
+          },
+          "retryAt": 1793404804000
+        }
+      ],
+      "expected": {
+        "id": "topic-prior",
+        "revision": 3,
+        "name": "Synthetic topic",
+        "queries": [
+          "changed"
+        ],
+        "sources": [
+          "openalex"
+        ],
+        "lookbackDays": 90,
+        "intervalHours": 24,
+        "enabled": false,
+        "includeTerms": [
+          "evidence",
+          "研究"
+        ],
+        "excludeTerms": [
+          "exclude"
+        ],
+        "priorityTerms": [
+          "method"
+        ],
+        "methodTerms": [
+          "randomized"
+        ],
+        "weights": {
+          "relevance": 40,
+          "priority": 30,
+          "methods": 20,
+          "recency": 10
+        },
+        "lastAttemptAt": 1793404800000,
+        "lastSuccessAt": null,
+        "nextRunAt": 1793404802000,
+        "lastRun": {
+          "reports": [
+            {
+              "source": "crossref",
+              "retryAt": 1793404804000
+            },
+            {
+              "source": "openalex",
+              "retryAt": 1793404802000
+            }
+          ]
+        },
+        "retryAt": 1793404802000
+      }
+    },
+    {
+      "name": "rankPaper",
+      "args": [
+        {
+          "source": "crossref",
+          "sourceId": "10.1000/radar",
+          "title": "Evidence retrieval method",
+          "authors": [
+            "Synthetic Author"
+          ],
+          "year": "2026",
+          "doi": "10.1000/radar",
+          "publication": "Fixture Journal",
+          "url": "https://doi.org/10.1000/radar",
+          "abstractText": "Evidence randomized method",
+          "keywords": []
+        },
+        {
+          "id": "topic-prior",
+          "revision": 2,
+          "name": "Synthetic topic",
+          "queries": [
+            "retrieval",
+            "evidence"
+          ],
+          "sources": [
+            "crossref",
+            "openalex"
+          ],
+          "lookbackDays": 90,
+          "intervalHours": 24,
+          "enabled": false,
+          "includeTerms": [
+            "evidence",
+            "研究"
+          ],
+          "excludeTerms": [
+            "exclude"
+          ],
+          "priorityTerms": [
+            "method"
+          ],
+          "methodTerms": [
+            "randomized"
+          ],
+          "weights": {
+            "relevance": 40,
+            "priority": 30,
+            "methods": 20,
+            "recency": 10
+          },
+          "lastAttemptAt": null,
+          "lastSuccessAt": null,
+          "nextRunAt": null,
+          "lastRun": null,
+          "retryAt": null
+        },
+        1793404800000
+      ],
+      "expected": {
+        "score": 80,
+        "reasons": [
+          {
+            "key": "relevance",
+            "points": 20,
+            "max": 40,
+            "matched": [
+              "evidence"
+            ]
+          },
+          {
+            "key": "priority",
+            "points": 30,
+            "max": 30,
+            "matched": [
+              "method"
+            ]
+          },
+          {
+            "key": "methods",
+            "points": 20,
+            "max": 20,
+            "matched": [
+              "randomized"
+            ]
+          },
+          {
+            "key": "recency",
+            "points": 10,
+            "max": 10,
+            "matched": [
+              "2026"
+            ]
+          }
+        ],
+        "excluded": false
+      }
+    },
+    {
+      "name": "rankPaper",
+      "args": [
+        {
+          "source": "crossref",
+          "sourceId": "10.1000/radar",
+          "title": "Excluded evidence",
+          "authors": [
+            "Synthetic Author"
+          ],
+          "year": "2026",
+          "doi": "10.1000/radar",
+          "publication": "Fixture Journal",
+          "url": "https://doi.org/10.1000/radar",
+          "abstractText": "exclude",
+          "keywords": []
+        },
+        {
+          "id": "topic-prior",
+          "revision": 2,
+          "name": "Synthetic topic",
+          "queries": [
+            "retrieval",
+            "evidence"
+          ],
+          "sources": [
+            "crossref",
+            "openalex"
+          ],
+          "lookbackDays": 90,
+          "intervalHours": 24,
+          "enabled": false,
+          "includeTerms": [
+            "evidence",
+            "研究"
+          ],
+          "excludeTerms": [
+            "exclude"
+          ],
+          "priorityTerms": [
+            "method"
+          ],
+          "methodTerms": [
+            "randomized"
+          ],
+          "weights": {
+            "relevance": 40,
+            "priority": 30,
+            "methods": 20,
+            "recency": 10
+          },
+          "lastAttemptAt": null,
+          "lastSuccessAt": null,
+          "nextRunAt": null,
+          "lastRun": null,
+          "retryAt": null
+        },
+        1793404800000
+      ],
+      "expected": {
+        "score": 0,
+        "reasons": [
+          {
+            "key": "relevance",
+            "points": 20,
+            "max": 40,
+            "matched": [
+              "evidence"
+            ]
+          },
+          {
+            "key": "priority",
+            "points": 0,
+            "max": 30,
+            "matched": []
+          },
+          {
+            "key": "methods",
+            "points": 0,
+            "max": 20,
+            "matched": []
+          },
+          {
+            "key": "recency",
+            "points": 10,
+            "max": 10,
+            "matched": [
+              "2026"
+            ]
+          }
+        ],
+        "excluded": true
+      }
+    },
+    {
+      "name": "rankPaper",
+      "args": [
+        {
+          "source": "crossref",
+          "sourceId": "10.1000/radar",
+          "title": "Evidence retrieval method",
+          "authors": [
+            "Synthetic Author"
+          ],
+          "year": "1800",
+          "doi": "10.1000/radar",
+          "publication": "Fixture Journal",
+          "url": "https://doi.org/10.1000/radar",
+          "abstractText": "Evidence randomized method",
+          "keywords": []
+        },
+        {
+          "id": "topic-prior",
+          "revision": 2,
+          "name": "Synthetic topic",
+          "queries": [
+            "retrieval",
+            "evidence"
+          ],
+          "sources": [
+            "crossref",
+            "openalex"
+          ],
+          "lookbackDays": 90,
+          "intervalHours": 24,
+          "enabled": false,
+          "includeTerms": [
+            "evidence",
+            "研究"
+          ],
+          "excludeTerms": [
+            "exclude"
+          ],
+          "priorityTerms": [
+            "method"
+          ],
+          "methodTerms": [
+            "randomized"
+          ],
+          "weights": {
+            "relevance": 40,
+            "priority": 30,
+            "methods": 20,
+            "recency": 10
+          },
+          "lastAttemptAt": null,
+          "lastSuccessAt": null,
+          "nextRunAt": null,
+          "lastRun": null,
+          "retryAt": null
+        },
+        1793404800000
+      ],
+      "expected": {
+        "score": 70,
+        "reasons": [
+          {
+            "key": "relevance",
+            "points": 20,
+            "max": 40,
+            "matched": [
+              "evidence"
+            ]
+          },
+          {
+            "key": "priority",
+            "points": 30,
+            "max": 30,
+            "matched": [
+              "method"
+            ]
+          },
+          {
+            "key": "methods",
+            "points": 20,
+            "max": 20,
+            "matched": [
+              "randomized"
+            ]
+          },
+          {
+            "key": "recency",
+            "points": 0,
+            "max": 10,
+            "matched": []
+          }
+        ],
+        "excluded": false
+      }
+    },
+    {
+      "name": "rankPaper",
+      "args": [
+        {
+          "source": "crossref",
+          "sourceId": "10.1000/radar",
+          "title": "Evidence retrieval method",
+          "authors": [
+            "Synthetic Author"
+          ],
+          "year": "2035",
+          "doi": "10.1000/radar",
+          "publication": "Fixture Journal",
+          "url": "https://doi.org/10.1000/radar",
+          "abstractText": "Evidence randomized method",
+          "keywords": []
+        },
+        {
+          "id": "topic-prior",
+          "revision": 2,
+          "name": "Synthetic topic",
+          "queries": [
+            "retrieval",
+            "evidence"
+          ],
+          "sources": [
+            "crossref",
+            "openalex"
+          ],
+          "lookbackDays": 90,
+          "intervalHours": 24,
+          "enabled": false,
+          "includeTerms": [
+            "evidence",
+            "研究"
+          ],
+          "excludeTerms": [
+            "exclude"
+          ],
+          "priorityTerms": [
+            "method"
+          ],
+          "methodTerms": [
+            "randomized"
+          ],
+          "weights": {
+            "relevance": 40,
+            "priority": 30,
+            "methods": 20,
+            "recency": 10
+          },
+          "lastAttemptAt": null,
+          "lastSuccessAt": null,
+          "nextRunAt": null,
+          "lastRun": null,
+          "retryAt": null
+        },
+        1793404800000
+      ],
+      "expected": {
+        "score": 70,
+        "reasons": [
+          {
+            "key": "relevance",
+            "points": 20,
+            "max": 40,
+            "matched": [
+              "evidence"
+            ]
+          },
+          {
+            "key": "priority",
+            "points": 30,
+            "max": 30,
+            "matched": [
+              "method"
+            ]
+          },
+          {
+            "key": "methods",
+            "points": 20,
+            "max": 20,
+            "matched": [
+              "randomized"
+            ]
+          },
+          {
+            "key": "recency",
+            "points": 0,
+            "max": 10,
+            "matched": []
+          }
+        ],
+        "excluded": false
+      }
+    },
+    {
+      "name": "rankPaper",
+      "args": [
+        {
+          "source": "crossref",
+          "sourceId": "10.1000/radar",
+          "title": "研究 evidence",
+          "authors": [
+            "Synthetic Author"
+          ],
+          "year": "2024",
+          "doi": "10.1000/radar",
+          "publication": "Fixture Journal",
+          "url": "https://doi.org/10.1000/radar",
+          "abstractText": "Evidence randomized method",
+          "keywords": []
+        },
+        {
+          "id": "topic-prior",
+          "revision": 2,
+          "name": "Synthetic topic",
+          "queries": [
+            "retrieval",
+            "evidence"
+          ],
+          "sources": [
+            "crossref",
+            "openalex"
+          ],
+          "lookbackDays": 90,
+          "intervalHours": 24,
+          "enabled": false,
+          "includeTerms": [
+            "evidence",
+            "研究"
+          ],
+          "excludeTerms": [
+            "exclude"
+          ],
+          "priorityTerms": [
+            "method"
+          ],
+          "methodTerms": [
+            "randomized"
+          ],
+          "weights": {
+            "relevance": 40,
+            "priority": 30,
+            "methods": 20,
+            "recency": 10
+          },
+          "lastAttemptAt": null,
+          "lastSuccessAt": null,
+          "nextRunAt": null,
+          "lastRun": null,
+          "retryAt": null
+        },
+        1793404800000
+      ],
+      "expected": {
+        "score": 98,
+        "reasons": [
+          {
+            "key": "relevance",
+            "points": 40,
+            "max": 40,
+            "matched": [
+              "evidence",
+              "研究"
+            ]
+          },
+          {
+            "key": "priority",
+            "points": 30,
+            "max": 30,
+            "matched": [
+              "method"
+            ]
+          },
+          {
+            "key": "methods",
+            "points": 20,
+            "max": 20,
+            "matched": [
+              "randomized"
+            ]
+          },
+          {
+            "key": "recency",
+            "points": 8,
+            "max": 10,
+            "matched": [
+              "2024"
+            ]
+          }
+        ],
+        "excluded": false
+      }
+    },
+    {
+      "name": "candidateKey",
+      "args": [
+        {
+          "source": "crossref",
+          "sourceId": "10.1000/radar",
+          "title": "Evidence retrieval method",
+          "authors": [
+            "Synthetic Author"
+          ],
+          "year": "2026",
+          "doi": "10.1000/radar",
+          "publication": "Fixture Journal",
+          "url": "https://doi.org/10.1000/radar",
+          "abstractText": "Evidence randomized method",
+          "keywords": []
+        }
+      ],
+      "expected": "candidate-4eac37dac8d72a019b54314f"
+    },
+    {
+      "name": "samePaper",
+      "args": [
+        {
+          "source": "crossref",
+          "sourceId": "10.1000/radar",
+          "title": "Evidence retrieval method",
+          "authors": [
+            "Synthetic Author"
+          ],
+          "year": "2026",
+          "doi": "10.1000/radar",
+          "publication": "Fixture Journal",
+          "url": "https://doi.org/10.1000/radar",
+          "abstractText": "Evidence randomized method",
+          "keywords": []
+        },
+        {
+          "source": "crossref",
+          "sourceId": "10.1000/radar",
+          "title": "Evidence retrieval method",
+          "authors": [
+            "Synthetic Author"
+          ],
+          "year": "2026",
+          "doi": "10.1000/radar",
+          "publication": "Fixture Journal",
+          "url": "https://doi.org/10.1000/radar",
+          "abstractText": "Evidence randomized method",
+          "keywords": []
+        }
+      ],
+      "expected": true
+    },
+    {
+      "name": "candidateKey",
+      "args": [
+        {
+          "source": "crossref",
+          "sourceId": "10.1000/radar",
+          "title": "Evidence retrieval method",
+          "authors": [
+            "Synthetic Author"
+          ],
+          "year": "2026",
+          "doi": "10.1000/other",
+          "publication": "Fixture Journal",
+          "url": "https://doi.org/10.1000/radar",
+          "abstractText": "Evidence randomized method",
+          "keywords": []
+        }
+      ],
+      "expected": "candidate-16105029bbebee60f49f58fe"
+    },
+    {
+      "name": "samePaper",
+      "args": [
+        {
+          "source": "crossref",
+          "sourceId": "10.1000/radar",
+          "title": "Evidence retrieval method",
+          "authors": [
+            "Synthetic Author"
+          ],
+          "year": "2026",
+          "doi": "10.1000/radar",
+          "publication": "Fixture Journal",
+          "url": "https://doi.org/10.1000/radar",
+          "abstractText": "Evidence randomized method",
+          "keywords": []
+        },
+        {
+          "source": "crossref",
+          "sourceId": "10.1000/radar",
+          "title": "Evidence retrieval method",
+          "authors": [
+            "Synthetic Author"
+          ],
+          "year": "2026",
+          "doi": "10.1000/other",
+          "publication": "Fixture Journal",
+          "url": "https://doi.org/10.1000/radar",
+          "abstractText": "Evidence randomized method",
+          "keywords": []
+        }
+      ],
+      "expected": false
+    },
+    {
+      "name": "candidateKey",
+      "args": [
+        {
+          "source": "crossref",
+          "sourceId": "10.1000/radar",
+          "title": "Evidence retrieval method",
+          "authors": [
+            "Synthetic Author"
+          ],
+          "year": "",
+          "doi": "",
+          "publication": "Fixture Journal",
+          "url": "https://doi.org/10.1000/radar",
+          "abstractText": "Evidence randomized method",
+          "keywords": []
+        }
+      ],
+      "expected": "candidate-a7a3936ba1df1e6397802e4b"
+    },
+    {
+      "name": "samePaper",
+      "args": [
+        {
+          "source": "crossref",
+          "sourceId": "10.1000/radar",
+          "title": "Evidence retrieval method",
+          "authors": [
+            "Synthetic Author"
+          ],
+          "year": "2026",
+          "doi": "10.1000/radar",
+          "publication": "Fixture Journal",
+          "url": "https://doi.org/10.1000/radar",
+          "abstractText": "Evidence randomized method",
+          "keywords": []
+        },
+        {
+          "source": "crossref",
+          "sourceId": "10.1000/radar",
+          "title": "Evidence retrieval method",
+          "authors": [
+            "Synthetic Author"
+          ],
+          "year": "",
+          "doi": "",
+          "publication": "Fixture Journal",
+          "url": "https://doi.org/10.1000/radar",
+          "abstractText": "Evidence randomized method",
+          "keywords": []
+        }
+      ],
+      "expected": false
+    },
+    {
+      "name": "candidateKey",
+      "args": [
+        {
+          "source": "crossref",
+          "sourceId": "10.1000/radar",
+          "title": "Evidence retrieval method",
+          "authors": [],
+          "year": "2026",
+          "doi": "",
+          "publication": "Fixture Journal",
+          "url": "https://doi.org/10.1000/radar",
+          "abstractText": "Evidence randomized method",
+          "keywords": []
+        }
+      ],
+      "expected": "candidate-3c002d97c30f28b0de81062c"
+    },
+    {
+      "name": "samePaper",
+      "args": [
+        {
+          "source": "crossref",
+          "sourceId": "10.1000/radar",
+          "title": "Evidence retrieval method",
+          "authors": [
+            "Synthetic Author"
+          ],
+          "year": "2026",
+          "doi": "10.1000/radar",
+          "publication": "Fixture Journal",
+          "url": "https://doi.org/10.1000/radar",
+          "abstractText": "Evidence randomized method",
+          "keywords": []
+        },
+        {
+          "source": "crossref",
+          "sourceId": "10.1000/radar",
+          "title": "Evidence retrieval method",
+          "authors": [],
+          "year": "2026",
+          "doi": "",
+          "publication": "Fixture Journal",
+          "url": "https://doi.org/10.1000/radar",
+          "abstractText": "Evidence randomized method",
+          "keywords": []
+        }
+      ],
+      "expected": false
+    },
+    {
+      "name": "candidatePaperId",
+      "args": [
+        "candidate-fixture"
+      ],
+      "expected": "paper-radar-536da99900c368b5b3c83de2"
+    },
+    {
+      "name": "buildQueue",
+      "args": [
+        {
+          "papers": [
+            {
+              "id": "paper-b",
+              "title": "Evidence retrieval method",
+              "authors": [
+                {
+                  "name": "Synthetic Author"
+                }
+              ],
+              "year": "2026",
+              "doi": "10.1000/radar",
+              "abstractText": "Evidence randomized method",
+              "readingProgress": 1,
+              "importedAt": 2,
+              "attachments": [
+                {
+                  "kind": "pdf",
+                  "missing": false
+                }
+              ]
+            },
+            {
+              "id": "paper-a",
+              "title": "研究 evidence",
+              "authors": [],
+              "year": "2024",
+              "abstractText": "Evidence method",
+              "importedAt": 1,
+              "attachments": []
+            }
+          ]
+        },
+        {
+          "topics": [
+            {
+              "id": "topic-prior",
+              "revision": 2,
+              "name": "Synthetic topic",
+              "queries": [
+                "retrieval",
+                "evidence"
+              ],
+              "sources": [
+                "crossref",
+                "openalex"
+              ],
+              "lookbackDays": 90,
+              "intervalHours": 24,
+              "enabled": false,
+              "includeTerms": [
+                "evidence",
+                "研究"
+              ],
+              "excludeTerms": [
+                "exclude"
+              ],
+              "priorityTerms": [
+                "method"
+              ],
+              "methodTerms": [
+                "randomized"
+              ],
+              "weights": {
+                "relevance": 40,
+                "priority": 30,
+                "methods": 20,
+                "recency": 10
+              },
+              "lastAttemptAt": null,
+              "lastSuccessAt": null,
+              "nextRunAt": null,
+              "lastRun": null,
+              "retryAt": null
+            }
+          ],
+          "candidates": [],
+          "queue": []
+        },
+        "topic-prior",
+        1793404800000
+      ],
+      "expected": [
+        {
+          "paper": {
+            "id": "paper-b",
+            "title": "Evidence retrieval method",
+            "authors": [
+              {
+                "name": "Synthetic Author"
+              }
+            ],
+            "year": "2026",
+            "doi": "10.1000/radar",
+            "abstractText": "Evidence randomized method",
+            "readingProgress": 1,
+            "importedAt": 2,
+            "attachments": [
+              {
+                "kind": "pdf",
+                "missing": false
+              }
+            ]
+          },
+          "score": 80,
+          "reasons": [
+            {
+              "key": "relevance",
+              "points": 20,
+              "max": 40,
+              "matched": [
+                "evidence"
+              ]
+            },
+            {
+              "key": "priority",
+              "points": 30,
+              "max": 30,
+              "matched": [
+                "method"
+              ]
+            },
+            {
+              "key": "methods",
+              "points": 20,
+              "max": 20,
+              "matched": [
+                "randomized"
+              ]
+            },
+            {
+              "key": "recency",
+              "points": 10,
+              "max": 10,
+              "matched": [
+                "2026"
+              ]
+            }
+          ],
+          "excluded": false,
+          "status": "unread",
+          "pinned": false,
+          "evidence": "pdf-available"
+        },
+        {
+          "paper": {
+            "id": "paper-a",
+            "title": "研究 evidence",
+            "authors": [],
+            "year": "2024",
+            "abstractText": "Evidence method",
+            "importedAt": 1,
+            "attachments": []
+          },
+          "score": 78,
+          "reasons": [
+            {
+              "key": "relevance",
+              "points": 40,
+              "max": 40,
+              "matched": [
+                "evidence",
+                "研究"
+              ]
+            },
+            {
+              "key": "priority",
+              "points": 30,
+              "max": 30,
+              "matched": [
+                "method"
+              ]
+            },
+            {
+              "key": "methods",
+              "points": 0,
+              "max": 20,
+              "matched": []
+            },
+            {
+              "key": "recency",
+              "points": 8,
+              "max": 10,
+              "matched": [
+                "2024"
+              ]
+            }
+          ],
+          "excluded": false,
+          "status": "unread",
+          "pinned": false,
+          "evidence": "abstract"
+        }
+      ]
+    },
+    {
+      "name": "buildQueue",
+      "args": [
+        {
+          "papers": [
+            {
+              "id": "paper-b",
+              "title": "Evidence retrieval method",
+              "authors": [
+                {
+                  "name": "Synthetic Author"
+                }
+              ],
+              "year": "2026",
+              "doi": "10.1000/radar",
+              "abstractText": "Evidence randomized method",
+              "readingProgress": 1,
+              "importedAt": 2,
+              "attachments": [
+                {
+                  "kind": "pdf",
+                  "missing": false
+                }
+              ]
+            },
+            {
+              "id": "paper-a",
+              "title": "研究 evidence",
+              "authors": [],
+              "year": "2024",
+              "abstractText": "Evidence method",
+              "importedAt": 1,
+              "attachments": []
+            }
+          ]
+        },
+        {
+          "topics": [
+            {
+              "id": "topic-prior",
+              "revision": 2,
+              "name": "Synthetic topic",
+              "queries": [
+                "retrieval",
+                "evidence"
+              ],
+              "sources": [
+                "crossref",
+                "openalex"
+              ],
+              "lookbackDays": 90,
+              "intervalHours": 24,
+              "enabled": false,
+              "includeTerms": [
+                "evidence",
+                "研究"
+              ],
+              "excludeTerms": [
+                "exclude"
+              ],
+              "priorityTerms": [
+                "method"
+              ],
+              "methodTerms": [
+                "randomized"
+              ],
+              "weights": {
+                "relevance": 40,
+                "priority": 30,
+                "methods": 20,
+                "recency": 10
+              },
+              "lastAttemptAt": null,
+              "lastSuccessAt": null,
+              "nextRunAt": null,
+              "lastRun": null,
+              "retryAt": null
+            }
+          ],
+          "candidates": [],
+          "queue": [
+            {
+              "paperId": "paper-a",
+              "pinned": true,
+              "status": "later"
+            }
+          ]
+        },
+        "topic-prior",
+        1793404800000
+      ],
+      "expected": [
+        {
+          "paper": {
+            "id": "paper-a",
+            "title": "研究 evidence",
+            "authors": [],
+            "year": "2024",
+            "abstractText": "Evidence method",
+            "importedAt": 1,
+            "attachments": []
+          },
+          "score": 78,
+          "reasons": [
+            {
+              "key": "relevance",
+              "points": 40,
+              "max": 40,
+              "matched": [
+                "evidence",
+                "研究"
+              ]
+            },
+            {
+              "key": "priority",
+              "points": 30,
+              "max": 30,
+              "matched": [
+                "method"
+              ]
+            },
+            {
+              "key": "methods",
+              "points": 0,
+              "max": 20,
+              "matched": []
+            },
+            {
+              "key": "recency",
+              "points": 8,
+              "max": 10,
+              "matched": [
+                "2024"
+              ]
+            }
+          ],
+          "excluded": false,
+          "status": "later",
+          "pinned": true,
+          "evidence": "abstract"
+        },
+        {
+          "paper": {
+            "id": "paper-b",
+            "title": "Evidence retrieval method",
+            "authors": [
+              {
+                "name": "Synthetic Author"
+              }
+            ],
+            "year": "2026",
+            "doi": "10.1000/radar",
+            "abstractText": "Evidence randomized method",
+            "readingProgress": 1,
+            "importedAt": 2,
+            "attachments": [
+              {
+                "kind": "pdf",
+                "missing": false
+              }
+            ]
+          },
+          "score": 80,
+          "reasons": [
+            {
+              "key": "relevance",
+              "points": 20,
+              "max": 40,
+              "matched": [
+                "evidence"
+              ]
+            },
+            {
+              "key": "priority",
+              "points": 30,
+              "max": 30,
+              "matched": [
+                "method"
+              ]
+            },
+            {
+              "key": "methods",
+              "points": 20,
+              "max": 20,
+              "matched": [
+                "randomized"
+              ]
+            },
+            {
+              "key": "recency",
+              "points": 10,
+              "max": 10,
+              "matched": [
+                "2026"
+              ]
+            }
+          ],
+          "excluded": false,
+          "status": "unread",
+          "pinned": false,
+          "evidence": "pdf-available"
+        }
+      ]
+    },
+    {
+      "name": "buildQueue",
+      "args": [
+        {
+          "papers": [
+            {
+              "id": "paper-b",
+              "title": "Evidence retrieval method",
+              "authors": [
+                {
+                  "name": "Synthetic Author"
+                }
+              ],
+              "year": "2026",
+              "doi": "10.1000/radar",
+              "abstractText": "Evidence randomized method",
+              "readingProgress": 1,
+              "importedAt": 2,
+              "attachments": [
+                {
+                  "kind": "pdf",
+                  "missing": false
+                }
+              ]
+            },
+            {
+              "id": "paper-a",
+              "title": "研究 evidence",
+              "authors": [],
+              "year": "2024",
+              "abstractText": "Evidence method",
+              "importedAt": 1,
+              "attachments": []
+            }
+          ]
+        },
+        {
+          "topics": [
+            {
+              "id": "topic-prior",
+              "revision": 2,
+              "name": "Synthetic topic",
+              "queries": [
+                "retrieval",
+                "evidence"
+              ],
+              "sources": [
+                "crossref",
+                "openalex"
+              ],
+              "lookbackDays": 90,
+              "intervalHours": 24,
+              "enabled": false,
+              "includeTerms": [
+                "evidence",
+                "研究"
+              ],
+              "excludeTerms": [
+                "exclude"
+              ],
+              "priorityTerms": [
+                "method"
+              ],
+              "methodTerms": [
+                "randomized"
+              ],
+              "weights": {
+                "relevance": 40,
+                "priority": 30,
+                "methods": 20,
+                "recency": 10
+              },
+              "lastAttemptAt": null,
+              "lastSuccessAt": null,
+              "nextRunAt": null,
+              "lastRun": null,
+              "retryAt": null
+            }
+          ],
+          "candidates": [],
+          "queue": [
+            {
+              "paperId": "paper-b",
+              "status": "read"
+            }
+          ]
+        },
+        "topic-prior",
+        1793404800000
+      ],
+      "expected": [
+        {
+          "paper": {
+            "id": "paper-b",
+            "title": "Evidence retrieval method",
+            "authors": [
+              {
+                "name": "Synthetic Author"
+              }
+            ],
+            "year": "2026",
+            "doi": "10.1000/radar",
+            "abstractText": "Evidence randomized method",
+            "readingProgress": 1,
+            "importedAt": 2,
+            "attachments": [
+              {
+                "kind": "pdf",
+                "missing": false
+              }
+            ]
+          },
+          "score": 80,
+          "reasons": [
+            {
+              "key": "relevance",
+              "points": 20,
+              "max": 40,
+              "matched": [
+                "evidence"
+              ]
+            },
+            {
+              "key": "priority",
+              "points": 30,
+              "max": 30,
+              "matched": [
+                "method"
+              ]
+            },
+            {
+              "key": "methods",
+              "points": 20,
+              "max": 20,
+              "matched": [
+                "randomized"
+              ]
+            },
+            {
+              "key": "recency",
+              "points": 10,
+              "max": 10,
+              "matched": [
+                "2026"
+              ]
+            }
+          ],
+          "excluded": false,
+          "status": "read",
+          "pinned": false,
+          "evidence": "pdf-available"
+        },
+        {
+          "paper": {
+            "id": "paper-a",
+            "title": "研究 evidence",
+            "authors": [],
+            "year": "2024",
+            "abstractText": "Evidence method",
+            "importedAt": 1,
+            "attachments": []
+          },
+          "score": 78,
+          "reasons": [
+            {
+              "key": "relevance",
+              "points": 40,
+              "max": 40,
+              "matched": [
+                "evidence",
+                "研究"
+              ]
+            },
+            {
+              "key": "priority",
+              "points": 30,
+              "max": 30,
+              "matched": [
+                "method"
+              ]
+            },
+            {
+              "key": "methods",
+              "points": 0,
+              "max": 20,
+              "matched": []
+            },
+            {
+              "key": "recency",
+              "points": 8,
+              "max": 10,
+              "matched": [
+                "2024"
+              ]
+            }
+          ],
+          "excluded": false,
+          "status": "unread",
+          "pinned": false,
+          "evidence": "abstract"
+        }
+      ]
+    }
+  ],
+  "merge": {
+    "state": {
+      "topics": [
+        {
+          "id": "topic-prior",
+          "revision": 2,
+          "name": "Synthetic topic",
+          "queries": [
+            "retrieval",
+            "evidence"
+          ],
+          "sources": [
+            "crossref",
+            "openalex"
+          ],
+          "lookbackDays": 90,
+          "intervalHours": 24,
+          "enabled": false,
+          "includeTerms": [
+            "evidence",
+            "研究"
+          ],
+          "excludeTerms": [
+            "exclude"
+          ],
+          "priorityTerms": [
+            "method"
+          ],
+          "methodTerms": [
+            "randomized"
+          ],
+          "weights": {
+            "relevance": 40,
+            "priority": 30,
+            "methods": 20,
+            "recency": 10
+          },
+          "lastAttemptAt": null,
+          "lastSuccessAt": null,
+          "nextRunAt": null,
+          "lastRun": null,
+          "retryAt": null
+        }
+      ],
+      "candidates": [],
+      "queue": []
+    },
+    "records": [
+      {
+        "source": "crossref",
+        "sourceId": "10.1000/radar",
+        "title": "Evidence retrieval method",
+        "authors": [
+          "Synthetic Author"
+        ],
+        "year": "2026",
+        "doi": "10.1000/radar",
+        "publication": "Fixture Journal",
+        "url": "https://doi.org/10.1000/radar",
+        "abstractText": "Evidence randomized method",
+        "keywords": []
+      },
+      {
+        "source": "openalex",
+        "sourceId": "https://openalex.org/W1",
+        "title": "Provider changed title",
+        "authors": [
+          "Synthetic Author"
+        ],
+        "year": "2026",
+        "doi": "10.1000/radar",
+        "publication": "Fixture Journal",
+        "url": "https://doi.org/10.1000/radar",
+        "abstractText": "Later abstract",
+        "keywords": []
+      },
+      {
+        "source": "crossref",
+        "sourceId": "10.1000/new",
+        "title": "New evidence",
+        "authors": [
+          "Synthetic Author"
+        ],
+        "year": "2026",
+        "doi": "10.1000/new",
+        "publication": "Fixture Journal",
+        "url": "https://doi.org/10.1000/radar",
+        "abstractText": "Evidence randomized method",
+        "keywords": []
+      },
+      {
+        "source": "crossref",
+        "sourceId": "10.1000/excluded",
+        "title": "Evidence retrieval method",
+        "authors": [
+          "Synthetic Author"
+        ],
+        "year": "2026",
+        "doi": "10.1000/excluded",
+        "publication": "Fixture Journal",
+        "url": "https://doi.org/10.1000/radar",
+        "abstractText": "exclude",
+        "keywords": []
+      }
+    ],
+    "topic": {
+      "id": "topic-prior",
+      "revision": 2,
+      "name": "Synthetic topic",
+      "queries": [
+        "retrieval",
+        "evidence"
+      ],
+      "sources": [
+        "crossref",
+        "openalex"
+      ],
+      "lookbackDays": 90,
+      "intervalHours": 24,
+      "enabled": false,
+      "includeTerms": [
+        "evidence",
+        "研究"
+      ],
+      "excludeTerms": [
+        "exclude"
+      ],
+      "priorityTerms": [
+        "method"
+      ],
+      "methodTerms": [
+        "randomized"
+      ],
+      "weights": {
+        "relevance": 40,
+        "priority": 30,
+        "methods": 20,
+        "recency": 10
+      },
+      "lastAttemptAt": null,
+      "lastSuccessAt": null,
+      "nextRunAt": null,
+      "lastRun": null,
+      "retryAt": null
+    },
+    "at": 1793404800000,
+    "library": {
+      "papers": [
+        {
+          "id": "paper-b",
+          "title": "Evidence retrieval method",
+          "authors": [
+            {
+              "name": "Synthetic Author"
+            }
+          ],
+          "year": "2026",
+          "doi": "10.1000/radar",
+          "abstractText": "Evidence randomized method",
+          "readingProgress": 1,
+          "importedAt": 2,
+          "attachments": [
+            {
+              "kind": "pdf",
+              "missing": false
+            }
+          ]
+        },
+        {
+          "id": "paper-a",
+          "title": "研究 evidence",
+          "authors": [],
+          "year": "2024",
+          "abstractText": "Evidence method",
+          "importedAt": 1,
+          "attachments": []
+        }
+      ]
+    },
+    "expectedStats": {
+      "added": 1,
+      "known": 1,
+      "capacity": false
+    },
+    "expectedState": {
+      "topics": [
+        {
+          "id": "topic-prior",
+          "revision": 2,
+          "name": "Synthetic topic",
+          "queries": [
+            "retrieval",
+            "evidence"
+          ],
+          "sources": [
+            "crossref",
+            "openalex"
+          ],
+          "lookbackDays": 90,
+          "intervalHours": 24,
+          "enabled": false,
+          "includeTerms": [
+            "evidence",
+            "研究"
+          ],
+          "excludeTerms": [
+            "exclude"
+          ],
+          "priorityTerms": [
+            "method"
+          ],
+          "methodTerms": [
+            "randomized"
+          ],
+          "weights": {
+            "relevance": 40,
+            "priority": 30,
+            "methods": 20,
+            "recency": 10
+          },
+          "lastAttemptAt": null,
+          "lastSuccessAt": null,
+          "nextRunAt": null,
+          "lastRun": null,
+          "retryAt": null
+        }
+      ],
+      "candidates": [
+        {
+          "source": "crossref",
+          "sourceId": "10.1000/radar",
+          "title": "Evidence retrieval method",
+          "authors": [
+            "Synthetic Author"
+          ],
+          "year": "2026",
+          "doi": "10.1000/radar",
+          "publication": "Fixture Journal",
+          "url": "https://doi.org/10.1000/radar",
+          "abstractText": "Evidence randomized method",
+          "keywords": [],
+          "id": "candidate-4eac37dac8d72a019b54314f",
+          "topicIds": [
+            "topic-prior"
+          ],
+          "sources": [
+            "crossref"
+          ],
+          "discoveredAt": 1793404800000,
+          "lastSeenAt": 1793404800000,
+          "dismissed": false,
+          "paperId": "paper-b"
+        },
+        {
+          "source": "crossref",
+          "sourceId": "10.1000/new",
+          "title": "New evidence",
+          "authors": [
+            "Synthetic Author"
+          ],
+          "year": "2026",
+          "doi": "10.1000/new",
+          "publication": "Fixture Journal",
+          "url": "https://doi.org/10.1000/radar",
+          "abstractText": "Evidence randomized method",
+          "keywords": [],
+          "id": "candidate-b9403ce7b69b9e2a4e15aed5",
+          "topicIds": [
+            "topic-prior"
+          ],
+          "sources": [
+            "crossref"
+          ],
+          "discoveredAt": 1793404800000,
+          "lastSeenAt": 1793404800000,
+          "dismissed": false,
+          "paperId": null
+        }
+      ],
+      "queue": []
+    }
+  },
+  "mappings": [
+    {
+      "source": "crossref",
+      "item": {
+        "DOI": "10.1000/radar",
+        "title": [
+          "Evidence"
+        ],
+        "published": {
+          "date-parts": [
+            [
+              2026,
+              10,
+              1
+            ]
+          ]
+        },
+        "author": [
+          {
+            "given": "Synthetic",
+            "family": "Author"
+          }
+        ],
+        "abstract": "<jats:p>Visible <b>evidence</b>.</jats:p>",
+        "container-title": [
+          "Fixture"
+        ]
+      },
+      "expected": {
+        "source": "crossref",
+        "sourceId": "10.1000/radar",
+        "title": "Evidence",
+        "doi": "10.1000/radar",
+        "authors": [
+          "Synthetic Author"
+        ],
+        "year": "2026",
+        "publication": "Fixture",
+        "url": "https://doi.org/10.1000/radar",
+        "abstractText": "Visible evidence .",
+        "keywords": []
+      }
+    },
+    {
+      "source": "openalex",
+      "item": {
+        "id": "https://openalex.org/W1",
+        "doi": "https://doi.org/10.1000/radar",
+        "title": "Evidence",
+        "publication_year": 2026,
+        "authorships": [
+          {
+            "author": {
+              "display_name": "Synthetic Author"
+            }
+          }
+        ],
+        "abstract_inverted_index": {
+          "Visible": [
+            0
+          ],
+          "evidence": [
+            1
+          ]
+        },
+        "primary_location": {
+          "source": {
+            "display_name": "Fixture"
+          }
+        }
+      },
+      "expected": {
+        "source": "openalex",
+        "sourceId": "https://openalex.org/W1",
+        "title": "Evidence",
+        "doi": "10.1000/radar",
+        "authors": [
+          "Synthetic Author"
+        ],
+        "year": "2026",
+        "publication": "Fixture",
+        "url": "https://doi.org/10.1000/radar",
+        "abstractText": "Visible evidence",
+        "keywords": []
+      }
+    },
+    {
+      "source": "crossref",
+      "item": {
+        "title": [
+          "No DOI"
+        ]
+      },
+      "expected": null
+    },
+    {
+      "source": "openalex",
+      "item": {
+        "id": "https://openalex.org/W2",
+        "title": "No DOI",
+        "publication_year": 1800
+      },
+      "expected": {
+        "source": "openalex",
+        "sourceId": "https://openalex.org/W2",
+        "title": "No DOI",
+        "doi": "",
+        "authors": [],
+        "year": "1800",
+        "publication": "",
+        "url": "https://openalex.org/W2",
+        "abstractText": "",
+        "keywords": []
+      }
+    }
+  ]
+}

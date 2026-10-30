@@ -1,45 +1,9 @@
-const { DAY_MS, normalizeDoi, publicUrl, text } = require('./radarDomain.cjs');
+const { DAY_MS, mapWork } = require('./radarDomain.cjs');
 const { setTimeout: delay } = require('node:timers/promises');
 
 const PAGE_SIZE = 25;
 const MAX_PAGES = 2;
 const MAX_BYTES = 3 * 1024 * 1024;
-
-function plainAbstract(value) {
-  return text(typeof value === 'string' ? value.replace(/<[^>]*>/g, ' ') : '', 12000);
-}
-
-function openAlexAbstract(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return '';
-  const words = [];
-  for (const [word, positions] of Object.entries(value).slice(0, 4000)) {
-    for (const position of (Array.isArray(positions) ? positions : []).slice(0, 100)) {
-      if (Number.isInteger(position) && position >= 0 && position < 4000) words[position] = text(word, 100);
-    }
-  }
-  return text(words.join(' '), 12000);
-}
-
-function mapWork(source, item) {
-  if (!item || typeof item !== 'object') return null;
-  const doi = normalizeDoi(source === 'openalex' ? item.doi : item.DOI);
-  const title = text(source === 'openalex' ? item.title || item.display_name : Array.isArray(item.title) ? item.title[0] : '', 1000);
-  if (!title) return null;
-  const year = source === 'openalex' ? item.publication_year :
-    (item.published?.['date-parts']?.[0]?.[0] || item['published-online']?.['date-parts']?.[0]?.[0] || item.issued?.['date-parts']?.[0]?.[0]);
-  const authors = source === 'openalex'
-    ? (Array.isArray(item.authorships) ? item.authorships : []).slice(0, 100).map((a) => text(a?.author?.display_name, 200)).filter(Boolean)
-    : (Array.isArray(item.author) ? item.author : []).slice(0, 100).map((a) => text(a?.name || `${a?.given || ''} ${a?.family || ''}`, 200)).filter(Boolean);
-  const sourceId = text(source === 'openalex' ? item.id : doi, 500);
-  if (!sourceId) return null;
-  return { source, sourceId, title, doi, authors,
-    year: Number.isInteger(Number(year)) && Number(year) >= 1800 && Number(year) < 2200 ? String(year) : '',
-    publication: text(source === 'openalex' ? item.primary_location?.source?.display_name : item['container-title']?.[0], 500),
-    url: doi ? `https://doi.org/${doi}` : publicUrl(source === 'openalex' ? item.primary_location?.landing_page_url || item.id : item.URL),
-    abstractText: source === 'openalex' ? openAlexAbstract(item.abstract_inverted_index) : plainAbstract(item.abstract),
-    keywords: [],
-  };
-}
 
 async function readBoundedJson(response) {
   if (!response.ok) {
@@ -73,7 +37,7 @@ async function readBoundedJson(response) {
   } finally { await reader.cancel().catch(() => {}); }
 }
 
-async function searchTopic(topic, settings = {}, { signal, fetchImpl = fetch, timestamp = Date.now(), throttleMs = 500 } = {}) {
+async function searchTopic(topic, settings = {}, { signal, fetchImpl = fetch, timestamp = Date.now(), throttleMs = 1100 } = {}) {
   const records = [], reports = [];
   const from = new Date(timestamp - topic.lookbackDays * DAY_MS).toISOString().slice(0, 10);
   const until = new Date(timestamp).toISOString().slice(0, 10);

@@ -1,5 +1,5 @@
 import type {FeatureInspection} from './inspector.ts';
-export type FeatureAction='library'|'notes'|'sync'|'conflicts'|'transfer'|'incoming'|'cloud'|'remote'|'zotero'|'research'|'review'|'graph'|'ai-settings'|'exports';
+export type FeatureAction='library'|'notes'|'sync'|'conflicts'|'transfer'|'incoming'|'cloud'|'remote'|'zotero'|'research'|'review'|'graph'|'radar'|'ai-settings'|'exports';
 export type FeatureState='available'|'conditional'|'partial'|'unavailable'|'planned'|'managed';
 export type FeatureMode='local'|'service'|'computer'|'external'|'mixed'|'operator';
 export interface FeatureRow {id:string;title:string;group:'account'|'library'|'sync'|'reading'|'notes'|'ai'|'research'|'operations';mode:FeatureMode;state:FeatureState;reason:string;action?:FeatureAction}
@@ -65,7 +65,7 @@ export function capabilityCatalog(e:FeatureEnvironment):FeatureRow[]{
  local('AI-05','取消、失败与费用提示','ai','生成时可停止等待；外部处理可能仍有费用。实际用量和未知费用分别呈现，检查能力不会调用模型。','ai-settings');
  remote('AI-06','远程解析与向量索引','ai','computer',s?Boolean(s.remoteTasks):null,i.providersError?'电脑配置本次未确认：'+i.providersError:present.computers?'最近检查可见解析配置 '+present.parse+' 个、索引配置 '+present.index+' 个；每类任务仍需相应电脑在线、来源和配额有效。':present.stale?'上次电脑信息已过期，请重新检查；现有任务仍可在任务页查询。':'暂未发现有效的电脑执行配置。请在同账号电脑上明确开启后重新检查。','remote');
  add('AI-07','电脑模型与专用网关','ai','mixed','partial','自定义兼容API可自行填写服务地址；专用电脑模型能力、网关授权与故障回退尚未接入，不能由一个地址推断已经支持。',e.ready?'ai-settings':undefined);
- add('PAR-01','文献雷达与推荐证据','research','mixed','partial','收藏、阅读状态与队列已有入口；雷达主题、推荐来源与证据业务尚未接入。',e.ready?'library':undefined);
+ add('PAR-01','文献雷达与推荐证据','research','mixed',e.ready?'partial':'unavailable',e.ready?'已接入主题配置、Crossref/OpenAlex手动查询、逐页断点、来源与评分证据、候选采用和本机阅读建议。主题与雷达标记不跨端同步；真实材料、现代WebView和设备验收仍待。':'先打开此账号在本机的文库副本。',e.ready?'radar':undefined);
  add('PAR-02','多篇问答与Agent','research','mixed',!e.ready?'unavailable':'partial','已接入多来源片段选择、实际发送预览、引用核对和结果保存；Agent工具审批、远程检索与委托执行尚未接入。',e.ready?'research':undefined);
  add('PAR-03','综述章节与引文核对','research','mixed',e.ready&&e.modelRuntime?'partial':'unavailable',e.ready&&e.modelRuntime?'已接入文献与笔记材料、蓝图和章节编辑、分段断点、引文校验及Word导出；真实外部模型、实机与桌面对应业务验收仍待完成。':!e.ready?'先登录并打开此账号在本机的文库副本。':'当前运行环境未提供模型与综述工作区，本机文库和笔记仍可访问。',e.ready&&e.modelRuntime?'review':undefined);
  add('PAR-04','知识图谱','research','local',e.ready?'partial':'unavailable',e.ready?'可触控浏览当前账号的文献、笔记链接、标签、按名称重建的分类与共同作者，检索、查看关系来源并导出JSON。桌面私有参考文献/向量/自定义关系尚未同步，真实材料与设备验收仍待。':'先打开此账号在本机的文库副本。',e.ready?'graph':undefined);

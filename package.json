@@ -164,7 +164,8 @@
       "node_modules/sqlite-vec/**/*",
       "node_modules/sqlite-vec-*/*",
       "node_modules/xmlbuilder/**/*",
-      "!node_modules/canvas/**/*"
+      "!node_modules/canvas/**/*",
+      "packages/radar-core/index.cjs"
     ],
     "mac": {
       "target": "dmg",

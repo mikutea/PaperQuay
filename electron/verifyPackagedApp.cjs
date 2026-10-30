@@ -28,6 +28,12 @@ try {
 
   require(pakoEntry);
   require(path.join(pizzipDirectory, 'flate.js'));
+  const radarDomain=require(path.join(extractionRoot,'electron','backend','radarDomain.cjs'));
+  const radarSources=require(path.join(extractionRoot,'electron','backend','radarSources.cjs'));
+  const radarTopic=radarDomain.normalizeTopic({name:'Packaged radar',queries:['evidence'],includeTerms:['evidence'],sources:['crossref']});
+  const radarRecord=radarDomain.mapWork('crossref',{DOI:'10.5555/packaged-radar',title:['Evidence in package'],published:{'date-parts':[[2026]]}});
+  const radarState={topics:[radarTopic],candidates:[],queue:[]};
+  if(!radarRecord||radarDomain.mergeCandidates(radarState,[radarRecord],radarTopic,0,{papers:[]}).added!==1||radarDomain.rankPaper(radarRecord,radarTopic,Date.UTC(2026,0,1)).score<=0||typeof radarSources.searchTopic!=='function')throw new Error('Packaged radar derivation failed.');
   const graphCore=require(path.join(extractionRoot,'packages','graph-core','index.cjs')).createKnowledgeGraphCore();
   const graphSmoke=graphCore.createKnowledgeGraphSnapshot({store:{load:()=>({papers:[{id:'synthetic',title:'Packaged graph',authors:[],tags:[{name:'Evidence'}]}],categories:[]})},noteStore:{listAllNotes:()=>[]}}, {includeCustomRelations:false});
   if(graphSmoke.nodes.length!==2||graphSmoke.edges[0]?.type!=='paper_tag')throw new Error('Packaged graph derivation failed.');
