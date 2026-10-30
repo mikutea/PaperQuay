@@ -126,6 +126,7 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
+      "packages/review-core/index.cjs",
       "!electron/native/build/**/*",
       "!electron/native/*.cc",
       "!electron/native/binding.gyp",

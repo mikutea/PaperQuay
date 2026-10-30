@@ -28,6 +28,15 @@ try {
 
   require(pakoEntry);
   require(path.join(pizzipDirectory, 'flate.js'));
+  const reviewCorePath=path.join(extractionRoot,'packages','review-core','index.cjs');
+  const {createReviewCore}=require(reviewCorePath);
+  const reviewCore=createReviewCore();
+  for(const name of ['normalizeReviewBlueprint','buildReviewBlueprintPrompt','composeReviewDraftFromGeneratedParts','reviewDraftToMarkdown','renderReviewPackage']) {
+    if(typeof reviewCore[name]!=='function')throw new Error('Packaged review core is missing '+name+'.');
+  }
+  const reviewCheck=spawnSync(process.execPath,['-e',"(function(){const {createRequire}=require('node:module'),path=require('node:path'),root=process.argv[1],load=createRequire(path.join(root,'package.json'));const {createReviewCore}=load('./packages/review-core/index.cjs');const word=createReviewCore({PizZip:load('pizzip'),Docxtemplater:load('docxtemplater'),temml:load('temml'),mathml2omml:load('mathml2omml'),DOMParser:load('@xmldom/xmldom').DOMParser,binaryType:'nodebuffer',readFigure:async()=>({imageBuffer:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=','base64'),extension:'png'})});const data=word.normalizeReviewJsonDraft({title:'Packaged review smoke',sections:[{heading:'Evidence',content:'Evidence [P1].\\n\\n$$E=mc^2$$\\n\\n[Figure: P1-F1]',citations:['P1']}],sources:[{id:'P1',title:'Synthetic source',sourceType:'paper'}],references:[{id:'P1',title:'Synthetic source',authors:'Synthetic A',year:'2026'}],figures:[{id:'P1-F1',sourceId:'P1',caption:'Synthetic image',path:'fixture://package/image'}]});word.renderReviewPackage({data}).then(result=>{if(result.validation.status!=='passed'||result.validation.imageCount!==1||result.validation.formulaCount!==1||result.skippedFigures.length)throw new Error(JSON.stringify(result.validation));console.log('Packaged review Word smoke passed: image, formal reference and editable formula.');}).catch(error=>{console.error(error);process.exitCode=1;});})()",extractionRoot],{stdio:'inherit',windowsHide:true});
+  if(reviewCheck.error)throw reviewCheck.error;
+  if(reviewCheck.status!==0)throw new Error('Packaged review Word runtime failed verification.');
   const syncCore = require(path.join(extractionRoot, 'electron', 'generated', 'desktopSyncCore.cjs'));
   for (const name of ['projectDesktopLibrary', 'createDesktopIdentityMap', 'queueLocalCreates', 'preparePush', 'applyPushResults', 'verifyParsedDocument', 'inspectParsedImage']) {
     if (typeof syncCore[name] !== 'function') throw new Error(`Packaged desktop sync core is missing ${name}.`);

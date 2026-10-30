@@ -1,0 +1,874 @@
+{
+  "context": [
+    {
+      "id": "P1",
+      "sourceType": "paper",
+      "title": "Synthetic grounded reading",
+      "authors": "Synthetic A",
+      "year": "2026",
+      "journal": "Fixture Journal",
+      "pages": "1-2",
+      "doi": "10.1000/synthetic.1",
+      "text": "Grounded reading compares evidence across documents.",
+      "figures": [
+        {
+          "id": "P1-F1",
+          "sourceId": "P1",
+          "caption": "Synthetic fixture pixels",
+          "path": "fixture://review/figure-1",
+          "kind": "image",
+          "pageIndex": 1,
+          "blockId": "b1"
+        }
+      ]
+    },
+    {
+      "id": "N1",
+      "sourceType": "note",
+      "title": "Synthetic research note",
+      "text": "A note separates evidence from interpretation."
+    }
+  ],
+  "options": {
+    "contextItems": [
+      {
+        "id": "P1",
+        "sourceType": "paper",
+        "title": "Synthetic grounded reading",
+        "authors": "Synthetic A",
+        "year": "2026",
+        "journal": "Fixture Journal",
+        "pages": "1-2",
+        "doi": "10.1000/synthetic.1",
+        "text": "Grounded reading compares evidence across documents.",
+        "figures": [
+          {
+            "id": "P1-F1",
+            "sourceId": "P1",
+            "caption": "Synthetic fixture pixels",
+            "path": "fixture://review/figure-1",
+            "kind": "image",
+            "pageIndex": 1,
+            "blockId": "b1"
+          }
+        ]
+      },
+      {
+        "id": "N1",
+        "sourceType": "note",
+        "title": "Synthetic research note",
+        "text": "A note separates evidence from interpretation."
+      }
+    ],
+    "intent": "Compare grounded reading workflows",
+    "reviewType": "comparative",
+    "targetAudience": "Researchers",
+    "outputLanguage": "English"
+  },
+  "rawBlueprint": {
+    "title": "Synthetic review",
+    "keywords": [
+      "grounding"
+    ],
+    "intentSummary": "Compare the same evidence",
+    "thesis": "Evidence must stay traceable.",
+    "abstractTask": {
+      "task": "Summarize",
+      "evidenceIds": [
+        "P1"
+      ]
+    },
+    "introductionTask": {
+      "task": "Introduce",
+      "evidenceIds": [
+        "P1"
+      ]
+    },
+    "sections": [
+      {
+        "id": "section-1",
+        "heading": "Evidence synthesis",
+        "task": "Compare",
+        "evidenceIds": [
+          "P1",
+          "N1"
+        ],
+        "paragraphTasks": [
+          {
+            "id": "p1",
+            "task": "Compare the findings",
+            "evidenceIds": [
+              "P1",
+              "N1"
+            ]
+          }
+        ]
+      }
+    ],
+    "comparisonTable": [
+      {
+        "id": "c1",
+        "theme": "Grounding",
+        "task": "Compare sources",
+        "evidenceIds": [
+          "P1",
+          "N1"
+        ]
+      }
+    ],
+    "researchGaps": [
+      {
+        "task": "Describe limits",
+        "evidenceIds": [
+          "N1"
+        ]
+      }
+    ],
+    "futureDirections": [
+      {
+        "task": "Describe next steps",
+        "evidenceIds": [
+          "P1"
+        ]
+      }
+    ],
+    "conclusionTask": {
+      "task": "Conclude",
+      "evidenceIds": [
+        "P1"
+      ]
+    },
+    "figures": [
+      {
+        "id": "P1-F1",
+        "placement": "Evidence synthesis",
+        "reason": "Show verified fixture"
+      }
+    ]
+  },
+  "rawParts": {
+    "abstract": {
+      "content": "Grounded reading [P1].",
+      "citations": [
+        "P1"
+      ]
+    },
+    "introduction": {
+      "content": "Compare **verified sources** [P1].",
+      "citations": [
+        "P1"
+      ]
+    },
+    "sectionParagraphs": [
+      [
+        {
+          "content": "Evidence agrees [P1][N1].\n\n- First finding\n- Second finding\n\n$$E=mc^2$$\n\n[Figure: P1-F1]",
+          "citations": [
+            "P1",
+            "N1"
+          ]
+        }
+      ]
+    ],
+    "comparisonTable": [
+      {
+        "content": "Both expose origins [P1][N1].",
+        "citations": [
+          "P1",
+          "N1"
+        ]
+      }
+    ],
+    "researchGaps": [
+      {
+        "content": "Evidence is synthetic [N1].",
+        "citations": [
+          "N1"
+        ]
+      }
+    ],
+    "futureDirections": [
+      {
+        "content": "Verify real settings [P1].",
+        "citations": [
+          "P1"
+        ]
+      }
+    ],
+    "conclusion": {
+      "content": "Traceability matters [P1].",
+      "citations": [
+        "P1"
+      ]
+    }
+  },
+  "blueprint": {
+    "title": "Synthetic review",
+    "keywords": [
+      "grounding"
+    ],
+    "intentSummary": "Compare the same evidence",
+    "thesis": "Evidence must stay traceable.",
+    "abstractTask": {
+      "task": "Summarize",
+      "evidenceIds": [
+        "P1"
+      ],
+      "retrievalNotes": "",
+      "keyEvidence": [],
+      "target": ""
+    },
+    "introductionTask": {
+      "task": "Introduce",
+      "evidenceIds": [
+        "P1"
+      ],
+      "retrievalNotes": "",
+      "keyEvidence": [],
+      "target": ""
+    },
+    "sections": [
+      {
+        "id": "section-1",
+        "heading": "Evidence synthesis",
+        "task": "Compare",
+        "evidenceIds": [
+          "P1",
+          "N1"
+        ],
+        "retrievalNotes": "",
+        "keyEvidence": [],
+        "target": "",
+        "paragraphTasks": [
+          {
+            "id": "p1",
+            "task": "Compare the findings",
+            "evidenceIds": [
+              "P1",
+              "N1"
+            ],
+            "retrievalNotes": "",
+            "keyEvidence": [],
+            "target": ""
+          }
+        ]
+      }
+    ],
+    "comparisonTable": [
+      {
+        "id": "c1",
+        "theme": "Grounding",
+        "task": "Compare sources",
+        "evidenceIds": [
+          "P1",
+          "N1"
+        ],
+        "retrievalNotes": "",
+        "keyEvidence": [],
+        "target": ""
+      }
+    ],
+    "researchGaps": [
+      {
+        "id": "gap-1",
+        "task": "Describe limits",
+        "evidenceIds": [
+          "N1"
+        ],
+        "retrievalNotes": "",
+        "keyEvidence": [],
+        "target": ""
+      }
+    ],
+    "futureDirections": [
+      {
+        "id": "future-1",
+        "task": "Describe next steps",
+        "evidenceIds": [
+          "P1"
+        ],
+        "retrievalNotes": "",
+        "keyEvidence": [],
+        "target": ""
+      }
+    ],
+    "conclusionTask": {
+      "task": "Conclude",
+      "evidenceIds": [
+        "P1"
+      ],
+      "retrievalNotes": "",
+      "keyEvidence": [],
+      "target": ""
+    },
+    "references": [],
+    "sources": [],
+    "figures": [
+      {
+        "id": "P1-F1",
+        "sourceId": "P1",
+        "title": "",
+        "sourceTitle": "Synthetic grounded reading",
+        "caption": "Synthetic fixture pixels",
+        "path": "fixture://review/figure-1",
+        "pageIndex": 1,
+        "blockId": "b1",
+        "kind": "image",
+        "placement": "Evidence synthesis",
+        "reason": "Show verified fixture"
+      }
+    ]
+  },
+  "parts": {
+    "abstract": {
+      "content": "Grounded reading [P1].",
+      "citations": [
+        "P1"
+      ]
+    },
+    "introduction": {
+      "content": "Compare **verified sources** [P1].",
+      "citations": [
+        "P1"
+      ]
+    },
+    "sectionParagraphs": [
+      [
+        {
+          "content": "Evidence agrees [P1][N1].\n\n- First finding\n- Second finding\n\n$$E=mc^2$$\n\n[Figure: P1-F1]",
+          "citations": [
+            "P1",
+            "N1"
+          ]
+        }
+      ]
+    ],
+    "comparisonTable": [
+      {
+        "content": "Both expose origins [P1][N1].",
+        "citations": [
+          "P1",
+          "N1"
+        ]
+      }
+    ],
+    "researchGaps": [
+      {
+        "content": "Evidence is synthetic [N1].",
+        "citations": [
+          "N1"
+        ]
+      }
+    ],
+    "futureDirections": [
+      {
+        "content": "Verify real settings [P1].",
+        "citations": [
+          "P1"
+        ]
+      }
+    ],
+    "conclusion": {
+      "content": "Traceability matters [P1].",
+      "citations": [
+        "P1"
+      ]
+    }
+  },
+  "draft": {
+    "title": "Synthetic review",
+    "abstract": "Grounded reading [P1].",
+    "keywords": [
+      "grounding"
+    ],
+    "intentSummary": "Compare the same evidence",
+    "thesis": "Evidence must stay traceable.",
+    "introduction": "Compare **verified sources** [P1].",
+    "sections": [
+      {
+        "id": "section-1",
+        "heading": "Evidence synthesis",
+        "content": "Evidence agrees [P1][N1].\n\n- First finding\n- Second finding\n\n$$E=mc^2$$\n\n[Figure: P1-F1]",
+        "citations": [
+          "P1",
+          "N1"
+        ]
+      }
+    ],
+    "comparisonTable": [
+      {
+        "theme": "Grounding",
+        "papers": [
+          "P1",
+          "N1"
+        ],
+        "conclusion": "Both expose origins [P1][N1]."
+      }
+    ],
+    "researchGaps": [
+      "Evidence is synthetic [N1]."
+    ],
+    "futureDirections": [
+      "Verify real settings [P1]."
+    ],
+    "conclusion": "Traceability matters [P1].",
+    "references": [
+      {
+        "id": "P1",
+        "title": "Synthetic grounded reading",
+        "authors": "Synthetic A",
+        "year": "2026",
+        "journal": "Fixture Journal",
+        "pages": "1-2",
+        "doi": "10.1000/synthetic.1"
+      },
+      {
+        "id": "N1",
+        "title": "Synthetic research note",
+        "authors": "",
+        "year": "",
+        "journal": "",
+        "pages": "",
+        "doi": ""
+      }
+    ],
+    "sources": [
+      {
+        "id": "P1",
+        "title": "Synthetic grounded reading",
+        "sourceType": "paper",
+        "relevance": "Grounded reading compares evidence across documents."
+      },
+      {
+        "id": "N1",
+        "title": "Synthetic research note",
+        "sourceType": "note",
+        "relevance": "A note separates evidence from interpretation."
+      }
+    ],
+    "figures": [
+      {
+        "id": "P1-F1",
+        "sourceId": "P1",
+        "title": "",
+        "sourceTitle": "Synthetic grounded reading",
+        "caption": "Synthetic fixture pixels",
+        "path": "fixture://review/figure-1",
+        "pageIndex": 1,
+        "blockId": "b1",
+        "kind": "image",
+        "placement": "Evidence synthesis",
+        "reason": "Show verified fixture"
+      }
+    ]
+  },
+  "prepared": {
+    "title": "Synthetic review",
+    "abstract": "Grounded reading [1].",
+    "keywords": [
+      "grounding"
+    ],
+    "intentSummary": "Compare the same evidence",
+    "thesis": "Evidence must stay traceable.",
+    "introduction": "Compare verified sources [1].",
+    "sections": [
+      {
+        "id": "section-1",
+        "heading": "Evidence synthesis",
+        "content": "Evidence agrees [1][2].\n\n• First finding\n\n• Second finding\n\n$$E=mc^2$$",
+        "citations": [
+          "P1",
+          "N1"
+        ],
+        "citationLabels": [
+          "[1]",
+          "[2]"
+        ],
+        "citationText": "",
+        "paragraphs": [
+          {
+            "kind": "paragraph",
+            "text": "Evidence agrees [1][2].",
+            "marker": "",
+            "suffixText": "",
+            "isParagraph": true,
+            "isList": false,
+            "isHeading": false,
+            "isQuote": false,
+            "isEquation": false,
+            "hasText": true,
+            "citationText": "",
+            "inlineFigures": [],
+            "hasInlineFigures": false
+          },
+          {
+            "kind": "bullet",
+            "text": "First finding",
+            "marker": "• ",
+            "suffixText": "",
+            "isParagraph": false,
+            "isList": true,
+            "isHeading": false,
+            "isQuote": false,
+            "isEquation": false,
+            "hasText": true,
+            "citationText": "",
+            "inlineFigures": [],
+            "hasInlineFigures": false
+          },
+          {
+            "kind": "bullet",
+            "text": "Second finding",
+            "marker": "• ",
+            "suffixText": "",
+            "isParagraph": false,
+            "isList": true,
+            "isHeading": false,
+            "isQuote": false,
+            "isEquation": false,
+            "hasText": true,
+            "citationText": "",
+            "inlineFigures": [],
+            "hasInlineFigures": false
+          },
+          {
+            "kind": "equation",
+            "text": "$$E=mc^2$$",
+            "marker": "",
+            "suffixText": "",
+            "isParagraph": false,
+            "isList": false,
+            "isHeading": false,
+            "isQuote": false,
+            "isEquation": true,
+            "hasText": true,
+            "citationText": "",
+            "inlineFigures": [],
+            "hasInlineFigures": false
+          },
+          {
+            "kind": "paragraph",
+            "text": "",
+            "marker": "",
+            "suffixText": "",
+            "isParagraph": true,
+            "isList": false,
+            "isHeading": false,
+            "isQuote": false,
+            "isEquation": false,
+            "hasText": false,
+            "citationText": "",
+            "inlineFigures": [
+              {
+                "id": "P1-F1",
+                "sourceId": "P1",
+                "title": "",
+                "sourceTitle": "Synthetic grounded reading",
+                "caption": "Synthetic fixture pixels",
+                "path": "fixture://review/figure-1",
+                "pageIndex": 1,
+                "blockId": "b1",
+                "kind": "image",
+                "placement": "Evidence synthesis",
+                "reason": "Show verified fixture",
+                "number": "1",
+                "marker": "__PAPERQUAY_REVIEW_FIGURE_1__",
+                "sourceLabel": "[1]",
+                "captionText": "Figure 1. Synthetic fixture pixels [1]"
+              }
+            ],
+            "hasInlineFigures": true
+          }
+        ]
+      }
+    ],
+    "comparisonTable": [
+      {
+        "theme": "Grounding",
+        "papers": [
+          "P1",
+          "N1"
+        ],
+        "conclusion": "Both expose origins [1][2].",
+        "paperLabels": [
+          "[1]",
+          "[2]"
+        ],
+        "paperLabelsText": ""
+      }
+    ],
+    "researchGaps": [
+      "Evidence is synthetic [2]."
+    ],
+    "futureDirections": [
+      "Verify real settings [1]."
+    ],
+    "conclusion": "Traceability matters [1].",
+    "references": [
+      {
+        "id": "P1",
+        "number": "1",
+        "label": "[1]",
+        "title": "Synthetic grounded reading",
+        "authors": "Synthetic A",
+        "year": "2026",
+        "journal": "Fixture Journal",
+        "pages": "1-2",
+        "doi": "10.1000/synthetic.1",
+        "sourceType": "paper",
+        "formattedText": "Synthetic A. Synthetic grounded reading. Fixture Journal. 2026. pp. 1-2. DOI: 10.1000/synthetic.1."
+      },
+      {
+        "id": "N1",
+        "number": "2",
+        "label": "[2]",
+        "title": "Synthetic research note",
+        "authors": "",
+        "year": "",
+        "journal": "",
+        "pages": "",
+        "doi": "",
+        "sourceType": "note",
+        "formattedText": "Synthetic research note."
+      }
+    ],
+    "sources": [
+      {
+        "id": "P1",
+        "title": "Synthetic grounded reading",
+        "sourceType": "paper",
+        "relevance": "Grounded reading compares evidence across documents.",
+        "label": "[1]",
+        "number": "1"
+      },
+      {
+        "id": "N1",
+        "title": "Synthetic research note",
+        "sourceType": "note",
+        "relevance": "A note separates evidence from interpretation.",
+        "label": "[2]",
+        "number": "2"
+      }
+    ],
+    "figures": [
+      {
+        "id": "P1-F1",
+        "sourceId": "P1",
+        "title": "",
+        "sourceTitle": "Synthetic grounded reading",
+        "caption": "Synthetic fixture pixels",
+        "path": "fixture://review/figure-1",
+        "pageIndex": 1,
+        "blockId": "b1",
+        "kind": "image",
+        "placement": "Evidence synthesis",
+        "reason": "Show verified fixture",
+        "number": "1",
+        "marker": "__PAPERQUAY_REVIEW_FIGURE_1__",
+        "sourceLabel": "[1]",
+        "captionText": "Figure 1. Synthetic fixture pixels [1]"
+      }
+    ],
+    "abstractParagraphs": [
+      {
+        "kind": "paragraph",
+        "text": "Grounded reading [1].",
+        "marker": "",
+        "suffixText": "",
+        "isParagraph": true,
+        "isList": false,
+        "isHeading": false,
+        "isQuote": false,
+        "isEquation": false,
+        "hasText": true,
+        "inlineFigures": [],
+        "hasInlineFigures": false
+      }
+    ],
+    "intentSummaryParagraphs": [
+      {
+        "kind": "paragraph",
+        "text": "Compare the same evidence",
+        "marker": "",
+        "suffixText": "",
+        "isParagraph": true,
+        "isList": false,
+        "isHeading": false,
+        "isQuote": false,
+        "isEquation": false,
+        "hasText": true,
+        "inlineFigures": [],
+        "hasInlineFigures": false
+      }
+    ],
+    "thesisParagraphs": [
+      {
+        "kind": "paragraph",
+        "text": "Evidence must stay traceable.",
+        "marker": "",
+        "suffixText": "",
+        "isParagraph": true,
+        "isList": false,
+        "isHeading": false,
+        "isQuote": false,
+        "isEquation": false,
+        "hasText": true,
+        "inlineFigures": [],
+        "hasInlineFigures": false
+      }
+    ],
+    "introductionParagraphs": [
+      {
+        "kind": "paragraph",
+        "text": "Compare verified sources [1].",
+        "marker": "",
+        "suffixText": "",
+        "isParagraph": true,
+        "isList": false,
+        "isHeading": false,
+        "isQuote": false,
+        "isEquation": false,
+        "hasText": true,
+        "inlineFigures": [],
+        "hasInlineFigures": false
+      }
+    ],
+    "researchGapBlocks": [
+      {
+        "kind": "bullet",
+        "text": "Evidence is synthetic [2].",
+        "marker": "• ",
+        "suffixText": "",
+        "isParagraph": false,
+        "isList": true,
+        "isHeading": false,
+        "isQuote": false,
+        "isEquation": false,
+        "hasText": true,
+        "inlineFigures": [],
+        "hasInlineFigures": false
+      }
+    ],
+    "futureDirectionBlocks": [
+      {
+        "kind": "bullet",
+        "text": "Verify real settings [1].",
+        "marker": "• ",
+        "suffixText": "",
+        "isParagraph": false,
+        "isList": true,
+        "isHeading": false,
+        "isQuote": false,
+        "isEquation": false,
+        "hasText": true,
+        "inlineFigures": [],
+        "hasInlineFigures": false
+      }
+    ],
+    "conclusionParagraphs": [
+      {
+        "kind": "paragraph",
+        "text": "Traceability matters [1].",
+        "marker": "",
+        "suffixText": "",
+        "isParagraph": true,
+        "isList": false,
+        "isHeading": false,
+        "isQuote": false,
+        "isEquation": false,
+        "hasText": true,
+        "inlineFigures": [],
+        "hasInlineFigures": false
+      }
+    ],
+    "hasFigures": false,
+    "hasRemainingFigures": false,
+    "remainingFigures": []
+  },
+  "markdown": "# Synthetic review\n\n## Abstract\n\nGrounded reading [1].\n\n**Keywords:** grounding\n\n## Writing Intent\n\nCompare the same evidence\n\n## Core Thesis\n\nEvidence must stay traceable.\n\n## Introduction\n\nCompare verified sources [1].\n\n## Literature Review\n\n### Evidence synthesis\n\nEvidence agrees [1][2].\n\n- First finding\n\n- Second finding\n\n$$E=mc^2$$\n\n![Figure 1. Synthetic fixture pixels [1\\]](<fixture://review/figure-1>)\n\n## Comparative Analysis\n\n- **Grounding:** Both expose origins [1][2].\n\n## Research Gaps\n\n- Evidence is synthetic [2].\n\n## Future Directions\n\n- Verify real settings [1].\n\n## Conclusion\n\nTraceability matters [1].\n\n## References\n\n[1] Synthetic A. Synthetic grounded reading. Fixture Journal. 2026. pp. 1-2. DOI: 10.1000/synthetic.1.\n\n[2] Synthetic research note.",
+  "blueprintPrompt": [
+    {
+      "role": "system",
+      "content": "You are PaperQuay research synthesis planning assistant.\nYour job is to create a rigorous academic writing plan for the user's own research-reading notes. This is an intermediate planning step, not final prose.\nInfer the user intent, topic boundary, target audience, review type, and evidence plan from the retrieved context.\nWrite every user-visible planning value in English.\nReturn strict JSON only. Do not return Markdown fences, comments, or prose outside JSON.\nDo not write full body paragraphs in this planning call. Instead, create detailed next-step section tasks.\nThe plan should follow the standards of high-quality scholarly literature reviews: clear problem framing, explicit scope, conceptual definitions, method or theme taxonomy, comparative synthesis, limitations, research gaps, and future agenda.\nMake every body-section heading analytically meaningful and journal-style. Prefer field-specific noun phrases over generic labels.\nEach section must contribute a distinct role in the argument. Avoid overlapping sections and avoid repeating the same evidence plan.\nTreat abstract, introduction, and conclusion as separate fields. Body sections must not duplicate Introduction, Conclusion, References, or Appendix.\nDesign the body-section flow as a formal research synthesis: conceptual foundations and scope -> theoretical or analytical framework -> taxonomy of methods or research streams -> comparative evidence and evaluation -> limitations, open challenges, and research gaps -> future research agenda.\nAdapt that flow to the user intent and available evidence; omit or merge a step only when evidence is insufficient or the requested review type demands it.\nSection headings must be concise academic noun phrases suitable for a journal review article. Avoid vague labels such as Section 1, Theme, Findings, Methods, Discussion, Background, Related Work, Research Gaps, Future Work, Introduction, or Conclusion.\nDo not number section headings. Do not write headings as questions, full sentences, or commands.\nGood English heading examples: \"Retrieval-Centric Architectures for Scholarly Reading\", \"Evidence Alignment and Citation-Grounded Synthesis\", \"Evaluation Protocols and Reproducibility Constraints\".\nGood Chinese heading examples: \"面向学术阅读的检索增强架构\", \"证据对齐与引文约束的综合生成\", \"评价协议与可复现性约束\".\nBad heading examples: \"Methods\", \"Discussion\", \"Future Work\", \"Section 2\", \"What are the challenges?\".\nThe exact heading string you put in sections[].heading will be preserved in the editable outline and the exported Word document, so choose final publication-quality headings now.\nEach section must include paragraphTasks. A paragraphTask is a task object for exactly one downstream model call to write exactly one paragraph.\nEach task must include evidenceIds, retrievalNotes, keyEvidence, and target length so a second model call can write that part independently.\nFor each section, create 2 to 4 paragraphTasks unless the user intent clearly requires a shorter section. Paragraph tasks should move from definition/context to comparison/synthesis to implications or limitations.\nUse only contextItems IDs such as P1 or N1. Do not invent papers, notes, facts, citations, experiments, metrics, or references.\nIf availableFigures contains source figures relevant to the review, select up to 4 figures by ID in figures. Prefer figures that support taxonomy, workflow, method comparison, or evaluation evidence. Do not invent figure IDs, file paths, or captions.\nFigure captions should be concise academic-style captions. The local image file path is handled by PaperQuay and must not be generated by the model.\nPrefer 4 to 6 coherent body sections unless the user asks for a different structure. Use at most 6 body sections.\nDo not invent numeric references such as [1]. PaperQuay converts internal IDs like [P1] into formal Word citations during export.\nThe required JSON shape is shown in requiredBlueprintShape. Follow the same keys exactly, with values adapted to the retrieved sources."
+    },
+    {
+      "role": "user",
+      "content": "{\n  \"intent\": \"Compare grounded reading workflows\",\n  \"reviewType\": \"comparative\",\n  \"sourceScope\": \"\",\n  \"targetAudience\": \"Researchers\",\n  \"outputLanguage\": \"English\",\n  \"sectionArchitecture\": {\n    \"rule\": \"Create formal body sections only; introduction and conclusion are separate fields.\",\n    \"preferredFlow\": [\n      \"Conceptual foundations and review scope\",\n      \"Theoretical perspectives or analytical framework\",\n      \"Methodological taxonomy or research-stream classification\",\n      \"Comparative evidence and evaluation\",\n      \"Limitations, open challenges, and research gaps\",\n      \"Future research agenda\"\n    ],\n    \"headingRules\": [\n      \"Concise journal-style academic noun phrase\",\n      \"No numbering\",\n      \"No questions\",\n      \"No generic labels such as Methods, Findings, Discussion, Background, Related Work, Introduction, Conclusion\",\n      \"The chosen heading is final and must be preserved exactly in the Word export\"\n    ],\n    \"goodHeadingExamples\": [\n      \"Retrieval-Centric Architectures for Scholarly Reading\",\n      \"Evidence Alignment and Citation-Grounded Synthesis\",\n      \"面向学术阅读的检索增强架构\",\n      \"证据对齐与引文约束的综合生成\"\n    ],\n    \"badHeadingExamples\": [\n      \"Methods\",\n      \"Discussion\",\n      \"Future Work\",\n      \"Section 2\"\n    ]\n  },\n  \"requiredBlueprintShape\": {\n    \"title\": \"Retrieval-Augmented Scholarly Reading: Foundations, Workflows, and Research Agenda\",\n    \"keywords\": [\n      \"retrieval-augmented generation\",\n      \"scholarly reading\",\n      \"literature review\"\n    ],\n    \"intentSummary\": \"The user asks for a rigorous academic review that synthesizes retrieved papers and notes into a coherent research narrative.\",\n    \"thesis\": \"Retrieval-augmented scholarly reading should be analyzed as an evidence-grounded workflow that connects document parsing, semantic retrieval, interactive annotation, and synthesis support.\",\n    \"abstractTask\": {\n      \"task\": \"Write a concise abstract after the body sections are generated, summarizing the research scope, organizing framework, major synthesis points, and open problems.\",\n      \"evidenceIds\": [\n        \"P1\",\n        \"P2\"\n      ],\n      \"retrievalNotes\": \"Use P1 for the research background and P2 for the workflow comparison.\",\n      \"keyEvidence\": [\n        \"P1 motivates retrieval-grounded reading.\",\n        \"P2 compares annotation and retrieval workflows.\"\n      ],\n      \"target\": \"one paragraph\"\n    },\n    \"introductionTask\": {\n      \"task\": \"Introduce the research problem, define the review boundary, explain why synthesis is needed, and preview the analytical structure.\",\n      \"evidenceIds\": [\n        \"P1\"\n      ],\n      \"retrievalNotes\": \"Use P1 for the problem setting and cite it when stating the need for retrieval-grounded reading.\",\n      \"keyEvidence\": [\n        \"P1 frames scholarly reading as a multi-step evidence use problem.\"\n      ],\n      \"target\": \"2-3 paragraphs\"\n    },\n    \"sections\": [\n      {\n        \"id\": \"section-1\",\n        \"heading\": \"Conceptual Foundations and Review Scope\",\n        \"task\": \"Define the core concepts, delimit the review scope, and explain how this section establishes the conceptual basis for later taxonomy and comparison.\",\n        \"evidenceIds\": [\n          \"P1\",\n          \"P2\"\n        ],\n        \"retrievalNotes\": \"Use selected evidence to define concepts, establish boundaries, and prepare the reader for later taxonomy and comparison sections.\",\n        \"keyEvidence\": [\n          \"Evidence point from P1.\",\n          \"Evidence point from P2.\"\n        ],\n        \"target\": \"2-4 academic paragraphs\",\n        \"paragraphTasks\": [\n          {\n            \"id\": \"paragraph-1\",\n            \"task\": \"Write the first paragraph: define key concepts, delimit the review scope, and cite the most relevant source.\",\n            \"evidenceIds\": [\n              \"P1\"\n            ],\n            \"retrievalNotes\": \"Use P1 for the background claim and cite it if used.\",\n            \"keyEvidence\": [\n              \"Background claim from P1.\"\n            ],\n            \"target\": \"one academic paragraph\"\n          },\n          {\n            \"id\": \"paragraph-2\",\n            \"task\": \"Write the second paragraph: synthesize why this scope leads to the following analytical framework or taxonomy.\",\n            \"evidenceIds\": [\n              \"P1\",\n              \"P2\"\n            ],\n            \"retrievalNotes\": \"Use P1 and P2 to connect scope, conceptual categories, and the rest of the review structure.\",\n            \"keyEvidence\": [\n              \"Conceptual cue from P1.\",\n              \"Scope cue from P2.\"\n            ],\n            \"target\": \"one academic paragraph\"\n          }\n        ]\n      }\n    ],\n    \"comparisonTable\": [\n      {\n        \"id\": \"comparison-1\",\n        \"theme\": \"Comparison theme\",\n        \"task\": \"Compare the selected sources on this analytical theme, emphasizing similarities, differences, and implications for the review argument.\",\n        \"evidenceIds\": [\n          \"P1\",\n          \"P2\"\n        ],\n        \"retrievalNotes\": \"Focus on method differences and limitations.\",\n        \"keyEvidence\": [\n          \"Comparison cue.\"\n        ],\n        \"target\": \"one concise comparison paragraph\"\n      }\n    ],\n    \"researchGaps\": [\n      {\n        \"task\": \"Identify one evidence-grounded research gap and explain why the retrieved sources leave it unresolved.\",\n        \"evidenceIds\": [\n          \"P1\"\n        ],\n        \"retrievalNotes\": \"Use explicit limitations only.\",\n        \"keyEvidence\": [\n          \"Limitation from P1.\"\n        ],\n        \"target\": \"one sentence\"\n      }\n    ],\n    \"futureDirections\": [\n      {\n        \"task\": \"Propose one evidence-grounded future direction that logically follows from the identified gap.\",\n        \"evidenceIds\": [\n          \"P2\"\n        ],\n        \"retrievalNotes\": \"Base the direction on retrieved limitations.\",\n        \"keyEvidence\": [\n          \"Future cue from P2.\"\n        ],\n        \"target\": \"one sentence\"\n      }\n    ],\n    \"conclusionTask\": {\n      \"task\": \"Conclude the review by synthesizing the major findings, clarifying the contribution of the review, and restating the future agenda.\",\n      \"evidenceIds\": [\n        \"P1\",\n        \"P2\"\n      ],\n      \"retrievalNotes\": \"Use the strongest evidence from all sections.\",\n      \"keyEvidence\": [\n        \"Overall conclusion cue.\"\n      ],\n      \"target\": \"one paragraph\"\n    },\n    \"references\": [\n      {\n        \"id\": \"P1\",\n        \"title\": \"Paper title\",\n        \"authors\": \"Author A; Author B\",\n        \"year\": \"2025\",\n        \"doi\": \"10.xxxx/example\"\n      }\n    ],\n    \"sources\": [\n      {\n        \"id\": \"P1\",\n        \"title\": \"Paper title\",\n        \"sourceType\": \"paper\",\n        \"relevance\": \"Why this source should be used.\"\n      }\n    ],\n    \"figures\": [\n      {\n        \"id\": \"P1-F1\",\n        \"caption\": \"Concise caption adapted from the source figure.\",\n        \"placement\": \"section-1\",\n        \"reason\": \"This figure helps compare the core taxonomy or evidence pattern.\"\n      }\n    ]\n  },\n  \"contextItems\": [\n    {\n      \"id\": \"P1\",\n      \"sourceType\": \"paper\",\n      \"title\": \"Synthetic grounded reading\",\n      \"authors\": \"Synthetic A\",\n      \"year\": \"2026\",\n      \"doi\": \"10.1000/synthetic.1\",\n      \"text\": \"Grounded reading compares evidence across documents.\",\n      \"figures\": [\n        {\n          \"id\": \"P1-F1\",\n          \"sourceId\": \"P1\",\n          \"kind\": \"image\",\n          \"page\": 2,\n          \"caption\": \"Synthetic fixture pixels\"\n        }\n      ]\n    },\n    {\n      \"id\": \"N1\",\n      \"sourceType\": \"note\",\n      \"title\": \"Synthetic research note\",\n      \"authors\": \"\",\n      \"year\": \"\",\n      \"doi\": \"\",\n      \"text\": \"A note separates evidence from interpretation.\",\n      \"figures\": []\n    }\n  ],\n  \"availableFigures\": [\n    {\n      \"id\": \"P1-F1\",\n      \"sourceId\": \"P1\",\n      \"sourceTitle\": \"Synthetic grounded reading\",\n      \"kind\": \"image\",\n      \"page\": 2,\n      \"caption\": \"Synthetic fixture pixels\"\n    }\n  ]\n}"
+    }
+  ],
+  "partPrompt": [
+    {
+      "role": "system",
+      "content": "You are PaperQuay research synthesis drafting assistant.\nWrite only the requested part of the user's academic literature review. Do not rewrite the whole document.\nWrite every user-visible value in English.\nUse only the selected context evidence. Do not invent papers, notes, facts, citations, experiments, metrics, or references.\nUse internal evidence IDs such as [P1] or [N1] in the content when making evidence-backed claims.\nDo not use numeric citations such as [1]. PaperQuay will convert internal IDs into formal numeric references during Word export.\nReturn strict JSON only with keys: content, citations.\ncontent must be polished academic prose: analytical, concise, coherent, and suitable for a research review.\nUse topic sentences, synthesis language, and explicit relationships such as contrast, convergence, limitation, implication, and research gap when evidence supports them.\nIf selectedFigures contains a figure that directly supports this part, place it with a short anchor such as [Figure: P1-F1] near the relevant sentence or paragraph. Use only selected figure IDs. PaperQuay will replace the anchor with the actual image in the Word export.\nAvoid bullet lists, Markdown headings, code fences, casual language, unsupported claims, and source-by-source summaries without synthesis.\nDo not write Markdown image syntax or long image placeholders. Prefer a single concise figure anchor only when the figure is genuinely useful.\ncitations must be an array of context item IDs actually used in content."
+    },
+    {
+      "role": "user",
+      "content": "{\n  \"kind\": \"section_paragraph\",\n  \"heading\": \"Evidence synthesis\",\n  \"task\": {\n    \"instruction\": \"Compare the findings\",\n    \"retrievalNotes\": \"\",\n    \"keyEvidence\": [],\n    \"target\": \"\",\n    \"evidenceIds\": [\n      \"P1\",\n      \"N1\"\n    ]\n  },\n  \"reviewBlueprint\": {\n    \"title\": \"Synthetic review\",\n    \"intentSummary\": \"Compare the same evidence\",\n    \"thesis\": \"Evidence must stay traceable.\",\n    \"sectionOutline\": [\n      {\n        \"id\": \"section-1\",\n        \"heading\": \"Evidence synthesis\",\n        \"evidenceIds\": [\n          \"P1\",\n          \"N1\"\n        ],\n        \"paragraphTasks\": [\n          {\n            \"id\": \"p1\",\n            \"task\": \"Compare the findings\",\n            \"evidenceIds\": [\n              \"P1\",\n              \"N1\"\n            ],\n            \"target\": \"\"\n          }\n        ]\n      }\n    ]\n  },\n  \"selectedContext\": [\n    {\n      \"id\": \"P1\",\n      \"sourceType\": \"paper\",\n      \"title\": \"Synthetic grounded reading\",\n      \"authors\": \"Synthetic A\",\n      \"year\": \"2026\",\n      \"doi\": \"10.1000/synthetic.1\",\n      \"text\": \"Grounded reading compares evidence across documents.\",\n      \"figures\": [\n        {\n          \"id\": \"P1-F1\",\n          \"sourceId\": \"P1\",\n          \"kind\": \"image\",\n          \"page\": 2,\n          \"caption\": \"Synthetic fixture pixels\"\n        }\n      ]\n    },\n    {\n      \"id\": \"N1\",\n      \"sourceType\": \"note\",\n      \"title\": \"Synthetic research note\",\n      \"text\": \"A note separates evidence from interpretation.\",\n      \"figures\": []\n    }\n  ],\n  \"selectedFigures\": [\n    {\n      \"id\": \"P1-F1\",\n      \"sourceId\": \"P1\",\n      \"caption\": \"Synthetic fixture pixels\",\n      \"placement\": \"Evidence synthesis\"\n    }\n  ],\n  \"outputShape\": {\n    \"content\": \"Drafted prose for this single part only, with internal citations like [P1] and optional concise figure anchors like [Figure: P1-F1].\",\n    \"citations\": [\n      \"P1\"\n    ]\n  },\n  \"outputExample\": {\n    \"content\": \"Retrieval-augmented scholarly reading reframes reading as an evidence-navigation workflow rather than a linear consumption process [P1]. This perspective helps connect document parsing, semantic retrieval, and annotation into a unified analytical pipeline [P2].\",\n    \"citations\": [\n      \"P1\",\n      \"P2\"\n    ]\n  }\n}"
+    }
+  ],
+  "composedParts": {
+    "abstract": {
+      "content": "Grounded reading [P1].",
+      "citations": [
+        "P1"
+      ]
+    },
+    "introduction": {
+      "content": "Compare **verified sources** [P1].",
+      "citations": [
+        "P1"
+      ]
+    },
+    "sectionParagraphs": [
+      [
+        {
+          "content": "Evidence agrees [P1][N1].\n\n- First finding\n- Second finding\n\n$$E=mc^2$$\n\n[Figure: P1-F1]",
+          "citations": [
+            "P1",
+            "N1"
+          ]
+        }
+      ]
+    ],
+    "comparisonTable": [
+      {
+        "content": "Both expose origins [P1][N1].",
+        "citations": [
+          "P1",
+          "N1"
+        ]
+      }
+    ],
+    "researchGaps": [
+      {
+        "content": "Evidence is synthetic [N1].",
+        "citations": [
+          "N1"
+        ]
+      }
+    ],
+    "futureDirections": [
+      {
+        "content": "Verify real settings [P1].",
+        "citations": [
+          "P1"
+        ]
+      }
+    ],
+    "conclusion": {
+      "content": "Traceability matters [P1].",
+      "citations": [
+        "P1"
+      ]
+    },
+    "sections": [
+      {
+        "content": "Evidence agrees [P1][N1].\n\n- First finding\n- Second finding\n\n$$E=mc^2$$\n\n[Figure: P1-F1]",
+        "citations": [
+          "P1",
+          "N1"
+        ]
+      }
+    ]
+  }
+}

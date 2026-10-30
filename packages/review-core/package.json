@@ -1,0 +1,7 @@
+{
+  "name": "@paperquay/review-core",
+  "private": true,
+  "type": "commonjs",
+  "main": "index.cjs",
+  "types": "index.d.cts"
+}

@@ -46,7 +46,12 @@
     "react-markdown": "10.1.0",
     "rehype-katex": "7.0.1",
     "remark-gfm": "4.0.1",
-    "remark-math": "6.0.0"
+    "remark-math": "6.0.0",
+    "pizzip": "3.2.0",
+    "docxtemplater": "3.68.7",
+    "temml": "0.13.3",
+    "mathml2omml": "0.5.0",
+    "@xmldom/xmldom": "0.9.12"
   },
   "overrides": {
     "xcode": {
