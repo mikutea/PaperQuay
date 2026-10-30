@@ -1,3 +1,4 @@
+import {agentModelMessages,validateAgentModelRequest,type AgentModelRequest} from '../agent/modelProtocol.ts';
 import {validateReviewRequest,type ReviewRequest} from '../review/requests.ts';
 import { buildConversationMessages, type AiConversationData } from '../../../../packages/ai-core/src/conversation.ts';
 import { AiError } from './errors.ts';
@@ -8,6 +9,7 @@ import { AiRequestGuard, boundedAiLimits, cancelResponseBody, ensureDirectRespon
 import type { AiAccountScope, AiAction, AiLimits, AiProviderConfig, AiTransport, AiUsage, PreparedAiContext, SecretStore } from './types.ts';
 
 interface RequestOptions { accountScope: AiAccountScope; config: AiProviderConfig; signal?: AbortSignal; current?():boolean }
+export interface AgentGenerateOptions extends RequestOptions {request:AgentModelRequest;onText(text:string):void;onUsage?(usage:AiUsage):void}
 export interface ReviewGenerateOptions extends RequestOptions {request:ReviewRequest;onText(text:string):void;onUsage?(usage:AiUsage):void}
 export interface ResearchGenerateOptions extends RequestOptions {
   context: ResearchContext;
@@ -129,6 +131,12 @@ export class AiClient {
     if(options.signal?.aborted||options.current&&!options.current())throw new AiError('CANCELLED');
     const config=parseAiProvider(options.config,true);
     return this.#complete(options,request.messages,config);
+  }
+  async generateAgent(options:AgentGenerateOptions):Promise<ChatCompletionResult>{
+    const request=validateAgentModelRequest(options.request),messages=agentModelMessages(request);
+    if(options.signal?.aborted||options.current&&!options.current())throw new AiError('CANCELLED');
+    if(new TextEncoder().encode(JSON.stringify(messages)).length>this.#limits.contextBytes)throw new AiError('CONTEXT_TOO_LARGE');
+    return this.#complete(options,messages,parseAiProvider(options.config,true));
   }
   async #complete(options: RequestOptions & { onText(text: string): void; onUsage?(usage: AiUsage): void },
     messages: { role: string; content: string }[], config: AiProviderConfig): Promise<ChatCompletionResult> {

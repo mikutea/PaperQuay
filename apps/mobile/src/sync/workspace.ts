@@ -1,4 +1,8 @@
-import{validateAgentState,validateAgentApproval,materializeAgentApproval,type AgentState,type AgentApproval,type AgentApplyResult}from'../agent/approval.ts';
+import{validateAgentContexts,assertAgentContextsCurrent,type AgentContext}from'../agent/context.ts';
+import{validateAgentConversation,assertAgentConversationCurrent,approveAgentContextRequest,beginAgentModelTurn,type AgentConversation}from'../agent/conversation.ts';
+import{validateAgentModelRequest,parseAgentModelResponse,type AgentModelRequest}from'../agent/modelProtocol.ts';
+import type{AiProviderConfig}from'../ai/types.ts';
+import{validateAgentState,emptyAgentState,withAgentProposal,validateAgentApproval,materializeAgentApproval,type AgentState,type AgentApproval,type AgentApplyResult}from'../agent/approval.ts';
 import{AgentError}from'../agent/proposals.ts';
 import{validateRadarState,type RadarState}from'../radar/model.ts';
 import{materializeRadarAdoption,validateRadarAdoption,type RadarAdoptionPlan,type RadarAdoptionResult}from'../radar/adoption.ts';
@@ -106,6 +110,7 @@ export interface StoredWorkspace {
   radarState?: RadarState;
   /** Local Agent proposals and apply receipts; only approved paper edits enter the outbox. */
   agentState?: AgentState;
+  agentConversation?:AgentConversation;
   /** Account-local receipts commit with imported entities and their outbox entries. */
   incomingReceipts?: IncomingImportReceipt[];
 }
@@ -132,7 +137,7 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
 export function decodeWorkspace(value: unknown): StoredWorkspace {
   if (
     !isObject(value) ||
-    Object.keys(value).some((key) => !['sync', 'pendingResolutions', 'paperOrganizationVersion','richNotesVersion','aiConversationsVersion', 'externalLibraries','remoteTaskIntent','remoteBatch','zoteroLibraries','incomingReceipts','reviewProject','radarState','agentState'].includes(key)) ||
+    Object.keys(value).some((key) => !['sync', 'pendingResolutions', 'paperOrganizationVersion','richNotesVersion','aiConversationsVersion', 'externalLibraries','remoteTaskIntent','remoteBatch','zoteroLibraries','incomingReceipts','reviewProject','radarState','agentState','agentConversation'].includes(key)) ||
     (value.paperOrganizationVersion !== undefined && value.paperOrganizationVersion !== 1) ||
     (value.richNotesVersion!==undefined&&value.richNotesVersion!==1)||(value.aiConversationsVersion!==undefined&&value.aiConversationsVersion!==1)||
     !isObject(value.pendingResolutions) ||
@@ -153,6 +158,7 @@ export function decodeWorkspace(value: unknown): StoredWorkspace {
     try { validateRemoteBatch(value.remoteBatch); } catch { throw new ClientError('STORAGE_CORRUPT'); }
     if (value.remoteTaskIntent !== undefined) throw new ClientError('STORAGE_CORRUPT');
   }
+  if(value.agentConversation!==undefined){try{validateAgentConversation(value.agentConversation);}catch{throw new ClientError('STORAGE_CORRUPT');}}
   if(value.agentState!==undefined){try{validateAgentState(value.agentState);}catch{throw new ClientError('STORAGE_CORRUPT');}}
   if(value.radarState!==undefined){try{validateRadarState(value.radarState);}catch{throw new ClientError('STORAGE_CORRUPT');}}
   if(value.reviewProject!==undefined){try{validateReviewProject(value.reviewProject);}catch{throw new ClientError('STORAGE_CORRUPT');}}
@@ -570,6 +576,40 @@ export class WorkspaceController {
     const epoch=this.epoch;await this.update(epoch,value=>{if(!guard())throw new ClientError('ACCOUNT_CHANGED');if(value.reviewProject?.id!==id||value.reviewProject.revision!==revision)throw new ClientError('EDIT_CHANGED');const{reviewProject:_project,...rest}=value;return rest;});
   }
 
+  async refreshAgentConversation():Promise<AgentConversation|null>{const next=await this.update(this.epoch,value=>value);return next.agentConversation??null;}
+  /** Stores private diagnostics, including a received response after source changes. Does not send or apply anything. */
+  async saveAgentConversation(input:AgentConversation,expected:{id:string;revision:number}|null,guard:()=>boolean=()=>true):Promise<AgentConversation>{
+    const conversation=validateAgentConversation(input),epoch=this.epoch;const next=await this.update(epoch,value=>{
+      if(!guard())throw new ClientError('ACCOUNT_CHANGED');const old=value.agentConversation;
+      if(old&&canonicalJson(old)===canonicalJson(conversation))return value;
+      if(expected===null){if(old||conversation.revision!==1)throw new ClientError('EDIT_CHANGED');}
+      else if(!old||old.id!==expected.id||old.revision!==expected.revision||(conversation.id===old.id?conversation.revision!==old.revision+1:conversation.revision!==1))throw new ClientError('EDIT_CHANGED');
+      return{...value,agentConversation:conversation};
+    });return next.agentConversation!;
+  }
+  /** A paid request cannot begin until this uncertain intent is durably acknowledged. No replay of an unknown model call. */
+  async beginAgentConversationTurn(input:AgentModelRequest,provider:AiProviderConfig,expected:{id:string;revision:number},guard:()=>boolean=()=>true):Promise<AgentConversation>{
+    const request=validateAgentModelRequest(input),epoch=this.epoch;const next=await this.update(epoch,value=>{
+      if(!guard())throw new ClientError('ACCOUNT_CHANGED');const c=value.agentConversation;if(!c||c.id!==expected.id||c.revision!==expected.revision)throw new ClientError('EDIT_CHANGED');assertAgentConversationCurrent(c,externalLibraryEntities(value));
+      return{...value,agentConversation:beginAgentModelTurn(c,request,provider)};
+    });return next.agentConversation!;
+  }
+  async approveAgentConversationContexts(conversationId:string,requestId:string,input:AgentContext[],expectedRevision:number,guard:()=>boolean=()=>true):Promise<AgentConversation>{
+    const epoch=this.epoch;const next=await this.update(epoch,value=>{
+      if(!guard())throw new ClientError('ACCOUNT_CHANGED');const current=value.agentConversation;if(!current||current.id!==conversationId||current.revision!==expectedRevision||current.turns.at(-1)?.id!==requestId)throw new ClientError('EDIT_CHANGED');
+      const entities=externalLibraryEntities(value),contexts=validateAgentContexts(input,current.targets);assertAgentConversationCurrent(current,entities);assertAgentContextsCurrent(contexts,entities);return{...value,agentConversation:approveAgentContextRequest(current,contexts)};
+    });return next.agentConversation!;
+  }
+  /** Saves the model suggestion and its once-only publication marker together; library changes still require ordinary item approval. */
+  async adoptAgentModelPlan(conversationId:string,requestId:string,expectedAgentRevision:number|null,guard:()=>boolean=()=>true):Promise<{proposalId:string;replayed:boolean}>{
+    const epoch=this.epoch;let result!:{proposalId:string;replayed:boolean};await this.update(epoch,value=>{
+      if(!guard())throw new ClientError('ACCOUNT_CHANGED');const current=value.agentConversation,turn=current?.turns.at(-1);if(!current||current.id!==conversationId||!turn||turn.id!==requestId||turn.status!=='complete')throw new ClientError('EDIT_CHANGED');
+      const response=parseAgentModelResponse(turn.text,turn.request);if(response.kind!=='plan')throw new ClientError('EDIT_CHANGED');if(turn.proposalSaved){result={proposalId:response.proposal.id,replayed:true};return value;}
+      if((value.agentState?.revision??null)!==expectedAgentRevision||value.agentState?.receipts.some(r=>r.proposalId===response.proposal.id))throw new ClientError('EDIT_CHANGED');assertAgentConversationCurrent(current,externalLibraryEntities(value));
+      const conversation=structuredClone(current);conversation.turns[conversation.turns.length-1].proposalSaved=true;conversation.revision++;result={proposalId:response.proposal.id,replayed:false};
+      return{...value,agentConversation:validateAgentConversation(conversation),agentState:withAgentProposal(value.agentState??emptyAgentState(),response.proposal)};
+    });return result;
+  }
   async refreshAgentState():Promise<AgentState|null>{const next=await this.update(this.epoch,value=>value);return next.agentState??null;}
   async saveAgentState(input:AgentState,expectedRevision:number|null,guard:()=>boolean=()=>true):Promise<AgentState>{
     const agent=validateAgentState(input),epoch=this.epoch;const next=await this.update(epoch,value=>{if(!guard())throw new ClientError('ACCOUNT_CHANGED');if(expectedRevision===null){if(value.agentState||agent.revision!==1)throw new ClientError('EDIT_CHANGED');}else if(!value.agentState||value.agentState.revision!==expectedRevision||agent.revision!==expectedRevision+1)throw new ClientError('EDIT_CHANGED');return{...value,agentState:agent};});return next.agentState!;

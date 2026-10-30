@@ -43,6 +43,11 @@ export function captureAgentTargets(entities:readonly VisibleEntity[],ids:readon
   const result=ids.map(id=>{const e=found.get(id);if(!e)throw new AgentError('DELETED');if(blocked(e))throw new AgentError(e.deleted?'DELETED':'BLOCKED');inspectAgentJson(e.data,AGENT_LIMITS.targetBytes);if(!validateEntityData('paper',e.data).ok)throw new AgentError('INVALID');return{id,revision:e.revision,hash:agentEntityHash(e),data:structuredClone(e.data as PaperData)};});
   inspectAgentJson(result,AGENT_LIMITS.targetBytes);return result;
 }
+export function validateCapturedAgentTargets(input:unknown):AgentTarget[] {
+  inspectAgentJson(input,AGENT_LIMITS.targetBytes);if(!Array.isArray(input)||!input.length||input.length>AGENT_LIMITS.targets)throw new AgentError('INVALID');const seen=new Set<string>();
+  for(const raw of input){if(!agentObject(raw))throw new AgentError('INVALID');agentOnly(raw,['id','hash','revision','data']);if(!agentUuid.test(String(raw.id))||seen.has(String(raw.id))||!agentHash.test(String(raw.hash))||!Number.isSafeInteger(raw.revision)||Number(raw.revision)<0||!validateEntityData('paper',raw.data).ok||raw.hash!==reviewFingerprint({id:raw.id,revision:raw.revision,data:raw.data,deleted:false,blocked:false}))throw new AgentError('INVALID');seen.add(raw.id as string);}
+  return structuredClone(input) as AgentTarget[];
+}
 export function agentPaper(target:AgentTarget):AgentPaper {
   const p=target.data,o=organizationOf(p);return{id:target.id,title:p.title,authors:p.authors.map(name=>({name})),year:p.year??null,publication:p.publication??null,doi:p.doi??null,url:null,abstractText:p.abstractText??null,keywords:[...p.keywords],tags:o.tags.map(name=>({name})),categoryIds:o.collections.map(name=>'name:'+reviewFingerprint(name))};
 }
@@ -107,7 +112,7 @@ export function validateAgentProposal(input:unknown):AgentProposal {
   const seen=new Set<string>(),seenTargets=new Set<string>();for(const raw of input.items){if(!agentObject(raw))throw new AgentError('INVALID');agentOnly(raw,['id','targetId','tool','label','description','patch']);agentText(raw.id,512,true);agentText(raw.label,1000,true);agentText(raw.description,4000);if(raw.tool!==input.tool||seen.has(raw.id as string)||seenTargets.has(raw.targetId as string)||!targets.has(raw.targetId as string))throw new AgentError('INVALID');seen.add(raw.id as string);seenTargets.add(raw.targetId as string);validatePatch(raw as unknown as AgentProposalItem,targets.get(raw.targetId as string)!);}
   const{digest,...value}=input;if(!agentHash.test(String(digest))||digest!==reviewFingerprint(value))throw new AgentError('INVALID');return structuredClone(input) as unknown as AgentProposal;
 }
-export function assertAgentTargetsCurrent(proposal:AgentProposal,entities:readonly VisibleEntity[]):void {
+export function assertAgentTargetsCurrent(proposal:Pick<AgentProposal,'targets'>,entities:readonly VisibleEntity[]):void {
   const wanted=new Set(proposal.targets.map(t=>t.id)),found=new Map<string,VisibleEntity>();for(const e of entities)if(e.entityType==='paper'&&wanted.has(e.entityId)){if(found.has(e.entityId))throw new AgentError('INVALID');found.set(e.entityId,e);}
   for(const target of proposal.targets){const entity=found.get(target.id);if(!entity||entity.deleted)throw new AgentError('DELETED');if(blocked(entity))throw new AgentError('BLOCKED');if(agentEntityHash(entity)!==target.hash)throw new AgentError('CHANGED');}
 }
