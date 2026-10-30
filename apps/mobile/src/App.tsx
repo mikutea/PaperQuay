@@ -48,6 +48,29 @@ import { entityStatus, hasEntityConflict } from './viewState.ts';
 const CONFIG_KEY = 'paperquay.mobile.public-config.v1';
 const DEVICE_NAME_KEY = 'paperquay.mobile.device-name.v1';
 type Section = 'library' | 'notes' | 'account' | 'conflicts';
+
+interface ListViewState {
+  query: string;
+  showDeleted: boolean;
+  favorite: boolean;
+  readingStatus: '' | 'unread' | 'reading' | 'read';
+  tag: string;
+  collection: string;
+  year: string;
+  queued: boolean;
+}
+function createListView(): ListViewState {
+  return { query: '', showDeleted: false, favorite: false, readingStatus: '', tag: '', collection: '', year: '', queued: false };
+}
+function createListViews() {
+  return { paper: createListView(), note: createListView() };
+}
+function listViewScope(apiBaseUrl: string, authStatus: string, subjectKey: string, state: WorkspaceSnapshot) {
+  if (state.status !== 'ready' || !state.workspace) return null;
+  const { accountId, deviceId, generation } = state.workspace.sync;
+  return JSON.stringify([apiBaseUrl, authStatus, subjectKey, accountId, deviceId, generation]);
+}
+
 const PaperReader = lazy(() => import('./components/PaperReader.tsx').then((module) => ({ default: module.PaperReader })));
 const ReaderSheet = lazy(() => import('./components/ReaderSheet.tsx').then((module) => ({ default: module.ReaderSheet })));
 const AiWorkspace = lazy(() => import('./components/AiWorkspace.tsx').then((module) => ({ default: module.AiWorkspace })));
@@ -238,6 +261,29 @@ export function ConnectedApp({
   const authState = useSyncExternalStore(auth.subscribe, auth.getSnapshot);
   const authSubjectKey = JSON.stringify(auth.getSubject?.() ?? null);
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
+  const listScope = listViewScope(runtime.config.apiBaseUrl, authState.status, authSubjectKey, state);
+  // A fresh owner also retires callbacks when a session leaves and returns to the same account.
+  const listOwner = useMemo(() => ({}), [auth, controller, listScope]);
+  const activeListOwner = useRef<object | null>(null);
+  const [listViews, setListViews] = useState(() => ({ owner: listOwner, ...createListViews() }));
+  useLayoutEffect(() => {
+    activeListOwner.current = listOwner;
+    setListViews({ owner: listOwner, ...createListViews() });
+    return () => { activeListOwner.current = null; };
+  }, [listOwner]);
+  const currentListViews = listViews.owner === listOwner ? listViews : createListViews();
+  function changeListView(type: 'paper' | 'note', patch: Partial<ListViewState>) {
+    // Read the live stores too: identity can change before React receives its notification.
+    const current = () => activeListOwner.current === listOwner && listScope !== null
+      && listScope === listViewScope(runtime.config.apiBaseUrl, auth.getSnapshot().status,
+        JSON.stringify(auth.getSubject?.() ?? null), controller.getSnapshot());
+    if (!current()) return;
+    setListViews(previous => {
+      if (!current()) return previous;
+      const views = previous.owner === listOwner ? previous : { owner: listOwner, ...createListViews() };
+      return { ...views, [type]: { ...views[type], ...patch } };
+    });
+  }
   const [section, setSection] = useState<Section>('library');
   const [selection, setSelection] = useState<{ type: 'paper' | 'note'; id: string } | null>(null);
   const [readingId, setReadingId] = useState<string | null>(null);
@@ -579,6 +625,8 @@ export function ConnectedApp({
           <div className={`workspace-grid ${selection ? 'has-selection' : ''}`}>
             <EntityList
               type={section === 'library' ? 'paper' : 'note'}
+              view={currentListViews[section === 'library' ? 'paper' : 'note']}
+              onViewChange={(patch) => changeListView(section === 'library' ? 'paper' : 'note', patch)}
               entities={section === 'library' ? papers : notes}
               selection={selection?.id}
               state={state}
@@ -932,6 +980,8 @@ function SyncStatus({
 
 function EntityList({
   type,
+  view,
+  onViewChange,
   entities,
   selection,
   state,
@@ -943,6 +993,8 @@ function EntityList({
   onConflicts,
 }: {
   type: 'paper' | 'note';
+  view: ListViewState;
+  onViewChange: (patch: Partial<ListViewState>) => void;
   entities: VisibleEntity[];
   selection?: string;
   state: WorkspaceSnapshot;
@@ -953,14 +1005,9 @@ function EntityList({
   onSync: () => void;
   onConflicts: () => void;
 }) {
-  const [query, setQuery] = useState('');
-  const [showDeleted, setShowDeleted] = useState(false);
-  const [favorite, setFavorite] = useState(false);
-  const [readingStatus, setReadingStatus] = useState<'' | 'unread' | 'reading' | 'read'>('');
-  const [tag, setTag] = useState('');
-  const [collection, setCollection] = useState('');
-  const [year, setYear] = useState('');
-  const [queued, setQueued] = useState(false);
+  const { query, showDeleted, favorite, readingStatus, tag, collection, year, queued } = view;
+  const hasFilters = Boolean(favorite || readingStatus || tag || collection || year || queued);
+  const hasSearchOrFilters = Boolean(query.trim() || (type === 'paper' && hasFilters));
   const noun = type === 'paper' ? '文献' : '笔记';
   const visible = entities.filter((entity) => (showDeleted ? entity.deleted : !entity.deleted));
   const filtered = type === 'paper' ? filterPapers(visible, { query, favorite, readingStatus, tag, collection, year, queued }) : visible.filter((entity) => {
@@ -1006,31 +1053,31 @@ function EntityList({
         <input
           type="search"
           value={query}
-          onChange={(event) => setQuery(event.target.value)}
+          onChange={(event) => onViewChange({ query: event.target.value })}
           placeholder={`搜索${noun}`}
         />
       </label>
       {type === 'paper' && <details className="library-filters">
-        <summary>筛选文库{favorite || readingStatus || tag || collection || year || queued ? ' · 已启用' : ''}</summary>
+        <summary>筛选文库{hasFilters ? ' · 已启用' : ''}</summary>
         <div className="filter-checks"><label className="check-field"><input type="checkbox" checked={favorite}
-          onChange={(event) => setFavorite(event.target.checked)} />仅收藏</label>
+          onChange={(event) => onViewChange({ favorite: event.target.checked })} />仅收藏</label>
           <label className="check-field"><input type="checkbox" checked={queued}
-            onChange={(event) => setQueued(event.target.checked)} />阅读队列</label></div>
+            onChange={(event) => onViewChange({ queued: event.target.checked })} />阅读队列</label></div>
         <div className="filter-grid">
-          <label className="field">阅读状态<select value={readingStatus} onChange={(event) => setReadingStatus(event.target.value as typeof readingStatus)}>
+          <label className="field">阅读状态<select value={readingStatus} onChange={(event) => onViewChange({ readingStatus: event.target.value as typeof readingStatus })}>
             <option value="">全部状态</option>{Object.entries(readingStatusLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
           </select></label>
-          <label className="field">年份<select value={year} onChange={(event) => setYear(event.target.value)}><option value="">全部年份</option>
+          <label className="field">年份<select value={year} onChange={(event) => onViewChange({ year: event.target.value })}><option value="">全部年份</option>
             {options(paperData.map((paper) => paper.year).filter((value): value is string => Boolean(value))).map((value) => <option key={value}>{value}</option>)}
           </select></label>
-          <label className="field">标签<select value={tag} onChange={(event) => setTag(event.target.value)}><option value="">全部标签</option>
+          <label className="field">标签<select value={tag} onChange={(event) => onViewChange({ tag: event.target.value })}><option value="">全部标签</option>
             {options(paperData.flatMap((paper) => organizationOf(paper).tags)).map((value) => <option key={value}>{value}</option>)}
           </select></label>
-          <label className="field">合集<select value={collection} onChange={(event) => setCollection(event.target.value)}><option value="">全部合集</option>
+          <label className="field">合集<select value={collection} onChange={(event) => onViewChange({ collection: event.target.value })}><option value="">全部合集</option>
             {options(paperData.flatMap((paper) => organizationOf(paper).collections)).map((value) => <option key={value}>{value}</option>)}
           </select></label>
         </div>
-        <button className="text-button" onClick={() => { setFavorite(false); setReadingStatus(''); setTag(''); setCollection(''); setYear(''); setQueued(false); }}>清除筛选</button>
+        <button className="text-button" onClick={() => onViewChange({ favorite: false, readingStatus: '', tag: '', collection: '', year: '', queued: false })}>清除筛选</button>
       </details>}
       <div className="list-meta">
         <span>
@@ -1040,7 +1087,7 @@ function EntityList({
           <input
             type="checkbox"
             checked={showDeleted}
-            onChange={(event) => setShowDeleted(event.target.checked)}
+            onChange={(event) => onViewChange({ showDeleted: event.target.checked })}
           />
           已删除
         </label>
@@ -1050,7 +1097,7 @@ function EntityList({
           <div className="empty-state">
             <Icon name={type === 'paper' ? 'library' : 'note'} />
             <h2>
-              {query
+              {hasSearchOrFilters
                 ? '没有找到匹配内容'
                 : showDeleted
                   ? '没有已删除的内容'
@@ -1059,13 +1106,18 @@ function EntityList({
                     : '记下一个新想法'}
             </h2>
             <p>
-              {query
-                ? '换一个标题、作者或关键词试试。'
+              {hasSearchOrFilters
+                ? '试试其他关键词，或清除搜索与筛选。'
                 : showDeleted
                   ? '删除的记录会在这里保留状态。'
                   : `添加${noun}后，内容会先保存在此设备。`}
             </p>
-            {!query && !showDeleted && (
+            {hasSearchOrFilters && (
+              <button className="secondary" onClick={() => onViewChange(createListView())}>
+                清除搜索与筛选
+              </button>
+            )}
+            {!hasSearchOrFilters && !showDeleted && (
               <button className="secondary" onClick={() => onCreate(type)}>
                 {type === 'paper' ? '添加文献' : '新建笔记'}
               </button>
