@@ -311,6 +311,58 @@ export function queueLocalPuts(state: AccountSyncState, edits: readonly LocalEdi
   return next.state;
 }
 
+/**
+ * Atomically queue explicitly approved edits to existing papers, cloning the
+ * library once. Callers must bind every target to the reviewed data/version.
+ * Unsent edits coalesce; attempted operations remain immutable with a successor
+ * overlay. Conflicts, deletions and blocked work never become implicit restores.
+ */
+export function queueLocalApprovedPaperPuts(state: AccountSyncState, edits: readonly LocalEdit[], identities: readonly EditIdentity[]): AccountSyncState {
+  assertState(state);
+  if (!Array.isArray(edits) || !Array.isArray(identities) || edits.length !== identities.length) fail('INVALID_PUT_BATCH');
+  const batchSchema: JsonSchema = { type: 'array', maxItems: SYNC_LIMITS.maxLocalOperations };
+  if (!validateJsonSchema(batchSchema, edits).ok || !validateJsonSchema(batchSchema, identities).ok) fail('INVALID_PUT_BATCH');
+  if (!edits.length) return state;
+  const entries = new Map(state.outbox.map((entry,index) => [operationKey(entry.operation), { entry,index }]));
+  const blockedKeys = new Set(Object.values(state.conflicts).map(c => operationKey(c.attempted)));
+  const existingIds = new Map([
+    ...state.outbox.map(e => e.operation), ...Object.values(state.overlays), ...Object.values(state.conflicts).map(c => c.attempted),
+  ].map(operation => [operation.opId, operation]));
+  const targets = new Set<string>(), proposedIds = new Set<string>();
+  const actions: { kind:'replace'|'overlay'|'add'; key:string; index:number; candidate:PendingEdit; operation:SyncOperation }[] = [];
+  let additions = 0;
+  for (let i=0;i<edits.length;i++) {
+    const edit=edits[i],identity=identities[i];
+    if (!validateJsonSchema(identitySchema,identity).ok) fail('INVALID_EDIT_IDENTITY');
+    if (!validateJsonSchema(editSchema,edit).ok || edit.entityType!=='paper' || edit.mutation!=='put') fail('INVALID_EDIT');
+    let candidate={...edit,...identity} as PendingEdit;
+    if (!validatePending(candidate).ok) fail('INVALID_EDIT');
+    const key=operationKey(candidate),existing=entries.get(key),entry=existing?.entry,current=state.serverRecords[key],overlay=state.overlays[key];
+    if (targets.has(key)) fail('INVALID_PUT_BATCH');targets.add(key);
+    if (proposedIds.has(identity.opId)) fail('OP_ID_REUSED');proposedIds.add(identity.opId);
+    if (blockedKeys.has(key) || entry&&['conflict','rejected','device-blocked'].includes(entry.status) || !entry&&overlay) fail('TARGET_HAS_PENDING_EDITS');
+    if (entry?.operation.mutation==='delete' || overlay?.mutation==='delete') fail('RESTORE_REQUIRED');
+    if (!entry && !current) fail('TARGET_MISSING');
+    if (!entry && current?.deletedAt!==null && current?.deletedAt!==undefined) fail('RESTORE_REQUIRED');
+    if (entry?.operation.mutation==='restore' && (entry.status==='queued'&&entry.attempts===0 || entry.operation.opId===candidate.opId)) candidate={...candidate,mutation:'restore'} as PendingEdit;
+    const duplicate=existingIds.get(identity.opId);
+    if (duplicate) { if(!sameIntent(duplicate,candidate))fail('OP_ID_REUSED');continue; }
+    const kind=entry?(entry.status==='queued'&&entry.attempts===0?'replace':'overlay'):'add';
+    if (kind==='add' && state.outbox.length+(++additions)>SYNC_LIMITS.maxLocalOperations) fail('LOCAL_CAPACITY_EXCEEDED');
+    const base=entry?entry.operation.baseRevision:current!.revision;
+    const operation=pendingAsOperation(candidate,base);
+    actions.push({kind,key,index:existing?.index??-1,candidate:{...candidate,data:operation.data} as PendingEdit,operation});
+  }
+  if (!actions.length) return state;
+  const next=copy({state,actions});
+  for (const action of next.actions) {
+    if (action.kind==='replace') { next.state.outbox[action.index].operation=action.operation;delete next.state.overlays[action.key]; }
+    else if (action.kind==='overlay') next.state.overlays[action.key]=action.candidate;
+    else next.state.outbox.push(newEntry(action.operation,next.state.deviceId));
+  }
+  assertState(next.state);return next.state;
+}
+
 /** Commit state first; send request only when opIds is non-empty. */
 export function preparePush(state: AccountSyncState, context: SyncContext, limit: number = SYNC_LIMITS.maxBatchOperations): PreparedPush {
   assertContext(state, context);

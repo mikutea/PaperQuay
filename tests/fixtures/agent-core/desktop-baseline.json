@@ -1,0 +1,1701 @@
+{
+  "at": 1793404800000,
+  "random": 0.125,
+  "cases": [
+    {
+      "name": "normalizeComparable",
+      "args": [
+        "  AI，ML；研究  "
+      ],
+      "expected": "ai ml 研究"
+    },
+    {
+      "name": "normalizeComparable",
+      "args": [
+        "REaD: title"
+      ],
+      "expected": "read: title"
+    },
+    {
+      "name": "normalizeComparable",
+      "args": [
+        "a_b-c"
+      ],
+      "expected": "a_b-c"
+    },
+    {
+      "name": "normalizeComparable",
+      "args": [
+        ""
+      ],
+      "expected": ""
+    },
+    {
+      "name": "normalizeComparable",
+      "args": [
+        "方法，方法"
+      ],
+      "expected": "方法 方法"
+    },
+    {
+      "name": "stripKnownReadPrefix",
+      "args": [
+        "[已读] Title"
+      ],
+      "expected": "Title"
+    },
+    {
+      "name": "stripKnownReadPrefix",
+      "args": [
+        "read: Title"
+      ],
+      "expected": "Title"
+    },
+    {
+      "name": "stripKnownReadPrefix",
+      "args": [
+        "READ title"
+      ],
+      "expected": "title"
+    },
+    {
+      "name": "stripKnownReadPrefix",
+      "args": [
+        "【已读】 （已读）标题"
+      ],
+      "expected": "（已读）标题"
+    },
+    {
+      "name": "stripKnownReadPrefix",
+      "args": [
+        "（已读）标题"
+      ],
+      "expected": "标题"
+    },
+    {
+      "name": "stripKnownReadPrefix",
+      "args": [
+        "未读标题"
+      ],
+      "expected": "未读标题"
+    },
+    {
+      "name": "stripKnownReadPrefix",
+      "args": [
+        "已读者的研究"
+      ],
+      "expected": "者的研究"
+    },
+    {
+      "name": "parseRenameCommand",
+      "args": [
+        "前面加 已读 "
+      ],
+      "expected": {
+        "mode": "prefix",
+        "value": "已读"
+      }
+    },
+    {
+      "name": "parseRenameCommand",
+      "args": [
+        "把 已读 替换成 "
+      ],
+      "expected": {
+        "mode": "suffix",
+        "value": "把 已读 替换成"
+      }
+    },
+    {
+      "name": "parseRenameCommand",
+      "args": [
+        "末尾添加 TEST"
+      ],
+      "expected": {
+        "mode": "suffix",
+        "value": "TEST"
+      }
+    },
+    {
+      "name": "parseRenameCommand",
+      "args": [
+        "把 A 改成 B"
+      ],
+      "expected": {
+        "mode": "replace",
+        "from": "A",
+        "to": "B"
+      }
+    },
+    {
+      "name": "parseRenameCommand",
+      "args": [
+        "原样后缀"
+      ],
+      "expected": {
+        "mode": "suffix",
+        "value": "原样后缀"
+      }
+    },
+    {
+      "name": "parseRenameCommand",
+      "args": [
+        ""
+      ],
+      "expected": null
+    },
+    {
+      "name": "parseRenameCommand",
+      "args": [
+        "开头加Prefix"
+      ],
+      "expected": {
+        "mode": "prefix",
+        "value": "Prefix"
+      }
+    },
+    {
+      "name": "normalizeAgentTagName",
+      "args": [
+        "##machine-learning"
+      ],
+      "expected": "Machine Learning"
+    },
+    {
+      "name": "normalizeAgentTagName",
+      "args": [
+        "人工智能"
+      ],
+      "expected": "AI"
+    },
+    {
+      "name": "normalizeAgentTagName",
+      "args": [
+        "llms"
+      ],
+      "expected": "LLM"
+    },
+    {
+      "name": "normalizeAgentTagName",
+      "args": [
+        "reinforcement_learning"
+      ],
+      "expected": "Reinforcement Learning"
+    },
+    {
+      "name": "normalizeAgentTagName",
+      "args": [
+        "A GENERAL TAG"
+      ],
+      "expected": "A General Tag"
+    },
+    {
+      "name": "normalizeAgentTagName",
+      "args": [
+        ""
+      ],
+      "expected": ""
+    },
+    {
+      "name": "normalizeAgentTagName",
+      "args": [
+        "计算机视觉"
+      ],
+      "expected": "Computer Vision"
+    },
+    {
+      "name": "uniqueTags",
+      "args": [
+        [
+          "#AI",
+          "人工智能",
+          "ML",
+          "machine-learning",
+          "自定义；标签",
+          "自定义 标签",
+          ""
+        ]
+      ],
+      "expected": [
+        "AI",
+        "Machine Learning",
+        "自定义 标签"
+      ]
+    },
+    {
+      "name": "paperAuthors",
+      "args": [
+        {
+          "id": "paper-a",
+          "title": "[已读] A survey of UAV optimization",
+          "authors": [
+            {
+              "name": " Synthetic Author "
+            }
+          ],
+          "year": "2026",
+          "publication": "Synthetic Journal",
+          "doi": "10.1000/agent",
+          "url": null,
+          "abstractText": "Deep reinforcement learning for UAV scheduling. UAV optimization.",
+          "keywords": [
+            "uav",
+            "deep_learning"
+          ],
+          "tags": [
+            {
+              "name": "#AI"
+            },
+            {
+              "name": "人工智能"
+            },
+            {
+              "name": "machine-learning"
+            }
+          ],
+          "categoryIds": [
+            "category-a"
+          ]
+        }
+      ],
+      "expected": [
+        "Synthetic Author"
+      ]
+    },
+    {
+      "name": "inferSmartTagsForPaper",
+      "args": [
+        {
+          "id": "paper-a",
+          "title": "[已读] A survey of UAV optimization",
+          "authors": [
+            {
+              "name": " Synthetic Author "
+            }
+          ],
+          "year": "2026",
+          "publication": "Synthetic Journal",
+          "doi": "10.1000/agent",
+          "url": null,
+          "abstractText": "Deep reinforcement learning for UAV scheduling. UAV optimization.",
+          "keywords": [
+            "uav",
+            "deep_learning"
+          ],
+          "tags": [
+            {
+              "name": "#AI"
+            },
+            {
+              "name": "人工智能"
+            },
+            {
+              "name": "machine-learning"
+            }
+          ],
+          "categoryIds": [
+            "category-a"
+          ]
+        }
+      ],
+      "expected": [
+        "AI",
+        "Machine Learning",
+        "UAV",
+        "Deep Learning",
+        "Reinforcement Learning",
+        "Optimization",
+        "Survey"
+      ]
+    },
+    {
+      "name": "inferCollectionNameForPaper",
+      "args": [
+        {
+          "id": "paper-a",
+          "title": "[已读] A survey of UAV optimization",
+          "authors": [
+            {
+              "name": " Synthetic Author "
+            }
+          ],
+          "year": "2026",
+          "publication": "Synthetic Journal",
+          "doi": "10.1000/agent",
+          "url": null,
+          "abstractText": "Deep reinforcement learning for UAV scheduling. UAV optimization.",
+          "keywords": [
+            "uav",
+            "deep_learning"
+          ],
+          "tags": [
+            {
+              "name": "#AI"
+            },
+            {
+              "name": "人工智能"
+            },
+            {
+              "name": "machine-learning"
+            }
+          ],
+          "categoryIds": [
+            "category-a"
+          ]
+        }
+      ],
+      "expected": "UAV"
+    },
+    {
+      "name": "paperAuthors",
+      "args": [
+        {
+          "id": "paper-b",
+          "title": "语言模型的研究方法",
+          "authors": [
+            {
+              "name": " Synthetic Author "
+            }
+          ],
+          "year": "2026",
+          "publication": "Synthetic Journal",
+          "doi": null,
+          "url": null,
+          "abstractText": "大语言模型与自然语言处理综述",
+          "keywords": [
+            "llms",
+            "研究"
+          ],
+          "tags": [
+            {
+              "name": "LLM"
+            },
+            {
+              "name": "llms"
+            }
+          ],
+          "categoryIds": []
+        }
+      ],
+      "expected": [
+        "Synthetic Author"
+      ]
+    },
+    {
+      "name": "inferSmartTagsForPaper",
+      "args": [
+        {
+          "id": "paper-b",
+          "title": "语言模型的研究方法",
+          "authors": [
+            {
+              "name": " Synthetic Author "
+            }
+          ],
+          "year": "2026",
+          "publication": "Synthetic Journal",
+          "doi": null,
+          "url": null,
+          "abstractText": "大语言模型与自然语言处理综述",
+          "keywords": [
+            "llms",
+            "研究"
+          ],
+          "tags": [
+            {
+              "name": "LLM"
+            },
+            {
+              "name": "llms"
+            }
+          ],
+          "categoryIds": []
+        }
+      ],
+      "expected": [
+        "LLM",
+        "研究",
+        "NLP",
+        "Survey"
+      ]
+    },
+    {
+      "name": "inferCollectionNameForPaper",
+      "args": [
+        {
+          "id": "paper-b",
+          "title": "语言模型的研究方法",
+          "authors": [
+            {
+              "name": " Synthetic Author "
+            }
+          ],
+          "year": "2026",
+          "publication": "Synthetic Journal",
+          "doi": null,
+          "url": null,
+          "abstractText": "大语言模型与自然语言处理综述",
+          "keywords": [
+            "llms",
+            "研究"
+          ],
+          "tags": [
+            {
+              "name": "LLM"
+            },
+            {
+              "name": "llms"
+            }
+          ],
+          "categoryIds": []
+        }
+      ],
+      "expected": "LLM"
+    },
+    {
+      "name": "paperAuthors",
+      "args": [
+        {
+          "id": "paper-c",
+          "title": "The Method",
+          "authors": [
+            {
+              "name": " Synthetic Author "
+            }
+          ],
+          "year": "2026",
+          "publication": null,
+          "doi": "10.1000/agent",
+          "url": null,
+          "abstractText": null,
+          "keywords": [],
+          "tags": [],
+          "categoryIds": []
+        }
+      ],
+      "expected": [
+        "Synthetic Author"
+      ]
+    },
+    {
+      "name": "inferSmartTagsForPaper",
+      "args": [
+        {
+          "id": "paper-c",
+          "title": "The Method",
+          "authors": [
+            {
+              "name": " Synthetic Author "
+            }
+          ],
+          "year": "2026",
+          "publication": null,
+          "doi": "10.1000/agent",
+          "url": null,
+          "abstractText": null,
+          "keywords": [],
+          "tags": [],
+          "categoryIds": []
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "inferCollectionNameForPaper",
+      "args": [
+        {
+          "id": "paper-c",
+          "title": "The Method",
+          "authors": [
+            {
+              "name": " Synthetic Author "
+            }
+          ],
+          "year": "2026",
+          "publication": null,
+          "doi": "10.1000/agent",
+          "url": null,
+          "abstractText": null,
+          "keywords": [],
+          "tags": [],
+          "categoryIds": []
+        }
+      ],
+      "expected": "未命名主题"
+    },
+    {
+      "name": "buildRenamePlan",
+      "args": [
+        [
+          {
+            "id": "paper-a",
+            "title": "[已读] A survey of UAV optimization",
+            "authors": [
+              {
+                "name": " Synthetic Author "
+              }
+            ],
+            "year": "2026",
+            "publication": "Synthetic Journal",
+            "doi": "10.1000/agent",
+            "url": null,
+            "abstractText": "Deep reinforcement learning for UAV scheduling. UAV optimization.",
+            "keywords": [
+              "uav",
+              "deep_learning"
+            ],
+            "tags": [
+              {
+                "name": "#AI"
+              },
+              {
+                "name": "人工智能"
+              },
+              {
+                "name": "machine-learning"
+              }
+            ],
+            "categoryIds": [
+              "category-a"
+            ]
+          },
+          {
+            "id": "paper-b",
+            "title": "语言模型的研究方法",
+            "authors": [
+              {
+                "name": " Synthetic Author "
+              }
+            ],
+            "year": "2026",
+            "publication": "Synthetic Journal",
+            "doi": null,
+            "url": null,
+            "abstractText": "大语言模型与自然语言处理综述",
+            "keywords": [
+              "llms",
+              "研究"
+            ],
+            "tags": [
+              {
+                "name": "LLM"
+              },
+              {
+                "name": "llms"
+              }
+            ],
+            "categoryIds": []
+          },
+          {
+            "id": "paper-c",
+            "title": "The Method",
+            "authors": [
+              {
+                "name": " Synthetic Author "
+              }
+            ],
+            "year": "2026",
+            "publication": null,
+            "doi": "10.1000/agent",
+            "url": null,
+            "abstractText": null,
+            "keywords": [],
+            "tags": [],
+            "categoryIds": []
+          }
+        ],
+        {
+          "mode": "prefix",
+          "value": "已读 "
+        }
+      ],
+      "expected": {
+        "id": "agent-plan:rename:1793404800000:4i",
+        "tool": "rename",
+        "title": "批量重命名论文",
+        "description": "准备更新 3 篇文献标题。",
+        "items": [
+          {
+            "id": "paper-a:rename",
+            "tool": "rename",
+            "paperId": "paper-a",
+            "paperTitle": "[已读] A survey of UAV optimization",
+            "title": "重命名论文标题",
+            "description": "[已读] A survey of UAV optimization -> 已读 [已读] A survey of UAV optimization",
+            "before": "[已读] A survey of UAV optimization",
+            "after": "已读 [已读] A survey of UAV optimization",
+            "updateRequest": {
+              "paperId": "paper-a",
+              "title": "已读 [已读] A survey of UAV optimization"
+            }
+          },
+          {
+            "id": "paper-b:rename",
+            "tool": "rename",
+            "paperId": "paper-b",
+            "paperTitle": "语言模型的研究方法",
+            "title": "重命名论文标题",
+            "description": "语言模型的研究方法 -> 已读 语言模型的研究方法",
+            "before": "语言模型的研究方法",
+            "after": "已读 语言模型的研究方法",
+            "updateRequest": {
+              "paperId": "paper-b",
+              "title": "已读 语言模型的研究方法"
+            }
+          },
+          {
+            "id": "paper-c:rename",
+            "tool": "rename",
+            "paperId": "paper-c",
+            "paperTitle": "The Method",
+            "title": "重命名论文标题",
+            "description": "The Method -> 已读 The Method",
+            "before": "The Method",
+            "after": "已读 The Method",
+            "updateRequest": {
+              "paperId": "paper-c",
+              "title": "已读 The Method"
+            }
+          }
+        ],
+        "createdAt": 1793404800000
+      }
+    },
+    {
+      "name": "buildRenamePlan",
+      "args": [
+        [
+          {
+            "id": "paper-a",
+            "title": "[已读] A survey of UAV optimization",
+            "authors": [
+              {
+                "name": " Synthetic Author "
+              }
+            ],
+            "year": "2026",
+            "publication": "Synthetic Journal",
+            "doi": "10.1000/agent",
+            "url": null,
+            "abstractText": "Deep reinforcement learning for UAV scheduling. UAV optimization.",
+            "keywords": [
+              "uav",
+              "deep_learning"
+            ],
+            "tags": [
+              {
+                "name": "#AI"
+              },
+              {
+                "name": "人工智能"
+              },
+              {
+                "name": "machine-learning"
+              }
+            ],
+            "categoryIds": [
+              "category-a"
+            ]
+          },
+          {
+            "id": "paper-b",
+            "title": "语言模型的研究方法",
+            "authors": [
+              {
+                "name": " Synthetic Author "
+              }
+            ],
+            "year": "2026",
+            "publication": "Synthetic Journal",
+            "doi": null,
+            "url": null,
+            "abstractText": "大语言模型与自然语言处理综述",
+            "keywords": [
+              "llms",
+              "研究"
+            ],
+            "tags": [
+              {
+                "name": "LLM"
+              },
+              {
+                "name": "llms"
+              }
+            ],
+            "categoryIds": []
+          },
+          {
+            "id": "paper-c",
+            "title": "The Method",
+            "authors": [
+              {
+                "name": " Synthetic Author "
+              }
+            ],
+            "year": "2026",
+            "publication": null,
+            "doi": "10.1000/agent",
+            "url": null,
+            "abstractText": null,
+            "keywords": [],
+            "tags": [],
+            "categoryIds": []
+          }
+        ],
+        {
+          "mode": "suffix",
+          "value": " [done]"
+        }
+      ],
+      "expected": {
+        "id": "agent-plan:rename:1793404800000:4i",
+        "tool": "rename",
+        "title": "批量重命名论文",
+        "description": "准备更新 3 篇文献标题。",
+        "items": [
+          {
+            "id": "paper-a:rename",
+            "tool": "rename",
+            "paperId": "paper-a",
+            "paperTitle": "[已读] A survey of UAV optimization",
+            "title": "重命名论文标题",
+            "description": "[已读] A survey of UAV optimization -> [已读] A survey of UAV optimization [done]",
+            "before": "[已读] A survey of UAV optimization",
+            "after": "[已读] A survey of UAV optimization [done]",
+            "updateRequest": {
+              "paperId": "paper-a",
+              "title": "[已读] A survey of UAV optimization [done]"
+            }
+          },
+          {
+            "id": "paper-b:rename",
+            "tool": "rename",
+            "paperId": "paper-b",
+            "paperTitle": "语言模型的研究方法",
+            "title": "重命名论文标题",
+            "description": "语言模型的研究方法 -> 语言模型的研究方法 [done]",
+            "before": "语言模型的研究方法",
+            "after": "语言模型的研究方法 [done]",
+            "updateRequest": {
+              "paperId": "paper-b",
+              "title": "语言模型的研究方法 [done]"
+            }
+          },
+          {
+            "id": "paper-c:rename",
+            "tool": "rename",
+            "paperId": "paper-c",
+            "paperTitle": "The Method",
+            "title": "重命名论文标题",
+            "description": "The Method -> The Method [done]",
+            "before": "The Method",
+            "after": "The Method [done]",
+            "updateRequest": {
+              "paperId": "paper-c",
+              "title": "The Method [done]"
+            }
+          }
+        ],
+        "createdAt": 1793404800000
+      }
+    },
+    {
+      "name": "buildRenamePlan",
+      "args": [
+        [
+          {
+            "id": "paper-a",
+            "title": "[已读] A survey of UAV optimization",
+            "authors": [
+              {
+                "name": " Synthetic Author "
+              }
+            ],
+            "year": "2026",
+            "publication": "Synthetic Journal",
+            "doi": "10.1000/agent",
+            "url": null,
+            "abstractText": "Deep reinforcement learning for UAV scheduling. UAV optimization.",
+            "keywords": [
+              "uav",
+              "deep_learning"
+            ],
+            "tags": [
+              {
+                "name": "#AI"
+              },
+              {
+                "name": "人工智能"
+              },
+              {
+                "name": "machine-learning"
+              }
+            ],
+            "categoryIds": [
+              "category-a"
+            ]
+          },
+          {
+            "id": "paper-b",
+            "title": "语言模型的研究方法",
+            "authors": [
+              {
+                "name": " Synthetic Author "
+              }
+            ],
+            "year": "2026",
+            "publication": "Synthetic Journal",
+            "doi": null,
+            "url": null,
+            "abstractText": "大语言模型与自然语言处理综述",
+            "keywords": [
+              "llms",
+              "研究"
+            ],
+            "tags": [
+              {
+                "name": "LLM"
+              },
+              {
+                "name": "llms"
+              }
+            ],
+            "categoryIds": []
+          },
+          {
+            "id": "paper-c",
+            "title": "The Method",
+            "authors": [
+              {
+                "name": " Synthetic Author "
+              }
+            ],
+            "year": "2026",
+            "publication": null,
+            "doi": "10.1000/agent",
+            "url": null,
+            "abstractText": null,
+            "keywords": [],
+            "tags": [],
+            "categoryIds": []
+          }
+        ],
+        {
+          "mode": "replace",
+          "from": "UAV",
+          "to": "Drone"
+        }
+      ],
+      "expected": {
+        "id": "agent-plan:rename:1793404800000:4i",
+        "tool": "rename",
+        "title": "批量重命名论文",
+        "description": "准备更新 1 篇文献标题。",
+        "items": [
+          {
+            "id": "paper-a:rename",
+            "tool": "rename",
+            "paperId": "paper-a",
+            "paperTitle": "[已读] A survey of UAV optimization",
+            "title": "重命名论文标题",
+            "description": "[已读] A survey of UAV optimization -> [已读] A survey of Drone optimization",
+            "before": "[已读] A survey of UAV optimization",
+            "after": "[已读] A survey of Drone optimization",
+            "updateRequest": {
+              "paperId": "paper-a",
+              "title": "[已读] A survey of Drone optimization"
+            }
+          }
+        ],
+        "createdAt": 1793404800000
+      }
+    },
+    {
+      "name": "buildRenamePlan",
+      "args": [
+        [
+          {
+            "id": "paper-a",
+            "title": "[已读] A survey of UAV optimization",
+            "authors": [
+              {
+                "name": " Synthetic Author "
+              }
+            ],
+            "year": "2026",
+            "publication": "Synthetic Journal",
+            "doi": "10.1000/agent",
+            "url": null,
+            "abstractText": "Deep reinforcement learning for UAV scheduling. UAV optimization.",
+            "keywords": [
+              "uav",
+              "deep_learning"
+            ],
+            "tags": [
+              {
+                "name": "#AI"
+              },
+              {
+                "name": "人工智能"
+              },
+              {
+                "name": "machine-learning"
+              }
+            ],
+            "categoryIds": [
+              "category-a"
+            ]
+          },
+          {
+            "id": "paper-b",
+            "title": "语言模型的研究方法",
+            "authors": [
+              {
+                "name": " Synthetic Author "
+              }
+            ],
+            "year": "2026",
+            "publication": "Synthetic Journal",
+            "doi": null,
+            "url": null,
+            "abstractText": "大语言模型与自然语言处理综述",
+            "keywords": [
+              "llms",
+              "研究"
+            ],
+            "tags": [
+              {
+                "name": "LLM"
+              },
+              {
+                "name": "llms"
+              }
+            ],
+            "categoryIds": []
+          },
+          {
+            "id": "paper-c",
+            "title": "The Method",
+            "authors": [
+              {
+                "name": " Synthetic Author "
+              }
+            ],
+            "year": "2026",
+            "publication": null,
+            "doi": "10.1000/agent",
+            "url": null,
+            "abstractText": null,
+            "keywords": [],
+            "tags": [],
+            "categoryIds": []
+          }
+        ],
+        {
+          "mode": "replace",
+          "from": "[已读]",
+          "to": ""
+        }
+      ],
+      "expected": {
+        "id": "agent-plan:rename:1793404800000:4i",
+        "tool": "rename",
+        "title": "批量重命名论文",
+        "description": "准备更新 1 篇文献标题。",
+        "items": [
+          {
+            "id": "paper-a:rename",
+            "tool": "rename",
+            "paperId": "paper-a",
+            "paperTitle": "[已读] A survey of UAV optimization",
+            "title": "重命名论文标题",
+            "description": "[已读] A survey of UAV optimization -> A survey of UAV optimization",
+            "before": "[已读] A survey of UAV optimization",
+            "after": "A survey of UAV optimization",
+            "updateRequest": {
+              "paperId": "paper-a",
+              "title": "A survey of UAV optimization"
+            }
+          }
+        ],
+        "createdAt": 1793404800000
+      }
+    },
+    {
+      "name": "buildRenamePlan",
+      "args": [
+        [
+          {
+            "id": "paper-a",
+            "title": "[已读] A survey of UAV optimization",
+            "authors": [
+              {
+                "name": " Synthetic Author "
+              }
+            ],
+            "year": "2026",
+            "publication": "Synthetic Journal",
+            "doi": "10.1000/agent",
+            "url": null,
+            "abstractText": "Deep reinforcement learning for UAV scheduling. UAV optimization.",
+            "keywords": [
+              "uav",
+              "deep_learning"
+            ],
+            "tags": [
+              {
+                "name": "#AI"
+              },
+              {
+                "name": "人工智能"
+              },
+              {
+                "name": "machine-learning"
+              }
+            ],
+            "categoryIds": [
+              "category-a"
+            ]
+          },
+          {
+            "id": "paper-b",
+            "title": "语言模型的研究方法",
+            "authors": [
+              {
+                "name": " Synthetic Author "
+              }
+            ],
+            "year": "2026",
+            "publication": "Synthetic Journal",
+            "doi": null,
+            "url": null,
+            "abstractText": "大语言模型与自然语言处理综述",
+            "keywords": [
+              "llms",
+              "研究"
+            ],
+            "tags": [
+              {
+                "name": "LLM"
+              },
+              {
+                "name": "llms"
+              }
+            ],
+            "categoryIds": []
+          },
+          {
+            "id": "paper-c",
+            "title": "The Method",
+            "authors": [
+              {
+                "name": " Synthetic Author "
+              }
+            ],
+            "year": "2026",
+            "publication": null,
+            "doi": "10.1000/agent",
+            "url": null,
+            "abstractText": null,
+            "keywords": [],
+            "tags": [],
+            "categoryIds": []
+          }
+        ],
+        {
+          "mode": "replace",
+          "from": "absent",
+          "to": "none"
+        }
+      ],
+      "expected": {
+        "id": "agent-plan:rename:1793404800000:4i",
+        "tool": "rename",
+        "title": "批量重命名论文",
+        "description": "准备更新 0 篇文献标题。",
+        "items": [],
+        "createdAt": 1793404800000
+      }
+    },
+    {
+      "name": "buildSmartTagPlan",
+      "args": [
+        [
+          {
+            "id": "paper-a",
+            "title": "[已读] A survey of UAV optimization",
+            "authors": [
+              {
+                "name": " Synthetic Author "
+              }
+            ],
+            "year": "2026",
+            "publication": "Synthetic Journal",
+            "doi": "10.1000/agent",
+            "url": null,
+            "abstractText": "Deep reinforcement learning for UAV scheduling. UAV optimization.",
+            "keywords": [
+              "uav",
+              "deep_learning"
+            ],
+            "tags": [
+              {
+                "name": "#AI"
+              },
+              {
+                "name": "人工智能"
+              },
+              {
+                "name": "machine-learning"
+              }
+            ],
+            "categoryIds": [
+              "category-a"
+            ]
+          },
+          {
+            "id": "paper-b",
+            "title": "语言模型的研究方法",
+            "authors": [
+              {
+                "name": " Synthetic Author "
+              }
+            ],
+            "year": "2026",
+            "publication": "Synthetic Journal",
+            "doi": null,
+            "url": null,
+            "abstractText": "大语言模型与自然语言处理综述",
+            "keywords": [
+              "llms",
+              "研究"
+            ],
+            "tags": [
+              {
+                "name": "LLM"
+              },
+              {
+                "name": "llms"
+              }
+            ],
+            "categoryIds": []
+          },
+          {
+            "id": "paper-c",
+            "title": "The Method",
+            "authors": [
+              {
+                "name": " Synthetic Author "
+              }
+            ],
+            "year": "2026",
+            "publication": null,
+            "doi": "10.1000/agent",
+            "url": null,
+            "abstractText": null,
+            "keywords": [],
+            "tags": [],
+            "categoryIds": []
+          }
+        ]
+      ],
+      "expected": {
+        "id": "agent-plan:smart-tags:1793404800000:4i",
+        "tool": "smart-tags",
+        "title": "智能标签",
+        "description": "准备为 2 篇文献更新标签。",
+        "items": [
+          {
+            "id": "paper-a:smart-tags",
+            "tool": "smart-tags",
+            "paperId": "paper-a",
+            "paperTitle": "[已读] A survey of UAV optimization",
+            "title": "智能标签建议",
+            "description": "建议标签：AI、Machine Learning、UAV、Deep Learning、Reinforcement Learning、Optimization、Survey",
+            "before": "AI、Machine Learning",
+            "after": "AI、Machine Learning、UAV、Deep Learning、Reinforcement Learning、Optimization、Survey",
+            "updateRequest": {
+              "paperId": "paper-a",
+              "tags": [
+                "AI",
+                "Machine Learning",
+                "UAV",
+                "Deep Learning",
+                "Reinforcement Learning",
+                "Optimization",
+                "Survey"
+              ]
+            }
+          },
+          {
+            "id": "paper-b:smart-tags",
+            "tool": "smart-tags",
+            "paperId": "paper-b",
+            "paperTitle": "语言模型的研究方法",
+            "title": "智能标签建议",
+            "description": "建议标签：LLM、研究、NLP、Survey",
+            "before": "LLM",
+            "after": "LLM、研究、NLP、Survey",
+            "updateRequest": {
+              "paperId": "paper-b",
+              "tags": [
+                "LLM",
+                "研究",
+                "NLP",
+                "Survey"
+              ]
+            }
+          }
+        ],
+        "createdAt": 1793404800000
+      }
+    },
+    {
+      "name": "buildSmartTagPlan",
+      "args": [
+        []
+      ],
+      "expected": {
+        "id": "agent-plan:smart-tags:1793404800000:4i",
+        "tool": "smart-tags",
+        "title": "智能标签",
+        "description": "准备为 0 篇文献更新标签。",
+        "items": [],
+        "createdAt": 1793404800000
+      }
+    },
+    {
+      "name": "buildCleanTagsPlan",
+      "args": [
+        [
+          {
+            "id": "paper-a",
+            "title": "[已读] A survey of UAV optimization",
+            "authors": [
+              {
+                "name": " Synthetic Author "
+              }
+            ],
+            "year": "2026",
+            "publication": "Synthetic Journal",
+            "doi": "10.1000/agent",
+            "url": null,
+            "abstractText": "Deep reinforcement learning for UAV scheduling. UAV optimization.",
+            "keywords": [
+              "uav",
+              "deep_learning"
+            ],
+            "tags": [
+              {
+                "name": "#AI"
+              },
+              {
+                "name": "人工智能"
+              },
+              {
+                "name": "machine-learning"
+              }
+            ],
+            "categoryIds": [
+              "category-a"
+            ]
+          },
+          {
+            "id": "paper-b",
+            "title": "语言模型的研究方法",
+            "authors": [
+              {
+                "name": " Synthetic Author "
+              }
+            ],
+            "year": "2026",
+            "publication": "Synthetic Journal",
+            "doi": null,
+            "url": null,
+            "abstractText": "大语言模型与自然语言处理综述",
+            "keywords": [
+              "llms",
+              "研究"
+            ],
+            "tags": [
+              {
+                "name": "LLM"
+              },
+              {
+                "name": "llms"
+              }
+            ],
+            "categoryIds": []
+          },
+          {
+            "id": "paper-c",
+            "title": "The Method",
+            "authors": [
+              {
+                "name": " Synthetic Author "
+              }
+            ],
+            "year": "2026",
+            "publication": null,
+            "doi": "10.1000/agent",
+            "url": null,
+            "abstractText": null,
+            "keywords": [],
+            "tags": [],
+            "categoryIds": []
+          }
+        ]
+      ],
+      "expected": {
+        "id": "agent-plan:clean-tags:1793404800000:4i",
+        "tool": "clean-tags",
+        "title": "标签清洗 / 合并",
+        "description": "准备清洗 2 篇文献的标签。",
+        "items": [
+          {
+            "id": "paper-a:clean-tags",
+            "tool": "clean-tags",
+            "paperId": "paper-a",
+            "paperTitle": "[已读] A survey of UAV optimization",
+            "title": "标签清洗 / 合并",
+            "description": "合并大小写、同义词和重复标签。",
+            "before": "#AI、人工智能、machine-learning",
+            "after": "AI、Machine Learning",
+            "updateRequest": {
+              "paperId": "paper-a",
+              "tags": [
+                "AI",
+                "Machine Learning"
+              ]
+            }
+          },
+          {
+            "id": "paper-b:clean-tags",
+            "tool": "clean-tags",
+            "paperId": "paper-b",
+            "paperTitle": "语言模型的研究方法",
+            "title": "标签清洗 / 合并",
+            "description": "合并大小写、同义词和重复标签。",
+            "before": "LLM、llms",
+            "after": "LLM",
+            "updateRequest": {
+              "paperId": "paper-b",
+              "tags": [
+                "LLM"
+              ]
+            }
+          }
+        ],
+        "createdAt": 1793404800000
+      }
+    },
+    {
+      "name": "buildCleanTagsPlan",
+      "args": [
+        []
+      ],
+      "expected": {
+        "id": "agent-plan:clean-tags:1793404800000:4i",
+        "tool": "clean-tags",
+        "title": "标签清洗 / 合并",
+        "description": "准备清洗 0 篇文献的标签。",
+        "items": [],
+        "createdAt": 1793404800000
+      }
+    },
+    {
+      "name": "buildAutoClassifyPlan",
+      "args": [
+        [
+          {
+            "id": "paper-a",
+            "title": "[已读] A survey of UAV optimization",
+            "authors": [
+              {
+                "name": " Synthetic Author "
+              }
+            ],
+            "year": "2026",
+            "publication": "Synthetic Journal",
+            "doi": "10.1000/agent",
+            "url": null,
+            "abstractText": "Deep reinforcement learning for UAV scheduling. UAV optimization.",
+            "keywords": [
+              "uav",
+              "deep_learning"
+            ],
+            "tags": [
+              {
+                "name": "#AI"
+              },
+              {
+                "name": "人工智能"
+              },
+              {
+                "name": "machine-learning"
+              }
+            ],
+            "categoryIds": [
+              "category-a"
+            ]
+          },
+          {
+            "id": "paper-b",
+            "title": "语言模型的研究方法",
+            "authors": [
+              {
+                "name": " Synthetic Author "
+              }
+            ],
+            "year": "2026",
+            "publication": "Synthetic Journal",
+            "doi": null,
+            "url": null,
+            "abstractText": "大语言模型与自然语言处理综述",
+            "keywords": [
+              "llms",
+              "研究"
+            ],
+            "tags": [
+              {
+                "name": "LLM"
+              },
+              {
+                "name": "llms"
+              }
+            ],
+            "categoryIds": []
+          },
+          {
+            "id": "paper-c",
+            "title": "The Method",
+            "authors": [
+              {
+                "name": " Synthetic Author "
+              }
+            ],
+            "year": "2026",
+            "publication": null,
+            "doi": "10.1000/agent",
+            "url": null,
+            "abstractText": null,
+            "keywords": [],
+            "tags": [],
+            "categoryIds": []
+          }
+        ]
+      ],
+      "expected": {
+        "id": "agent-plan:classify:1793404800000:4i",
+        "tool": "classify",
+        "title": "自动归类 Collection",
+        "description": "准备为 3 篇文献加入自动分类。",
+        "items": [
+          {
+            "id": "paper-a:classify:UAV",
+            "tool": "classify",
+            "paperId": "paper-a",
+            "paperTitle": "[已读] A survey of UAV optimization",
+            "title": "自动归类 Collection",
+            "description": "加入 Agent 自动归类 / UAV",
+            "before": "1 个已有分类",
+            "after": "Agent 自动归类 / UAV",
+            "targetCategoryName": "UAV",
+            "targetCategoryParentName": "Agent 自动归类"
+          },
+          {
+            "id": "paper-b:classify:LLM",
+            "tool": "classify",
+            "paperId": "paper-b",
+            "paperTitle": "语言模型的研究方法",
+            "title": "自动归类 Collection",
+            "description": "加入 Agent 自动归类 / LLM",
+            "before": "未分类",
+            "after": "Agent 自动归类 / LLM",
+            "targetCategoryName": "LLM",
+            "targetCategoryParentName": "Agent 自动归类"
+          },
+          {
+            "id": "paper-c:classify:未命名主题",
+            "tool": "classify",
+            "paperId": "paper-c",
+            "paperTitle": "The Method",
+            "title": "自动归类 Collection",
+            "description": "加入 Agent 自动归类 / 未命名主题",
+            "before": "未分类",
+            "after": "Agent 自动归类 / 未命名主题",
+            "targetCategoryName": "未命名主题",
+            "targetCategoryParentName": "Agent 自动归类"
+          }
+        ],
+        "createdAt": 1793404800000
+      }
+    },
+    {
+      "name": "buildAutoClassifyPlan",
+      "args": [
+        []
+      ],
+      "expected": {
+        "id": "agent-plan:classify:1793404800000:4i",
+        "tool": "classify",
+        "title": "自动归类 Collection",
+        "description": "准备为 0 篇文献加入自动分类。",
+        "items": [],
+        "createdAt": 1793404800000
+      }
+    }
+  ],
+  "metadataCases": [
+    {
+      "paper": {
+        "id": "paper-a",
+        "title": "[已读] A survey of UAV optimization",
+        "authors": [
+          {
+            "name": " Synthetic Author "
+          }
+        ],
+        "year": "2026",
+        "publication": "Synthetic Journal",
+        "doi": "10.1000/agent",
+        "url": null,
+        "abstractText": "Deep reinforcement learning for UAV scheduling. UAV optimization.",
+        "keywords": [
+          "uav",
+          "deep_learning"
+        ],
+        "tags": [
+          {
+            "name": "#AI"
+          },
+          {
+            "name": "人工智能"
+          },
+          {
+            "name": "machine-learning"
+          }
+        ],
+        "categoryIds": [
+          "category-a"
+        ]
+      },
+      "metadata": {
+        "title": "Revised title",
+        "authors": [
+          "New Author"
+        ],
+        "year": "2025",
+        "publication": "New Journal",
+        "doi": "10.1000/new",
+        "url": "https://example.test/paper",
+        "abstractText": " Revised abstract ",
+        "source": "Synthetic metadata"
+      },
+      "expectedUpdate": {
+        "paperId": "paper-a",
+        "title": "Revised title",
+        "year": "2025",
+        "publication": "New Journal",
+        "doi": "10.1000/new",
+        "url": "https://example.test/paper",
+        "abstractText": "Revised abstract",
+        "authors": [
+          "New Author"
+        ]
+      }
+    },
+    {
+      "paper": {
+        "id": "paper-a",
+        "title": "[已读] A survey of UAV optimization",
+        "authors": [
+          {
+            "name": " Synthetic Author "
+          }
+        ],
+        "year": "2026",
+        "publication": "Synthetic Journal",
+        "doi": "10.1000/agent",
+        "url": null,
+        "abstractText": "Deep reinforcement learning for UAV scheduling. UAV optimization.",
+        "keywords": [
+          "uav",
+          "deep_learning"
+        ],
+        "tags": [
+          {
+            "name": "#AI"
+          },
+          {
+            "name": "人工智能"
+          },
+          {
+            "name": "machine-learning"
+          }
+        ],
+        "categoryIds": [
+          "category-a"
+        ]
+      },
+      "metadata": {
+        "title": "[已读] A survey of UAV optimization",
+        "authors": [
+          "Synthetic Author"
+        ],
+        "year": "2026",
+        "publication": "Synthetic Journal",
+        "doi": "10.1000/agent",
+        "url": null,
+        "abstractText": "Deep reinforcement learning for UAV scheduling. UAV optimization.",
+        "source": "Synthetic unchanged"
+      },
+      "expectedUpdate": null
+    },
+    {
+      "paper": {
+        "id": "paper-a",
+        "title": "[已读] A survey of UAV optimization",
+        "authors": [
+          {
+            "name": " Synthetic Author "
+          }
+        ],
+        "year": "2026",
+        "publication": "Synthetic Journal",
+        "doi": "10.1000/agent",
+        "url": null,
+        "abstractText": "Deep reinforcement learning for UAV scheduling. UAV optimization.",
+        "keywords": [
+          "uav",
+          "deep_learning"
+        ],
+        "tags": [
+          {
+            "name": "#AI"
+          },
+          {
+            "name": "人工智能"
+          },
+          {
+            "name": "machine-learning"
+          }
+        ],
+        "categoryIds": [
+          "category-a"
+        ]
+      },
+      "metadata": {
+        "title": "",
+        "authors": [],
+        "year": "",
+        "publication": null,
+        "doi": null,
+        "url": "",
+        "abstractText": "",
+        "source": "Synthetic empty"
+      },
+      "expectedUpdate": null
+    }
+  ]
+}

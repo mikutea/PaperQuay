@@ -13,6 +13,7 @@ export type ClientErrorCode =
   | 'ACCOUNT_CHANGED'
   | 'ACCOUNT_STORAGE_LIMIT'
   | 'AI_COLLECTION_LIMIT'
+  | 'AGENT_CAPACITY'
   | 'REMOTE_REQUEST_PENDING'
   | 'SYNC_FAILED'
   | 'SYNC_FEATURE_UNAVAILABLE'
@@ -40,6 +41,7 @@ const messages: Record<ClientErrorCode, string> = {
   ACCOUNT_CHANGED: '账号已切换，本次同步已停止。',
   ACCOUNT_STORAGE_LIMIT: '账号同步存储额度已满。改动仍保存在此设备，请联系服务管理员处理额度后重试。',
   AI_COLLECTION_LIMIT: '此账号最多保存50个同步会话和100个同步模板。请先删除不再需要的内容；原有内容已保留。',
+  AGENT_CAPACITY: '本机文库、待同步队列或 Agent 记录容量不足，本次没有应用任何改动。请先同步或减少选择后重试。',
   REMOTE_REQUEST_PENDING: '上一条远程任务的创建结果尚未确认。请先重试同一请求或查询任务，再发起新的工作。',
   SYNC_FAILED: '同步未完成，请重试或查看待处理操作。',
   SYNC_FEATURE_UNAVAILABLE:'当前账号服务尚未支持这类内容。已保存的内容与待同步操作会保留，请连接支持相应能力的服务后重试。',

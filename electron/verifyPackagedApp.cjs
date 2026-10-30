@@ -28,6 +28,9 @@ try {
 
   require(pakoEntry);
   require(path.join(pizzipDirectory, 'flate.js'));
+  const agentEntry=require('node:url').pathToFileURL(path.join(extractionRoot,'packages','agent-core','index.mjs')).href;
+  const agentCheck=spawnSync(process.execPath,['--input-type=module','-e',"const {createAgentPlanCore}=await import(process.argv[1]);const core=createAgentPlanCore({now:()=>1,random:()=>0.125});const plan=core.buildRenamePlan([{id:'synthetic',title:'Evidence'}],{mode:'prefix',value:'Reviewed '});if(plan.items.length!==1||plan.items[0].updateRequest?.title!=='Reviewed Evidence'||core.normalizeAgentTagName('人工智能')!=='AI')throw Error('Packaged Agent planning failed');console.log('Packaged Agent planning passed.');",agentEntry],{stdio:'inherit',windowsHide:true});
+  if(agentCheck.error)throw agentCheck.error;if(agentCheck.status!==0)throw new Error('Packaged Agent planning failed.');
   const radarDomain=require(path.join(extractionRoot,'electron','backend','radarDomain.cjs'));
   const radarSources=require(path.join(extractionRoot,'electron','backend','radarSources.cjs'));
   const radarTopic=radarDomain.normalizeTopic({name:'Packaged radar',queries:['evidence'],includeTerms:['evidence'],sources:['crossref']});

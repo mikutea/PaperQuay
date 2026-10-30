@@ -17,7 +17,7 @@ interface CapabilityRuntime {
  inspectCapabilities?(signal:AbortSignal):Promise<ServiceCapabilitySnapshot>;
 }
 interface Props {runtime:CapabilityRuntime;controller:WorkspaceController;scope:AccountScope;scopeKey:string;incomingShare:boolean;current():boolean;onClose():void;onNavigate(action:FeatureAction):void}
-const actionLabels:Record<FeatureAction,string>={library:'前往文库',notes:'前往笔记',sync:'设备与同步',conflicts:'查看已收到的冲突',transfer:'导入与导出',incoming:'处理系统分享',cloud:'管理私有副本',remote:'查看远程任务',zotero:'接入Zotero',research:'多篇文献问答',review:'打开文献综述',graph:'打开知识图谱',radar:'打开文献雷达','ai-settings':'检查模型设置',exports:'导出笔记与引用'};
+const actionLabels:Record<FeatureAction,string>={library:'前往文库',notes:'前往笔记',sync:'设备与同步',conflicts:'查看已收到的冲突',transfer:'导入与导出',incoming:'处理系统分享',cloud:'管理私有副本',remote:'查看远程任务',zotero:'接入Zotero',research:'多篇文献问答',review:'打开文献综述',graph:'打开知识图谱',radar:'打开文献雷达',agent:'打开文库 Agent','ai-settings':'检查模型设置',exports:'导出笔记与引用'};
 export function CapabilitySheet(props:Props){
  const id=useId(),latest=useRef(props);latest.current=props;
  const state=useSyncExternalStore(props.controller.subscribe,props.controller.getSnapshot,props.controller.getSnapshot);
