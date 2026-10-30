@@ -1,0 +1,92 @@
+/* Semantic app chrome; document pixels and user annotation colors are independent. */
+:root {
+  color-scheme: light;
+  --theme-background: #f5f5f7;
+  --theme-surface: #ffffff;
+  --theme-soft: #eff0f3;
+  --theme-selected: #eaf2ff;
+  --theme-text: #1d1d1f;
+  --theme-control-border: #878d98;
+  --theme-disabled: #737780;
+  --accent: #0066cc;
+  --accent-dark: #005bb8;
+  --accent-hover: #004e9e;
+  --on-accent: #ffffff;
+  --line: #dfe1e6;
+  --muted: #60646c;
+  --subtle: #656a73;
+  --danger: #b4232c;
+  --danger-soft: #fff0f1;
+  --danger-line: #e8acb1;
+  --warning: #865100;
+  --warning-soft: #fff8e8;
+  --warning-line: #dbc48e;
+  --success: #216345;
+  --success-soft: #edf7f0;
+  --success-line: #a3c7ae;
+  --focus-ring: #2d78d4;
+  --pdf-surround: #e8e9ed;
+  --app-shadow: 0 12px 36px rgb(24 32 50 / 7%);
+  --radius-control: 12px;
+  --radius-group: 20px;
+  --motion-press: 100ms;
+  --motion-select: 220ms;
+  --ease-settle: cubic-bezier(.22,1,.36,1);
+  --glass-solid: #fbfbfd;
+  --glass-surface: rgb(251 251 253 / 88%);
+  --glass-border: rgb(255 255 255 / 94%);
+  --glass-highlight: rgb(255 255 255 / 96%);
+  --glass-shadow: 0 8px 32px rgb(24 32 50 / 12%), 0 0 0 1px rgb(24 32 50 / 8%);
+  --glass-selected: #e5edfa;
+  --glass-text: #30343b;
+  /* Existing rich-note and import components share the same semantic roles. */
+  --border: var(--line);
+  --text-primary: var(--theme-text);
+  --text-secondary: var(--muted);
+  --text-muted: var(--subtle);
+  --surface: var(--theme-surface);
+  --surface-secondary: var(--theme-soft);
+  --accent-soft: var(--theme-selected);
+  --theme-accent-soft: var(--theme-selected);
+  --surface-soft: var(--theme-soft);
+  --reader-control-fill: var(--theme-soft);
+  --reader-control-hover: var(--theme-selected);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --theme-background: #101114;
+    --theme-surface: #1c1d21;
+    --theme-soft: #292b31;
+    --theme-selected: #25364e;
+    --theme-text: #f5f5f7;
+    --theme-control-border: #777e8b;
+    --theme-disabled: #a0a6b2;
+    --accent: #86b9ff;
+    --accent-dark: #9ac5ff;
+    --accent-hover: #b5d5ff;
+    --on-accent: #09274f;
+    --line: #383b43;
+    --muted: #b6bac4;
+    --subtle: #aeb4c0;
+    --danger: #ffb4ba;
+    --danger-soft: #3b232a;
+    --danger-line: #975661;
+    --warning: #f5ce80;
+    --warning-soft: #352d1c;
+    --warning-line: #8b7447;
+    --success: #a2d8b7;
+    --success-soft: #1c3327;
+    --success-line: #577c64;
+    --focus-ring: #a4cbff;
+    --pdf-surround: #111216;
+    --app-shadow: 0 12px 36px rgb(0 0 0 / 20%);
+    --glass-solid: #25262b;
+    --glass-surface: rgb(37 38 43 / 92%);
+    --glass-border: rgb(255 255 255 / 16%);
+    --glass-highlight: rgb(255 255 255 / 12%);
+    --glass-shadow: 0 8px 32px rgb(0 0 0 / 30%), 0 0 0 1px rgb(255 255 255 / 5%);
+    --glass-selected: #3a4659;
+    --glass-text: #f5f5f7;
+  }
+}

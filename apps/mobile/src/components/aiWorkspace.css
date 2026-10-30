@@ -5,7 +5,7 @@
 .ai-heading { margin-bottom: 24px; }
 .ai-eyebrow { color: var(--accent-dark); font-size: .8rem; font-weight: 700; }
 .ai-device-badge { padding: 4px 10px; border: 1px solid var(--line); border-radius: 20px; font-size: .75rem; color: var(--muted); white-space: nowrap; }
-.ai-settings, .ai-context, .ai-result { border: 1px solid var(--line); background: #fff; border-radius: 12px; margin-bottom: 20px; }
+.ai-settings, .ai-context, .ai-result { border: 1px solid var(--line); background: var(--theme-surface); border-radius: 12px; margin-bottom: 20px; }
 .ai-settings > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 18px; cursor: pointer; font-weight: 650; min-height: 52px; }
 .ai-settings > summary::after { content: '+'; font-size: 1.25rem; color: var(--accent-dark); }
 .ai-settings[open] > summary::after { content: '−'; }
@@ -30,7 +30,7 @@
 .ai-advanced summary::before, .ai-context-preview summary::before { content: '›'; font-size: 1.1rem; margin-right: 8px; }
 .ai-advanced[open] summary::before, .ai-context-preview[open] summary::before { transform: rotate(90deg); }
 .ai-context, .ai-result { padding: 18px; }
-.ai-context-top > span { color: var(--accent-dark); font-size: .75rem; background: #f0fdfa; padding: 4px 8px; border-radius: 4px; }
+.ai-context-top > span { color: var(--accent-dark); font-size: .75rem; background: var(--theme-selected); padding: 4px 8px; border-radius: 4px; }
 .ai-context-title { margin: 14px 0 5px; font-weight: 600; }
 .ai-context-facts { display: flex; gap: 6px 16px; flex-wrap: wrap; font-size: .8125rem; color: var(--muted); }
 .ai-context-preview { border-top: 1px solid var(--line); margin-top: 12px; }
@@ -41,20 +41,20 @@
 .ai-composer { margin-bottom: 20px; }
 .ai-action-picker { display: grid; grid-template-columns: repeat(5, 1fr); border-bottom: 1px solid var(--line); gap: 4px; }
 .ai-action-picker button { min-height: 44px; font-size: .875rem; border-bottom: 2px solid transparent; color: var(--muted); }
-.ai-action-picker button[aria-pressed='true'] { color: var(--accent-dark); font-weight: 700; border-bottom-color: var(--accent); background: #f0fdfa; }
+.ai-action-picker button[aria-pressed='true'] { color: var(--accent-dark); font-weight: 700; border-bottom-color: var(--accent); background: var(--theme-selected); }
 .ai-send-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-top: 12px; }
 .ai-send-row p { margin: 0; }
 .ai-send-row button { flex-shrink: 0; }
 .ai-error, .ai-warning, .ai-success, .ai-notice { padding: 10px 12px; border-radius: 6px; line-height: 1.65; font-size: .8125rem; margin: 10px 0; }
-.ai-error { color: #991b1b; background: #fef2f2; border: 1px solid #fecaca; }
-.ai-warning { color: #854d0e; background: #fffbeb; border: 1px solid #fde68a; }
-.ai-success, .ai-notice { color: #115e59; background: #f0fdfa; border: 1px solid #99f6e4; }
+.ai-error { color: var(--danger); background: var(--danger-soft); border: 1px solid var(--danger-line); }
+.ai-warning { color: var(--warning); background: var(--warning-soft); border: 1px solid var(--warning-line); }
+.ai-success, .ai-notice { color: var(--accent-hover); background: var(--theme-selected); border: 1px solid var(--theme-selected); }
 .ai-result-heading { margin-bottom: 16px; }
 .ai-result-heading span { color: var(--muted); font-size: .8125rem; }
 .ai-result-source { font-size: .75rem; color: var(--muted); padding-bottom: 12px; border-bottom: 1px solid var(--line); }
 .ai-result-switch { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 14px 0 10px; }
 .ai-result-switch button { padding: 8px 12px; border-radius: 6px; font-size: .8125rem; border: 1px solid var(--line); }
-.ai-result-switch button[aria-pressed='true'] { color: var(--accent-dark); background: #f0fdfa; border-color: #5eead4; }
+.ai-result-switch button[aria-pressed='true'] { color: var(--accent-dark); background: var(--theme-selected); border-color: var(--focus-ring); }
 .ai-result-switch > span { color: var(--muted); font-size: .75rem; }
 .ai-output { line-height: 1.8; font-size: .9375rem; min-height: 3em; }
 .ai-citations { margin-top: 18px; }

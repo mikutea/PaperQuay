@@ -177,7 +177,7 @@ export function App() {
       <div className="login-page">
         <Brand />
         <main className="login-panel">
-          <span className="eyebrow">你的研究，随身继续</span>
+          <ConnectionArtwork />
           <h1>连接你的 PaperQuay</h1>
           <p className="muted">填写自托管服务提供的地址，然后使用账号登录。</p>
           {loading ? <p role="status">正在打开此设备的数据…</p> : <ConfigForm input={input} onSave={configure} />}
@@ -196,6 +196,14 @@ export function App() {
   );
 }
 
+function ConnectionArtwork() {
+  return (
+    <div className="connection-art" aria-hidden="true">
+      <span />
+      <span><Icon name="note" /></span>
+    </div>
+  );
+}
 function Brand() {
   return (
     <div className="brand">
@@ -485,7 +493,7 @@ export function ConnectedApp({
       <div className="login-page">
         <Brand />
         <main className="login-panel">
-          <span className="eyebrow">文献与想法，随时接续</span>
+          <ConnectionArtwork />
           <h1>{state.status === 'binding' ? '正在打开你的文库' : '登录到你的文库'}</h1>
           <p className="muted">使用你的 PaperQuay 账号，继续整理文献和 Markdown 笔记。</p>
           {state.status === 'binding' ? (
@@ -829,7 +837,7 @@ export function ConnectedApp({
             accountCurrent={() => JSON.stringify(auth.getSubject?.() ?? null) === authSubjectKey} />
         </ReaderSheet>
       </Suspense>}
-      <nav className="bottom-nav app-glass" aria-label="主导航">
+      <nav className="bottom-nav app-glass" data-section={section} aria-label="主导航">
         {nav}
       </nav>
     </div>
@@ -850,6 +858,7 @@ function NavButton({
   return (
     <button
       className={`nav-button ${active ? 'active' : ''}`}
+      aria-label={label}
       aria-current={active ? 'page' : undefined}
       onClick={onClick}
     >
@@ -1139,42 +1148,44 @@ function ConfigForm({
         void onSave(form).finally(() => setBusy(false));
       }}
     >
-      <label className="field">
-        同步服务地址
-        <input
-          type="url"
-          required
-          value={form.apiBaseUrl ?? ''}
-          onChange={(event) => setForm({ ...form, apiBaseUrl: event.target.value })}
-          placeholder="https://sync.example.com"
-          autoCapitalize="none"
-          spellCheck={false}
-        />
-      </label>
-      <label className="field">
-        账号服务地址
-        <input
-          type="url"
-          required
-          value={form.oidcAuthority ?? ''}
-          onChange={(event) => setForm({ ...form, oidcAuthority: event.target.value })}
-          placeholder="https://id.example.com/realms/paperquay"
-          autoCapitalize="none"
-          spellCheck={false}
-        />
-      </label>
-      <label className="field">
-        客户端标识
-        <input
-          required
-          value={form.oidcClientId ?? ''}
-          onChange={(event) => setForm({ ...form, oidcClientId: event.target.value })}
-          placeholder="paperquay-mobile"
-          autoCapitalize="none"
-          spellCheck={false}
-        />
-      </label>
-      <button className="secondary" disabled={busy} type="submit">
+      <div className="config-fields">
+        <label className="field">
+          同步服务地址
+          <input
+            type="url"
+            required
+            value={form.apiBaseUrl ?? ''}
+            onChange={(event) => setForm({ ...form, apiBaseUrl: event.target.value })}
+            placeholder="https://sync.example.com"
+            autoCapitalize="none"
+            spellCheck={false}
+          />
+        </label>
+        <label className="field">
+          账号服务地址
+          <input
+            type="url"
+            required
+            value={form.oidcAuthority ?? ''}
+            onChange={(event) => setForm({ ...form, oidcAuthority: event.target.value })}
+            placeholder="https://id.example.com/realms/paperquay"
+            autoCapitalize="none"
+            spellCheck={false}
+          />
+        </label>
+        <label className="field">
+          客户端标识
+          <input
+            required
+            value={form.oidcClientId ?? ''}
+            onChange={(event) => setForm({ ...form, oidcClientId: event.target.value })}
+            placeholder="paperquay-mobile"
+            autoCapitalize="none"
+            spellCheck={false}
+          />
+        </label>
+      </div>
+      <button className="primary" disabled={busy} type="submit">
         {busy ? '正在保存…' : '保存服务设置'}
       </button>
     </form>
@@ -1217,8 +1228,12 @@ function AccountView({
     <div className="account-page">
       <header className="page-heading">
         <h1>账号</h1>
-        <span className="eyebrow">{displayName || '我的 PaperQuay'}</span>
       </header>
+      <div className="account-profile">
+        <span className="account-avatar"><Icon name="account" /></span>
+        <div><strong>{displayName || '我的 PaperQuay'}</strong>
+          <span>{!state.online ? '离线使用中' : state.needsLogin ? '需要重新登录' : '已连接到你的文库'}</span></div>
+      </div>
       <section className="account-section">
         <h2>同步状态</h2>
         <SyncStatus state={state} conflicts={conflicts} onSync={onSync} onConflicts={onConflicts} />

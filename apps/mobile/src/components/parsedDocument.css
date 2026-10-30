@@ -4,7 +4,7 @@
 .parsed-file { display: grid; gap: .4rem; font-weight: 600; max-width: 100%; min-width: 0; }
 .parsed-file input { max-width: 100%; min-width: 0; width: 100%; font-weight: 400; }
 .parsed-feedback { display: flex; align-items: start; flex-wrap: wrap; gap: .5rem; border-left: 3px solid var(--accent, #346a66); padding: .65rem .75rem; font-size: .88rem; line-height: 1.6; }
-.parsed-error { border-color: #b34b42; }
+.parsed-error { border-color: var(--danger); }
 .parsed-page-controls { display: flex; gap: .35rem; align-items: center; flex-wrap: wrap; }
 .parsed-panel .parsed-page-controls form { display: flex; flex-direction: row; align-items: center; gap: .35rem; flex: 1; min-width: 0; flex-wrap: wrap; }
 .parsed-panel .parsed-page-controls label { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; gap: .25rem; min-width: 0; }

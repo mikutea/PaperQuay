@@ -1,8 +1,8 @@
 .pr-reader, .reader-sheet {
   --reader-material: var(--glass-surface);
   --reader-material-border: var(--glass-border);
-  --reader-control-fill: #edf3ef;
-  --reader-control-hover: #e2eee7;
+  --reader-control-fill: var(--theme-soft);
+  --reader-control-hover: var(--theme-selected);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
 }
 .reader-sheet-overlay {
@@ -10,7 +10,7 @@
   width: var(--reader-sheet-width, 100%); height: var(--reader-sheet-height, 100%);
   z-index: 80; display: flex; align-items: flex-end; justify-content: center;
   padding: max(12px, env(safe-area-inset-top)) env(safe-area-inset-right) 0 env(safe-area-inset-left);
-  background: rgb(15 23 20 / 32%); overscroll-behavior: contain;
+  background: rgb(16 18 24 / 32%); overscroll-behavior: contain;
 }
 .reader-sheet-overlay[hidden] { display: none !important; }
 .reader-sheet-background { pointer-events: none !important; user-select: none !important; }
@@ -67,11 +67,11 @@
   .pr-reader, .reader-sheet {
     --reader-material: var(--glass-surface);
     --reader-material-border: var(--glass-border);
-    --reader-control-fill: #263b31;
-    --reader-control-hover: #30483b;
+    --reader-control-fill: var(--theme-soft);
+    --reader-control-hover: var(--theme-selected);
   }
-  .pr-reader-sheet .pr-feedback { color: #bcecd6; background: #143629; border-color: #396b54; }
-  .pr-reader-sheet .pr-feedback-error { color: #fecaca; background: #3b2224; border-color: #8e5457; }
+  .pr-reader-sheet .pr-feedback { color: var(--success); background: var(--success-soft); border-color: var(--success-line); }
+  .pr-reader-sheet .pr-feedback-error { color: var(--danger-line); background: var(--danger-soft); border-color: var(--danger-line); }
 }
 @media (prefers-contrast: more), (forced-colors: active) {
   .reader-sheet { box-shadow: none; outline: 1px solid currentColor; }

@@ -1,5 +1,15 @@
 # Android 原生构建与 MuMu 检查点 · 2026-10-29
 
+## 2026-10-30：移动端统一视觉与原生交互验收
+
+已按Apple当前HIG、WWDC26及4个可核实小红书样本重做实际应用配色、布局和反馈。覆盖连接、文库、笔记、账号、AI/导入及阅读工具；使用语义tokens、带名称的图标导航、浮层滚动避让和短横屏侧栏。PDF与批注颜色独立，原Native安全区、权限和认证/分享逻辑未改。设计来源与范围见[UI改版说明](ui-refresh.md)。
+
+本轮根928/928、移动串行935/935通过；最终定向39/39、两端TypeScript/Vite及Android构建通过。独立无INTERNET权限测试包在实际MuMu WebView以320/390/768px视口验证51个新版状态，另保留3个旧版基线；包含真实深色、200%根字号、横屏、减少动画、快速反向导航和触摸取消。全状态无脚本错误/横向溢出，测得的可见按钮与summary均不小于44px。合成认证/API/分享接口不代表真实服务验收。
+
+不含夹具的最终产品APK另通过正式Native分享/认证VIEW回归1项（4.571秒）。APK 18589768B，SHA256 b988264361829f1a5f56ffacea2d7ff74541a155095af840056fed44c61b82ca；与上一轮相比Manifest/DEX/Native库18项字节不变，SystemBars native和关闭WebView远程调试保留。111个dist资源逐字节匹配Native资源，额外仅Cordova生成文件。QA在qa/m3/20261030/ui-refresh，含实拍、失败记录和回执。
+
+本轮未push或发布，未接管桌面用户profile。真实服务链、桌面Electron Reader、真实IME/现代WebView、四类实机及Xcode仍待验收，M3未完成、M4未进入。此前服务链自动审批阻塞未重试或绕过。本地file浏览器通道也因协议权限被拒，改以无联网权限的独立原生包验证本地组件。
+
 ## 2026-10-30：认证 VIEW 路由与分享隔离
 
 从19dc492继续，仅扩展正式Android instrumentation，没有修改运行时逻辑。在生产MainActivity上通过真实暖ACTION_VIEW分别打开合成callback和logout URL；App插件各回传一个完全相同的appUrlOpen事件，Activity实例保持相同，分享列表/错误通知与私有空快照不变，HTTP调用0。完整Bridge测试1项/3.894秒通过，包括原有认领/隔离/去重/重建/权限和清理回归。本轮根项目928/928、TypeScript与Vite生产构建通过。
