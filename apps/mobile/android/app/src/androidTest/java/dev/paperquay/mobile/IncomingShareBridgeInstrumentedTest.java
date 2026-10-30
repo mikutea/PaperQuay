@@ -66,6 +66,7 @@ public final class IncomingShareBridgeInstrumentedTest {
             assertEquals(0, list(ownerB).length());
             assertNoPreexistingPrivateItems();
             assertNoNetwork();
+            assertAuthViewsRemainSeparateFromShares();
             android.net.Uri ungranted = android.net.Uri.parse("content://dev.paperquay.fixture.share.files/ungranted-" + nonce);
             assertEquals(android.content.pm.PackageManager.PERMISSION_DENIED, context.checkUriPermission(ungranted,
                 android.os.Process.myPid(), android.os.Process.myUid(), Intent.FLAG_GRANT_READ_URI_PERMISSION));
@@ -182,6 +183,44 @@ public final class IncomingShareBridgeInstrumentedTest {
                 if (scenario != null) scenario.close();
                 scenario = null;
             }
+        }
+    }
+
+    private void assertAuthViewsRemainSeparateFromShares() throws Exception {
+        assertTrue(evaluate("JSON.stringify({available:window.Capacitor.isPluginAvailable('App')})").getBoolean("available"));
+        evaluate("(function(){window.__pqAuthQaEvents=[];window.__pqAuthQaListener=window.Capacitor.nativeCallback('App','addListener',{eventName:'appUrlOpen'},function(data,error){window.__pqAuthQaEvents.push({data:data,error:error?'ERROR':null});});return JSON.stringify({registered:!!window.__pqAuthQaListener});})()");
+        list(ownerA); // The bridge Handler barrier also covers App listener registration.
+        try {
+            for (String path : new String[]{"callback?code=synthetic-qa-code&state=", "logout?state="}) {
+                String url = "dev.paperquay.mobile://auth/" + path + nonce;
+                int before = evaluate("JSON.stringify({count:window.__pqAuthQaEvents.length})").getInt("count");
+                int activity = activityIdentity();
+                scenario.onActivity(host -> host.startActivity(new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))
+                    .setClass(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)));
+                long deadline = SystemClock.elapsedRealtime() + WAIT_MS;
+                JSONArray events = null;
+                while (SystemClock.elapsedRealtime() < deadline) {
+                    events = evaluate("JSON.stringify({events:window.__pqAuthQaEvents})").getJSONArray("events");
+                    if (events.length() > before) break;
+                    Thread.sleep(60);
+                }
+                assertNotNull(events);
+                assertEquals("One VIEW must produce one App URL event", before + 1, events.length());
+                JSONObject event = events.getJSONObject(before);
+                assertTrue(event.isNull("error"));
+                assertEquals(1, event.getJSONObject("data").length());
+                assertEquals(url, event.getJSONObject("data").getString("url"));
+                assertEquals("VIEW should reuse the warm activity", activity, activityIdentity());
+                JSONObject inbox = success("list", owner(ownerA)).getJSONObject("data");
+                assertEquals(0, inbox.getJSONArray("items").length());
+                assertTrue("Auth routing must not generate an intake error", inbox.isNull("notice"));
+                assertEquals(0, list(ownerB).length());
+                assertNoPreexistingPrivateItems();
+                assertNoNetwork();
+            }
+        } finally {
+            evaluate("(function(){if(window.__pqAuthQaListener){window.Capacitor.nativeCallback('App','removeListener',{eventName:'appUrlOpen',callbackId:window.__pqAuthQaListener});delete window.__pqAuthQaListener;}return JSON.stringify({removed:true});})()");
+            list(ownerA);
         }
     }
 

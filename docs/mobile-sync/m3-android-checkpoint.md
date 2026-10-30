@@ -1,5 +1,12 @@
 # Android 原生构建与 MuMu 检查点 · 2026-10-29
 
+## 2026-10-30：认证 VIEW 路由与分享隔离
+
+从19dc492继续，仅扩展正式Android instrumentation，没有修改运行时逻辑。在生产MainActivity上通过真实暖ACTION_VIEW分别打开合成callback和logout URL；App插件各回传一个完全相同的appUrlOpen事件，Activity实例保持相同，分享列表/错误通知与私有空快照不变，HTTP调用0。完整Bridge测试1项/3.894秒通过，包括原有认领/隔离/去重/重建/权限和清理回归。本轮根项目928/928、TypeScript与Vite生产构建通过。
+
+测试使用合成code/state，不是实际OIDC登录、token交换、外部浏览器回跳或服务链验收。证据位于qa/m3/20261030/android-auth-routing。真实身份服务仍受此前blocked by policy限制，本轮未启动或绕过；M3未完成，M4未进入。初始可见剩余额度51%，依约不扩大本轮范围。
+
+
 ## 续作：系统栏注入与真实键盘遮挡
 
 从 30391f985aa39ded690f85ddb539b2eeb24c1b6a 继续，运行时只将 Capacitor 8.5.3 支持的 Android 专用 SystemBars.insetsHandling 设为 native。应用只使用标准 env(safe-area-inset-*)，没有依赖 SDK 注入的 --safe-area-inset-*。原生安全区与 IME padding 保留，跳过 document.documentElement 尚未建立时的 CSS 注入；没有改 SDK、关闭 insets 或降低 WebView 安全配置。
