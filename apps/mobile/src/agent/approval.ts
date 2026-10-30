@@ -1,10 +1,11 @@
+import{assertAgentReceiptEvidence,selectAgentReceiptEvidence,type AgentEvidence}from'./evidence.ts';
 import { canonicalJson, validateEntityData, type VisibleEntity, type PaperData, type LocalEdit, type EditIdentity } from '../../../../packages/sync-core/src/index.ts';
 import { reviewFingerprint } from '../review/fingerprint.ts';
 import { AgentError, AGENT_LIMITS, agentUuid, agentHash, agentObject, agentOnly, agentText, inspectAgentJson, validateAgentProposal, assertAgentTargetsCurrent, agentProposalDiffs, type AgentProposal } from './proposals.ts';
 
 export interface AgentApproval { version:1; id:string; stateRevision:number; proposalId:string; proposalDigest:string; itemIds:string[]; digest:string }
 export interface AgentAppliedChange { itemId:string; paperId:string; opId:string; fields:string[]; beforeHash:string; afterDataHash:string }
-export interface AgentReceipt { id:string; digest:string; proposalId:string; proposalDigest:string; origin:AgentProposal['origin']; originPlanId:string; title:string; at:number; changes:AgentAppliedChange[] }
+export interface AgentReceipt { id:string; digest:string; proposalId:string; proposalDigest:string; origin:AgentProposal['origin']; originPlanId:string; title:string; at:number; changes:AgentAppliedChange[];evidence?:AgentEvidence[] }
 export interface AgentState { version:1; revision:number; proposal:AgentProposal|null; receipts:AgentReceipt[] }
 export interface AgentApplyResult { receipt:AgentReceipt; replayed:boolean }
 const stateBytes=8*1024*1024;
@@ -20,12 +21,13 @@ export function validateAgentState(input:unknown):AgentState {
   if(input.version!==1||!Number.isSafeInteger(input.revision)||(input.revision as number)<1||!Array.isArray(input.receipts)||input.receipts.length>AGENT_LIMITS.receipts)throw new AgentError('INVALID');
   if(input.proposal!==null)validateAgentProposal(input.proposal);
   const receiptIds=new Set<string>();for(const raw of input.receipts){
-    if(!agentObject(raw))throw new AgentError('INVALID');agentOnly(raw,['id','digest','proposalId','proposalDigest','origin','originPlanId','title','at','changes']);
+    if(!agentObject(raw))throw new AgentError('INVALID');agentOnly(raw,['id','digest','proposalId','proposalDigest','origin','originPlanId','title','at','changes','evidence']);
     if(!agentUuid.test(String(raw.id))||receiptIds.has(raw.id as string)||!agentUuid.test(String(raw.proposalId))||!agentHash.test(String(raw.digest))||!agentHash.test(String(raw.proposalDigest))||!['local','model','metadata'].includes(String(raw.origin))||!stamp(raw.at)||!Array.isArray(raw.changes)||!raw.changes.length||raw.changes.length>AGENT_LIMITS.targets)throw new AgentError('INVALID');receiptIds.add(raw.id as string);agentText(raw.originPlanId,512,true);agentText(raw.title,1000,true);
     const items=new Set<string>(),papers=new Set<string>(),operations=new Set<string>();for(const change of raw.changes){
       if(!agentObject(change))throw new AgentError('INVALID');agentOnly(change,['itemId','paperId','opId','fields','beforeHash','afterDataHash']);agentText(change.itemId,512,true);
       if(items.has(change.itemId as string)||!agentUuid.test(String(change.paperId))||papers.has(change.paperId as string)||!agentUuid.test(String(change.opId))||operations.has(change.opId as string)||change.opId!==agentOperationId(raw.id as string,change.paperId as string,change.itemId as string)||!agentHash.test(String(change.beforeHash))||!agentHash.test(String(change.afterDataHash))||!Array.isArray(change.fields)||!change.fields.length||change.fields.length>fields.size||new Set(change.fields).size!==change.fields.length||change.fields.some(f=>!fields.has(String(f))))throw new AgentError('INVALID');items.add(change.itemId as string);papers.add(change.paperId as string);operations.add(change.opId as string);
     }
+    if(raw.evidence!==undefined)assertAgentReceiptEvidence(raw.evidence,raw.origin as AgentReceipt['origin'],raw.originPlanId as string,raw.changes as unknown as AgentAppliedChange[]);
   }
   return structuredClone(input) as unknown as AgentState;
 }
@@ -55,6 +57,6 @@ export function materializeAgentApproval(input:AgentState,entities:readonly Visi
     if(data.organization!==undefined&&!organizationSupported)throw new AgentError('UNSUPPORTED');if(!validateEntityData('paper',data).ok)throw new AgentError('INVALID');
     const opId=agentOperationId(approval.id,item.targetId,item.id);edits.push({entityType:'paper',entityId:item.targetId,mutation:'put',data});identities.push({opId,clientCreatedAt:new Date(at).toISOString()});changes.push({itemId:item.id,paperId:item.targetId,opId,fields:agentProposalDiffs(proposal,item.id).map(d=>d.field),beforeHash:target.hash,afterDataHash:reviewFingerprint(data)});
   }
-  const saved:AgentReceipt={id:approval.id,digest:approval.digest,proposalId:proposal.id,proposalDigest:proposal.digest,origin:proposal.origin,originPlanId:proposal.originPlanId,title:proposal.title,at,changes};// Applying checked items finishes this proposal; unchecked items remain unchanged and require a new reviewed proposal.
+  const saved:AgentReceipt={id:approval.id,digest:approval.digest,proposalId:proposal.id,proposalDigest:proposal.digest,origin:proposal.origin,originPlanId:proposal.originPlanId,title:proposal.title,at,changes,...(proposal.evidence?{evidence:selectAgentReceiptEvidence(proposal.evidence,changes.map(c=>c.paperId))}:{})};// Applying checked items finishes this proposal; unchecked items remain unchanged and require a new reviewed proposal.
   state.proposal=null;state.receipts.push(saved);if(state.receipts.length>AGENT_LIMITS.receipts)state.receipts.shift();state.revision++;return{state:validateAgentState(state),edits,identities,result:{receipt:structuredClone(saved),replayed:false}};
 }

@@ -189,7 +189,13 @@ function mapWork(value: unknown, doi: string, apiUrl: string): DoiLookupResult {
   if (!isPlainObject(value) || value.status !== 'ok' || value['message-type'] !== 'work'
     || typeof value['message-version'] !== 'string' || !/^1\.\d{1,4}\.\d{1,4}$/u.test(value['message-version'])
     || !isPlainObject(value.message)) return fail('INVALID_RESPONSE');
-  const work = value.message;
+  return mapCrossrefWork(value.message, doi, apiUrl);
+}
+
+/** Shared strict work mapping for exact DOI responses and explicitly selected title candidates. */
+export function mapCrossrefWork(input: unknown, doi: string, apiUrl: string): DoiLookupResult {
+  if (!isPlainObject(input)) return fail('INVALID_RESPONSE');
+  const work = input;
   if (typeof work.DOI !== 'string') return fail('INVALID_RESPONSE');
   let returnedDoi: string;
   try { returnedDoi = normalizeDoi(work.DOI); } catch { return fail('INVALID_RESPONSE'); }
@@ -376,3 +382,5 @@ export async function lookupDoi(input: string, options: DoiLookupOptions = {}): 
     } else if (response) discardBody(response);
   }
 }
+
+export { parseJson as parseCrossrefJson, mapWork as mapCrossrefDoiResponse };

@@ -1,9 +1,12 @@
+import { validateAgentMetadataSession, beginAgentMetadataQuery, assertAgentMetadataCurrent, buildAgentMetadataProposal, metadataPublicationKey, markAgentMetadataPublished, type AgentMetadataSession, type AgentMetadataChoice } from '../agent/metadataSession.ts';
+import { validateAgentMetadataRequest, type AgentMetadataRequest } from '../agent/metadataRequest.ts';
+import{modelEvidenceFromTurn}from'../agent/evidence.ts';
 import{validateAgentContexts,assertAgentContextsCurrent,type AgentContext}from'../agent/context.ts';
 import{validateAgentConversation,assertAgentConversationCurrent,approveAgentContextRequest,beginAgentModelTurn,type AgentConversation}from'../agent/conversation.ts';
 import{validateAgentModelRequest,parseAgentModelResponse,type AgentModelRequest}from'../agent/modelProtocol.ts';
 import type{AiProviderConfig}from'../ai/types.ts';
 import{validateAgentState,emptyAgentState,withAgentProposal,validateAgentApproval,materializeAgentApproval,type AgentState,type AgentApproval,type AgentApplyResult}from'../agent/approval.ts';
-import{AgentError}from'../agent/proposals.ts';
+import{AgentError,withAgentProposalEvidence}from'../agent/proposals.ts';
 import{validateRadarState,type RadarState}from'../radar/model.ts';
 import{materializeRadarAdoption,validateRadarAdoption,type RadarAdoptionPlan,type RadarAdoptionResult}from'../radar/adoption.ts';
 import{RadarError}from'../radar/config.ts';
@@ -111,6 +114,8 @@ export interface StoredWorkspace {
   /** Local Agent proposals and apply receipts; only approved paper edits enter the outbox. */
   agentState?: AgentState;
   agentConversation?:AgentConversation;
+  agentMetadataSession?:AgentMetadataSession;
+  agentMetadataCooldownUntil?:number;
   /** Account-local receipts commit with imported entities and their outbox entries. */
   incomingReceipts?: IncomingImportReceipt[];
 }
@@ -137,7 +142,7 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
 export function decodeWorkspace(value: unknown): StoredWorkspace {
   if (
     !isObject(value) ||
-    Object.keys(value).some((key) => !['sync', 'pendingResolutions', 'paperOrganizationVersion','richNotesVersion','aiConversationsVersion', 'externalLibraries','remoteTaskIntent','remoteBatch','zoteroLibraries','incomingReceipts','reviewProject','radarState','agentState','agentConversation'].includes(key)) ||
+    Object.keys(value).some((key) => !['sync', 'pendingResolutions', 'paperOrganizationVersion','richNotesVersion','aiConversationsVersion', 'externalLibraries','remoteTaskIntent','remoteBatch','zoteroLibraries','incomingReceipts','reviewProject','radarState','agentState','agentConversation','agentMetadataSession','agentMetadataCooldownUntil'].includes(key)) ||
     (value.paperOrganizationVersion !== undefined && value.paperOrganizationVersion !== 1) ||
     (value.richNotesVersion!==undefined&&value.richNotesVersion!==1)||(value.aiConversationsVersion!==undefined&&value.aiConversationsVersion!==1)||
     !isObject(value.pendingResolutions) ||
@@ -158,6 +163,8 @@ export function decodeWorkspace(value: unknown): StoredWorkspace {
     try { validateRemoteBatch(value.remoteBatch); } catch { throw new ClientError('STORAGE_CORRUPT'); }
     if (value.remoteTaskIntent !== undefined) throw new ClientError('STORAGE_CORRUPT');
   }
+  if(value.agentMetadataCooldownUntil!==undefined&&(!Number.isSafeInteger(value.agentMetadataCooldownUntil)||Number(value.agentMetadataCooldownUntil)<0||Number(value.agentMetadataCooldownUntil)>253402300799999))throw new ClientError('STORAGE_CORRUPT');
+  if(value.agentMetadataSession!==undefined){try{validateAgentMetadataSession(value.agentMetadataSession);}catch{throw new ClientError('STORAGE_CORRUPT');}}
   if(value.agentConversation!==undefined){try{validateAgentConversation(value.agentConversation);}catch{throw new ClientError('STORAGE_CORRUPT');}}
   if(value.agentState!==undefined){try{validateAgentState(value.agentState);}catch{throw new ClientError('STORAGE_CORRUPT');}}
   if(value.radarState!==undefined){try{validateRadarState(value.radarState);}catch{throw new ClientError('STORAGE_CORRUPT');}}
@@ -576,6 +583,33 @@ export class WorkspaceController {
     const epoch=this.epoch;await this.update(epoch,value=>{if(!guard())throw new ClientError('ACCOUNT_CHANGED');if(value.reviewProject?.id!==id||value.reviewProject.revision!==revision)throw new ClientError('EDIT_CHANGED');const{reviewProject:_project,...rest}=value;return rest;});
   }
 
+
+  async refreshAgentMetadataSession():Promise<AgentMetadataSession|null>{const next=await this.update(this.epoch,value=>value);return next.agentMetadataSession??null;}
+  /** Private diagnostics are retained even if a same-account source changed after the query. */
+  async saveAgentMetadataSession(input:AgentMetadataSession,expected:{id:string;revision:number}|null,guard:()=>boolean=()=>true):Promise<AgentMetadataSession>{
+    const session=validateAgentMetadataSession(input),epoch=this.epoch;const next=await this.update(epoch,value=>{
+      if(!guard())throw new ClientError('ACCOUNT_CHANGED');const old=value.agentMetadataSession;if(old&&canonicalJson(old)===canonicalJson(session))return value;
+      if(expected===null){if(old||session.revision!==1)throw new ClientError('EDIT_CHANGED');}
+      else if(!old||old.id!==expected.id||old.revision!==expected.revision||(session.id===old.id?session.revision!==old.revision+1:session.revision!==1))throw new ClientError('EDIT_CHANGED');
+      return{...value,agentMetadataSession:session,agentMetadataCooldownUntil:Math.max(value.agentMetadataCooldownUntil??0,session.cooldownUntil)};
+    });return next.agentMetadataSession!;
+  }
+  async beginAgentMetadataRequest(input:AgentMetadataRequest,expected:{id:string;revision:number},guard:()=>boolean=()=>true):Promise<AgentMetadataSession>{
+    const request=validateAgentMetadataRequest(input),epoch=this.epoch;const next=await this.update(epoch,value=>{
+      if(!guard())throw new ClientError('ACCOUNT_CHANGED');const s=value.agentMetadataSession;if(!s||s.id!==expected.id||s.revision!==expected.revision||Date.parse(this.now())<Math.max(s.cooldownUntil,value.agentMetadataCooldownUntil??0))throw new ClientError('EDIT_CHANGED');assertAgentMetadataCurrent(s,externalLibraryEntities(value));return{...value,agentMetadataSession:beginAgentMetadataQuery(s,request)};
+    });return next.agentMetadataSession!;
+  }
+  /** A selected candidate and publication marker commit together. Library writes still require normal item approval. */
+  async adoptAgentMetadataPlan(sessionId:string,choices:AgentMetadataChoice[],expected:{sessionRevision:number;agentRevision:number|null;proposalDigest:string},guard:()=>boolean=()=>true):Promise<{proposalId:string;replayed:boolean}>{
+    const key=metadataPublicationKey(sessionId,choices),epoch=this.epoch;let result!:{proposalId:string;replayed:boolean};await this.update(epoch,value=>{
+      if(!guard())throw new ClientError('ACCOUNT_CHANGED');const s=value.agentMetadataSession;if(!s||s.id!==sessionId)throw new ClientError('EDIT_CHANGED');const marker=s.publications.find(p=>p.key===key);
+      if(marker){if(marker.proposalDigest!==expected.proposalDigest)throw new ClientError('EDIT_CHANGED');result={proposalId:marker.proposalId,replayed:true};return value;}
+      if(s.revision!==expected.sessionRevision||(value.agentState?.revision??null)!==expected.agentRevision)throw new ClientError('EDIT_CHANGED');assertAgentMetadataCurrent(s,externalLibraryEntities(value));const proposal=buildAgentMetadataProposal(s,choices);
+      if(proposal.digest!==expected.proposalDigest||value.agentState?.receipts.some(r=>r.proposalId===proposal.id))throw new ClientError('EDIT_CHANGED');result={proposalId:proposal.id,replayed:false};
+      return{...value,agentMetadataSession:markAgentMetadataPublished(s,key,proposal),agentState:withAgentProposal(value.agentState??emptyAgentState(),proposal)};
+    });return result;
+  }
+
   async refreshAgentConversation():Promise<AgentConversation|null>{const next=await this.update(this.epoch,value=>value);return next.agentConversation??null;}
   /** Stores private diagnostics, including a received response after source changes. Does not send or apply anything. */
   async saveAgentConversation(input:AgentConversation,expected:{id:string;revision:number}|null,guard:()=>boolean=()=>true):Promise<AgentConversation>{
@@ -607,7 +641,7 @@ export class WorkspaceController {
       const response=parseAgentModelResponse(turn.text,turn.request);if(response.kind!=='plan')throw new ClientError('EDIT_CHANGED');if(turn.proposalSaved){result={proposalId:response.proposal.id,replayed:true};return value;}
       if((value.agentState?.revision??null)!==expectedAgentRevision||value.agentState?.receipts.some(r=>r.proposalId===response.proposal.id))throw new ClientError('EDIT_CHANGED');assertAgentConversationCurrent(current,externalLibraryEntities(value));
       const conversation=structuredClone(current);conversation.turns[conversation.turns.length-1].proposalSaved=true;conversation.revision++;result={proposalId:response.proposal.id,replayed:false};
-      return{...value,agentConversation:validateAgentConversation(conversation),agentState:withAgentProposal(value.agentState??emptyAgentState(),response.proposal)};
+      return{...value,agentConversation:validateAgentConversation(conversation),agentState:withAgentProposal(value.agentState??emptyAgentState(),withAgentProposalEvidence(response.proposal,[modelEvidenceFromTurn(current,turn)]))};
     });return result;
   }
   async refreshAgentState():Promise<AgentState|null>{const next=await this.update(this.epoch,value=>value);return next.agentState??null;}

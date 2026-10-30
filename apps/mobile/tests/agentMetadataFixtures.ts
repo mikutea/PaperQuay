@@ -1,0 +1,11 @@
+import { AgentMetadataClient } from '../src/agent/metadataClient.ts';
+import { createAgentMetadataSession, prepareAgentMetadataSessionRequest, beginAgentMetadataQuery, finishAgentMetadataQuery, metadataCandidatePatch, type AgentMetadataSession, type AgentMetadataChoice } from '../src/agent/metadataSession.ts';
+import { id, entities, now } from './reviewFixtures.ts';
+export { id, entities, paper, now, scope, deferred, tickUntil } from './reviewFixtures.ts';
+export const at=Date.parse(now);
+export const work=(doi='10.1000/synthetic',title='External title')=>({DOI:doi,title:[title],author:[{given:'Source',family:'Author'}],issued:{'date-parts':[[2025]]},'container-title':['Source Journal'],subject:['Methods']});
+export const wire=(items:unknown[]= [work()])=>({status:'ok','message-type':'work-list','message-version':'1.0.0',message:{items,'total-results':items.length}});
+export const makeSession=()=>createAgentMetadataSession(entities,[id(2)],id(80),at);
+export async function responseFor(request:ReturnType<typeof prepareAgentMetadataSessionRequest>,items:unknown[]=[work()]){return new AgentMetadataClient({now:()=>at+10,rateState:{nextAllowed:-Infinity,cooldownUntil:0},fetch:async()=>new Response(JSON.stringify(wire(items)),{headers:{'content-type':'application/json'}})}).lookup(request,{current:()=>true,authorize:()=>true});}
+export async function completed(input=makeSession(),requestId=id(81),items:unknown[]=[work()]){const request=prepareAgentMetadataSessionRequest(input,id(2),{kind:'title',value:'Synthetic evidence'},requestId,at),begun=beginAgentMetadataQuery(input,request),response=await responseFor(request,items),session=finishAgentMetadataQuery(begun,request.id,{response},at+20);return{session,request,response,begun};}
+export function choices(s:AgentMetadataSession,fields?:AgentMetadataChoice['fields']):AgentMetadataChoice[]{const response=s.responses[0],r=s.records.find(r=>r.request.id===response.requestId)!,c=response.candidates[0],t=s.targets.find(t=>t.id===r.request.target.id)!;return[{targetId:t.id,requestId:r.request.id,candidateId:c.id,fields:fields??Object.keys(metadataCandidatePatch(t,c)).filter(f=>f!=='keywords') as AgentMetadataChoice['fields']}];}

@@ -1,40 +1,16 @@
+import{validateAgentEvidence,assertAgentEvidenceMatches,type AgentEvidence}from'./evidence.ts';
 import { canonicalJson, validateEntityData, type PaperData, type PaperOrganization, type VisibleEntity } from '../../../../packages/sync-core/src/index.ts';
 import { createAgentPlanCore, type AgentPlan, type AgentPlanItem, type AgentTool, type AgentPaper, type RenameOperation } from '../../../../packages/agent-core/index.mjs';
 import { organizationOf } from '../library/organization.ts';
 import { reviewFingerprint } from '../review/fingerprint.ts';
 
-export const AGENT_LIMITS = Object.freeze({ targets:64, targetBytes:1024*1024, proposalBytes:4*1024*1024, receipts:256, classificationWork:32000000 });
-export class AgentError extends Error {
-  constructor(readonly code:'INVALID'|'LIMIT'|'CHANGED'|'BLOCKED'|'UNSUPPORTED'|'EMPTY'|'PENDING'|'DELETED'|'COMPLEXITY') { super(code); this.name='AgentError'; }
-}
-export const agentUuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-export const agentHash=/^[0-9a-f]{64}$/;
+import{AGENT_LIMITS,AgentError,agentUuid,agentHash,agentObject,agentOnly,agentText,inspectAgentJson}from'./guards.ts';
+export{AGENT_LIMITS,AgentError,agentUuid,agentHash,agentObject,agentOnly,agentText,inspectAgentJson}from'./guards.ts';
 export const agentCore=createAgentPlanCore();
 export interface AgentTarget { id:string; hash:string; revision:number; data:PaperData }
 export type AgentPatch=Partial<Pick<PaperData,'title'|'authors'|'year'|'publication'|'doi'|'abstractText'|'keywords'|'organization'>>;
 export interface AgentProposalItem { id:string; targetId:string; tool:AgentTool; label:string; description:string; patch:AgentPatch }
-export interface AgentProposal { version:1; id:string; origin:'local'|'model'|'metadata'; originPlanId:string; tool:AgentTool; title:string; description:string; createdAt:number; targets:AgentTarget[]; items:AgentProposalItem[]; digest:string }
-export function agentObject(v:unknown):v is Record<string,unknown> { return Boolean(v&&typeof v==='object'&&!Array.isArray(v)&&[Object.prototype,null].includes(Object.getPrototypeOf(v))); }
-export function agentOnly(v:Record<string,unknown>,keys:readonly string[]):void { if(Reflect.ownKeys(v).some(k=>typeof k!=='string'||!keys.includes(k)))throw new AgentError('INVALID'); }
-export function agentText(v:unknown,max:number,required=false):string {
-  if(typeof v!=='string'||v.length>max||required&&!v.trim())throw new AgentError('INVALID');
-  for(const c of v){const n=c.charCodeAt(0);if(n<32&&![9,10,13].includes(n)||n===127)throw new AgentError('INVALID');}
-  try{encodeURIComponent(v);}catch{throw new AgentError('INVALID');}return v;
-}
-/** Inspect descriptors before serialization, including imported/proposed objects. */
-export function inspectAgentJson(value:unknown,maxBytes=AGENT_LIMITS.proposalBytes):void {
-  let nodes=0,chars=0;const seen=new Set<object>();
-  function visit(v:unknown,depth:number){
-    if(++nodes>500000||depth>24)throw new AgentError('LIMIT');
-    if(typeof v==='string'){chars+=v.length;if(chars>maxBytes)throw new AgentError('LIMIT');return;}
-    if(v===null||typeof v==='boolean'||typeof v==='number'&&Number.isFinite(v))return;
-    if(!v||typeof v!=='object'||seen.has(v)||!Array.isArray(v)&&!agentObject(v))throw new AgentError('INVALID');
-    seen.add(v);const keys=Reflect.ownKeys(v);
-    for(const k of keys){if(Array.isArray(v)&&k==='length')continue;if(typeof k!=='string')throw new AgentError('INVALID');const d=Object.getOwnPropertyDescriptor(v,k)!;if(!d.enumerable||!('value'in d))throw new AgentError('INVALID');if(Array.isArray(v)&&(!/^(0|[1-9][0-9]*)$/.test(k)||Number(k)>=v.length))throw new AgentError('INVALID');chars+=k.length;if(chars>maxBytes)throw new AgentError('LIMIT');visit(d.value,depth+1);}
-    if(Array.isArray(v)&&keys.length!==v.length+1)throw new AgentError('INVALID');seen.delete(v);
-  }
-  visit(value,0);if(new TextEncoder().encode(JSON.stringify(value)).length>maxBytes)throw new AgentError('LIMIT');
-}
+export interface AgentProposal { version:1; id:string; origin:'local'|'model'|'metadata'; originPlanId:string; tool:AgentTool; title:string; description:string; createdAt:number; targets:AgentTarget[]; items:AgentProposalItem[]; evidence?:AgentEvidence[]; digest:string }
 function blocked(e:VisibleEntity){return e.deleted||!e.data||['conflict','rejected','device-blocked'].includes(e.status);}
 export function agentEntityHash(e:VisibleEntity):string { return reviewFingerprint({id:e.entityId,revision:e.revision,data:e.data,deleted:e.deleted,blocked:blocked(e)}); }
 export function captureAgentTargets(entities:readonly VisibleEntity[],ids:readonly string[]):AgentTarget[] {
@@ -105,11 +81,12 @@ export function prepareLocalAgentProposal(entities:readonly VisibleEntity[],ids:
   return proposalFromAgentPlan({plan,targets});
 }
 export function validateAgentProposal(input:unknown):AgentProposal {
-  inspectAgentJson(input);if(!agentObject(input))throw new AgentError('INVALID');agentOnly(input,['version','id','origin','originPlanId','tool','title','description','createdAt','targets','items','digest']);
+  inspectAgentJson(input);if(!agentObject(input))throw new AgentError('INVALID');agentOnly(input,['version','id','origin','originPlanId','tool','title','description','createdAt','targets','items','evidence','digest']);
   if(input.version!==1||!agentUuid.test(String(input.id))||!['local','model','metadata'].includes(String(input.origin))||!validTool(input.tool)||!Number.isSafeInteger(input.createdAt)||(input.createdAt as number)<0||!Array.isArray(input.targets)||!input.targets.length||input.targets.length>AGENT_LIMITS.targets||!Array.isArray(input.items)||!input.items.length||input.items.length>AGENT_LIMITS.targets)throw new AgentError('INVALID');
   agentText(input.originPlanId,512,true);agentText(input.title,1000,true);agentText(input.description,4000);
   const targets=new Map<string,AgentTarget>();for(const raw of input.targets){if(!agentObject(raw))throw new AgentError('INVALID');agentOnly(raw,['id','hash','revision','data']);if(!agentUuid.test(String(raw.id))||targets.has(String(raw.id))||!agentHash.test(String(raw.hash))||!Number.isSafeInteger(raw.revision)||(raw.revision as number)<0||!validateEntityData('paper',raw.data).ok)throw new AgentError('INVALID');if(raw.hash!==reviewFingerprint({id:raw.id,revision:raw.revision,data:raw.data,deleted:false,blocked:false}))throw new AgentError('INVALID');targets.set(raw.id as string,raw as unknown as AgentTarget);}inspectAgentJson(input.targets,AGENT_LIMITS.targetBytes);
   const seen=new Set<string>(),seenTargets=new Set<string>();for(const raw of input.items){if(!agentObject(raw))throw new AgentError('INVALID');agentOnly(raw,['id','targetId','tool','label','description','patch']);agentText(raw.id,512,true);agentText(raw.label,1000,true);agentText(raw.description,4000);if(raw.tool!==input.tool||seen.has(raw.id as string)||seenTargets.has(raw.targetId as string)||!targets.has(raw.targetId as string))throw new AgentError('INVALID');seen.add(raw.id as string);seenTargets.add(raw.targetId as string);validatePatch(raw as unknown as AgentProposalItem,targets.get(raw.targetId as string)!);}
+  if(input.evidence!==undefined)assertAgentEvidenceMatches(validateAgentEvidence(input.evidence),input.origin as AgentProposal['origin'],input.originPlanId as string,[...targets.values()],[...seenTargets]);
   const{digest,...value}=input;if(!agentHash.test(String(digest))||digest!==reviewFingerprint(value))throw new AgentError('INVALID');return structuredClone(input) as unknown as AgentProposal;
 }
 export function assertAgentTargetsCurrent(proposal:Pick<AgentProposal,'targets'>,entities:readonly VisibleEntity[]):void {
@@ -118,4 +95,8 @@ export function assertAgentTargetsCurrent(proposal:Pick<AgentProposal,'targets'>
 }
 export function agentProposalDiffs(proposal:AgentProposal,itemId:string):{field:string;before:unknown;after:unknown}[]{
   const item=proposal.items.find(i=>i.id===itemId),target=proposal.targets.find(t=>t.id===item?.targetId);if(!item||!target)throw new AgentError('CHANGED');const diffs=[];for(const key of Object.keys(item.patch)as (keyof AgentPatch)[]){if(key==='organization'){const field=item.tool==='classify'?'collections':'tags';diffs.push({field,before:organizationOf(target.data)[field],after:item.patch.organization![field]});}else diffs.push({field:key,before:target.data[key]??null,after:item.patch[key]??null});}return diffs;
+}
+
+export function withAgentProposalEvidence(input:AgentProposal,evidenceInput:AgentEvidence[]):AgentProposal{
+ const proposal=validateAgentProposal(input),{digest:_digest,...body}=proposal,evidence=validateAgentEvidence(evidenceInput),next={...body,evidence};return validateAgentProposal({...next,digest:reviewFingerprint(next)});
 }
