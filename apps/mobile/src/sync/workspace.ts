@@ -17,6 +17,7 @@ import {
   rebindDevice,
   resumeAfterRestart,
   validateClientState,
+  validateEntityData,
   validateOperation,
   SyncStateError,
   supportsSyncRecord,
@@ -24,6 +25,7 @@ import {
   type EntityData,
   type EntityType,
   type LocalEdit,
+  type NoteData,
   type PreparedPush,
   type PushResult,
   type SyncContext,
@@ -503,6 +505,29 @@ export class WorkspaceController {
       if (epoch === this.epoch) this.publish({ error: safe });
       throw safe;
     }
+  }
+
+  /** A result UUID identifies one new note across retries and uncertain acknowledgements. */
+  async saveNewNoteOnce(entityId: string, note: NoteData,
+    beforeCommit?: (state: Readonly<AccountSyncState>) => void): Promise<boolean> {
+    const validated = validateEntityData('note', note);
+    if (!validated.ok) throw new ClientError('EDIT_CHANGED');
+    const data = structuredClone(validated.value), epoch = this.epoch;
+    const edit: LocalEdit = { entityType: 'note', entityId, mutation: 'put', data };
+    let created = false;
+    await this.update(epoch, value => {
+      beforeCommit?.(value.sync);
+      if (!this.supportedContent(edit, value, true)) throw new ClientError('SYNC_FEATURE_UNAVAILABLE');
+      const existing = getVisibleEntity(value.sync, 'note', entityId);
+      if (existing) {
+        if (existing.deleted || canonicalJson(existing.data) !== canonicalJson(data)) throw new ClientError('EDIT_CHANGED');
+        created = false; return value;
+      }
+      created = true;
+      return { ...value, sync: queueLocalEdit(value.sync, edit, { opId: this.makeId(), clientCreatedAt: this.now() }) };
+    });
+    if (created && !this.snapshot.needsLogin) void this.syncNow();
+    return created;
   }
 
   async prepareRemoteTask(request: RemoteTaskRequest): Promise<RemoteTaskRequest> {

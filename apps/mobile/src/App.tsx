@@ -79,6 +79,7 @@ const IncomingSharePanel = lazy(() => import('./components/IncomingSharePanel.ts
 const CloudPdfLibrary = lazy(() => import('./components/CloudPdfPanel.tsx').then((module) => ({ default: module.CloudPdfLibrary })));
 const RemoteTaskPanel = lazy(() => import('./components/RemoteTaskPanel.tsx').then(module => ({ default: module.RemoteTaskPanel })));
 const ZoteroLibrarySheet = lazy(() => import('./components/ZoteroLibrarySheet.tsx').then(module => ({ default: module.ZoteroLibrarySheet })));
+const ResearchWorkspace = lazy(() => import('./components/ResearchWorkspace.tsx').then(module => ({ default: module.ResearchWorkspace })));
 const NoteExportPanel = lazy(() => import('./components/NoteExportPanel.tsx').then(module => ({ default: module.NoteExportPanel })));
 const COMPACT_READER_QUERY = '(max-width: 900px)';
 function compactReaderSnapshot() {
@@ -304,12 +305,13 @@ export function ConnectedApp({
   const [remoteOpen, setRemoteOpen] = useState(false);
   const [zoteroOpen, setZoteroOpen] = useState(false);
   const [noteExportOpen, setNoteExportOpen] = useState(false);
+  const [researchOpen, setResearchOpen] = useState(false);
   const [parsedRemoteEpoch, setParsedRemoteEpoch] = useState(0);
   const transferScope = state.status === 'ready' && state.workspace
     ? JSON.stringify([state.workspace.sync.accountId, state.workspace.sync.deviceId, state.workspace.sync.generation]) : null;
   useEffect(() => { setCloudOpen(false); }, [transferScope, authSubjectKey]);
   useEffect(() => { setRemoteOpen(false); }, [transferScope, authSubjectKey]);
-  useEffect(() => { setZoteroOpen(false); setNoteExportOpen(false); }, [transferScope, authSubjectKey]);
+  useEffect(() => { setZoteroOpen(false); setNoteExportOpen(false); setResearchOpen(false); }, [transferScope, authSubjectKey]);
   const [dirty, setDirty] = useState(false);
   const [readerDirty, setReaderDirty] = useState(false);
   const editorUnsaved = useRef(false);
@@ -633,6 +635,7 @@ export function ConnectedApp({
               conflicts={conflictCount}
               onSelect={select}
               onCreate={(type) => select(type, crypto.randomUUID())}
+              onResearch={scope && runtime.secretStore ? () => { if (canLeave()) setResearchOpen(true); } : undefined}
               onTransfer={() => { setIncomingSelection(null); setTransferOpen(true); }}
               onSync={() => void controller.syncNow()}
               onConflicts={() => navigate('conflicts')}
@@ -825,6 +828,10 @@ export function ConnectedApp({
           <button type="button" className="secondary" onClick={() => setNoteExportOpen(true)}>导出笔记、批注与引用</button>
         </section>}
         {section === 'account' && scope && runtime.secretStore && <section className="account-ai-settings">
+          <button type="button" className="secondary" onClick={() => { if (canLeave()) setResearchOpen(true); }}>多篇文献问答</button>
+          <p className="muted">选择多篇题录摘要或已核验解析片段，核对后发送，引用与结果可保存。</p>
+        </section>}
+        {section === 'account' && scope && runtime.secretStore && <section className="account-ai-settings">
           <button className="secondary" onClick={() => setAiSettings(!aiSettings)}>{aiSettings ? '收起 AI 设置' : 'AI 提供商设置'}</button>
           {aiSettings && <Suspense fallback={<p role="status">正在打开设置…</p>}><AiWorkspace accountScope={scope} context={null} archiveEpoch={archiveEpochs[accountScopeKey(scope)] ?? 0}
             secretStore={runtime.secretStore} sync={aiSync} onSaveNote={async () => { throw new ClientError('ACCOUNT_CHANGED'); }} onNavigateCitation={() => {}} /></Suspense>}
@@ -844,6 +851,10 @@ export function ConnectedApp({
           />
         )}
       </main>
+      {researchOpen && transferScope && scope && runtime.secretStore && <Suspense fallback={<p className="loading-message" role="status">正在打开多篇问答…</p>}>
+        <ResearchWorkspace key={transferScope+':'+authSubjectKey} scope={scope} scopeKey={transferScope} controller={controller} secretStore={runtime.secretStore}
+          accountCurrent={() => JSON.stringify(auth.getSubject?.() ?? null) === authSubjectKey} onClose={() => setResearchOpen(false)} />
+      </Suspense>}
       {cloudOpen && transferScope && scope && runtime.cloudPdf && <Suspense fallback={<p className="loading-message" role="status">正在打开云副本…</p>}>
         <CloudPdfLibrary key={`${transferScope}:${authSubjectKey}`} context={runtime.cloudPdf} scope={scope} controller={controller}
           accountCurrent={() => JSON.stringify(auth.getSubject?.() ?? null) === authSubjectKey}
@@ -989,6 +1000,7 @@ function EntityList({
   onSelect,
   onCreate,
   onTransfer,
+  onResearch,
   onSync,
   onConflicts,
 }: {
@@ -1002,6 +1014,7 @@ function EntityList({
   onSelect: (type: 'paper' | 'note', id: string) => void;
   onCreate: (type: 'paper' | 'note') => void;
   onTransfer: () => void;
+  onResearch?: () => void;
   onSync: () => void;
   onConflicts: () => void;
 }) {
@@ -1038,6 +1051,7 @@ function EntityList({
       <div className="list-heading">
         <h1>{type === 'paper' ? '文库' : '笔记'}</h1>
         <div className="library-list-actions">
+          {onResearch && <button type="button" className="transfer-button app-glass" aria-label="多篇文献问答" onClick={onResearch}><Icon name="search" /></button>}
           <button className="transfer-button app-glass" aria-label="导入与导出" onClick={onTransfer}>
             <Icon name="transfer" /></button>
           <button className="add-button" onClick={() => onCreate(type)}>

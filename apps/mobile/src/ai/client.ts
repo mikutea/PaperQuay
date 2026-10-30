@@ -1,11 +1,17 @@
 import { buildConversationMessages, type AiConversationData } from '../../../../packages/ai-core/src/conversation.ts';
 import { AiError } from './errors.ts';
+import { buildResearchMessages, type ResearchContext } from '../research/context.ts';
 import { AI_SECRET_KEY, aiAccountKey, aiSecretNamespace, checkedApiKey, parseAiProvider } from './provider.ts';
 import { AiSseParser, ChatOutput, type ChatCompletionResult } from './stream.ts';
 import { AiRequestGuard, boundedAiLimits, cancelResponseBody, ensureDirectResponse, fetchAiTransport, readAiBody } from './transport.ts';
 import type { AiAccountScope, AiAction, AiLimits, AiProviderConfig, AiTransport, AiUsage, PreparedAiContext, SecretStore } from './types.ts';
 
 interface RequestOptions { accountScope: AiAccountScope; config: AiProviderConfig; signal?: AbortSignal }
+export interface ResearchGenerateOptions extends RequestOptions {
+  context: ResearchContext;
+  onText(text: string): void;
+  onUsage?(usage: AiUsage): void;
+}
 export interface GenerateOptions extends RequestOptions {
   context: PreparedAiContext;
   action: AiAction;
@@ -108,6 +114,16 @@ export class AiClient {
     const config = parseAiProvider(options.config, true);
     const messages = buildConversationMessages(options.context, options.action, options.question, options.conversation);
     if (options.context.bytes > this.#limits.contextBytes) throw new AiError('CONTEXT_TOO_LARGE');
+    return this.#complete(options, messages, config);
+  }
+  async generateResearch(options: ResearchGenerateOptions): Promise<ChatCompletionResult> {
+    const config = parseAiProvider(options.config, true);
+    const messages = await buildResearchMessages(options.context);
+    if (new TextEncoder().encode(JSON.stringify(messages)).byteLength > this.#limits.contextBytes) throw new AiError('CONTEXT_TOO_LARGE');
+    return this.#complete(options, messages, config);
+  }
+  async #complete(options: RequestOptions & { onText(text: string): void; onUsage?(usage: AiUsage): void },
+    messages: { role: string; content: string }[], config: AiProviderConfig): Promise<ChatCompletionResult> {
     const streaming = config.stream && this.#transport.supportsStreaming;
     const body = JSON.stringify({ model: config.model, messages, n: 1, stream: streaming,
       [config.tokenParameter]: config.maxOutputTokens,
