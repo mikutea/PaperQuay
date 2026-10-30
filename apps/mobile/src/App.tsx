@@ -81,6 +81,7 @@ const CloudPdfLibrary = lazy(() => import('./components/CloudPdfPanel.tsx').then
 const CapabilitySheet = lazy(() => import('./components/CapabilitySheet.tsx').then(module => ({default:module.CapabilitySheet})));
 const RemoteTaskPanel = lazy(() => import('./components/RemoteTaskPanel.tsx').then(module => ({ default: module.RemoteTaskPanel })));
 const ZoteroLibrarySheet = lazy(() => import('./components/ZoteroLibrarySheet.tsx').then(module => ({ default: module.ZoteroLibrarySheet })));
+const KnowledgeGraphSheet = lazy(()=>import('./components/KnowledgeGraphSheet.tsx').then(module=>({default:module.KnowledgeGraphSheet})));
 const ReviewWorkspace = lazy(() => import('./components/ReviewWorkspace.tsx').then(module => ({ default: module.ReviewWorkspace })));
 const ResearchWorkspace = lazy(() => import('./components/ResearchWorkspace.tsx').then(module => ({ default: module.ResearchWorkspace })));
 const NoteExportPanel = lazy(() => import('./components/NoteExportPanel.tsx').then(module => ({ default: module.NoteExportPanel })));
@@ -312,12 +313,13 @@ export function ConnectedApp({
   const [noteExportOpen, setNoteExportOpen] = useState(false);
   const [researchOpen, setResearchOpen] = useState(false);
   const [reviewOpen,setReviewOpen]=useState(false);
+  const [graphOpen,setGraphOpen]=useState(false);
   const [parsedRemoteEpoch, setParsedRemoteEpoch] = useState(0);
   const transferScope = state.status === 'ready' && state.workspace
     ? JSON.stringify([state.workspace.sync.accountId, state.workspace.sync.deviceId, state.workspace.sync.generation]) : null;
   useEffect(() => { setCloudOpen(false); }, [transferScope, authSubjectKey]);
   useEffect(() => { setRemoteOpen(false); setCapabilityOpen(null); }, [transferScope, authSubjectKey]);
-  useEffect(() => { setZoteroOpen(false); setNoteExportOpen(false); setResearchOpen(false);setReviewOpen(false); }, [transferScope, authSubjectKey]);
+  useEffect(() => { setZoteroOpen(false); setNoteExportOpen(false); setResearchOpen(false);setReviewOpen(false);setGraphOpen(false); }, [transferScope, authSubjectKey]);
   const [dirty, setDirty] = useState(false);
   const [readerDirty, setReaderDirty] = useState(false);
   const editorUnsaved = useRef(false);
@@ -823,6 +825,7 @@ export function ConnectedApp({
           <button type="button" className="secondary" onClick={() => setRemoteOpen(true)}>远程解析与索引</button>
           <p className="muted">选择同账号在线电脑执行，查询持久任务和实际产物用量。</p>
         </section>}
+        {section === 'account' && scope && <section className="account-ai-settings"><button type="button" className="secondary" onClick={()=>{if(canLeave())setGraphOpen(true);}}>知识图谱</button><p className="muted">浏览文献、笔记与已保存关系，核对来源后继续阅读。</p></section>}
         {section === 'account' && scope && runtime.secretStore && <section className="account-ai-settings">
           <button type="button" className="secondary" onClick={() => setZoteroOpen(true)}>Zotero 增量接入</button>
           <p className="muted">读取个人库或群组库题录，比较变化后明确采用。</p>
@@ -859,6 +862,7 @@ export function ConnectedApp({
           />
         )}
       </main>
+      {graphOpen&&transferScope&&<Suspense fallback={<p role="status">正在打开知识图谱…</p>}><KnowledgeGraphSheet key={transferScope+':'+authSubjectKey} controller={controller} scopeKey={transferScope} accountCurrent={()=>JSON.stringify(auth.getSubject?.()??null)===authSubjectKey} onClose={()=>setGraphOpen(false)} onOpen={node=>{const s=controller.getSnapshot(),sync=s.workspace?.sync;if(s.status!=='ready'||!sync||JSON.stringify([sync.accountId,sync.deviceId,sync.generation])!==transferScope||JSON.stringify(auth.getSubject?.()??null)!==authSubjectKey||!canLeave())return;const type=node.type==='paper'?'paper':node.type==='note'?'note':null,id=type==='paper'?node.paperId:node.noteId;if(!type||!id||!listVisibleEntities(sync).some(e=>!e.deleted&&e.data&&e.entityType===type&&e.entityId===id))return;setGraphOpen(false);if(type==='paper')openReader(id);else{setSection('notes');setSelection({type:'note',id});}}}/></Suspense>}
       {reviewOpen&&transferScope&&scope&&runtime.secretStore&&<Suspense fallback={<p className="loading-message" role="status">正在打开综述工作区…</p>}><ReviewWorkspace key={transferScope+':'+authSubjectKey} scope={scope} scopeKey={transferScope} controller={controller} secretStore={runtime.secretStore} accountCurrent={()=>JSON.stringify(auth.getSubject?.()??null)===authSubjectKey} onClose={()=>setReviewOpen(false)}/></Suspense>}
       {researchOpen && transferScope && scope && runtime.secretStore && <Suspense fallback={<p className="loading-message" role="status">正在打开多篇问答…</p>}>
         <ResearchWorkspace key={transferScope+':'+authSubjectKey} scope={scope} scopeKey={transferScope} controller={controller} secretStore={runtime.secretStore}
@@ -891,7 +895,7 @@ export function ConnectedApp({
         if(snapshot.status!=='ready'||!sync||JSON.stringify([sync.accountId,sync.deviceId,sync.generation])!==transferScope||JSON.stringify(auth.getSubject?.()??null)!==authSubjectKey||!canLeave())return;
         setCapabilityOpen(null);
         if(['library','notes','sync','conflicts'].includes(action)){navigate(action==='sync'?'account':action as Section);return;}
-        if(action==='transfer')setTransferOpen(true);else if(action==='incoming')setIncomingOpen(incomingKey);else if(action==='cloud')setCloudOpen(true);else if(action==='remote')setRemoteOpen(true);else if(action==='zotero')setZoteroOpen(true);else if(action==='review'){setReviewOpen(true);return;}
+        if(action==='transfer')setTransferOpen(true);else if(action==='incoming')setIncomingOpen(incomingKey);else if(action==='cloud')setCloudOpen(true);else if(action==='remote')setRemoteOpen(true);else if(action==='zotero')setZoteroOpen(true);else if(action==='graph'){setGraphOpen(true);return;}else if(action==='review'){setReviewOpen(true);return;}
         if(action==='research')setResearchOpen(true);else if(action==='ai-settings')setAiSettings(true);else if(action==='exports')setNoteExportOpen(true);
       }}/></Suspense>}
       {remoteOpen && transferScope && scope && runtime.remoteTasks && <Suspense fallback={<p role="status">正在打开远程任务…</p>}>

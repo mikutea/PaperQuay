@@ -1,0 +1,3652 @@
+{
+  "input": {
+    "library": {
+      "papers": [
+        {
+          "id": "paper-1",
+          "title": "Retrieval-Augmented Reading",
+          "authors": [
+            {
+              "name": "Smith J"
+            },
+            {
+              "name": "Chen L"
+            }
+          ],
+          "year": "2025",
+          "publication": "Synthetic Journal",
+          "readingProgress": 0.5,
+          "doi": "10.1234/reader",
+          "tags": [
+            {
+              "name": "RAG"
+            },
+            {
+              "name": "evidence"
+            }
+          ],
+          "categoryIds": [
+            "cat-1",
+            "system"
+          ],
+          "references": [
+            {
+              "title": "Semantic Literature Graphs",
+              "doi": "https://doi.org/10.1234/graph.1"
+            },
+            "[2] Unimported Reference. doi:10.9999/outside"
+          ]
+        },
+        {
+          "id": "paper-2",
+          "title": "Semantic Literature Graphs",
+          "authors": [
+            {
+              "name": "Smith J"
+            }
+          ],
+          "year": "2024",
+          "doi": "10.1234/graph.1",
+          "tags": [
+            {
+              "name": "Graph"
+            },
+            {
+              "name": "EVIDENCE"
+            }
+          ],
+          "categoryIds": [
+            "cat-1"
+          ]
+        },
+        {
+          "id": "paper-3",
+          "title": "Unconnected Methods",
+          "authors": [
+            {
+              "name": "Other B"
+            }
+          ],
+          "tags": [],
+          "categoryIds": []
+        }
+      ],
+      "categories": [
+        {
+          "id": "cat-1",
+          "name": "Reading Systems",
+          "paperCount": 2,
+          "isSystem": false
+        },
+        {
+          "id": "system",
+          "name": "System All",
+          "paperCount": 3,
+          "isSystem": true
+        }
+      ]
+    },
+    "notes": [
+      {
+        "id": "note-1",
+        "title": "Reading note",
+        "contentText": "Visible evidence text",
+        "tags": [
+          "RAG"
+        ],
+        "linkedPaperId": "native-library:paper-1",
+        "linkedPaperIds": [
+          "paper:paper-2"
+        ],
+        "linkedNoteIds": [
+          "note-2",
+          "missing"
+        ],
+        "anchors": [
+          {
+            "paperId": "paper-3"
+          }
+        ],
+        "isPinned": true
+      },
+      {
+        "id": "note-2",
+        "title": "Graph note",
+        "contentText": "Graph connection evidence",
+        "tags": [
+          "Graph"
+        ]
+      }
+    ],
+    "references": [
+      {
+        "paperId": "paper-2",
+        "doi": "10.1234/reader",
+        "title": "Retrieval-Augmented Reading",
+        "unstructured": "Known local citation"
+      }
+    ],
+    "similarities": [
+      {
+        "sourceDocumentKey": "native-library:paper-1",
+        "targetDocumentKey": "paper-2",
+        "similarity": 0.91
+      },
+      {
+        "sourceDocumentKey": "missing",
+        "targetDocumentKey": "paper-1",
+        "similarity": 0.99
+      }
+    ],
+    "relations": [
+      {
+        "id": "custom-1",
+        "source": "paper:paper-3",
+        "target": "note:note-2",
+        "type": "custom_relation",
+        "label": "explains",
+        "description": "Saved evidence",
+        "weight": 0.58,
+        "createdAt": 1,
+        "updatedAt": 1
+      },
+      {
+        "id": "ai-1",
+        "source": "paper:paper-2",
+        "target": "paper:paper-3",
+        "type": "ai_suggested",
+        "label": "contrasts_with",
+        "description": "Approved synthetic suggestion",
+        "confidence": 0.82,
+        "weight": 0.66,
+        "createdAt": 2,
+        "updatedAt": 2
+      }
+    ]
+  },
+  "cases": [
+    {
+      "request": {},
+      "expected": {
+        "nodes": [
+          {
+            "id": "paper:paper-1",
+            "type": "paper",
+            "label": "Retrieval-Augmented Reading",
+            "subtitle": "Smith J, Chen L · 2025 · Synthetic Journal",
+            "paperId": "paper-1",
+            "size": 43
+          },
+          {
+            "id": "paper:paper-2",
+            "type": "paper",
+            "label": "Semantic Literature Graphs",
+            "subtitle": "Smith J · 2024",
+            "paperId": "paper-2",
+            "size": 34
+          },
+          {
+            "id": "paper:paper-3",
+            "type": "paper",
+            "label": "Unconnected Methods",
+            "subtitle": "Other B",
+            "paperId": "paper-3",
+            "size": 34
+          },
+          {
+            "id": "note:note-1",
+            "type": "note",
+            "label": "Reading note",
+            "subtitle": "Visible evidence text",
+            "noteId": "note-1",
+            "paperId": "paper-1",
+            "size": 30
+          },
+          {
+            "id": "note:note-2",
+            "type": "note",
+            "label": "Graph note",
+            "subtitle": "Graph connection evidence",
+            "noteId": "note-2",
+            "size": 24
+          },
+          {
+            "id": "tag:rag",
+            "type": "tag",
+            "label": "#RAG",
+            "subtitle": "2 items",
+            "tag": "RAG",
+            "size": 24
+          },
+          {
+            "id": "tag:evidence",
+            "type": "tag",
+            "label": "#EVIDENCE",
+            "subtitle": "2 items",
+            "tag": "EVIDENCE",
+            "size": 24
+          },
+          {
+            "id": "tag:graph",
+            "type": "tag",
+            "label": "#Graph",
+            "subtitle": "2 items",
+            "tag": "Graph",
+            "size": 24
+          },
+          {
+            "id": "category:cat-1",
+            "type": "category",
+            "label": "Reading Systems",
+            "subtitle": "Collection",
+            "categoryId": "cat-1",
+            "size": 26
+          }
+        ],
+        "edges": [
+          {
+            "id": "note_paper:note:note-1->paper:paper-1",
+            "source": "note:note-1",
+            "target": "paper:paper-1",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_paper:note:note-1->paper:paper-2",
+            "source": "note:note-1",
+            "target": "paper:paper-2",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_paper:note:note-1->paper:paper-3",
+            "source": "note:note-1",
+            "target": "paper:paper-3",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_link:note:note-1->note:note-2",
+            "source": "note:note-1",
+            "target": "note:note-2",
+            "type": "note_link",
+            "label": "link",
+            "weight": 0.82
+          },
+          {
+            "id": "paper_tag:paper:paper-1->tag:rag",
+            "source": "paper:paper-1",
+            "target": "tag:rag",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-1->tag:evidence",
+            "source": "paper:paper-1",
+            "target": "tag:evidence",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-2->tag:graph",
+            "source": "paper:paper-2",
+            "target": "tag:graph",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-2->tag:evidence",
+            "source": "paper:paper-2",
+            "target": "tag:evidence",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "note_tag:note:note-1->tag:rag",
+            "source": "note:note-1",
+            "target": "tag:rag",
+            "type": "note_tag",
+            "label": "tag",
+            "weight": 0.38
+          },
+          {
+            "id": "note_tag:note:note-2->tag:graph",
+            "source": "note:note-2",
+            "target": "tag:graph",
+            "type": "note_tag",
+            "label": "tag",
+            "weight": 0.38
+          },
+          {
+            "id": "paper_category:paper:paper-1->category:cat-1",
+            "source": "paper:paper-1",
+            "target": "category:cat-1",
+            "type": "paper_category",
+            "label": "category",
+            "weight": 0.48
+          },
+          {
+            "id": "paper_category:paper:paper-2->category:cat-1",
+            "source": "paper:paper-2",
+            "target": "category:cat-1",
+            "type": "paper_category",
+            "label": "category",
+            "weight": 0.48
+          },
+          {
+            "id": "paper_cites_paper:paper:paper-1->paper:paper-2",
+            "source": "paper:paper-1",
+            "target": "paper:paper-2",
+            "type": "paper_cites_paper",
+            "label": "cites",
+            "description": "Semantic Literature Graphs https://doi.org/10.1234/graph.1",
+            "weight": 0.78
+          },
+          {
+            "id": "paper_cites_paper:paper:paper-2->paper:paper-1",
+            "source": "paper:paper-2",
+            "target": "paper:paper-1",
+            "type": "paper_cites_paper",
+            "label": "cites",
+            "description": "Retrieval-Augmented Reading Retrieval-Augmented Reading 10.1234/reader Known local citation",
+            "weight": 0.78
+          },
+          {
+            "id": "related_by_embedding:paper:paper-1->paper:paper-2",
+            "source": "paper:paper-1",
+            "target": "paper:paper-2",
+            "type": "related_by_embedding",
+            "label": "similar",
+            "weight": 0.91
+          },
+          {
+            "id": "custom-1",
+            "source": "paper:paper-3",
+            "target": "note:note-2",
+            "type": "custom_relation",
+            "label": "explains",
+            "description": "Saved evidence",
+            "weight": 0.58,
+            "createdAt": 1,
+            "updatedAt": 1
+          },
+          {
+            "id": "ai-1",
+            "source": "paper:paper-2",
+            "target": "paper:paper-3",
+            "type": "ai_suggested",
+            "label": "contrasts_with",
+            "description": "Approved synthetic suggestion",
+            "confidence": 0.82,
+            "weight": 0.66,
+            "createdAt": 2,
+            "updatedAt": 2
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "includeCoAuthors": true
+      },
+      "expected": {
+        "nodes": [
+          {
+            "id": "paper:paper-1",
+            "type": "paper",
+            "label": "Retrieval-Augmented Reading",
+            "subtitle": "Smith J, Chen L · 2025 · Synthetic Journal",
+            "paperId": "paper-1",
+            "size": 43
+          },
+          {
+            "id": "paper:paper-2",
+            "type": "paper",
+            "label": "Semantic Literature Graphs",
+            "subtitle": "Smith J · 2024",
+            "paperId": "paper-2",
+            "size": 34
+          },
+          {
+            "id": "paper:paper-3",
+            "type": "paper",
+            "label": "Unconnected Methods",
+            "subtitle": "Other B",
+            "paperId": "paper-3",
+            "size": 34
+          },
+          {
+            "id": "note:note-1",
+            "type": "note",
+            "label": "Reading note",
+            "subtitle": "Visible evidence text",
+            "noteId": "note-1",
+            "paperId": "paper-1",
+            "size": 30
+          },
+          {
+            "id": "note:note-2",
+            "type": "note",
+            "label": "Graph note",
+            "subtitle": "Graph connection evidence",
+            "noteId": "note-2",
+            "size": 24
+          },
+          {
+            "id": "tag:rag",
+            "type": "tag",
+            "label": "#RAG",
+            "subtitle": "2 items",
+            "tag": "RAG",
+            "size": 24
+          },
+          {
+            "id": "tag:evidence",
+            "type": "tag",
+            "label": "#EVIDENCE",
+            "subtitle": "2 items",
+            "tag": "EVIDENCE",
+            "size": 24
+          },
+          {
+            "id": "tag:graph",
+            "type": "tag",
+            "label": "#Graph",
+            "subtitle": "2 items",
+            "tag": "Graph",
+            "size": 24
+          },
+          {
+            "id": "category:cat-1",
+            "type": "category",
+            "label": "Reading Systems",
+            "subtitle": "Collection",
+            "categoryId": "cat-1",
+            "size": 26
+          }
+        ],
+        "edges": [
+          {
+            "id": "note_paper:note:note-1->paper:paper-1",
+            "source": "note:note-1",
+            "target": "paper:paper-1",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_paper:note:note-1->paper:paper-2",
+            "source": "note:note-1",
+            "target": "paper:paper-2",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_paper:note:note-1->paper:paper-3",
+            "source": "note:note-1",
+            "target": "paper:paper-3",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_link:note:note-1->note:note-2",
+            "source": "note:note-1",
+            "target": "note:note-2",
+            "type": "note_link",
+            "label": "link",
+            "weight": 0.82
+          },
+          {
+            "id": "paper_tag:paper:paper-1->tag:rag",
+            "source": "paper:paper-1",
+            "target": "tag:rag",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-1->tag:evidence",
+            "source": "paper:paper-1",
+            "target": "tag:evidence",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-2->tag:graph",
+            "source": "paper:paper-2",
+            "target": "tag:graph",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-2->tag:evidence",
+            "source": "paper:paper-2",
+            "target": "tag:evidence",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "note_tag:note:note-1->tag:rag",
+            "source": "note:note-1",
+            "target": "tag:rag",
+            "type": "note_tag",
+            "label": "tag",
+            "weight": 0.38
+          },
+          {
+            "id": "note_tag:note:note-2->tag:graph",
+            "source": "note:note-2",
+            "target": "tag:graph",
+            "type": "note_tag",
+            "label": "tag",
+            "weight": 0.38
+          },
+          {
+            "id": "paper_category:paper:paper-1->category:cat-1",
+            "source": "paper:paper-1",
+            "target": "category:cat-1",
+            "type": "paper_category",
+            "label": "category",
+            "weight": 0.48
+          },
+          {
+            "id": "paper_category:paper:paper-2->category:cat-1",
+            "source": "paper:paper-2",
+            "target": "category:cat-1",
+            "type": "paper_category",
+            "label": "category",
+            "weight": 0.48
+          },
+          {
+            "id": "paper_cites_paper:paper:paper-1->paper:paper-2",
+            "source": "paper:paper-1",
+            "target": "paper:paper-2",
+            "type": "paper_cites_paper",
+            "label": "cites",
+            "description": "Semantic Literature Graphs https://doi.org/10.1234/graph.1",
+            "weight": 0.78
+          },
+          {
+            "id": "paper_cites_paper:paper:paper-2->paper:paper-1",
+            "source": "paper:paper-2",
+            "target": "paper:paper-1",
+            "type": "paper_cites_paper",
+            "label": "cites",
+            "description": "Retrieval-Augmented Reading Retrieval-Augmented Reading 10.1234/reader Known local citation",
+            "weight": 0.78
+          },
+          {
+            "id": "co_author:paper:paper-1->paper:paper-2",
+            "source": "paper:paper-1",
+            "target": "paper:paper-2",
+            "type": "co_author",
+            "label": "Smith J",
+            "description": "Shared author(s): Smith J",
+            "weight": 0.58
+          },
+          {
+            "id": "related_by_embedding:paper:paper-1->paper:paper-2",
+            "source": "paper:paper-1",
+            "target": "paper:paper-2",
+            "type": "related_by_embedding",
+            "label": "similar",
+            "weight": 0.91
+          },
+          {
+            "id": "custom-1",
+            "source": "paper:paper-3",
+            "target": "note:note-2",
+            "type": "custom_relation",
+            "label": "explains",
+            "description": "Saved evidence",
+            "weight": 0.58,
+            "createdAt": 1,
+            "updatedAt": 1
+          },
+          {
+            "id": "ai-1",
+            "source": "paper:paper-2",
+            "target": "paper:paper-3",
+            "type": "ai_suggested",
+            "label": "contrasts_with",
+            "description": "Approved synthetic suggestion",
+            "confidence": 0.82,
+            "weight": 0.66,
+            "createdAt": 2,
+            "updatedAt": 2
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "search": "graph"
+      },
+      "expected": {
+        "nodes": [
+          {
+            "id": "paper:paper-1",
+            "type": "paper",
+            "label": "Retrieval-Augmented Reading",
+            "subtitle": "Smith J, Chen L · 2025 · Synthetic Journal",
+            "paperId": "paper-1",
+            "size": 43
+          },
+          {
+            "id": "paper:paper-2",
+            "type": "paper",
+            "label": "Semantic Literature Graphs",
+            "subtitle": "Smith J · 2024",
+            "paperId": "paper-2",
+            "size": 34
+          },
+          {
+            "id": "paper:paper-3",
+            "type": "paper",
+            "label": "Unconnected Methods",
+            "subtitle": "Other B",
+            "paperId": "paper-3",
+            "size": 34
+          },
+          {
+            "id": "note:note-1",
+            "type": "note",
+            "label": "Reading note",
+            "subtitle": "Visible evidence text",
+            "noteId": "note-1",
+            "paperId": "paper-1",
+            "size": 30
+          },
+          {
+            "id": "note:note-2",
+            "type": "note",
+            "label": "Graph note",
+            "subtitle": "Graph connection evidence",
+            "noteId": "note-2",
+            "size": 24
+          },
+          {
+            "id": "tag:evidence",
+            "type": "tag",
+            "label": "#EVIDENCE",
+            "subtitle": "2 items",
+            "tag": "EVIDENCE",
+            "size": 24
+          },
+          {
+            "id": "tag:graph",
+            "type": "tag",
+            "label": "#Graph",
+            "subtitle": "2 items",
+            "tag": "Graph",
+            "size": 24
+          },
+          {
+            "id": "category:cat-1",
+            "type": "category",
+            "label": "Reading Systems",
+            "subtitle": "Collection",
+            "categoryId": "cat-1",
+            "size": 26
+          }
+        ],
+        "edges": [
+          {
+            "id": "note_paper:note:note-1->paper:paper-1",
+            "source": "note:note-1",
+            "target": "paper:paper-1",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_paper:note:note-1->paper:paper-2",
+            "source": "note:note-1",
+            "target": "paper:paper-2",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_paper:note:note-1->paper:paper-3",
+            "source": "note:note-1",
+            "target": "paper:paper-3",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_link:note:note-1->note:note-2",
+            "source": "note:note-1",
+            "target": "note:note-2",
+            "type": "note_link",
+            "label": "link",
+            "weight": 0.82
+          },
+          {
+            "id": "paper_tag:paper:paper-1->tag:evidence",
+            "source": "paper:paper-1",
+            "target": "tag:evidence",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-2->tag:graph",
+            "source": "paper:paper-2",
+            "target": "tag:graph",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-2->tag:evidence",
+            "source": "paper:paper-2",
+            "target": "tag:evidence",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "note_tag:note:note-2->tag:graph",
+            "source": "note:note-2",
+            "target": "tag:graph",
+            "type": "note_tag",
+            "label": "tag",
+            "weight": 0.38
+          },
+          {
+            "id": "paper_category:paper:paper-1->category:cat-1",
+            "source": "paper:paper-1",
+            "target": "category:cat-1",
+            "type": "paper_category",
+            "label": "category",
+            "weight": 0.48
+          },
+          {
+            "id": "paper_category:paper:paper-2->category:cat-1",
+            "source": "paper:paper-2",
+            "target": "category:cat-1",
+            "type": "paper_category",
+            "label": "category",
+            "weight": 0.48
+          },
+          {
+            "id": "paper_cites_paper:paper:paper-1->paper:paper-2",
+            "source": "paper:paper-1",
+            "target": "paper:paper-2",
+            "type": "paper_cites_paper",
+            "label": "cites",
+            "description": "Semantic Literature Graphs https://doi.org/10.1234/graph.1",
+            "weight": 0.78
+          },
+          {
+            "id": "paper_cites_paper:paper:paper-2->paper:paper-1",
+            "source": "paper:paper-2",
+            "target": "paper:paper-1",
+            "type": "paper_cites_paper",
+            "label": "cites",
+            "description": "Retrieval-Augmented Reading Retrieval-Augmented Reading 10.1234/reader Known local citation",
+            "weight": 0.78
+          },
+          {
+            "id": "related_by_embedding:paper:paper-1->paper:paper-2",
+            "source": "paper:paper-1",
+            "target": "paper:paper-2",
+            "type": "related_by_embedding",
+            "label": "similar",
+            "weight": 0.91
+          },
+          {
+            "id": "custom-1",
+            "source": "paper:paper-3",
+            "target": "note:note-2",
+            "type": "custom_relation",
+            "label": "explains",
+            "description": "Saved evidence",
+            "weight": 0.58,
+            "createdAt": 1,
+            "updatedAt": 1
+          },
+          {
+            "id": "ai-1",
+            "source": "paper:paper-2",
+            "target": "paper:paper-3",
+            "type": "ai_suggested",
+            "label": "contrasts_with",
+            "description": "Approved synthetic suggestion",
+            "confidence": 0.82,
+            "weight": 0.66,
+            "createdAt": 2,
+            "updatedAt": 2
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "search": "NO_MATCH"
+      },
+      "expected": {
+        "nodes": [],
+        "edges": []
+      }
+    },
+    {
+      "request": {
+        "includePapers": false
+      },
+      "expected": {
+        "nodes": [
+          {
+            "id": "note:note-1",
+            "type": "note",
+            "label": "Reading note",
+            "subtitle": "Visible evidence text",
+            "noteId": "note-1",
+            "paperId": "paper-1",
+            "size": 30
+          },
+          {
+            "id": "note:note-2",
+            "type": "note",
+            "label": "Graph note",
+            "subtitle": "Graph connection evidence",
+            "noteId": "note-2",
+            "size": 24
+          },
+          {
+            "id": "tag:rag",
+            "type": "tag",
+            "label": "#RAG",
+            "subtitle": "2 items",
+            "tag": "RAG",
+            "size": 24
+          },
+          {
+            "id": "tag:evidence",
+            "type": "tag",
+            "label": "#EVIDENCE",
+            "subtitle": "2 items",
+            "tag": "EVIDENCE",
+            "size": 24
+          },
+          {
+            "id": "tag:graph",
+            "type": "tag",
+            "label": "#Graph",
+            "subtitle": "2 items",
+            "tag": "Graph",
+            "size": 24
+          },
+          {
+            "id": "category:cat-1",
+            "type": "category",
+            "label": "Reading Systems",
+            "subtitle": "Collection",
+            "categoryId": "cat-1",
+            "size": 26
+          }
+        ],
+        "edges": [
+          {
+            "id": "note_link:note:note-1->note:note-2",
+            "source": "note:note-1",
+            "target": "note:note-2",
+            "type": "note_link",
+            "label": "link",
+            "weight": 0.82
+          },
+          {
+            "id": "note_tag:note:note-1->tag:rag",
+            "source": "note:note-1",
+            "target": "tag:rag",
+            "type": "note_tag",
+            "label": "tag",
+            "weight": 0.38
+          },
+          {
+            "id": "note_tag:note:note-2->tag:graph",
+            "source": "note:note-2",
+            "target": "tag:graph",
+            "type": "note_tag",
+            "label": "tag",
+            "weight": 0.38
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "includeNotes": false
+      },
+      "expected": {
+        "nodes": [
+          {
+            "id": "paper:paper-1",
+            "type": "paper",
+            "label": "Retrieval-Augmented Reading",
+            "subtitle": "Smith J, Chen L · 2025 · Synthetic Journal",
+            "paperId": "paper-1",
+            "size": 43
+          },
+          {
+            "id": "paper:paper-2",
+            "type": "paper",
+            "label": "Semantic Literature Graphs",
+            "subtitle": "Smith J · 2024",
+            "paperId": "paper-2",
+            "size": 34
+          },
+          {
+            "id": "paper:paper-3",
+            "type": "paper",
+            "label": "Unconnected Methods",
+            "subtitle": "Other B",
+            "paperId": "paper-3",
+            "size": 34
+          },
+          {
+            "id": "tag:rag",
+            "type": "tag",
+            "label": "#RAG",
+            "subtitle": "1 item",
+            "tag": "RAG",
+            "size": 22
+          },
+          {
+            "id": "tag:evidence",
+            "type": "tag",
+            "label": "#EVIDENCE",
+            "subtitle": "2 items",
+            "tag": "EVIDENCE",
+            "size": 24
+          },
+          {
+            "id": "tag:graph",
+            "type": "tag",
+            "label": "#Graph",
+            "subtitle": "1 item",
+            "tag": "Graph",
+            "size": 22
+          },
+          {
+            "id": "category:cat-1",
+            "type": "category",
+            "label": "Reading Systems",
+            "subtitle": "Collection",
+            "categoryId": "cat-1",
+            "size": 26
+          }
+        ],
+        "edges": [
+          {
+            "id": "paper_tag:paper:paper-1->tag:rag",
+            "source": "paper:paper-1",
+            "target": "tag:rag",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-1->tag:evidence",
+            "source": "paper:paper-1",
+            "target": "tag:evidence",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-2->tag:graph",
+            "source": "paper:paper-2",
+            "target": "tag:graph",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-2->tag:evidence",
+            "source": "paper:paper-2",
+            "target": "tag:evidence",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_category:paper:paper-1->category:cat-1",
+            "source": "paper:paper-1",
+            "target": "category:cat-1",
+            "type": "paper_category",
+            "label": "category",
+            "weight": 0.48
+          },
+          {
+            "id": "paper_category:paper:paper-2->category:cat-1",
+            "source": "paper:paper-2",
+            "target": "category:cat-1",
+            "type": "paper_category",
+            "label": "category",
+            "weight": 0.48
+          },
+          {
+            "id": "paper_cites_paper:paper:paper-1->paper:paper-2",
+            "source": "paper:paper-1",
+            "target": "paper:paper-2",
+            "type": "paper_cites_paper",
+            "label": "cites",
+            "description": "Semantic Literature Graphs https://doi.org/10.1234/graph.1",
+            "weight": 0.78
+          },
+          {
+            "id": "paper_cites_paper:paper:paper-2->paper:paper-1",
+            "source": "paper:paper-2",
+            "target": "paper:paper-1",
+            "type": "paper_cites_paper",
+            "label": "cites",
+            "description": "Retrieval-Augmented Reading Retrieval-Augmented Reading 10.1234/reader Known local citation",
+            "weight": 0.78
+          },
+          {
+            "id": "related_by_embedding:paper:paper-1->paper:paper-2",
+            "source": "paper:paper-1",
+            "target": "paper:paper-2",
+            "type": "related_by_embedding",
+            "label": "similar",
+            "weight": 0.91
+          },
+          {
+            "id": "ai-1",
+            "source": "paper:paper-2",
+            "target": "paper:paper-3",
+            "type": "ai_suggested",
+            "label": "contrasts_with",
+            "description": "Approved synthetic suggestion",
+            "confidence": 0.82,
+            "weight": 0.66,
+            "createdAt": 2,
+            "updatedAt": 2
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "includeTags": false
+      },
+      "expected": {
+        "nodes": [
+          {
+            "id": "paper:paper-1",
+            "type": "paper",
+            "label": "Retrieval-Augmented Reading",
+            "subtitle": "Smith J, Chen L · 2025 · Synthetic Journal",
+            "paperId": "paper-1",
+            "size": 43
+          },
+          {
+            "id": "paper:paper-2",
+            "type": "paper",
+            "label": "Semantic Literature Graphs",
+            "subtitle": "Smith J · 2024",
+            "paperId": "paper-2",
+            "size": 34
+          },
+          {
+            "id": "paper:paper-3",
+            "type": "paper",
+            "label": "Unconnected Methods",
+            "subtitle": "Other B",
+            "paperId": "paper-3",
+            "size": 34
+          },
+          {
+            "id": "note:note-1",
+            "type": "note",
+            "label": "Reading note",
+            "subtitle": "Visible evidence text",
+            "noteId": "note-1",
+            "paperId": "paper-1",
+            "size": 30
+          },
+          {
+            "id": "note:note-2",
+            "type": "note",
+            "label": "Graph note",
+            "subtitle": "Graph connection evidence",
+            "noteId": "note-2",
+            "size": 24
+          },
+          {
+            "id": "category:cat-1",
+            "type": "category",
+            "label": "Reading Systems",
+            "subtitle": "Collection",
+            "categoryId": "cat-1",
+            "size": 26
+          }
+        ],
+        "edges": [
+          {
+            "id": "note_paper:note:note-1->paper:paper-1",
+            "source": "note:note-1",
+            "target": "paper:paper-1",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_paper:note:note-1->paper:paper-2",
+            "source": "note:note-1",
+            "target": "paper:paper-2",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_paper:note:note-1->paper:paper-3",
+            "source": "note:note-1",
+            "target": "paper:paper-3",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_link:note:note-1->note:note-2",
+            "source": "note:note-1",
+            "target": "note:note-2",
+            "type": "note_link",
+            "label": "link",
+            "weight": 0.82
+          },
+          {
+            "id": "paper_category:paper:paper-1->category:cat-1",
+            "source": "paper:paper-1",
+            "target": "category:cat-1",
+            "type": "paper_category",
+            "label": "category",
+            "weight": 0.48
+          },
+          {
+            "id": "paper_category:paper:paper-2->category:cat-1",
+            "source": "paper:paper-2",
+            "target": "category:cat-1",
+            "type": "paper_category",
+            "label": "category",
+            "weight": 0.48
+          },
+          {
+            "id": "paper_cites_paper:paper:paper-1->paper:paper-2",
+            "source": "paper:paper-1",
+            "target": "paper:paper-2",
+            "type": "paper_cites_paper",
+            "label": "cites",
+            "description": "Semantic Literature Graphs https://doi.org/10.1234/graph.1",
+            "weight": 0.78
+          },
+          {
+            "id": "paper_cites_paper:paper:paper-2->paper:paper-1",
+            "source": "paper:paper-2",
+            "target": "paper:paper-1",
+            "type": "paper_cites_paper",
+            "label": "cites",
+            "description": "Retrieval-Augmented Reading Retrieval-Augmented Reading 10.1234/reader Known local citation",
+            "weight": 0.78
+          },
+          {
+            "id": "related_by_embedding:paper:paper-1->paper:paper-2",
+            "source": "paper:paper-1",
+            "target": "paper:paper-2",
+            "type": "related_by_embedding",
+            "label": "similar",
+            "weight": 0.91
+          },
+          {
+            "id": "custom-1",
+            "source": "paper:paper-3",
+            "target": "note:note-2",
+            "type": "custom_relation",
+            "label": "explains",
+            "description": "Saved evidence",
+            "weight": 0.58,
+            "createdAt": 1,
+            "updatedAt": 1
+          },
+          {
+            "id": "ai-1",
+            "source": "paper:paper-2",
+            "target": "paper:paper-3",
+            "type": "ai_suggested",
+            "label": "contrasts_with",
+            "description": "Approved synthetic suggestion",
+            "confidence": 0.82,
+            "weight": 0.66,
+            "createdAt": 2,
+            "updatedAt": 2
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "includeCategories": false
+      },
+      "expected": {
+        "nodes": [
+          {
+            "id": "paper:paper-1",
+            "type": "paper",
+            "label": "Retrieval-Augmented Reading",
+            "subtitle": "Smith J, Chen L · 2025 · Synthetic Journal",
+            "paperId": "paper-1",
+            "size": 43
+          },
+          {
+            "id": "paper:paper-2",
+            "type": "paper",
+            "label": "Semantic Literature Graphs",
+            "subtitle": "Smith J · 2024",
+            "paperId": "paper-2",
+            "size": 34
+          },
+          {
+            "id": "paper:paper-3",
+            "type": "paper",
+            "label": "Unconnected Methods",
+            "subtitle": "Other B",
+            "paperId": "paper-3",
+            "size": 34
+          },
+          {
+            "id": "note:note-1",
+            "type": "note",
+            "label": "Reading note",
+            "subtitle": "Visible evidence text",
+            "noteId": "note-1",
+            "paperId": "paper-1",
+            "size": 30
+          },
+          {
+            "id": "note:note-2",
+            "type": "note",
+            "label": "Graph note",
+            "subtitle": "Graph connection evidence",
+            "noteId": "note-2",
+            "size": 24
+          },
+          {
+            "id": "tag:rag",
+            "type": "tag",
+            "label": "#RAG",
+            "subtitle": "2 items",
+            "tag": "RAG",
+            "size": 24
+          },
+          {
+            "id": "tag:evidence",
+            "type": "tag",
+            "label": "#EVIDENCE",
+            "subtitle": "2 items",
+            "tag": "EVIDENCE",
+            "size": 24
+          },
+          {
+            "id": "tag:graph",
+            "type": "tag",
+            "label": "#Graph",
+            "subtitle": "2 items",
+            "tag": "Graph",
+            "size": 24
+          }
+        ],
+        "edges": [
+          {
+            "id": "note_paper:note:note-1->paper:paper-1",
+            "source": "note:note-1",
+            "target": "paper:paper-1",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_paper:note:note-1->paper:paper-2",
+            "source": "note:note-1",
+            "target": "paper:paper-2",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_paper:note:note-1->paper:paper-3",
+            "source": "note:note-1",
+            "target": "paper:paper-3",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_link:note:note-1->note:note-2",
+            "source": "note:note-1",
+            "target": "note:note-2",
+            "type": "note_link",
+            "label": "link",
+            "weight": 0.82
+          },
+          {
+            "id": "paper_tag:paper:paper-1->tag:rag",
+            "source": "paper:paper-1",
+            "target": "tag:rag",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-1->tag:evidence",
+            "source": "paper:paper-1",
+            "target": "tag:evidence",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-2->tag:graph",
+            "source": "paper:paper-2",
+            "target": "tag:graph",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-2->tag:evidence",
+            "source": "paper:paper-2",
+            "target": "tag:evidence",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "note_tag:note:note-1->tag:rag",
+            "source": "note:note-1",
+            "target": "tag:rag",
+            "type": "note_tag",
+            "label": "tag",
+            "weight": 0.38
+          },
+          {
+            "id": "note_tag:note:note-2->tag:graph",
+            "source": "note:note-2",
+            "target": "tag:graph",
+            "type": "note_tag",
+            "label": "tag",
+            "weight": 0.38
+          },
+          {
+            "id": "paper_cites_paper:paper:paper-1->paper:paper-2",
+            "source": "paper:paper-1",
+            "target": "paper:paper-2",
+            "type": "paper_cites_paper",
+            "label": "cites",
+            "description": "Semantic Literature Graphs https://doi.org/10.1234/graph.1",
+            "weight": 0.78
+          },
+          {
+            "id": "paper_cites_paper:paper:paper-2->paper:paper-1",
+            "source": "paper:paper-2",
+            "target": "paper:paper-1",
+            "type": "paper_cites_paper",
+            "label": "cites",
+            "description": "Retrieval-Augmented Reading Retrieval-Augmented Reading 10.1234/reader Known local citation",
+            "weight": 0.78
+          },
+          {
+            "id": "related_by_embedding:paper:paper-1->paper:paper-2",
+            "source": "paper:paper-1",
+            "target": "paper:paper-2",
+            "type": "related_by_embedding",
+            "label": "similar",
+            "weight": 0.91
+          },
+          {
+            "id": "custom-1",
+            "source": "paper:paper-3",
+            "target": "note:note-2",
+            "type": "custom_relation",
+            "label": "explains",
+            "description": "Saved evidence",
+            "weight": 0.58,
+            "createdAt": 1,
+            "updatedAt": 1
+          },
+          {
+            "id": "ai-1",
+            "source": "paper:paper-2",
+            "target": "paper:paper-3",
+            "type": "ai_suggested",
+            "label": "contrasts_with",
+            "description": "Approved synthetic suggestion",
+            "confidence": 0.82,
+            "weight": 0.66,
+            "createdAt": 2,
+            "updatedAt": 2
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "includeReferences": false
+      },
+      "expected": {
+        "nodes": [
+          {
+            "id": "paper:paper-1",
+            "type": "paper",
+            "label": "Retrieval-Augmented Reading",
+            "subtitle": "Smith J, Chen L · 2025 · Synthetic Journal",
+            "paperId": "paper-1",
+            "size": 43
+          },
+          {
+            "id": "paper:paper-2",
+            "type": "paper",
+            "label": "Semantic Literature Graphs",
+            "subtitle": "Smith J · 2024",
+            "paperId": "paper-2",
+            "size": 34
+          },
+          {
+            "id": "paper:paper-3",
+            "type": "paper",
+            "label": "Unconnected Methods",
+            "subtitle": "Other B",
+            "paperId": "paper-3",
+            "size": 34
+          },
+          {
+            "id": "note:note-1",
+            "type": "note",
+            "label": "Reading note",
+            "subtitle": "Visible evidence text",
+            "noteId": "note-1",
+            "paperId": "paper-1",
+            "size": 30
+          },
+          {
+            "id": "note:note-2",
+            "type": "note",
+            "label": "Graph note",
+            "subtitle": "Graph connection evidence",
+            "noteId": "note-2",
+            "size": 24
+          },
+          {
+            "id": "tag:rag",
+            "type": "tag",
+            "label": "#RAG",
+            "subtitle": "2 items",
+            "tag": "RAG",
+            "size": 24
+          },
+          {
+            "id": "tag:evidence",
+            "type": "tag",
+            "label": "#EVIDENCE",
+            "subtitle": "2 items",
+            "tag": "EVIDENCE",
+            "size": 24
+          },
+          {
+            "id": "tag:graph",
+            "type": "tag",
+            "label": "#Graph",
+            "subtitle": "2 items",
+            "tag": "Graph",
+            "size": 24
+          },
+          {
+            "id": "category:cat-1",
+            "type": "category",
+            "label": "Reading Systems",
+            "subtitle": "Collection",
+            "categoryId": "cat-1",
+            "size": 26
+          }
+        ],
+        "edges": [
+          {
+            "id": "note_paper:note:note-1->paper:paper-1",
+            "source": "note:note-1",
+            "target": "paper:paper-1",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_paper:note:note-1->paper:paper-2",
+            "source": "note:note-1",
+            "target": "paper:paper-2",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_paper:note:note-1->paper:paper-3",
+            "source": "note:note-1",
+            "target": "paper:paper-3",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_link:note:note-1->note:note-2",
+            "source": "note:note-1",
+            "target": "note:note-2",
+            "type": "note_link",
+            "label": "link",
+            "weight": 0.82
+          },
+          {
+            "id": "paper_tag:paper:paper-1->tag:rag",
+            "source": "paper:paper-1",
+            "target": "tag:rag",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-1->tag:evidence",
+            "source": "paper:paper-1",
+            "target": "tag:evidence",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-2->tag:graph",
+            "source": "paper:paper-2",
+            "target": "tag:graph",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-2->tag:evidence",
+            "source": "paper:paper-2",
+            "target": "tag:evidence",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "note_tag:note:note-1->tag:rag",
+            "source": "note:note-1",
+            "target": "tag:rag",
+            "type": "note_tag",
+            "label": "tag",
+            "weight": 0.38
+          },
+          {
+            "id": "note_tag:note:note-2->tag:graph",
+            "source": "note:note-2",
+            "target": "tag:graph",
+            "type": "note_tag",
+            "label": "tag",
+            "weight": 0.38
+          },
+          {
+            "id": "paper_category:paper:paper-1->category:cat-1",
+            "source": "paper:paper-1",
+            "target": "category:cat-1",
+            "type": "paper_category",
+            "label": "category",
+            "weight": 0.48
+          },
+          {
+            "id": "paper_category:paper:paper-2->category:cat-1",
+            "source": "paper:paper-2",
+            "target": "category:cat-1",
+            "type": "paper_category",
+            "label": "category",
+            "weight": 0.48
+          },
+          {
+            "id": "related_by_embedding:paper:paper-1->paper:paper-2",
+            "source": "paper:paper-1",
+            "target": "paper:paper-2",
+            "type": "related_by_embedding",
+            "label": "similar",
+            "weight": 0.91
+          },
+          {
+            "id": "custom-1",
+            "source": "paper:paper-3",
+            "target": "note:note-2",
+            "type": "custom_relation",
+            "label": "explains",
+            "description": "Saved evidence",
+            "weight": 0.58,
+            "createdAt": 1,
+            "updatedAt": 1
+          },
+          {
+            "id": "ai-1",
+            "source": "paper:paper-2",
+            "target": "paper:paper-3",
+            "type": "ai_suggested",
+            "label": "contrasts_with",
+            "description": "Approved synthetic suggestion",
+            "confidence": 0.82,
+            "weight": 0.66,
+            "createdAt": 2,
+            "updatedAt": 2
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "includeCustomRelations": false
+      },
+      "expected": {
+        "nodes": [
+          {
+            "id": "paper:paper-1",
+            "type": "paper",
+            "label": "Retrieval-Augmented Reading",
+            "subtitle": "Smith J, Chen L · 2025 · Synthetic Journal",
+            "paperId": "paper-1",
+            "size": 43
+          },
+          {
+            "id": "paper:paper-2",
+            "type": "paper",
+            "label": "Semantic Literature Graphs",
+            "subtitle": "Smith J · 2024",
+            "paperId": "paper-2",
+            "size": 34
+          },
+          {
+            "id": "paper:paper-3",
+            "type": "paper",
+            "label": "Unconnected Methods",
+            "subtitle": "Other B",
+            "paperId": "paper-3",
+            "size": 34
+          },
+          {
+            "id": "note:note-1",
+            "type": "note",
+            "label": "Reading note",
+            "subtitle": "Visible evidence text",
+            "noteId": "note-1",
+            "paperId": "paper-1",
+            "size": 30
+          },
+          {
+            "id": "note:note-2",
+            "type": "note",
+            "label": "Graph note",
+            "subtitle": "Graph connection evidence",
+            "noteId": "note-2",
+            "size": 24
+          },
+          {
+            "id": "tag:rag",
+            "type": "tag",
+            "label": "#RAG",
+            "subtitle": "2 items",
+            "tag": "RAG",
+            "size": 24
+          },
+          {
+            "id": "tag:evidence",
+            "type": "tag",
+            "label": "#EVIDENCE",
+            "subtitle": "2 items",
+            "tag": "EVIDENCE",
+            "size": 24
+          },
+          {
+            "id": "tag:graph",
+            "type": "tag",
+            "label": "#Graph",
+            "subtitle": "2 items",
+            "tag": "Graph",
+            "size": 24
+          },
+          {
+            "id": "category:cat-1",
+            "type": "category",
+            "label": "Reading Systems",
+            "subtitle": "Collection",
+            "categoryId": "cat-1",
+            "size": 26
+          }
+        ],
+        "edges": [
+          {
+            "id": "note_paper:note:note-1->paper:paper-1",
+            "source": "note:note-1",
+            "target": "paper:paper-1",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_paper:note:note-1->paper:paper-2",
+            "source": "note:note-1",
+            "target": "paper:paper-2",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_paper:note:note-1->paper:paper-3",
+            "source": "note:note-1",
+            "target": "paper:paper-3",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_link:note:note-1->note:note-2",
+            "source": "note:note-1",
+            "target": "note:note-2",
+            "type": "note_link",
+            "label": "link",
+            "weight": 0.82
+          },
+          {
+            "id": "paper_tag:paper:paper-1->tag:rag",
+            "source": "paper:paper-1",
+            "target": "tag:rag",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-1->tag:evidence",
+            "source": "paper:paper-1",
+            "target": "tag:evidence",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-2->tag:graph",
+            "source": "paper:paper-2",
+            "target": "tag:graph",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-2->tag:evidence",
+            "source": "paper:paper-2",
+            "target": "tag:evidence",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "note_tag:note:note-1->tag:rag",
+            "source": "note:note-1",
+            "target": "tag:rag",
+            "type": "note_tag",
+            "label": "tag",
+            "weight": 0.38
+          },
+          {
+            "id": "note_tag:note:note-2->tag:graph",
+            "source": "note:note-2",
+            "target": "tag:graph",
+            "type": "note_tag",
+            "label": "tag",
+            "weight": 0.38
+          },
+          {
+            "id": "paper_category:paper:paper-1->category:cat-1",
+            "source": "paper:paper-1",
+            "target": "category:cat-1",
+            "type": "paper_category",
+            "label": "category",
+            "weight": 0.48
+          },
+          {
+            "id": "paper_category:paper:paper-2->category:cat-1",
+            "source": "paper:paper-2",
+            "target": "category:cat-1",
+            "type": "paper_category",
+            "label": "category",
+            "weight": 0.48
+          },
+          {
+            "id": "paper_cites_paper:paper:paper-1->paper:paper-2",
+            "source": "paper:paper-1",
+            "target": "paper:paper-2",
+            "type": "paper_cites_paper",
+            "label": "cites",
+            "description": "Semantic Literature Graphs https://doi.org/10.1234/graph.1",
+            "weight": 0.78
+          },
+          {
+            "id": "paper_cites_paper:paper:paper-2->paper:paper-1",
+            "source": "paper:paper-2",
+            "target": "paper:paper-1",
+            "type": "paper_cites_paper",
+            "label": "cites",
+            "description": "Retrieval-Augmented Reading Retrieval-Augmented Reading 10.1234/reader Known local citation",
+            "weight": 0.78
+          },
+          {
+            "id": "related_by_embedding:paper:paper-1->paper:paper-2",
+            "source": "paper:paper-1",
+            "target": "paper:paper-2",
+            "type": "related_by_embedding",
+            "label": "similar",
+            "weight": 0.91
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "includeEmbeddingEdges": false
+      },
+      "expected": {
+        "nodes": [
+          {
+            "id": "paper:paper-1",
+            "type": "paper",
+            "label": "Retrieval-Augmented Reading",
+            "subtitle": "Smith J, Chen L · 2025 · Synthetic Journal",
+            "paperId": "paper-1",
+            "size": 43
+          },
+          {
+            "id": "paper:paper-2",
+            "type": "paper",
+            "label": "Semantic Literature Graphs",
+            "subtitle": "Smith J · 2024",
+            "paperId": "paper-2",
+            "size": 34
+          },
+          {
+            "id": "paper:paper-3",
+            "type": "paper",
+            "label": "Unconnected Methods",
+            "subtitle": "Other B",
+            "paperId": "paper-3",
+            "size": 34
+          },
+          {
+            "id": "note:note-1",
+            "type": "note",
+            "label": "Reading note",
+            "subtitle": "Visible evidence text",
+            "noteId": "note-1",
+            "paperId": "paper-1",
+            "size": 30
+          },
+          {
+            "id": "note:note-2",
+            "type": "note",
+            "label": "Graph note",
+            "subtitle": "Graph connection evidence",
+            "noteId": "note-2",
+            "size": 24
+          },
+          {
+            "id": "tag:rag",
+            "type": "tag",
+            "label": "#RAG",
+            "subtitle": "2 items",
+            "tag": "RAG",
+            "size": 24
+          },
+          {
+            "id": "tag:evidence",
+            "type": "tag",
+            "label": "#EVIDENCE",
+            "subtitle": "2 items",
+            "tag": "EVIDENCE",
+            "size": 24
+          },
+          {
+            "id": "tag:graph",
+            "type": "tag",
+            "label": "#Graph",
+            "subtitle": "2 items",
+            "tag": "Graph",
+            "size": 24
+          },
+          {
+            "id": "category:cat-1",
+            "type": "category",
+            "label": "Reading Systems",
+            "subtitle": "Collection",
+            "categoryId": "cat-1",
+            "size": 26
+          }
+        ],
+        "edges": [
+          {
+            "id": "note_paper:note:note-1->paper:paper-1",
+            "source": "note:note-1",
+            "target": "paper:paper-1",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_paper:note:note-1->paper:paper-2",
+            "source": "note:note-1",
+            "target": "paper:paper-2",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_paper:note:note-1->paper:paper-3",
+            "source": "note:note-1",
+            "target": "paper:paper-3",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_link:note:note-1->note:note-2",
+            "source": "note:note-1",
+            "target": "note:note-2",
+            "type": "note_link",
+            "label": "link",
+            "weight": 0.82
+          },
+          {
+            "id": "paper_tag:paper:paper-1->tag:rag",
+            "source": "paper:paper-1",
+            "target": "tag:rag",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-1->tag:evidence",
+            "source": "paper:paper-1",
+            "target": "tag:evidence",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-2->tag:graph",
+            "source": "paper:paper-2",
+            "target": "tag:graph",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-2->tag:evidence",
+            "source": "paper:paper-2",
+            "target": "tag:evidence",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "note_tag:note:note-1->tag:rag",
+            "source": "note:note-1",
+            "target": "tag:rag",
+            "type": "note_tag",
+            "label": "tag",
+            "weight": 0.38
+          },
+          {
+            "id": "note_tag:note:note-2->tag:graph",
+            "source": "note:note-2",
+            "target": "tag:graph",
+            "type": "note_tag",
+            "label": "tag",
+            "weight": 0.38
+          },
+          {
+            "id": "paper_category:paper:paper-1->category:cat-1",
+            "source": "paper:paper-1",
+            "target": "category:cat-1",
+            "type": "paper_category",
+            "label": "category",
+            "weight": 0.48
+          },
+          {
+            "id": "paper_category:paper:paper-2->category:cat-1",
+            "source": "paper:paper-2",
+            "target": "category:cat-1",
+            "type": "paper_category",
+            "label": "category",
+            "weight": 0.48
+          },
+          {
+            "id": "paper_cites_paper:paper:paper-1->paper:paper-2",
+            "source": "paper:paper-1",
+            "target": "paper:paper-2",
+            "type": "paper_cites_paper",
+            "label": "cites",
+            "description": "Semantic Literature Graphs https://doi.org/10.1234/graph.1",
+            "weight": 0.78
+          },
+          {
+            "id": "paper_cites_paper:paper:paper-2->paper:paper-1",
+            "source": "paper:paper-2",
+            "target": "paper:paper-1",
+            "type": "paper_cites_paper",
+            "label": "cites",
+            "description": "Retrieval-Augmented Reading Retrieval-Augmented Reading 10.1234/reader Known local citation",
+            "weight": 0.78
+          },
+          {
+            "id": "custom-1",
+            "source": "paper:paper-3",
+            "target": "note:note-2",
+            "type": "custom_relation",
+            "label": "explains",
+            "description": "Saved evidence",
+            "weight": 0.58,
+            "createdAt": 1,
+            "updatedAt": 1
+          },
+          {
+            "id": "ai-1",
+            "source": "paper:paper-2",
+            "target": "paper:paper-3",
+            "type": "ai_suggested",
+            "label": "contrasts_with",
+            "description": "Approved synthetic suggestion",
+            "confidence": 0.82,
+            "weight": 0.66,
+            "createdAt": 2,
+            "updatedAt": 2
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "localNodeId": "paper:paper-1",
+        "localDepth": 1
+      },
+      "expected": {
+        "nodes": [
+          {
+            "id": "paper:paper-1",
+            "type": "paper",
+            "label": "Retrieval-Augmented Reading",
+            "subtitle": "Smith J, Chen L · 2025 · Synthetic Journal",
+            "paperId": "paper-1",
+            "size": 43
+          },
+          {
+            "id": "paper:paper-2",
+            "type": "paper",
+            "label": "Semantic Literature Graphs",
+            "subtitle": "Smith J · 2024",
+            "paperId": "paper-2",
+            "size": 34
+          },
+          {
+            "id": "note:note-1",
+            "type": "note",
+            "label": "Reading note",
+            "subtitle": "Visible evidence text",
+            "noteId": "note-1",
+            "paperId": "paper-1",
+            "size": 30
+          },
+          {
+            "id": "tag:rag",
+            "type": "tag",
+            "label": "#RAG",
+            "subtitle": "2 items",
+            "tag": "RAG",
+            "size": 24
+          },
+          {
+            "id": "tag:evidence",
+            "type": "tag",
+            "label": "#EVIDENCE",
+            "subtitle": "2 items",
+            "tag": "EVIDENCE",
+            "size": 24
+          },
+          {
+            "id": "category:cat-1",
+            "type": "category",
+            "label": "Reading Systems",
+            "subtitle": "Collection",
+            "categoryId": "cat-1",
+            "size": 26
+          }
+        ],
+        "edges": [
+          {
+            "id": "note_paper:note:note-1->paper:paper-1",
+            "source": "note:note-1",
+            "target": "paper:paper-1",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_paper:note:note-1->paper:paper-2",
+            "source": "note:note-1",
+            "target": "paper:paper-2",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "paper_tag:paper:paper-1->tag:rag",
+            "source": "paper:paper-1",
+            "target": "tag:rag",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-1->tag:evidence",
+            "source": "paper:paper-1",
+            "target": "tag:evidence",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-2->tag:evidence",
+            "source": "paper:paper-2",
+            "target": "tag:evidence",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "note_tag:note:note-1->tag:rag",
+            "source": "note:note-1",
+            "target": "tag:rag",
+            "type": "note_tag",
+            "label": "tag",
+            "weight": 0.38
+          },
+          {
+            "id": "paper_category:paper:paper-1->category:cat-1",
+            "source": "paper:paper-1",
+            "target": "category:cat-1",
+            "type": "paper_category",
+            "label": "category",
+            "weight": 0.48
+          },
+          {
+            "id": "paper_category:paper:paper-2->category:cat-1",
+            "source": "paper:paper-2",
+            "target": "category:cat-1",
+            "type": "paper_category",
+            "label": "category",
+            "weight": 0.48
+          },
+          {
+            "id": "paper_cites_paper:paper:paper-1->paper:paper-2",
+            "source": "paper:paper-1",
+            "target": "paper:paper-2",
+            "type": "paper_cites_paper",
+            "label": "cites",
+            "description": "Semantic Literature Graphs https://doi.org/10.1234/graph.1",
+            "weight": 0.78
+          },
+          {
+            "id": "paper_cites_paper:paper:paper-2->paper:paper-1",
+            "source": "paper:paper-2",
+            "target": "paper:paper-1",
+            "type": "paper_cites_paper",
+            "label": "cites",
+            "description": "Retrieval-Augmented Reading Retrieval-Augmented Reading 10.1234/reader Known local citation",
+            "weight": 0.78
+          },
+          {
+            "id": "related_by_embedding:paper:paper-1->paper:paper-2",
+            "source": "paper:paper-1",
+            "target": "paper:paper-2",
+            "type": "related_by_embedding",
+            "label": "similar",
+            "weight": 0.91
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "localNodeId": "paper:paper-1",
+        "localDepth": 2
+      },
+      "expected": {
+        "nodes": [
+          {
+            "id": "paper:paper-1",
+            "type": "paper",
+            "label": "Retrieval-Augmented Reading",
+            "subtitle": "Smith J, Chen L · 2025 · Synthetic Journal",
+            "paperId": "paper-1",
+            "size": 43
+          },
+          {
+            "id": "paper:paper-2",
+            "type": "paper",
+            "label": "Semantic Literature Graphs",
+            "subtitle": "Smith J · 2024",
+            "paperId": "paper-2",
+            "size": 34
+          },
+          {
+            "id": "paper:paper-3",
+            "type": "paper",
+            "label": "Unconnected Methods",
+            "subtitle": "Other B",
+            "paperId": "paper-3",
+            "size": 34
+          },
+          {
+            "id": "note:note-1",
+            "type": "note",
+            "label": "Reading note",
+            "subtitle": "Visible evidence text",
+            "noteId": "note-1",
+            "paperId": "paper-1",
+            "size": 30
+          },
+          {
+            "id": "note:note-2",
+            "type": "note",
+            "label": "Graph note",
+            "subtitle": "Graph connection evidence",
+            "noteId": "note-2",
+            "size": 24
+          },
+          {
+            "id": "tag:rag",
+            "type": "tag",
+            "label": "#RAG",
+            "subtitle": "2 items",
+            "tag": "RAG",
+            "size": 24
+          },
+          {
+            "id": "tag:evidence",
+            "type": "tag",
+            "label": "#EVIDENCE",
+            "subtitle": "2 items",
+            "tag": "EVIDENCE",
+            "size": 24
+          },
+          {
+            "id": "tag:graph",
+            "type": "tag",
+            "label": "#Graph",
+            "subtitle": "2 items",
+            "tag": "Graph",
+            "size": 24
+          },
+          {
+            "id": "category:cat-1",
+            "type": "category",
+            "label": "Reading Systems",
+            "subtitle": "Collection",
+            "categoryId": "cat-1",
+            "size": 26
+          }
+        ],
+        "edges": [
+          {
+            "id": "note_paper:note:note-1->paper:paper-1",
+            "source": "note:note-1",
+            "target": "paper:paper-1",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_paper:note:note-1->paper:paper-2",
+            "source": "note:note-1",
+            "target": "paper:paper-2",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_paper:note:note-1->paper:paper-3",
+            "source": "note:note-1",
+            "target": "paper:paper-3",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_link:note:note-1->note:note-2",
+            "source": "note:note-1",
+            "target": "note:note-2",
+            "type": "note_link",
+            "label": "link",
+            "weight": 0.82
+          },
+          {
+            "id": "paper_tag:paper:paper-1->tag:rag",
+            "source": "paper:paper-1",
+            "target": "tag:rag",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-1->tag:evidence",
+            "source": "paper:paper-1",
+            "target": "tag:evidence",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-2->tag:graph",
+            "source": "paper:paper-2",
+            "target": "tag:graph",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-2->tag:evidence",
+            "source": "paper:paper-2",
+            "target": "tag:evidence",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "note_tag:note:note-1->tag:rag",
+            "source": "note:note-1",
+            "target": "tag:rag",
+            "type": "note_tag",
+            "label": "tag",
+            "weight": 0.38
+          },
+          {
+            "id": "note_tag:note:note-2->tag:graph",
+            "source": "note:note-2",
+            "target": "tag:graph",
+            "type": "note_tag",
+            "label": "tag",
+            "weight": 0.38
+          },
+          {
+            "id": "paper_category:paper:paper-1->category:cat-1",
+            "source": "paper:paper-1",
+            "target": "category:cat-1",
+            "type": "paper_category",
+            "label": "category",
+            "weight": 0.48
+          },
+          {
+            "id": "paper_category:paper:paper-2->category:cat-1",
+            "source": "paper:paper-2",
+            "target": "category:cat-1",
+            "type": "paper_category",
+            "label": "category",
+            "weight": 0.48
+          },
+          {
+            "id": "paper_cites_paper:paper:paper-1->paper:paper-2",
+            "source": "paper:paper-1",
+            "target": "paper:paper-2",
+            "type": "paper_cites_paper",
+            "label": "cites",
+            "description": "Semantic Literature Graphs https://doi.org/10.1234/graph.1",
+            "weight": 0.78
+          },
+          {
+            "id": "paper_cites_paper:paper:paper-2->paper:paper-1",
+            "source": "paper:paper-2",
+            "target": "paper:paper-1",
+            "type": "paper_cites_paper",
+            "label": "cites",
+            "description": "Retrieval-Augmented Reading Retrieval-Augmented Reading 10.1234/reader Known local citation",
+            "weight": 0.78
+          },
+          {
+            "id": "related_by_embedding:paper:paper-1->paper:paper-2",
+            "source": "paper:paper-1",
+            "target": "paper:paper-2",
+            "type": "related_by_embedding",
+            "label": "similar",
+            "weight": 0.91
+          },
+          {
+            "id": "custom-1",
+            "source": "paper:paper-3",
+            "target": "note:note-2",
+            "type": "custom_relation",
+            "label": "explains",
+            "description": "Saved evidence",
+            "weight": 0.58,
+            "createdAt": 1,
+            "updatedAt": 1
+          },
+          {
+            "id": "ai-1",
+            "source": "paper:paper-2",
+            "target": "paper:paper-3",
+            "type": "ai_suggested",
+            "label": "contrasts_with",
+            "description": "Approved synthetic suggestion",
+            "confidence": 0.82,
+            "weight": 0.66,
+            "createdAt": 2,
+            "updatedAt": 2
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "localNodeId": "paper:paper-1",
+        "localDepth": 4
+      },
+      "expected": {
+        "nodes": [
+          {
+            "id": "paper:paper-1",
+            "type": "paper",
+            "label": "Retrieval-Augmented Reading",
+            "subtitle": "Smith J, Chen L · 2025 · Synthetic Journal",
+            "paperId": "paper-1",
+            "size": 43
+          },
+          {
+            "id": "paper:paper-2",
+            "type": "paper",
+            "label": "Semantic Literature Graphs",
+            "subtitle": "Smith J · 2024",
+            "paperId": "paper-2",
+            "size": 34
+          },
+          {
+            "id": "paper:paper-3",
+            "type": "paper",
+            "label": "Unconnected Methods",
+            "subtitle": "Other B",
+            "paperId": "paper-3",
+            "size": 34
+          },
+          {
+            "id": "note:note-1",
+            "type": "note",
+            "label": "Reading note",
+            "subtitle": "Visible evidence text",
+            "noteId": "note-1",
+            "paperId": "paper-1",
+            "size": 30
+          },
+          {
+            "id": "note:note-2",
+            "type": "note",
+            "label": "Graph note",
+            "subtitle": "Graph connection evidence",
+            "noteId": "note-2",
+            "size": 24
+          },
+          {
+            "id": "tag:rag",
+            "type": "tag",
+            "label": "#RAG",
+            "subtitle": "2 items",
+            "tag": "RAG",
+            "size": 24
+          },
+          {
+            "id": "tag:evidence",
+            "type": "tag",
+            "label": "#EVIDENCE",
+            "subtitle": "2 items",
+            "tag": "EVIDENCE",
+            "size": 24
+          },
+          {
+            "id": "tag:graph",
+            "type": "tag",
+            "label": "#Graph",
+            "subtitle": "2 items",
+            "tag": "Graph",
+            "size": 24
+          },
+          {
+            "id": "category:cat-1",
+            "type": "category",
+            "label": "Reading Systems",
+            "subtitle": "Collection",
+            "categoryId": "cat-1",
+            "size": 26
+          }
+        ],
+        "edges": [
+          {
+            "id": "note_paper:note:note-1->paper:paper-1",
+            "source": "note:note-1",
+            "target": "paper:paper-1",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_paper:note:note-1->paper:paper-2",
+            "source": "note:note-1",
+            "target": "paper:paper-2",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_paper:note:note-1->paper:paper-3",
+            "source": "note:note-1",
+            "target": "paper:paper-3",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_link:note:note-1->note:note-2",
+            "source": "note:note-1",
+            "target": "note:note-2",
+            "type": "note_link",
+            "label": "link",
+            "weight": 0.82
+          },
+          {
+            "id": "paper_tag:paper:paper-1->tag:rag",
+            "source": "paper:paper-1",
+            "target": "tag:rag",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-1->tag:evidence",
+            "source": "paper:paper-1",
+            "target": "tag:evidence",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-2->tag:graph",
+            "source": "paper:paper-2",
+            "target": "tag:graph",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-2->tag:evidence",
+            "source": "paper:paper-2",
+            "target": "tag:evidence",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "note_tag:note:note-1->tag:rag",
+            "source": "note:note-1",
+            "target": "tag:rag",
+            "type": "note_tag",
+            "label": "tag",
+            "weight": 0.38
+          },
+          {
+            "id": "note_tag:note:note-2->tag:graph",
+            "source": "note:note-2",
+            "target": "tag:graph",
+            "type": "note_tag",
+            "label": "tag",
+            "weight": 0.38
+          },
+          {
+            "id": "paper_category:paper:paper-1->category:cat-1",
+            "source": "paper:paper-1",
+            "target": "category:cat-1",
+            "type": "paper_category",
+            "label": "category",
+            "weight": 0.48
+          },
+          {
+            "id": "paper_category:paper:paper-2->category:cat-1",
+            "source": "paper:paper-2",
+            "target": "category:cat-1",
+            "type": "paper_category",
+            "label": "category",
+            "weight": 0.48
+          },
+          {
+            "id": "paper_cites_paper:paper:paper-1->paper:paper-2",
+            "source": "paper:paper-1",
+            "target": "paper:paper-2",
+            "type": "paper_cites_paper",
+            "label": "cites",
+            "description": "Semantic Literature Graphs https://doi.org/10.1234/graph.1",
+            "weight": 0.78
+          },
+          {
+            "id": "paper_cites_paper:paper:paper-2->paper:paper-1",
+            "source": "paper:paper-2",
+            "target": "paper:paper-1",
+            "type": "paper_cites_paper",
+            "label": "cites",
+            "description": "Retrieval-Augmented Reading Retrieval-Augmented Reading 10.1234/reader Known local citation",
+            "weight": 0.78
+          },
+          {
+            "id": "related_by_embedding:paper:paper-1->paper:paper-2",
+            "source": "paper:paper-1",
+            "target": "paper:paper-2",
+            "type": "related_by_embedding",
+            "label": "similar",
+            "weight": 0.91
+          },
+          {
+            "id": "custom-1",
+            "source": "paper:paper-3",
+            "target": "note:note-2",
+            "type": "custom_relation",
+            "label": "explains",
+            "description": "Saved evidence",
+            "weight": 0.58,
+            "createdAt": 1,
+            "updatedAt": 1
+          },
+          {
+            "id": "ai-1",
+            "source": "paper:paper-2",
+            "target": "paper:paper-3",
+            "type": "ai_suggested",
+            "label": "contrasts_with",
+            "description": "Approved synthetic suggestion",
+            "confidence": 0.82,
+            "weight": 0.66,
+            "createdAt": 2,
+            "updatedAt": 2
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "localNodeId": "paper:paper-1",
+        "localDepth": 0
+      },
+      "expected": {
+        "nodes": [
+          {
+            "id": "paper:paper-1",
+            "type": "paper",
+            "label": "Retrieval-Augmented Reading",
+            "subtitle": "Smith J, Chen L · 2025 · Synthetic Journal",
+            "paperId": "paper-1",
+            "size": 43
+          },
+          {
+            "id": "paper:paper-2",
+            "type": "paper",
+            "label": "Semantic Literature Graphs",
+            "subtitle": "Smith J · 2024",
+            "paperId": "paper-2",
+            "size": 34
+          },
+          {
+            "id": "paper:paper-3",
+            "type": "paper",
+            "label": "Unconnected Methods",
+            "subtitle": "Other B",
+            "paperId": "paper-3",
+            "size": 34
+          },
+          {
+            "id": "note:note-1",
+            "type": "note",
+            "label": "Reading note",
+            "subtitle": "Visible evidence text",
+            "noteId": "note-1",
+            "paperId": "paper-1",
+            "size": 30
+          },
+          {
+            "id": "note:note-2",
+            "type": "note",
+            "label": "Graph note",
+            "subtitle": "Graph connection evidence",
+            "noteId": "note-2",
+            "size": 24
+          },
+          {
+            "id": "tag:rag",
+            "type": "tag",
+            "label": "#RAG",
+            "subtitle": "2 items",
+            "tag": "RAG",
+            "size": 24
+          },
+          {
+            "id": "tag:evidence",
+            "type": "tag",
+            "label": "#EVIDENCE",
+            "subtitle": "2 items",
+            "tag": "EVIDENCE",
+            "size": 24
+          },
+          {
+            "id": "tag:graph",
+            "type": "tag",
+            "label": "#Graph",
+            "subtitle": "2 items",
+            "tag": "Graph",
+            "size": 24
+          },
+          {
+            "id": "category:cat-1",
+            "type": "category",
+            "label": "Reading Systems",
+            "subtitle": "Collection",
+            "categoryId": "cat-1",
+            "size": 26
+          }
+        ],
+        "edges": [
+          {
+            "id": "note_paper:note:note-1->paper:paper-1",
+            "source": "note:note-1",
+            "target": "paper:paper-1",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_paper:note:note-1->paper:paper-2",
+            "source": "note:note-1",
+            "target": "paper:paper-2",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_paper:note:note-1->paper:paper-3",
+            "source": "note:note-1",
+            "target": "paper:paper-3",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_link:note:note-1->note:note-2",
+            "source": "note:note-1",
+            "target": "note:note-2",
+            "type": "note_link",
+            "label": "link",
+            "weight": 0.82
+          },
+          {
+            "id": "paper_tag:paper:paper-1->tag:rag",
+            "source": "paper:paper-1",
+            "target": "tag:rag",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-1->tag:evidence",
+            "source": "paper:paper-1",
+            "target": "tag:evidence",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-2->tag:graph",
+            "source": "paper:paper-2",
+            "target": "tag:graph",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-2->tag:evidence",
+            "source": "paper:paper-2",
+            "target": "tag:evidence",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "note_tag:note:note-1->tag:rag",
+            "source": "note:note-1",
+            "target": "tag:rag",
+            "type": "note_tag",
+            "label": "tag",
+            "weight": 0.38
+          },
+          {
+            "id": "note_tag:note:note-2->tag:graph",
+            "source": "note:note-2",
+            "target": "tag:graph",
+            "type": "note_tag",
+            "label": "tag",
+            "weight": 0.38
+          },
+          {
+            "id": "paper_category:paper:paper-1->category:cat-1",
+            "source": "paper:paper-1",
+            "target": "category:cat-1",
+            "type": "paper_category",
+            "label": "category",
+            "weight": 0.48
+          },
+          {
+            "id": "paper_category:paper:paper-2->category:cat-1",
+            "source": "paper:paper-2",
+            "target": "category:cat-1",
+            "type": "paper_category",
+            "label": "category",
+            "weight": 0.48
+          },
+          {
+            "id": "paper_cites_paper:paper:paper-1->paper:paper-2",
+            "source": "paper:paper-1",
+            "target": "paper:paper-2",
+            "type": "paper_cites_paper",
+            "label": "cites",
+            "description": "Semantic Literature Graphs https://doi.org/10.1234/graph.1",
+            "weight": 0.78
+          },
+          {
+            "id": "paper_cites_paper:paper:paper-2->paper:paper-1",
+            "source": "paper:paper-2",
+            "target": "paper:paper-1",
+            "type": "paper_cites_paper",
+            "label": "cites",
+            "description": "Retrieval-Augmented Reading Retrieval-Augmented Reading 10.1234/reader Known local citation",
+            "weight": 0.78
+          },
+          {
+            "id": "related_by_embedding:paper:paper-1->paper:paper-2",
+            "source": "paper:paper-1",
+            "target": "paper:paper-2",
+            "type": "related_by_embedding",
+            "label": "similar",
+            "weight": 0.91
+          },
+          {
+            "id": "custom-1",
+            "source": "paper:paper-3",
+            "target": "note:note-2",
+            "type": "custom_relation",
+            "label": "explains",
+            "description": "Saved evidence",
+            "weight": 0.58,
+            "createdAt": 1,
+            "updatedAt": 1
+          },
+          {
+            "id": "ai-1",
+            "source": "paper:paper-2",
+            "target": "paper:paper-3",
+            "type": "ai_suggested",
+            "label": "contrasts_with",
+            "description": "Approved synthetic suggestion",
+            "confidence": 0.82,
+            "weight": 0.66,
+            "createdAt": 2,
+            "updatedAt": 2
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "localNodeId": "missing",
+        "localDepth": 1
+      },
+      "expected": {
+        "nodes": [
+          {
+            "id": "paper:paper-1",
+            "type": "paper",
+            "label": "Retrieval-Augmented Reading",
+            "subtitle": "Smith J, Chen L · 2025 · Synthetic Journal",
+            "paperId": "paper-1",
+            "size": 43
+          },
+          {
+            "id": "paper:paper-2",
+            "type": "paper",
+            "label": "Semantic Literature Graphs",
+            "subtitle": "Smith J · 2024",
+            "paperId": "paper-2",
+            "size": 34
+          },
+          {
+            "id": "paper:paper-3",
+            "type": "paper",
+            "label": "Unconnected Methods",
+            "subtitle": "Other B",
+            "paperId": "paper-3",
+            "size": 34
+          },
+          {
+            "id": "note:note-1",
+            "type": "note",
+            "label": "Reading note",
+            "subtitle": "Visible evidence text",
+            "noteId": "note-1",
+            "paperId": "paper-1",
+            "size": 30
+          },
+          {
+            "id": "note:note-2",
+            "type": "note",
+            "label": "Graph note",
+            "subtitle": "Graph connection evidence",
+            "noteId": "note-2",
+            "size": 24
+          },
+          {
+            "id": "tag:rag",
+            "type": "tag",
+            "label": "#RAG",
+            "subtitle": "2 items",
+            "tag": "RAG",
+            "size": 24
+          },
+          {
+            "id": "tag:evidence",
+            "type": "tag",
+            "label": "#EVIDENCE",
+            "subtitle": "2 items",
+            "tag": "EVIDENCE",
+            "size": 24
+          },
+          {
+            "id": "tag:graph",
+            "type": "tag",
+            "label": "#Graph",
+            "subtitle": "2 items",
+            "tag": "Graph",
+            "size": 24
+          },
+          {
+            "id": "category:cat-1",
+            "type": "category",
+            "label": "Reading Systems",
+            "subtitle": "Collection",
+            "categoryId": "cat-1",
+            "size": 26
+          }
+        ],
+        "edges": [
+          {
+            "id": "note_paper:note:note-1->paper:paper-1",
+            "source": "note:note-1",
+            "target": "paper:paper-1",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_paper:note:note-1->paper:paper-2",
+            "source": "note:note-1",
+            "target": "paper:paper-2",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_paper:note:note-1->paper:paper-3",
+            "source": "note:note-1",
+            "target": "paper:paper-3",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_link:note:note-1->note:note-2",
+            "source": "note:note-1",
+            "target": "note:note-2",
+            "type": "note_link",
+            "label": "link",
+            "weight": 0.82
+          },
+          {
+            "id": "paper_tag:paper:paper-1->tag:rag",
+            "source": "paper:paper-1",
+            "target": "tag:rag",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-1->tag:evidence",
+            "source": "paper:paper-1",
+            "target": "tag:evidence",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-2->tag:graph",
+            "source": "paper:paper-2",
+            "target": "tag:graph",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-2->tag:evidence",
+            "source": "paper:paper-2",
+            "target": "tag:evidence",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "note_tag:note:note-1->tag:rag",
+            "source": "note:note-1",
+            "target": "tag:rag",
+            "type": "note_tag",
+            "label": "tag",
+            "weight": 0.38
+          },
+          {
+            "id": "note_tag:note:note-2->tag:graph",
+            "source": "note:note-2",
+            "target": "tag:graph",
+            "type": "note_tag",
+            "label": "tag",
+            "weight": 0.38
+          },
+          {
+            "id": "paper_category:paper:paper-1->category:cat-1",
+            "source": "paper:paper-1",
+            "target": "category:cat-1",
+            "type": "paper_category",
+            "label": "category",
+            "weight": 0.48
+          },
+          {
+            "id": "paper_category:paper:paper-2->category:cat-1",
+            "source": "paper:paper-2",
+            "target": "category:cat-1",
+            "type": "paper_category",
+            "label": "category",
+            "weight": 0.48
+          },
+          {
+            "id": "paper_cites_paper:paper:paper-1->paper:paper-2",
+            "source": "paper:paper-1",
+            "target": "paper:paper-2",
+            "type": "paper_cites_paper",
+            "label": "cites",
+            "description": "Semantic Literature Graphs https://doi.org/10.1234/graph.1",
+            "weight": 0.78
+          },
+          {
+            "id": "paper_cites_paper:paper:paper-2->paper:paper-1",
+            "source": "paper:paper-2",
+            "target": "paper:paper-1",
+            "type": "paper_cites_paper",
+            "label": "cites",
+            "description": "Retrieval-Augmented Reading Retrieval-Augmented Reading 10.1234/reader Known local citation",
+            "weight": 0.78
+          },
+          {
+            "id": "related_by_embedding:paper:paper-1->paper:paper-2",
+            "source": "paper:paper-1",
+            "target": "paper:paper-2",
+            "type": "related_by_embedding",
+            "label": "similar",
+            "weight": 0.91
+          },
+          {
+            "id": "custom-1",
+            "source": "paper:paper-3",
+            "target": "note:note-2",
+            "type": "custom_relation",
+            "label": "explains",
+            "description": "Saved evidence",
+            "weight": 0.58,
+            "createdAt": 1,
+            "updatedAt": 1
+          },
+          {
+            "id": "ai-1",
+            "source": "paper:paper-2",
+            "target": "paper:paper-3",
+            "type": "ai_suggested",
+            "label": "contrasts_with",
+            "description": "Approved synthetic suggestion",
+            "confidence": 0.82,
+            "weight": 0.66,
+            "createdAt": 2,
+            "updatedAt": 2
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "search": "rag",
+        "localNodeId": "note:note-1",
+        "localDepth": 1
+      },
+      "expected": {
+        "nodes": [
+          {
+            "id": "paper:paper-1",
+            "type": "paper",
+            "label": "Retrieval-Augmented Reading",
+            "subtitle": "Smith J, Chen L · 2025 · Synthetic Journal",
+            "paperId": "paper-1",
+            "size": 43
+          },
+          {
+            "id": "note:note-1",
+            "type": "note",
+            "label": "Reading note",
+            "subtitle": "Visible evidence text",
+            "noteId": "note-1",
+            "paperId": "paper-1",
+            "size": 30
+          },
+          {
+            "id": "tag:rag",
+            "type": "tag",
+            "label": "#RAG",
+            "subtitle": "2 items",
+            "tag": "RAG",
+            "size": 24
+          }
+        ],
+        "edges": [
+          {
+            "id": "note_paper:note:note-1->paper:paper-1",
+            "source": "note:note-1",
+            "target": "paper:paper-1",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "paper_tag:paper:paper-1->tag:rag",
+            "source": "paper:paper-1",
+            "target": "tag:rag",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "note_tag:note:note-1->tag:rag",
+            "source": "note:note-1",
+            "target": "tag:rag",
+            "type": "note_tag",
+            "label": "tag",
+            "weight": 0.38
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "includePapers": false,
+        "includeNotes": false,
+        "includeTags": false,
+        "includeCategories": false
+      },
+      "expected": {
+        "nodes": [],
+        "edges": []
+      }
+    },
+    {
+      "request": {
+        "embeddingEdgeLimit": 0,
+        "embeddingMinSimilarity": 0.9
+      },
+      "expected": {
+        "nodes": [
+          {
+            "id": "paper:paper-1",
+            "type": "paper",
+            "label": "Retrieval-Augmented Reading",
+            "subtitle": "Smith J, Chen L · 2025 · Synthetic Journal",
+            "paperId": "paper-1",
+            "size": 43
+          },
+          {
+            "id": "paper:paper-2",
+            "type": "paper",
+            "label": "Semantic Literature Graphs",
+            "subtitle": "Smith J · 2024",
+            "paperId": "paper-2",
+            "size": 34
+          },
+          {
+            "id": "paper:paper-3",
+            "type": "paper",
+            "label": "Unconnected Methods",
+            "subtitle": "Other B",
+            "paperId": "paper-3",
+            "size": 34
+          },
+          {
+            "id": "note:note-1",
+            "type": "note",
+            "label": "Reading note",
+            "subtitle": "Visible evidence text",
+            "noteId": "note-1",
+            "paperId": "paper-1",
+            "size": 30
+          },
+          {
+            "id": "note:note-2",
+            "type": "note",
+            "label": "Graph note",
+            "subtitle": "Graph connection evidence",
+            "noteId": "note-2",
+            "size": 24
+          },
+          {
+            "id": "tag:rag",
+            "type": "tag",
+            "label": "#RAG",
+            "subtitle": "2 items",
+            "tag": "RAG",
+            "size": 24
+          },
+          {
+            "id": "tag:evidence",
+            "type": "tag",
+            "label": "#EVIDENCE",
+            "subtitle": "2 items",
+            "tag": "EVIDENCE",
+            "size": 24
+          },
+          {
+            "id": "tag:graph",
+            "type": "tag",
+            "label": "#Graph",
+            "subtitle": "2 items",
+            "tag": "Graph",
+            "size": 24
+          },
+          {
+            "id": "category:cat-1",
+            "type": "category",
+            "label": "Reading Systems",
+            "subtitle": "Collection",
+            "categoryId": "cat-1",
+            "size": 26
+          }
+        ],
+        "edges": [
+          {
+            "id": "note_paper:note:note-1->paper:paper-1",
+            "source": "note:note-1",
+            "target": "paper:paper-1",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_paper:note:note-1->paper:paper-2",
+            "source": "note:note-1",
+            "target": "paper:paper-2",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_paper:note:note-1->paper:paper-3",
+            "source": "note:note-1",
+            "target": "paper:paper-3",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_link:note:note-1->note:note-2",
+            "source": "note:note-1",
+            "target": "note:note-2",
+            "type": "note_link",
+            "label": "link",
+            "weight": 0.82
+          },
+          {
+            "id": "paper_tag:paper:paper-1->tag:rag",
+            "source": "paper:paper-1",
+            "target": "tag:rag",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-1->tag:evidence",
+            "source": "paper:paper-1",
+            "target": "tag:evidence",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-2->tag:graph",
+            "source": "paper:paper-2",
+            "target": "tag:graph",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-2->tag:evidence",
+            "source": "paper:paper-2",
+            "target": "tag:evidence",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "note_tag:note:note-1->tag:rag",
+            "source": "note:note-1",
+            "target": "tag:rag",
+            "type": "note_tag",
+            "label": "tag",
+            "weight": 0.38
+          },
+          {
+            "id": "note_tag:note:note-2->tag:graph",
+            "source": "note:note-2",
+            "target": "tag:graph",
+            "type": "note_tag",
+            "label": "tag",
+            "weight": 0.38
+          },
+          {
+            "id": "paper_category:paper:paper-1->category:cat-1",
+            "source": "paper:paper-1",
+            "target": "category:cat-1",
+            "type": "paper_category",
+            "label": "category",
+            "weight": 0.48
+          },
+          {
+            "id": "paper_category:paper:paper-2->category:cat-1",
+            "source": "paper:paper-2",
+            "target": "category:cat-1",
+            "type": "paper_category",
+            "label": "category",
+            "weight": 0.48
+          },
+          {
+            "id": "paper_cites_paper:paper:paper-1->paper:paper-2",
+            "source": "paper:paper-1",
+            "target": "paper:paper-2",
+            "type": "paper_cites_paper",
+            "label": "cites",
+            "description": "Semantic Literature Graphs https://doi.org/10.1234/graph.1",
+            "weight": 0.78
+          },
+          {
+            "id": "paper_cites_paper:paper:paper-2->paper:paper-1",
+            "source": "paper:paper-2",
+            "target": "paper:paper-1",
+            "type": "paper_cites_paper",
+            "label": "cites",
+            "description": "Retrieval-Augmented Reading Retrieval-Augmented Reading 10.1234/reader Known local citation",
+            "weight": 0.78
+          },
+          {
+            "id": "related_by_embedding:paper:paper-1->paper:paper-2",
+            "source": "paper:paper-1",
+            "target": "paper:paper-2",
+            "type": "related_by_embedding",
+            "label": "similar",
+            "weight": 0.91
+          },
+          {
+            "id": "custom-1",
+            "source": "paper:paper-3",
+            "target": "note:note-2",
+            "type": "custom_relation",
+            "label": "explains",
+            "description": "Saved evidence",
+            "weight": 0.58,
+            "createdAt": 1,
+            "updatedAt": 1
+          },
+          {
+            "id": "ai-1",
+            "source": "paper:paper-2",
+            "target": "paper:paper-3",
+            "type": "ai_suggested",
+            "label": "contrasts_with",
+            "description": "Approved synthetic suggestion",
+            "confidence": 0.82,
+            "weight": 0.66,
+            "createdAt": 2,
+            "updatedAt": 2
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "includeCoAuthors": true,
+        "includeReferences": false,
+        "includeCustomRelations": false,
+        "includeEmbeddingEdges": false
+      },
+      "expected": {
+        "nodes": [
+          {
+            "id": "paper:paper-1",
+            "type": "paper",
+            "label": "Retrieval-Augmented Reading",
+            "subtitle": "Smith J, Chen L · 2025 · Synthetic Journal",
+            "paperId": "paper-1",
+            "size": 43
+          },
+          {
+            "id": "paper:paper-2",
+            "type": "paper",
+            "label": "Semantic Literature Graphs",
+            "subtitle": "Smith J · 2024",
+            "paperId": "paper-2",
+            "size": 34
+          },
+          {
+            "id": "paper:paper-3",
+            "type": "paper",
+            "label": "Unconnected Methods",
+            "subtitle": "Other B",
+            "paperId": "paper-3",
+            "size": 34
+          },
+          {
+            "id": "note:note-1",
+            "type": "note",
+            "label": "Reading note",
+            "subtitle": "Visible evidence text",
+            "noteId": "note-1",
+            "paperId": "paper-1",
+            "size": 30
+          },
+          {
+            "id": "note:note-2",
+            "type": "note",
+            "label": "Graph note",
+            "subtitle": "Graph connection evidence",
+            "noteId": "note-2",
+            "size": 24
+          },
+          {
+            "id": "tag:rag",
+            "type": "tag",
+            "label": "#RAG",
+            "subtitle": "2 items",
+            "tag": "RAG",
+            "size": 24
+          },
+          {
+            "id": "tag:evidence",
+            "type": "tag",
+            "label": "#EVIDENCE",
+            "subtitle": "2 items",
+            "tag": "EVIDENCE",
+            "size": 24
+          },
+          {
+            "id": "tag:graph",
+            "type": "tag",
+            "label": "#Graph",
+            "subtitle": "2 items",
+            "tag": "Graph",
+            "size": 24
+          },
+          {
+            "id": "category:cat-1",
+            "type": "category",
+            "label": "Reading Systems",
+            "subtitle": "Collection",
+            "categoryId": "cat-1",
+            "size": 26
+          }
+        ],
+        "edges": [
+          {
+            "id": "note_paper:note:note-1->paper:paper-1",
+            "source": "note:note-1",
+            "target": "paper:paper-1",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_paper:note:note-1->paper:paper-2",
+            "source": "note:note-1",
+            "target": "paper:paper-2",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_paper:note:note-1->paper:paper-3",
+            "source": "note:note-1",
+            "target": "paper:paper-3",
+            "type": "note_paper",
+            "label": "note",
+            "weight": 0.72
+          },
+          {
+            "id": "note_link:note:note-1->note:note-2",
+            "source": "note:note-1",
+            "target": "note:note-2",
+            "type": "note_link",
+            "label": "link",
+            "weight": 0.82
+          },
+          {
+            "id": "paper_tag:paper:paper-1->tag:rag",
+            "source": "paper:paper-1",
+            "target": "tag:rag",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-1->tag:evidence",
+            "source": "paper:paper-1",
+            "target": "tag:evidence",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-2->tag:graph",
+            "source": "paper:paper-2",
+            "target": "tag:graph",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "paper_tag:paper:paper-2->tag:evidence",
+            "source": "paper:paper-2",
+            "target": "tag:evidence",
+            "type": "paper_tag",
+            "label": "tag",
+            "weight": 0.42
+          },
+          {
+            "id": "note_tag:note:note-1->tag:rag",
+            "source": "note:note-1",
+            "target": "tag:rag",
+            "type": "note_tag",
+            "label": "tag",
+            "weight": 0.38
+          },
+          {
+            "id": "note_tag:note:note-2->tag:graph",
+            "source": "note:note-2",
+            "target": "tag:graph",
+            "type": "note_tag",
+            "label": "tag",
+            "weight": 0.38
+          },
+          {
+            "id": "paper_category:paper:paper-1->category:cat-1",
+            "source": "paper:paper-1",
+            "target": "category:cat-1",
+            "type": "paper_category",
+            "label": "category",
+            "weight": 0.48
+          },
+          {
+            "id": "paper_category:paper:paper-2->category:cat-1",
+            "source": "paper:paper-2",
+            "target": "category:cat-1",
+            "type": "paper_category",
+            "label": "category",
+            "weight": 0.48
+          },
+          {
+            "id": "co_author:paper:paper-1->paper:paper-2",
+            "source": "paper:paper-1",
+            "target": "paper:paper-2",
+            "type": "co_author",
+            "label": "Smith J",
+            "description": "Shared author(s): Smith J",
+            "weight": 0.58
+          }
+        ]
+      }
+    }
+  ]
+}

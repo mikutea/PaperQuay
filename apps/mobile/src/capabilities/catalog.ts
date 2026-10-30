@@ -1,5 +1,5 @@
 import type {FeatureInspection} from './inspector.ts';
-export type FeatureAction='library'|'notes'|'sync'|'conflicts'|'transfer'|'incoming'|'cloud'|'remote'|'zotero'|'research'|'review'|'ai-settings'|'exports';
+export type FeatureAction='library'|'notes'|'sync'|'conflicts'|'transfer'|'incoming'|'cloud'|'remote'|'zotero'|'research'|'review'|'graph'|'ai-settings'|'exports';
 export type FeatureState='available'|'conditional'|'partial'|'unavailable'|'planned'|'managed';
 export type FeatureMode='local'|'service'|'computer'|'external'|'mixed'|'operator';
 export interface FeatureRow {id:string;title:string;group:'account'|'library'|'sync'|'reading'|'notes'|'ai'|'research'|'operations';mode:FeatureMode;state:FeatureState;reason:string;action?:FeatureAction}
@@ -68,7 +68,7 @@ export function capabilityCatalog(e:FeatureEnvironment):FeatureRow[]{
  add('PAR-01','文献雷达与推荐证据','research','mixed','partial','收藏、阅读状态与队列已有入口；雷达主题、推荐来源与证据业务尚未接入。',e.ready?'library':undefined);
  add('PAR-02','多篇问答与Agent','research','mixed',!e.ready?'unavailable':'partial','已接入多来源片段选择、实际发送预览、引用核对和结果保存；Agent工具审批、远程检索与委托执行尚未接入。',e.ready?'research':undefined);
  add('PAR-03','综述章节与引文核对','research','mixed',e.ready&&e.modelRuntime?'partial':'unavailable',e.ready&&e.modelRuntime?'已接入文献与笔记材料、蓝图和章节编辑、分段断点、引文校验及Word导出；真实外部模型、实机与桌面对应业务验收仍待完成。':!e.ready?'先登录并打开此账号在本机的文库副本。':'当前运行环境未提供模型与综述工作区，本机文库和笔记仍可访问。',e.ready&&e.modelRuntime?'review':undefined);
- add('PAR-04','知识图谱浏览与证据','research','mixed','planned','触控图谱、关系检索、详情证据与图谱导出尚未接入。');
+ add('PAR-04','知识图谱','research','local',e.ready?'partial':'unavailable',e.ready?'可触控浏览当前账号的文献、笔记链接、标签、按名称重建的分类与共同作者，检索、查看关系来源并导出JSON。桌面私有参考文献/向量/自定义关系尚未同步，真实材料与设备验收仍待。':'先打开此账号在本机的文库副本。',e.ready?'graph':undefined);
  const batchSupport=s?Boolean(s.remoteTasks):null;
  remote('PAR-05','持久批次与长任务','research','computer',batchSupport,i.batch==='unsupported'?'服务尚不支持安全的批次查询与取消，请升级后再用批次；单份远程任务仍可查询。':i.batch!=='supported'?'本次尚未确认批次查询与取消能力，请重新检查；不会自动提交或恢复任务。':'批次查询与取消已确认。提交仍需在线电脑配置、已同步版本及配额；进度保存在此设备，关闭后不会自动继续。','remote');
  if(rows.at(-1)?.id==='PAR-05'&&batchSupport&&i.batch==='unsupported'&&!gate())rows[rows.length-1].state='partial';

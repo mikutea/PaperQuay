@@ -13,7 +13,7 @@ test('unread declarations do not become disabled services, live PCs or a verifie
 });
 test('declaration support never proves every remote profile, file, capacity or unimplemented M4 function',()=>{
  const e=enabled();assert.match(row(e,'AI-06').reason,/解析配置 1 个、索引配置 0 个/);assert.equal(row(e,'AI-06').state,'conditional');
- assert.equal(row(e,'PAR-03').state,'partial');assert.equal(row(e,'PAR-03').action,'review');assert.match(row(e,'PAR-03').reason,/真实外部模型.*待完成/);assert.equal(row(e,'PAR-02').state,'partial');assert.match(row(e,'PAR-02').reason,/Agent.*尚未接入/);for(const id of ['PAR-04','OPS-02','OPS-03','OPS-06']){assert.equal(row(e,id).state,'planned');assert.equal(row(e,id).action,undefined);}
+ assert.equal(row(e,'PAR-03').state,'partial');assert.equal(row(e,'PAR-03').action,'review');assert.match(row(e,'PAR-03').reason,/真实外部模型.*待完成/);assert.equal(row(e,'PAR-02').state,'partial');assert.match(row(e,'PAR-02').reason,/Agent.*尚未接入/);for(const id of ['OPS-02','OPS-03','OPS-06']){assert.equal(row(e,id).state,'planned');assert.equal(row(e,id).action,undefined);}
  assert.equal(row(e,'AI-07').state,'partial');assert.match(row(e,'AI-07').reason,/不能由一个地址推断/);
 });
 test('presence expires at the observed TTL even with far-future server timestamps, and a backwards clock is never online proof',()=>{
@@ -39,3 +39,5 @@ test('a freshly checked empty provider list is not misreported as expired eviden
  const e=enabled();e.inspection.providers=[];assert.equal(presentProfiles(e).stale,false);assert.match(row(e,'AI-06').reason,/暂未发现有效/);
  e.now+=45000;assert.equal(presentProfiles(e).stale,true);assert.match(row(e,'AI-06').reason,/信息已过期/);
 });
+
+test('graph has a real local route without model runtime but keeps unsupported desktop sources explicit',()=>{const e=enabled();e.modelRuntime=false;e.online=false;assert.equal(row(e,'PAR-04').action,'graph');assert.equal(row(e,'PAR-04').state,'partial');assert.match(row(e,'PAR-04').reason,/桌面私有.*尚未同步/);e.ready=false;assert.equal(row(e,'PAR-04').action,undefined);assert.equal(row(e,'PAR-04').state,'unavailable');});

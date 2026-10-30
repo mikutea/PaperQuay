@@ -28,6 +28,9 @@ try {
 
   require(pakoEntry);
   require(path.join(pizzipDirectory, 'flate.js'));
+  const graphCore=require(path.join(extractionRoot,'packages','graph-core','index.cjs')).createKnowledgeGraphCore();
+  const graphSmoke=graphCore.createKnowledgeGraphSnapshot({store:{load:()=>({papers:[{id:'synthetic',title:'Packaged graph',authors:[],tags:[{name:'Evidence'}]}],categories:[]})},noteStore:{listAllNotes:()=>[]}}, {includeCustomRelations:false});
+  if(graphSmoke.nodes.length!==2||graphSmoke.edges[0]?.type!=='paper_tag')throw new Error('Packaged graph derivation failed.');
   const reviewCorePath=path.join(extractionRoot,'packages','review-core','index.cjs');
   const {createReviewCore}=require(reviewCorePath);
   const reviewCore=createReviewCore();

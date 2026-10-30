@@ -127,6 +127,7 @@
       "dist/**/*",
       "electron/**/*",
       "packages/review-core/index.cjs",
+      "packages/graph-core/index.cjs",
       "!electron/native/build/**/*",
       "!electron/native/*.cc",
       "!electron/native/binding.gyp",
