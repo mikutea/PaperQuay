@@ -34,3 +34,8 @@ test('a newly declared content schema stays conditional until the workspace conn
  const e=enabled();e.localOrganization=false;e.localRichNotes=false;e.localAiConversations=false;
  for(const id of ['LIB-02','NOTE-02','AI-04']){assert.equal(row(e,id).state,'partial');assert.match(row(e,id).reason,/当前连接尚未协商/);}
 });
+
+test('a freshly checked empty provider list is not misreported as expired evidence',()=>{
+ const e=enabled();e.inspection.providers=[];assert.equal(presentProfiles(e).stale,false);assert.match(row(e,'AI-06').reason,/暂未发现有效/);
+ e.now+=45000;assert.equal(presentProfiles(e).stale,true);assert.match(row(e,'AI-06').reason,/信息已过期/);
+});

@@ -15,7 +15,7 @@ export function presentProfiles(env:FeatureEnvironment):{parse:number;index:numb
  const i=env.inspection,checked=Date.parse(i.providersCheckedAt??''),ttl=(i.service?.remoteTasks?.providerPresenceSeconds??0)*1000;
  const fresh=Number.isFinite(checked)&&env.now>=checked&&env.now<checked+ttl;
  const providers=fresh?i.providers.filter(p=>Date.parse(p.expiresAt)>env.now):[];
- return{parse:providers.flatMap(p=>p.profiles).filter(p=>p.kind==='parse').length,index:providers.flatMap(p=>p.profiles).filter(p=>p.kind==='index').length,computers:providers.length,stale:Boolean(i.providersCheckedAt)&&!providers.length};
+ return{parse:providers.flatMap(p=>p.profiles).filter(p=>p.kind==='parse').length,index:providers.flatMap(p=>p.profiles).filter(p=>p.kind==='index').length,computers:providers.length,stale:Boolean(i.providersCheckedAt)&&(!fresh||(i.providers.length>0&&!providers.length))};
 }
 export function capabilityCatalog(e:FeatureEnvironment):FeatureRow[]{
  const rows:FeatureRow[]=[],i=e.inspection,s=i.status==='ready'?i.service:null,present=presentProfiles(e);
