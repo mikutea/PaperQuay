@@ -331,7 +331,7 @@ async function fixture(t) {
     const files = fs.readdirSync(dir).filter((name) => name.endsWith('.json'));
     return { dir, files, documents: files.map((name) => JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'))) };
   };
-  return { root, profile, libraryRoot, appPaths, store, context, paper, attachment, service, manager, create, login, publish, privateState };
+  return { root, profile, libraryRoot, appPaths, store, context, paper, attachment, service, manager, create, login, publish, privateState, imports, access };
 }
 
 test('service capability extensions do not block login or escape the validated desktop projection', async (t) => {
@@ -676,4 +676,129 @@ test('actual desktop model commands stay independent of PDF sharing, save the re
 });
 test('actual model backup command rejects a dialog reply after sign out and keeps the profile lock until export settles',async t=>{
  const entered=deferred(),release=deferred();let destination;const f=await modelCommandFixture(t,{showSaveDialog:async()=>{entered.resolve();await release.promise;return{canceled:false,filePath:destination};}});destination=f.destination;await f.enabled();await f.worker().runOnce();const pending=f.manager.commands.desktop_models_export({id:f.claim().request.id}),rejected=assert.rejects(pending,{code:'DESKTOP_OPERATION_CANCELLED'});await entered.promise;await f.manager.commands.desktop_account_sign_out();assert.equal(f.manager.getStatus().account,null);assert.equal(fs.existsSync(destination),false);release.resolve();await rejected;await f.manager.settled();assert.equal(fs.existsSync(destination),false);assert.equal(f.modelCalls(),1);
+});
+
+
+async function graphCommandFixture(t, extra = {}) {
+  const f = await fixture(t);
+  f.context.noteStore = { listAllNotes: () => [] };
+  const input = path.join(f.root,'second.pdf');
+  fs.writeFileSync(input, Buffer.from('%PDF-1.7\nsecond selected graph paper\n%%EOF\n'));
+  f.access.rememberPicked([input]);
+  const second = (await f.imports.library_import_pdfs({request:{paths:[input],metadata:{[input]:{title:'Second selected graph paper'}}}}))[0].paper;
+  const headers = [];
+  f.service.onRoute = (url, options) => {
+    if (url.pathname === '/v1/capabilities') return Response.json({protocolVersion:1,features:{desktopPdfTransfer:1,graphRelations:1},desktopPdf:{transport:'http-relay-v1',maxFileBytes:67108864,requestTtlMs:30000,pollTimeoutMs:20000}});
+    if (url.pathname === '/v1/sync/pull' || url.pathname === '/v1/conflicts' || url.pathname === '/v1/sync/push' && JSON.parse(options.body).operations[0].entityType === 'graphRelation') {
+      headers.push(options.headers);
+      assert.equal(options.headers['X-PaperQuay-Features'],'graph-relations-v1');
+    }
+    if (url.pathname === '/v1/sync/pull') return Response.json({protocolVersion:1,records:[...f.service.records.values()],nextCursor:'preview-cursor',hasMore:false});
+    if (url.pathname === '/v1/conflicts') return Response.json({conflicts:[],nextCursor:'conflict-cursor',hasMore:false});
+  };
+  const manager = Object.keys(extra).length ? f.create(extra) : f.manager;
+  await f.login(manager);
+  await f.publish(manager);
+  await manager.commands.desktop_provider_publish({localPaperId:second.id,localAttachmentId:second.attachments[0].id});
+  const file=path.join(f.appPaths.dataDir,'paperquay-knowledge-graph-relations.json');
+  const original=JSON.stringify({version:1,relations:[{id:'actual-local-graph',source:'paper:'+f.paper.id,target:'paper:'+second.id,type:'ai_suggested',label:'Supports',description:'Full first line.\nFull second line.',confidence:null,weight:.58,createdAt:0,updatedAt:null}],localExtension:'preserve'},null,2);
+  fs.writeFileSync(file,original);
+  return {...f,manager,second,headers,file,original};
+}
+
+test('actual graph account commands negotiate the feature, preview before publishing and adopt into a private overlay only',async t=>{
+  const f=await graphCommandFixture(t);
+  assert.equal(f.manager.getStatus().graphExchange.supported,true);
+  assert.equal(f.service.calls.filter(row=>row.url.includes('/v1/sync/pull')).length,0,'login never pulls graph content');
+  let preview=await f.manager.commands.desktop_graph_preview();
+  assert.equal(preview.localRows.length,1);assert.equal(preview.localRows[0].action,'create',JSON.stringify(preview.localRows[0]));
+  assert.equal(f.service.calls.filter(row=>row.url.endsWith('/v1/sync/push')).length,4,'preview is read only');
+  await f.manager.commands.desktop_graph_publish({token:preview.token,keys:[preview.localRows[0].key]});
+  assert.equal(f.manager.getStatus().graphExchange.pending,0);
+  const record=[...f.service.records.values()].find(row=>row.entityType==='graphRelation');
+  assert.equal(record.data.confidence,null);assert.equal(record.data.createdAt,'1970-01-01T00:00:00.000Z');
+  assert.deepEqual(f.manager.graphProjection().relations,[],'publication does not implicitly receive an account overlay');
+  preview=await f.manager.commands.desktop_graph_preview();
+  await f.manager.commands.desktop_graph_adopt({token:preview.token,ids:[record.entityId]});
+  assert.equal(f.manager.graphProjection().relations[0].scope,'account');
+  assert.deepEqual(f.manager.graphProjection().suppressedLocalIds,['actual-local-graph']);
+  assert.equal(fs.readFileSync(f.file,'utf8'),f.original);
+  assert.equal(f.headers.length,5);
+  const owner=f.manager.getStatus().graphExchange.scopeKey;
+  await f.manager.commands.desktop_account_sign_out();
+  assert.deepEqual(f.manager.graphProjection(),{relations:[],suppressedLocalIds:[]});
+  f.service.accountId=randomUUID();f.service.deviceId=randomUUID();await f.login(f.manager,false);
+  assert.notEqual(f.manager.getStatus().graphExchange.scopeKey,owner);
+  assert.deepEqual(f.manager.graphProjection().relations,[]);
+});
+
+test('actual graph export retains the account writer lock while the native picker is pending and refuses a late signed-out save',async t=>{
+  const entered=deferred(),release=deferred();let invoked=0;
+  const f=await graphCommandFixture(t,{graphBackupExporter:{async save(backup,{check,event}){
+    invoked++;assert.equal(backup.format,'paperquay-desktop-graph-backup');assert.equal(event,'native-event');
+    entered.resolve();await release.promise;check();return{status:'exported'};
+  }}});
+  const exportTask=f.manager.commands.desktop_graph_export({path:'renderer path is ignored'},'native-event');
+  const cancelled=assert.rejects(exportTask,{code:'DESKTOP_OPERATION_CANCELLED'});
+  await entered.promise;await f.manager.commands.desktop_account_sign_out();
+  const other=f.create();await other.commands.desktop_account_sign_in();await other.settled();
+  assert.equal(other.getStatus().errorCode,'DESKTOP_ACCOUNT_IN_USE');
+  release.resolve();await cancelled;await f.manager.settled();
+  await other.commands.desktop_account_sign_in();await other.settled();
+  assert.equal(other.getStatus().account.accountId,f.service.accountId);
+  assert.equal(invoked,1);assert.equal(fs.readFileSync(f.file,'utf8'),f.original);
+});
+
+test('current graph mappings remove an unbound material immediately without recreating it by UUID',async t=>{
+  const f=await graphCommandFixture(t);
+  let preview=await f.manager.commands.desktop_graph_preview();
+  await f.manager.commands.desktop_graph_publish({token:preview.token,keys:[preview.localRows[0].key]});
+  const record=[...f.service.records.values()].find(row=>row.entityType==='graphRelation');
+  preview=await f.manager.commands.desktop_graph_preview();
+  await f.manager.commands.desktop_graph_adopt({token:preview.token,ids:[record.entityId]});
+  const binding=f.manager.getStatus().bindings.find(row=>row.localPaperId===f.second.id);
+  await f.manager.commands.desktop_provider_unbind({bindingId:binding.bindingId});
+  assert.deepEqual(f.manager.graphProjection().relations,[]);
+  preview=await f.manager.commands.desktop_graph_preview();
+  assert.equal(preview.incoming.find(row=>row.entityId===record.entityId).canAccept,false);
+  await assert.rejects(f.manager.commands.desktop_graph_adopt({token:preview.token,ids:[record.entityId]}),{code:'UNMAPPED_GRAPH_ENDPOINT'});
+  assert.equal(fs.readFileSync(f.file,'utf8'),f.original);
+});
+
+
+test('a late graph receipt keeps the profile locked after a later login capability check fails',async t=>{
+  const f=await graphCommandFixture(t);
+  const preview=await f.manager.commands.desktop_graph_preview();
+  f.service.loseAfter='graphRelation';
+  await assert.rejects(f.manager.commands.desktop_graph_publish({token:preview.token,keys:[preview.localRows[0].key]}),{code:'NETWORK_UNAVAILABLE'});
+  await f.manager.commands.desktop_account_sign_out();await f.manager.settled();
+  const entered=deferred(),release=deferred(),normalRoute=f.service.onRoute;
+  let continued,started=false,badCapability=true,manager;
+  f.service.onRoute=async(url,options,body)=>{
+    if(url.pathname==='/v1/capabilities'&&badCapability)return Response.json({protocolVersion:1,features:{desktopPdfTransfer:1,graphRelations:1},desktopPdf:{transport:'http-relay-v1',maxFileBytes:67108864,requestTtlMs:30000,pollTimeoutMs:0}});
+    if(url.pathname==='/v1/sync/push'&&body.operations[0].entityType==='graphRelation'){
+      entered.resolve();await release.promise;
+      const receipt=f.service.receipts.get(body.operations[0].opId);
+      return Response.json({protocolVersion:1,results:[{...receipt.result,replayed:true}]});
+    }
+    return normalRoute(url,options,body);
+  };
+  manager=f.create({onGraphChange(){
+    if(!started&&manager?.getStatus().graphExchange.loaded){
+      started=true;continued=manager.commands.desktop_graph_continue().catch(error=>error);
+    }
+  }});
+  await manager.commands.desktop_account_sign_in();
+  await entered.promise;
+  await until(()=>manager.getStatus().account===null&&manager.getStatus().errorCode==='DESKTOP_INVALID_RESPONSE');
+  const other=f.create();
+  try{
+    await other.commands.desktop_account_sign_in();await other.settled();
+    assert.equal(other.getStatus().errorCode,'DESKTOP_ACCOUNT_IN_USE');
+  }finally{release.resolve();}
+  await continued;await manager.settled();
+  assert.deepEqual(manager.graphProjection(),{relations:[],suppressedLocalIds:[]});
+  badCapability=false;
+  await other.commands.desktop_account_sign_in();await other.settled();
+  assert.equal(other.getStatus().account.accountId,f.service.accountId);
 });

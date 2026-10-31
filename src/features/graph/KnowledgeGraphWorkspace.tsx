@@ -1,3 +1,4 @@
+import { listen } from '../../platform/electron/event';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import cytoscape, { type Core, type ElementDefinition, type StylesheetJson } from 'cytoscape';
 import { graphContainerHasSize } from './graphLayoutVisibility.ts';
@@ -719,6 +720,17 @@ export default function KnowledgeGraphWorkspace() {
       cancelled = true;
       unsubscribe?.();
     };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const subscription = listen('knowledge-graph:changed', () => {
+      if (!active) return;
+      setSnapshot(current => current ? { ...current, edges: current.edges.filter(edge => edge.scope !== 'account') } : current);
+      setSelectedEdge(current => current?.scope === 'account' ? null : current);
+      setRefreshToken(value => value + 1);
+    });
+    return () => { active = false; void subscription.then(unlisten => unlisten()); };
   }, []);
 
   useEffect(() => {
@@ -1510,7 +1522,7 @@ export default function KnowledgeGraphWorkspace() {
                         {source?.label ?? suggestion.sourceId} {'->'} {target?.label ?? suggestion.targetId}
                       </div>
                       <div className="mt-1 text-[11px] text-[var(--pq-accent)]">
-                        {suggestion.label} · {(suggestion.confidence * 100).toFixed(0)}%
+                        {suggestion.label} · {typeof suggestion.confidence === 'number' ? (suggestion.confidence * 100).toFixed(0) + '%' : l('分数未知', 'Score unknown')}
                       </div>
                       <div className="mt-1 line-clamp-3 text-[11px] leading-5 text-[var(--pq-text-muted)]">
                         {suggestion.description}
@@ -1787,6 +1799,7 @@ export default function KnowledgeGraphWorkspace() {
                 {selectedEdge.type}
               </span>
             </div>
+            {selectedEdge.scope === 'account' ? <p className="mt-2 text-xs text-[var(--pq-text-muted)]">{l('账号关系 · 修改与删除会同步到账号', 'Account relation · edits and deletions sync to your account')}</p> : null}
             <div className="mt-3 space-y-1.5 text-xs text-[var(--pq-text-muted)]">
               <div className="flex items-center gap-2">
                 <span className="w-10 shrink-0 text-[var(--pq-text-faint)]">{l('起点', 'From')}</span>

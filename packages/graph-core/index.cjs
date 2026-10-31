@@ -638,6 +638,7 @@ function createKnowledgeGraphSnapshot(context, request = {}) {
         weight: relation.weight,
         createdAt: relation.createdAt,
         updatedAt: relation.updatedAt,
+        ...(relation.scope === 'account' ? { scope: 'account' } : {}),
       });
     }
   }

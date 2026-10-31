@@ -9,7 +9,7 @@ const {
   toError,
 } = require('./utils.cjs');
 
-const { normalizeBoolean, normalizeLimit, paperNodeId, normalizePaperReferenceId, noteNodeId, tagNodeId, categoryNodeId, uniqueEdgeId, normalizeDoi, normalizeTitleKey, normalizeAuthorKey, textValuesFromUnknown, normalizeReferenceCandidate, extractPaperReferenceCandidates, referenceCandidatesFromCache, findReferencedPaper, authorsText, addCoAuthorEdges, notePreview, matchesSearch, filterLocalGraph, createKnowledgeGraphSnapshot } = require('../../packages/graph-core/index.cjs').createKnowledgeGraphCore({cleanString,listCustomRelations});
+const { normalizeBoolean, normalizeLimit, paperNodeId, normalizePaperReferenceId, noteNodeId, tagNodeId, categoryNodeId, uniqueEdgeId, normalizeDoi, normalizeTitleKey, normalizeAuthorKey, textValuesFromUnknown, normalizeReferenceCandidate, extractPaperReferenceCandidates, referenceCandidatesFromCache, findReferencedPaper, authorsText, addCoAuthorEdges, notePreview, matchesSearch, filterLocalGraph, createKnowledgeGraphSnapshot: createLocalKnowledgeGraphSnapshot } = require('../../packages/graph-core/index.cjs').createKnowledgeGraphCore({cleanString,listCustomRelations});
 const RELATION_STORE_FILE = 'paperquay-knowledge-graph-relations.json';
 const MAX_AI_GRAPH_ITEMS = 60;
 const MAX_AI_GRAPH_SUGGESTIONS = 16;
@@ -59,7 +59,7 @@ function normalizeCustomRelation(input = {}) {
     return null;
   }
 
-  const createdAt = Number(input.createdAt) || Date.now();
+  const createdAt = typeof input.createdAt === 'number' && Number.isFinite(input.createdAt) ? input.createdAt : Date.now();
   return {
     id: cleanString(input.id) || id(type === 'ai_suggested' ? 'kgai' : 'kgrel'),
     source,
@@ -67,18 +67,16 @@ function normalizeCustomRelation(input = {}) {
     type,
     label,
     description: cleanString(input.description),
-    confidence: Number.isFinite(Number(input.confidence))
-      ? Math.max(0, Math.min(1, Number(input.confidence)))
-      : type === 'ai_suggested'
-        ? 0.7
-        : undefined,
+    confidence: typeof input.confidence === 'number' && Number.isFinite(input.confidence)
+      ? Math.max(0, Math.min(1, input.confidence))
+      : undefined,
     weight: Number.isFinite(Number(input.weight))
       ? Math.max(0.1, Math.min(1, Number(input.weight)))
       : type === 'ai_suggested'
         ? 0.66
         : 0.58,
     createdAt,
-    updatedAt: Number(input.updatedAt) || createdAt,
+    updatedAt: input.updatedAt === null ? undefined : typeof input.updatedAt === 'number' && Number.isFinite(input.updatedAt) ? input.updatedAt : createdAt,
   };
 }
 
@@ -88,6 +86,24 @@ function listCustomRelations(appPaths) {
     .map(normalizeCustomRelation)
     .filter(Boolean);
 }
+
+function projectedRelationLayers(context) {
+  const local = listCustomRelations(context.appPaths);
+  const account = context.accountGraphProjection?.() || { relations: [], suppressedLocalIds: [] };
+  const localIds = new Set(local.map(relation => relation.id));
+  const suppressed = new Set(account.suppressedLocalIds);
+  const accountIds = new Set(account.relations.map(relation => relation.id));
+  return { local: local.filter(relation => !suppressed.has(relation.id) || accountIds.has(relation.id)),
+    account: account.relations.filter(relation => !localIds.has(relation.id)) };
+}
+function createKnowledgeGraphSnapshot(context, request) {
+  if (!context.accountGraphProjection) return createLocalKnowledgeGraphSnapshot(context, request);
+  const layers = projectedRelationLayers(context);
+  return require('../../packages/graph-core/index.cjs').createKnowledgeGraphCore({
+    cleanString, listCustomRelations: () => [...layers.local, ...layers.account],
+  }).createKnowledgeGraphSnapshot(context, request);
+}
+
 
 
 
@@ -260,9 +276,9 @@ async function suggestAiRelations(context, request = {}, options = {}) {
         targetId,
         label,
         description: cleanString(relation.description || relation.reason),
-        confidence: Number.isFinite(Number(relation.confidence))
-          ? Math.max(0, Math.min(1, Number(relation.confidence)))
-          : 0.7,
+        confidence: typeof relation.confidence === 'number' && Number.isFinite(relation.confidence)
+          ? Math.max(0, Math.min(1, relation.confidence))
+          : undefined,
       };
     })
     .filter(Boolean)
@@ -275,9 +291,13 @@ function createKnowledgeGraphCommands(context) {
       return createKnowledgeGraphSnapshot(context, request);
     },
     knowledge_graph_list_relations() {
-      return listCustomRelations(context.appPaths);
+      const layers = projectedRelationLayers(context);
+      return [...layers.local, ...layers.account];
     },
     knowledge_graph_create_relation({ request = {} }) {
+      if (typeof request.id === 'string' && request.id.startsWith('account-graph:')
+          && !listCustomRelations(context.appPaths).some(item => item.id === request.id)
+          && context.updateAccountGraphRelation) return context.updateAccountGraphRelation(request);
       const relation = normalizeCustomRelation(request);
 
       if (!relation) {
@@ -295,6 +315,8 @@ function createKnowledgeGraphCommands(context) {
     knowledge_graph_delete_relation({ relationId }) {
       const targetId = cleanString(relationId);
       const store = readRelationStore(context.appPaths);
+      if (targetId.startsWith('account-graph:') && !store.relations.some(item => cleanString(item.id) === targetId)
+          && context.deleteAccountGraphRelation) return context.deleteAccountGraphRelation(targetId);
       const nextRelations = store.relations.filter((item) => cleanString(item.id) !== targetId);
       writeRelationStore(context.appPaths, { version: 1, relations: nextRelations });
       return { deleted: nextRelations.length !== store.relations.length };

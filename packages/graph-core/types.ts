@@ -39,6 +39,8 @@ export interface KnowledgeGraphEdge {
   weight?: number;
   createdAt?: number;
   updatedAt?: number;
+  /** Origin supplied only by the current private account overlay. */
+  scope?: 'account';
 }
 
 export interface KnowledgeGraphSnapshot {
@@ -74,6 +76,8 @@ export interface KnowledgeGraphRelation {
   weight?: number;
   createdAt?: number;
   updatedAt?: number;
+  /** Origin supplied only by the current private account overlay. */
+  scope?: 'account';
 }
 
 export interface KnowledgeGraphRelationCreateRequest {
@@ -91,7 +95,7 @@ export interface KnowledgeGraphAiRelationSuggestion {
   targetId: string;
   label: string;
   description: string;
-  confidence: number;
+  confidence?: number;
 }
 
 export interface KnowledgeGraphAiSuggestRequest {

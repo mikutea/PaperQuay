@@ -381,7 +381,7 @@ export function projectDesktopLibrary(input: DesktopProjectionInput, allocateId:
     let data;
     try{
       if(typeof candidate.createdAt!=='number'||!Number.isSafeInteger(candidate.createdAt)||candidate.createdAt<0)throw Error();
-      data=validateGraphRelationData({source,target,relationType:candidate.type,label:candidate.label,description:candidate.description??'',confidence:candidate.confidence??null,weight:candidate.weight,createdAt:new Date(candidate.createdAt).toISOString(),updatedAt:candidate.updatedAt===undefined?null:typeof candidate.updatedAt==='number'&&Number.isSafeInteger(candidate.updatedAt)&&candidate.updatedAt>=candidate.createdAt?new Date(candidate.updatedAt).toISOString():'INVALID'});
+      data=validateGraphRelationData({source,target,relationType:candidate.type,label:candidate.label,description:candidate.description??'',confidence:candidate.confidence??null,weight:candidate.weight,createdAt:new Date(candidate.createdAt).toISOString(),updatedAt:candidate.updatedAt===undefined||candidate.updatedAt===null?null:typeof candidate.updatedAt==='number'&&Number.isSafeInteger(candidate.updatedAt)&&candidate.updatedAt>=candidate.createdAt?new Date(candidate.updatedAt).toISOString():'INVALID'});
     }catch{skip('graphRelation',index,'UNSUPPORTED_GRAPH_RELATION');return;}
     graphBytes+=new TextEncoder().encode(JSON.stringify(data)).length;
     if(graphBytes>GRAPH_RELATION_LIMITS.accountBytes)return fail('GRAPH_RELATION_LIMIT');

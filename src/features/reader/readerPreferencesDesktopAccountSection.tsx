@@ -1,3 +1,4 @@
+import { DesktopGraphExchangePanel } from './desktopGraphExchangePanel';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { FileText, Laptop, LogIn, LogOut, RefreshCw } from 'lucide-react';
 import { desktopAccount, type DesktopAccountConfig, type DesktopAccountStatus, type DesktopPdfCandidate, type DesktopRemoteVersion, type DesktopModelRecord } from '../../services/desktopAccount';
@@ -305,6 +306,7 @@ export function ReaderPreferencesDesktopAccountSection({ l }: { l: ReaderPrefere
       </div>
     </SettingsField>
 
+    <DesktopGraphExchangePanel l={l} accountActive={signedIn} ownerKey={status?.graphExchange?.scopeKey ?? null} />
     <SettingsField label={l('添加可读取的 PDF', 'Add an available PDF')} description={l('先在文库中导入文件，再选择需要在其他设备上读取的附件。只同步选中文献的题录和附件版本。', 'Import a PDF into the library, then select the attachment to read on your other devices. Only the selected paper’s metadata and file version are synced.')}>
       <div className="flex flex-wrap gap-2">
         <SettingsSelect aria-label={l('选择本机 PDF', 'Select local PDF')} className="min-w-0 flex-1" value={candidateKey} disabled={!signedIn || busy}

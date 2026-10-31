@@ -11,3 +11,9 @@ export * from './remoteTasks.ts';
 export * from './modelInference.ts';
 
 export * from './graphRelation.ts';
+
+export * from './desktopGraph.ts';
+
+export * from './desktopGraphState.ts';
+
+export * from './desktopGraphReview.ts';

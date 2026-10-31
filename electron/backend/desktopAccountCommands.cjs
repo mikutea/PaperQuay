@@ -6,6 +6,7 @@ const { MAX_FILE_BYTES, captureLibraryAnchor, sameLibraryAnchor, assertLibraryAn
 const { validStunUrls } = require('./desktopPeerHost.cjs');
 const { createDesktopRemoteTasks } = require('./desktopRemoteTasks.cjs');
 const { createDesktopModels } = require('./desktopModels.cjs');
+const { createDesktopGraphExchange } = require('./desktopGraphExchange.cjs');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const HASH = /^[0-9a-f]{64}$/;
@@ -26,10 +27,10 @@ const KNOWN_ERRORS = new Set(['AUTHENTICATION_REQUIRED', 'AUTH_REQUIRED', 'AUTH_
   'DESKTOP_PDF_TRANSFER_BUSY', 'REQUEST_TOO_LARGE', 'PDF_INTEGRITY_MISMATCH', 'INVALID_PDF', 'DESKTOP_PDF_TIMEOUT',
   'DESKTOP_PDF_DIRECT_FALLBACK', 'IDENTITY_PROVIDER_UNAVAILABLE', 'SERVICE_UNAVAILABLE', 'RATE_LIMITED', 'NETWORK_UNAVAILABLE', 'REQUEST_TIMEOUT',
   'ACCOUNT_STORAGE_LIMIT', 'ACCOUNT_ENTITY_LIMIT', 'ACCOUNT_CHANGE_LIMIT', 'ACCOUNT_RECEIPT_LIMIT', 'CONFLICT',
-  'LOCAL_CAPACITY_EXCEEDED', 'ENTITY_ALREADY_EXISTS', 'INVALID_DESKTOP_SOURCE', 'INVALID_PAPER_METADATA', 'INVALID_ATTACHMENT_METADATA']);
+  'LOCAL_CAPACITY_EXCEEDED', 'ENTITY_ALREADY_EXISTS', 'INVALID_DESKTOP_SOURCE', 'INVALID_PAPER_METADATA', 'INVALID_ATTACHMENT_METADATA', 'INVALID_GRAPH_MAPPING', 'INVALID_DESKTOP_GRAPH_RELATION', 'UNMAPPED_GRAPH_ENDPOINT']);
 function publicError(error) {
   const code = error?.code || error?.message;
-  return typeof code === 'string' && (/^(?:DESKTOP_|REMOTE_|MODEL_)[A-Z0-9_]{1,64}$/.test(code) || ['PROFILE_CHANGED', 'SOURCE_UNAVAILABLE', 'EXTERNAL_OUTCOME_UNKNOWN'].includes(code) || KNOWN_ERRORS.has(code)) ? code : 'DESKTOP_OPERATION_FAILED';
+  return typeof code === 'string' && (/^(?:DESKTOP_|REMOTE_|MODEL_|GRAPH_)[A-Z0-9_]{1,64}$/.test(code) || ['PROFILE_CHANGED', 'SOURCE_UNAVAILABLE', 'EXTERNAL_OUTCOME_UNKNOWN'].includes(code) || KNOWN_ERRORS.has(code)) ? code : 'DESKTOP_OPERATION_FAILED';
 }
 function normalizeUrl(value) {
   if (typeof value !== 'string' || value.length > 2048 || value !== value.trim()) fail('DESKTOP_CONFIG_INVALID');
@@ -85,7 +86,7 @@ function createDesktopAccountCommands(context, options = {}) {
   const fetcher = options.fetch || ((...args) => fetch(...args));
   const allocateId = options.randomUUID || randomUUID;
   const now = options.now || Date.now;
-  const notify = () => { try { options.onChange?.(); } catch {} };
+  const notify = () => { try { options.onChange?.(); } catch {} try { options.onGraphChange?.(); } catch {} };
   const privateRoot = path.join(path.dirname(context.appPaths.configPath), 'account-sync');
   const configPath = path.join(privateRoot, 'config.json');
   let config = null, account = null, capability = null, enabled = false, lastError = null, closed = false;
@@ -162,7 +163,7 @@ function createDesktopAccountCommands(context, options = {}) {
     return { config: config && { ...config }, auth: safeAuth, account: account && { ...account }, enabled, busy: busy > 0,
       capability: capability && { ...capability, ...(capability.direct ? { direct: { ...capability.direct, stunUrls: [...capability.direct.stunUrls] } } : {}) },
       bindings: (currentLibrary()?.bindings || []).filter((item) => !item.removed).map(publicBinding),
-      transfers: provider.snapshot(), remoteTasks: remoteTasks.status(), modelInference: models.status(), errorCode: lastError };
+      transfers: provider.snapshot(), remoteTasks: remoteTasks.status(), modelInference: models.status(), graphExchange: graph.status(), errorCode: lastError };
   }
   function activeBinding(versionId) {
     if (!enabled || !account) return null;
@@ -177,16 +178,16 @@ function createDesktopAccountCommands(context, options = {}) {
   }
   function invalidateSession(code) {
     if (closed) return;
-    void remoteTasks.stop(); void models.stop();
+    void remoteTasks.stop(); void models.stop(); graph.invalidate();
     enabled = false; providerIntent++; provider.stop(); epoch++; sessionController.abort(); sessionController = new AbortController();
     for (const controller of bindingControllers.values()) controller.abort();
     account = null; capability = null; document = null; libraryBindingId = null; scopePath = null; sourceErrors.clear();
     lastError = code; notify();
     void Promise.resolve(auth?.signOut()).catch(() => {});
     const ownedLock = lock; lock = null;
-    pendingCleanup = Promise.allSettled([pendingCleanup, mutations, actions, loginTask, remoteTasks.settled(), models.settled()]).then(() => releaseLock(ownedLock));
+    pendingCleanup = Promise.allSettled([pendingCleanup, mutations, actions, loginTask, remoteTasks.settled(), models.settled(), graph.settled()]).then(() => releaseLock(ownedLock));
   }
-  async function request(route, { method = 'GET', body, signal, timeoutMs = 30_000, raw = false, minimumExpiry = 0, remoteHeaders } = {}) {
+  async function request(route, { method = 'GET', body, signal, timeoutMs = 30_000, raw = false, minimumExpiry = 0, remoteHeaders, graphRelations = false } = {}) {
     if (!config) fail('DESKTOP_CONFIG_REQUIRED');
     const captured = epoch, settings = config;
     assertEpoch(captured);
@@ -210,6 +211,7 @@ function createDesktopAccountCommands(context, options = {}) {
       }
       const response = await fetcher(`${settings.apiBaseUrl}${route}`, {
         method, headers: { Authorization: `Bearer ${token}`, Accept: 'application/json',
+          ...(graphRelations ? { [syncCore().SYNC_FEATURE_HEADER]: syncCore().GRAPH_RELATIONS_FEATURE } : {}),
           ...(body !== undefined ? raw ? { 'Content-Type': remoteHeaders ? 'application/octet-stream' : 'application/pdf', 'Content-Length': String(body.length) }
             : { 'Content-Type': 'application/json' } : {}), ...(remoteHeaders ? {
               'X-PaperQuay-Remote-Attempt': remoteHeaders['X-PaperQuay-Remote-Attempt'],
@@ -326,6 +328,31 @@ function createDesktopAccountCommands(context, options = {}) {
     },
   });
 
+  const graph = createDesktopGraphExchange(context, {
+    core: syncCore(), onChange: notify, ...options.graph,
+    getContext: () => ({ config, account, epoch, library: currentLibrary() }),
+    checkContext(value) {
+      assertEpoch(value.epoch); requireAccount();
+      if (value.library.libraryBindingId !== libraryBindingId || value.account.accountId !== account.accountId
+        || value.account.deviceId !== account.deviceId) fail('DESKTOP_OPERATION_CANCELLED');
+      assertLibraryAnchor(context, value.library.anchor);
+    },
+    getMaterialBindings(value) {
+      const papers = context.store.load().papers || [];
+      const paperIds = papers.map(item => item.id);
+      const livePapers = new Set(paperIds);
+      return {
+        bindings: value.library.bindings.filter(item => !item.removed && livePapers.has(item.localPaperId)
+          && bindingStatus(item, value.library).publicationStatus === 'published')
+          .map(item => ({ entityType: 'paper', localId: item.localPaperId, entityId: item.paperId })),
+        live: { paperIds, noteIds: (context.noteStore.listAllNotes?.() || []).map(item => item.id) },
+      };
+    },
+    api(_snapshot, input) { return request(input.path, {
+      method: input.method, body: input.body, signal: input.signal, graphRelations: true,
+    }); },
+  });
+
   function validateDocument(value, expectedService, expectedAccount) {
     if (!exactKeys(value, ['formatVersion', 'serviceKey', 'accountId', 'libraries']) || value.formatVersion !== 1 ||
         value.serviceKey !== expectedService || value.accountId !== expectedAccount || !Array.isArray(value.libraries) || value.libraries.length > MAX_LIBRARIES) fail('DESKTOP_STORAGE_INVALID');
@@ -425,6 +452,8 @@ function createDesktopAccountCommands(context, options = {}) {
     const result = await request('/v1/capabilities', { signal });
     capability = null;
     if (result?.protocolVersion !== 1) fail('DESKTOP_INVALID_RESPONSE');
+    graph.setCapability(result.features?.graphRelations === 1);
+    await graph.refreshStatus();
     remoteTasks.setCapability(result.features?.remoteTasks === 1 ? result.remoteTasks : null);
     await remoteTasks.refreshStatus();
     models.setCapability(result.features?.modelInference === 1 ? result.modelInference : null);
@@ -467,6 +496,7 @@ function createDesktopAccountCommands(context, options = {}) {
     const stopping = stopProviderRemote();
     const remoteStopping = remoteTasks.stop();
     const modelStopping = models.stop();
+    graph.invalidate();
     epoch++; sessionController.abort(); sessionController = new AbortController();
     for (const controller of bindingControllers.values()) controller.abort();
     const oldAuth = auth;
@@ -474,7 +504,7 @@ function createDesktopAccountCommands(context, options = {}) {
     // Clear the visible session immediately. A cancelled native read still owns
     // its slot and private writer lock until it actually ends in the background.
     const ownedLock = lock; lock = null;
-    pendingCleanup = Promise.allSettled([pendingCleanup, mutations, actions, loginTask, stopping, remoteStopping, modelStopping, remoteTasks.settled(), models.settled()]).then(() => releaseLock(ownedLock));
+    pendingCleanup = Promise.allSettled([pendingCleanup, mutations, actions, loginTask, stopping, remoteStopping, modelStopping, remoteTasks.settled(), models.settled(), graph.settled()]).then(() => releaseLock(ownedLock));
     notify(); await oldAuth?.signOut();
   }
   async function sendOperation(entityId, captured, signal) {
@@ -569,6 +599,29 @@ function createDesktopAccountCommands(context, options = {}) {
   }
 
   const handlers = {
+    async desktop_graph_status() { await initialization; return graph.status(); },
+    async desktop_graph_preview() { requireAccount(); return graph.preview(); },
+    async desktop_graph_publish(args) { requireAccount(); return graph.publish(args); },
+    async desktop_graph_adopt(args) { requireAccount(); return graph.adopt(args); },
+    async desktop_graph_continue() { requireAccount(); return graph.continue(); },
+    async desktop_graph_stop() { await graph.stop(); return graph.status(); },
+    async desktop_graph_resolve(args) { requireAccount(); return graph.resolve(args); },
+    async desktop_graph_retry_save() { requireAccount(); return graph.retrySave(); },
+    async desktop_graph_backup() { requireAccount(); return graph.backup(); },
+    async desktop_graph_export(_args, event) {
+      requireAccount(); const captured = epoch, library = currentLibrary().libraryBindingId;
+      return runAction('graph-backup', async () => {
+        const backup = await graph.backup();
+        const check = () => {
+          assertEpoch(captured); requireAccount();
+          if (currentLibrary().libraryBindingId !== library) fail('DESKTOP_OPERATION_CANCELLED');
+          assertLibraryAnchor(context, currentLibrary().anchor);
+        };
+        check();
+        const exporter = options.graphBackupExporter || require('./graphBackupExport.cjs').createGraphBackupExporter(options.graphBackupExport);
+        return exporter.save(backup, { event, check });
+      });
+    },
     async desktop_account_status() { await initialization; await Promise.all([remoteTasks.refreshStatus(), models.refreshStatus()]); return getStatus(); },
     async desktop_remote_tasks_set_enabled(args) { await initialization;
       if (args?.enabled) { requireAccount(); await refreshCapability(sessionController.signal); }
@@ -613,8 +666,8 @@ function createDesktopAccountCommands(context, options = {}) {
           await openAccount(identity, captured); await refreshCapability(signal); assertEpoch(captured);
         })().catch(async (error) => {
           if (captured === epoch) {
-            lastError = publicError(error); account = null; document = null; libraryBindingId = null; scopePath = null;
-            await auth.signOut().catch(() => {}); await releaseLock();
+            lastError = publicError(error);
+            await clearSession().catch(() => {});
           }
         }).finally(() => { if (loginTask === task) loginTask = null; busy--; notify(); });
         loginTask = task;
@@ -775,25 +828,29 @@ function createDesktopAccountCommands(context, options = {}) {
   }]));
   return {
     commands, getStatus,
-    stopProvider: () => Promise.allSettled([stopProviderRemote(), remoteTasks.stop(), models.stop()]),
+    graphProjection: () => graph.projection(),
+    updateGraphRelation: request => graph.updateRelation(request),
+    deleteGraphRelation: id => graph.deleteRelation({ id }),
+    stopProvider: () => Promise.allSettled([stopProviderRemote(), remoteTasks.stop(), models.stop(), graph.stop()]),
     configurationWillChange: (content) => Promise.all([remoteTasks.configurationWillChange(content), models.configurationWillChange(content)]),
     configurationDidChange: () => Promise.all([remoteTasks.refreshStatus(), models.refreshStatus()]),
     close() {
       if (closed) return;
       const remoteStopping = remoteTasks.stop();
       const modelStopping = models.stop();
+      graph.close();
       closed = true; enabled = false; providerIntent++; epoch++; sessionController.abort(); provider.stop();
       void peerHost?.close();
       for (const controller of bindingControllers.values()) controller.abort();
       authUnsubscribe?.(); auth?.close();
       const ownedLock = lock; lock = null;
-      shutdownTask = Promise.allSettled([loginStarting, loginTask, mutations, actions, provider.settled(), peerHost?.settled(), initialization, pendingCleanup, stoppingProvider, remoteStopping, modelStopping, remoteTasks.settled(), models.settled()]).then(() => { remoteWires.clear(); modelWires.clear(); return releaseLock(ownedLock); });
+      shutdownTask = Promise.allSettled([loginStarting, loginTask, mutations, actions, provider.settled(), peerHost?.settled(), initialization, pendingCleanup, stoppingProvider, remoteStopping, modelStopping, remoteTasks.settled(), models.settled(), graph.settled()]).then(() => { remoteWires.clear(); modelWires.clear(); return releaseLock(ownedLock); });
       account = null; document = null; scopePath = null; libraryBindingId = null;
     },
     // A completion hook for isolated tests and orderly backend shutdown checks.
     async settled() {
       await Promise.allSettled([loginStarting]);
-      await Promise.allSettled([loginTask, mutations, actions, provider.settled(), initialization, shutdownTask, pendingCleanup, remoteTasks.settled(), models.settled()]);
+      await Promise.allSettled([loginTask, mutations, actions, provider.settled(), initialization, shutdownTask, pendingCleanup, remoteTasks.settled(), models.settled(), graph.settled()]);
     },
   };
 }

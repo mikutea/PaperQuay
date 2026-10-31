@@ -100,12 +100,29 @@ function createBackend({ app, libraryLocation }) {
     }
   } });
   radar.start();
-  const desktopAccount = createDesktopAccountCommands(context, { onChange: () => {
+  let graphProjectionIdentity = '';
+  function notifyGraphProjection() {
+    const projection = JSON.stringify(desktopAccount.graphProjection());
+    if (projection === graphProjectionIdentity) return;
+    graphProjectionIdentity = projection;
+    const { BrowserWindow } = require('electron');
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.webContents.isDestroyed()) window.webContents.send('paperquay:event', 'knowledge-graph:changed', {});
+    }
+  }
+  const desktopAccount = createDesktopAccountCommands(context, { onGraphChange: notifyGraphProjection, onChange: () => {
     const { BrowserWindow } = require('electron');
     for (const window of BrowserWindow.getAllWindows()) {
       if (!window.webContents.isDestroyed()) window.webContents.send('paperquay:event', 'desktop-account:changed', {});
     }
   } });
+
+  context.accountGraphProjection = () => desktopAccount.graphProjection();
+  context.updateAccountGraphRelation = async request => {
+    await desktopAccount.updateGraphRelation(request);
+    return desktopAccount.graphProjection().relations.find(row => row.id === request.id);
+  };
+  context.deleteAccountGraphRelation = id => desktopAccount.deleteGraphRelation(id);
 
   const richNoteExport = createRichNoteExportCommands(context);
   const commands = {
@@ -149,6 +166,7 @@ function createBackend({ app, libraryLocation }) {
       const configWrite = command === 'write_text_file' && [appPaths.configPath, appPaths.legacyConfigPath].filter(Boolean).some((file) => same(file) === same(args?.path));
       if (configWrite) await desktopAccount.configurationWillChange(String(args?.content ?? ''));
       const result = await handler(args ?? {}, event);
+      if (/^(?:library_|notes_|knowledge_graph_)/.test(command)) notifyGraphProjection();
       if (configWrite) await desktopAccount.configurationDidChange();
       return result;
     },

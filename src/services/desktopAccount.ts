@@ -1,3 +1,4 @@
+import type { DesktopGraphExchangeStatus } from './desktopGraphExchange';
 import type {ModelInferenceCapability,ModelInferenceProfile} from '../../packages/sync-core/src/modelInference';
 import { invoke } from '../platform/electron/core';
 import { listen } from '../platform/electron/event';
@@ -36,6 +37,7 @@ export interface DesktopAccountStatus {
   errorCode: string | null;
   remoteTasks?: DesktopRemoteTaskStatus;
   modelInference?: DesktopModelStatus;
+  graphExchange?: DesktopGraphExchangeStatus;
 }
 export interface DesktopRemoteTaskStatus {
   enabled: boolean; running: boolean; busy: boolean; errorCode: string | null;
