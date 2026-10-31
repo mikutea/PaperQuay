@@ -40,9 +40,11 @@ test('a freshly checked empty provider list is not misreported as expired eviden
  e.now+=45000;assert.equal(presentProfiles(e).stale,true);assert.match(row(e,'AI-06').reason,/信息已过期/);
 });
 
-test('graph has a real local route without model runtime but keeps unsupported desktop sources explicit',()=>{const e=enabled();e.modelRuntime=false;e.online=false;assert.equal(row(e,'PAR-04').action,'graph');assert.equal(row(e,'PAR-04').state,'partial');assert.match(row(e,'PAR-04').reason,/桌面私有.*尚未同步/);e.ready=false;assert.equal(row(e,'PAR-04').action,undefined);assert.equal(row(e,'PAR-04').state,'unavailable');});
+test('graph has a real local route without model runtime but keeps unsupported desktop sources explicit',()=>{const e=enabled();e.modelRuntime=false;e.online=false;assert.equal(row(e,'PAR-04').action,'graph');assert.equal(row(e,'PAR-04').state,'partial');assert.match(row(e,'PAR-04').reason,/桌面关系自动发布.*回写.*私有参考文献与向量关系仍待接通/);e.ready=false;assert.equal(row(e,'PAR-04').action,undefined);assert.equal(row(e,'PAR-04').state,'unavailable');});
 
 test('gateway capability and private history are explained without inferring provider presence or enabling a missing runtime',()=>{
  const e=enabled();assert.match(row(e,'AI-07').reason,/原请求账本.*当前服务未声明模型调用/);assert.equal(row(e,'AI-07').action,'ai-settings');
  e.modelRuntime=false;assert.equal(row(e,'AI-07').state,'unavailable');assert.equal(row(e,'AI-07').action,undefined);assert.match(row(e,'AI-07').reason,/未提供独立模型功能/);
 });
+
+test('graph editing follows negotiated local capability while desktop exchange remains an explicit gap',()=>{const e=enabled();e.localGraphRelations=false;assert.match(row(e,'PAR-04').reason,/关系同步尚未确认/);e.inspection.service!.graphRelations=true;assert.match(row(e,'PAR-04').reason,/服务已声明关系同步/);e.localGraphRelations=true;assert.match(row(e,'PAR-04').reason,/明确创建、编辑、删除及同步/);assert.match(row(e,'PAR-04').reason,/桌面关系自动发布/);assert.equal(row(e,'PAR-04').state,'partial');});

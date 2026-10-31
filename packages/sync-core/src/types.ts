@@ -1,6 +1,7 @@
 import type {RichNoteData} from './richNote.ts';
 import type {AiConversationData,AiTemplateData} from '../../ai-core/src/conversation.ts';
-export const ENTITY_TYPES = ['paper', 'attachmentVersion', 'note', 'annotation', 'readingPosition', 'aiConversation', 'aiTemplate'] as const;
+import type {GraphRelationData} from './graphRelation.ts';
+export const ENTITY_TYPES = ['paper', 'attachmentVersion', 'note', 'annotation', 'readingPosition', 'aiConversation', 'aiTemplate', 'graphRelation'] as const;
 export type EntityType = typeof ENTITY_TYPES[number];
 
 export interface PaperOrganization {
@@ -78,6 +79,7 @@ export interface EntityDataMap {
   readingPosition: ReadingPositionData;
   aiConversation: AiConversationData;
   aiTemplate: AiTemplateData;
+  graphRelation: GraphRelationData;
 }
 export type EntityData = EntityDataMap[EntityType];
 export type SyncMutation = 'put' | 'delete' | 'restore';

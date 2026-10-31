@@ -1,3 +1,4 @@
+import {GRAPH_RELATION_LIMITS} from '../../packages/sync-core/src/graphRelation.ts';
 import {createModelInferenceRepository,type ModelInferenceRepository,type ModelInferenceRepositoryOptions} from './model-inference-store.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import pg from 'pg';
@@ -166,7 +167,7 @@ export class PostgresSyncStore implements SyncRepository, CloudPdfRepository, De
   async ready(): Promise<boolean> {
     try {
       const result = await this.pool.query<{ version: string }>('SELECT version FROM paperquay.schema_migrations ORDER BY version');
-      return result.rows.map((row) => row.version).join(',') === '001_initial.sql,002_receipt_quota.sql,003_retained_bytes_quota.sql,004_private_cloud_pdfs.sql,005_remote_tasks.sql,006_extended_sync_content.sql,007_remote_task_recovery.sql,008_remote_journal_holder.sql,009_remote_request_cancellation.sql,010_model_inference.sql';
+      return result.rows.map((row) => row.version).join(',') === '001_initial.sql,002_receipt_quota.sql,003_retained_bytes_quota.sql,004_private_cloud_pdfs.sql,005_remote_tasks.sql,006_extended_sync_content.sql,007_remote_task_recovery.sql,008_remote_journal_holder.sql,009_remote_request_cancellation.sql,010_model_inference.sql,011_graph_relations.sql';
     } catch { return false; }
   }
 
@@ -635,6 +636,16 @@ export class PostgresSyncStore implements SyncRepository, CloudPdfRepository, De
   private async validateReferences(context: TransactionContext, operation: SyncOperation): Promise<PushResult | undefined> {
     if (!operation.data || operation.mutation === 'delete' || operation.entityType === 'paper') return undefined;
     const data = operation.data;
+
+    if(operation.entityType==='graphRelation'){
+      for(const endpoint of [operation.data.source,operation.data.target]){
+        const target=await this.entity(context,endpoint.entityType,endpoint.entityId);
+        if(!target)return rejected(operation.opId,'DEPENDENCY_NOT_READY',true);
+        if(target.deleted_at)return rejected(operation.opId,'REFERENCE_DELETED');
+      }
+      return undefined;
+    }
+
     if ('paperId' in data && data.paperId) {
       const paper = await this.entity(context, 'paper', data.paperId);
       if (!paper) return rejected(operation.opId, 'DEPENDENCY_NOT_READY', true);
@@ -693,6 +704,7 @@ export class PostgresSyncStore implements SyncRepository, CloudPdfRepository, De
         ? ['paperId', 'attachmentId', 'sha256', 'sizeBytes', 'mediaType']
         : (operation.entityType === 'annotation' || operation.entityType === 'readingPosition') ? ['paperId', 'attachmentVersionId'] : [];
       if (immutable.some((field) => before[field] !== after[field])) return rejected(operation.opId, 'IMMUTABLE_VERSION_BINDING');
+      if(operation.entityType==='graphRelation'&&['source','target','relationType','createdAt'].some(field=>canonicalJson(before[field])!==canonicalJson(after[field])))return rejected(operation.opId,'IMMUTABLE_GRAPH_BINDING');
       if(operation.entityType==='aiConversation'&&canonicalJson(before.context)!==canonicalJson(after.context))return rejected(operation.opId,'IMMUTABLE_AI_SOURCE');
       if (operation.entityType === 'attachmentVersion' && before.pageCount !== null && before.pageCount !== after.pageCount) return rejected(operation.opId, 'IMMUTABLE_VERSION_BINDING');
       if (operation.entityType === 'readingPosition') {
@@ -707,6 +719,18 @@ export class PostgresSyncStore implements SyncRepository, CloudPdfRepository, De
     }
     const invalidReference = await this.validateReferences(context, operation);
     if (invalidReference) return invalidReference;
+
+    if(operation.entityType==='graphRelation'&&operation.mutation!=='delete'&&operation.data){
+      // withAccount serializes writes, including concurrent creates/restores.
+      // Deleted row copies remain covered by the account retained-byte quota.
+      const totals=await context.client.query<{count:string;bytes:string}>(
+        "SELECT count(*) AS count, COALESCE(sum(octet_length(data::text)),0) AS bytes FROM paperquay.entities WHERE account_id=$1 AND entity_type='graphRelation' AND deleted_at IS NULL AND entity_id<>$2",
+        [context.account.id,operation.entityId]);
+      if(Number(totals.rows[0].count)>=GRAPH_RELATION_LIMITS.relations)return rejected(operation.opId,'GRAPH_COLLECTION_LIMIT');
+      const size=await context.client.query<{bytes:number}>('SELECT octet_length($1::jsonb::text) AS bytes',[JSON.stringify(operation.data)]);
+      if(Number(totals.rows[0].bytes)+Number(size.rows[0].bytes)>GRAPH_RELATION_LIMITS.accountBytes)return rejected(operation.opId,'GRAPH_COLLECTION_LIMIT');
+    }
+
     if((operation.entityType==='aiConversation'||operation.entityType==='aiTemplate')&&operation.mutation!=='delete'&&(!existing||existing.deleted_at)){
       const count=await context.client.query<{count:string}>(`SELECT count(*) FROM paperquay.entities WHERE account_id=$1 AND entity_type=$2 AND deleted_at IS NULL`,[context.account.id,operation.entityType]);
       if(Number(count.rows[0].count)>=(operation.entityType==='aiConversation'?50:100))return rejected(operation.opId,'AI_COLLECTION_LIMIT');

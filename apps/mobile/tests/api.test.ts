@@ -275,3 +275,10 @@ test('identity changes or an aborted late token cannot commit feature inspection
  const api=new SyncApi('https://sync.example.test',()=>token,async()=>{sent++;return json({protocolVersion:1,features:{richNotes:1}});},()=>identityKey);
  const pending=assert.rejects(api.inspectCapabilities(controller.signal),{code:'ACCOUNT_CHANGED'});identityKey='B';controller.abort();release('opaque-test-token');await pending;assert.equal(sent,0);assert.equal(api.supportsRichNotes,false);
 });
+
+test('graph capability inspection cannot opt transport into a schema until binding resets the cursor',async()=>{
+ const calls:{path:string;features:string|null}[]=[];const api=new SyncApi('https://sync.example.test',async()=>'synthetic-token',async(url,options)=>{calls.push({path:String(url),features:new Headers(options?.headers).get('X-PaperQuay-Features')});return json({protocolVersion:1,features:{graphRelations:1}});});
+ const snapshot=await api.inspectCapabilities(new AbortController().signal);assert.equal(snapshot.graphRelations,true);assert.equal(api.supportsGraphRelations,false);assert.equal(calls[0].features,null);
+ await api.capabilities(new AbortController().signal);assert.equal(api.supportsGraphRelations,true);
+ await api.inspectCapabilities(new AbortController().signal);assert.equal(calls.at(-1)!.features,null,'inspection uses a detached non-negotiated probe');assert.equal(api.supportsGraphRelations,true);
+});

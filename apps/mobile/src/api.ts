@@ -9,7 +9,7 @@ import {
   validateSyncRecord,
   SYNC_FEATURE_HEADER,
   PAPER_ORGANIZATION_FEATURE,
-  RICH_NOTES_FEATURE,AI_CONVERSATIONS_FEATURE,
+  RICH_NOTES_FEATURE,AI_CONVERSATIONS_FEATURE,GRAPH_RELATIONS_FEATURE,
   type EntityType,
   type PullResponse,
   type PushRequest,
@@ -142,7 +142,7 @@ async function boundedJson(response: Response): Promise<unknown> {
 }
 
 export interface ServiceCapabilitySnapshot {
-  paperOrganization:boolean;richNotes:boolean;aiConversations:boolean;
+  paperOrganization:boolean;richNotes:boolean;aiConversations:boolean;graphRelations?:boolean;
   cloudPdf:CloudPdfCapability|null;desktopPdf:DesktopPdfCapability|null;remoteTasks:RemoteTaskCapability|null;modelInference:ModelInferenceCapability|null;
 }
 export class SyncApi {
@@ -150,6 +150,7 @@ export class SyncApi {
   supportsPaperOrganization = false;
   supportsRichNotes=false;
   supportsAiConversations=false;
+  supportsGraphRelations=false;
   cloudPdfCapability: CloudPdfCapability | null = null;
   desktopPdfCapability: DesktopPdfCapability | null = null;
   remoteTaskCapability: RemoteTaskCapability | null = null;
@@ -194,9 +195,9 @@ export class SyncApi {
         headers: {
           Authorization: `Bearer ${token}`,
           Accept: 'application/json',
-          ...((this.supportsPaperOrganization||this.supportsRichNotes||this.supportsAiConversations)?{[SYNC_FEATURE_HEADER]:[
+          ...((this.supportsPaperOrganization||this.supportsRichNotes||this.supportsAiConversations||this.supportsGraphRelations)?{[SYNC_FEATURE_HEADER]:[
             ...(this.supportsPaperOrganization?[PAPER_ORGANIZATION_FEATURE]:[]),...(this.supportsRichNotes?[RICH_NOTES_FEATURE]:[]),
-            ...(this.supportsAiConversations?[AI_CONVERSATIONS_FEATURE]:[])].join(', ')}:{}),
+            ...(this.supportsAiConversations?[AI_CONVERSATIONS_FEATURE]:[]),...(this.supportsGraphRelations?[GRAPH_RELATIONS_FEATURE]:[])].join(', ')}:{}),
           ...(data === undefined ? {} : { 'Content-Type': 'application/json' }),
         },
         redirect: 'error',
@@ -239,7 +240,7 @@ export class SyncApi {
 
   async capabilities(signal: AbortSignal): Promise<{ paperOrganization: boolean }> {
     const generation=++this.capabilityGeneration;
-    this.supportsRichNotes=false;this.supportsAiConversations=false;
+    this.supportsRichNotes=false;this.supportsAiConversations=false;this.supportsGraphRelations=false;
     this.cloudPdfCapability = null;
     this.desktopPdfCapability = null;
     this.remoteTaskCapability = null;
@@ -275,6 +276,7 @@ export class SyncApi {
       this.cloudPdfCapability = { maxFileBytes: Number(limits.maxFileBytes), maxAccountBytes: Number(limits.maxAccountBytes),
         maxCopies: Number(limits.maxCopies) };
     }
+    this.supportsGraphRelations=isObject(body.features)&&body.features.graphRelations===1;
     this.desktopPdfCapability = desktopCapability;
     this.modelInferenceCapability=modelCapability;
     return { paperOrganization: this.supportsPaperOrganization };
@@ -288,7 +290,7 @@ export class SyncApi {
     const probe=new SyncApi(this.baseUrl,this.getToken,this.fetcher,this.getIdentityKey);
     await probe.capabilities(signal);
     if(signal.aborted||generation!==this.capabilityGeneration||identityKey!==this.getIdentityKey?.())throw new ClientError('ACCOUNT_CHANGED');
-    const snapshot:ServiceCapabilitySnapshot={paperOrganization:probe.supportsPaperOrganization,richNotes:probe.supportsRichNotes,aiConversations:probe.supportsAiConversations,
+    const snapshot:ServiceCapabilitySnapshot={paperOrganization:probe.supportsPaperOrganization,richNotes:probe.supportsRichNotes,aiConversations:probe.supportsAiConversations,graphRelations:probe.supportsGraphRelations,
       cloudPdf:probe.cloudPdfCapability,desktopPdf:probe.desktopPdfCapability,remoteTasks:probe.remoteTaskCapability,modelInference:probe.modelInferenceCapability};
     this.cloudPdfCapability=structuredClone(snapshot.cloudPdf);this.desktopPdfCapability=structuredClone(snapshot.desktopPdf);this.remoteTaskCapability=structuredClone(snapshot.remoteTasks);this.modelInferenceCapability=structuredClone(snapshot.modelInference);
     return structuredClone(snapshot);

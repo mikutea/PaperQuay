@@ -5,11 +5,13 @@ export const SYNC_FEATURE_HEADER = 'X-PaperQuay-Features';
 export const PAPER_ORGANIZATION_FEATURE = 'paper-organization-v1';
 export const RICH_NOTES_FEATURE='rich-notes-v1';
 export const AI_CONVERSATIONS_FEATURE='ai-conversations-v1';
-export interface SyncFeatureSet {richNotes:boolean;aiConversations:boolean}
+export const GRAPH_RELATIONS_FEATURE='graph-relations-v1';
+export interface SyncFeatureSet {richNotes:boolean;aiConversations:boolean;graphRelations?:boolean}
 export const LEGACY_SYNC_FEATURES:Readonly<SyncFeatureSet>=Object.freeze({richNotes:false,aiConversations:false});
 /** Closed-schema older clients still advance their cursor through hidden
  * records. New clients must reset the feed once when enabling these features. */
 export function supportsSyncRecord(features:SyncFeatureSet,value:Pick<SyncRecord,'entityType'|'data'>):boolean{
+  if(value.entityType==='graphRelation')return features.graphRelations===true;
   if(value.entityType==='aiConversation'||value.entityType==='aiTemplate')return features.aiConversations;
   return value.entityType!=='note'||value.data===null||!('format'in value.data)||value.data.format!=='tiptap-json'||features.richNotes;
 }

@@ -1,3 +1,4 @@
+import {validateGraphRelationData} from './graphRelation.ts';
 import { ENTITY_TYPES } from './types.ts';
 import type { EntityDataMap, EntityType, PullResponse, PushRequest, PushResponse, PushResult, SyncOperation, SyncRecord, ValidationIssue, ValidationResult } from './types.ts';
 import { ENTITY_DATA_SCHEMAS, PULL_RESPONSE_SCHEMA, PUSH_REQUEST_SCHEMA, PUSH_RESPONSE_SCHEMA, PUSH_RESULT_SCHEMA, SYNC_LIMITS, SYNC_OPERATION_SCHEMA, SYNC_RECORD_SCHEMA } from './schema.ts';
@@ -116,7 +117,8 @@ function checkEntityContent(type:EntityType,data:unknown):ValidationIssue[]{
     if(type==='note'&&isPlainObject(data)&&data.format==='tiptap-json')validateRichNoteData(data);
     else if(type==='aiConversation')validateAiConversation(data);
     else if(type==='aiTemplate')validateAiTemplate(data);
-  }catch{return[{path:'$',code:type==='note'?'INVALID_RICH_NOTE':type==='aiConversation'?'INVALID_AI_CONVERSATION':'INVALID_AI_TEMPLATE'}];}
+    else if(type==='graphRelation')validateGraphRelationData(data);
+  }catch{return[{path:'$',code:type==='graphRelation'?'INVALID_GRAPH_RELATION':type==='note'?'INVALID_RICH_NOTE':type==='aiConversation'?'INVALID_AI_CONVERSATION':'INVALID_AI_TEMPLATE'}];}
   return checkPositionOrder(type,data);
 }
 

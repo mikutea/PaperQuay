@@ -12,6 +12,7 @@ export type ClientErrorCode =
   | 'STORAGE_CORRUPT'
   | 'ACCOUNT_CHANGED'
   | 'ACCOUNT_STORAGE_LIMIT'
+  | 'GRAPH_COLLECTION_LIMIT'
   | 'AI_COLLECTION_LIMIT'
   | 'AGENT_CAPACITY'
   | 'REMOTE_REQUEST_PENDING'
@@ -40,6 +41,7 @@ const messages: Record<ClientErrorCode, string> = {
   STORAGE_CORRUPT: '此设备的缓存格式无法读取。请保留本地数据并联系维护者。',
   ACCOUNT_CHANGED: '账号已切换，本次同步已停止。',
   ACCOUNT_STORAGE_LIMIT: '账号同步存储额度已满。改动仍保存在此设备，请联系服务管理员处理额度后重试。',
+  GRAPH_COLLECTION_LIMIT:'当前账号的关系数量或内容已达到上限（最多512条、2MiB）。请先删除不再使用的关系；原有材料与关系仍保留。',
   AI_COLLECTION_LIMIT: '此账号最多保存50个同步会话和100个同步模板。请先删除不再需要的内容；原有内容已保留。',
   AGENT_CAPACITY: '本机文库、待同步队列或 Agent 记录容量不足，本次没有应用任何改动。请先同步或减少选择后重试。',
   REMOTE_REQUEST_PENDING: '上一条远程任务的创建结果尚未确认。请先重试同一请求或查询任务，再发起新的工作。',

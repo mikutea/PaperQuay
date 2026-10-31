@@ -1,3 +1,4 @@
+import {assertGraphRelationPlan,type GraphRelationPlan} from '../graph/relations.ts';
 import type {ModelLedgerOwner} from '../modelRouting/ledger.ts';
 import {emptyModelLedger,readModelLedger,verifyModelLedger} from '../modelRouting/ledger.ts';
 import { validateAgentMetadataSession, beginAgentMetadataQuery, assertAgentMetadataCurrent, buildAgentMetadataProposal, metadataPublicationKey, markAgentMetadataPublished, type AgentMetadataSession, type AgentMetadataChoice } from '../agent/metadataSession.ts';
@@ -102,6 +103,7 @@ export interface StoredWorkspace {
   paperOrganizationVersion?: 1;
   richNotesVersion?:1;
   aiConversationsVersion?:1;
+  graphRelationsVersion?:1;
   /** Private to this account on this device; never part of the synchronization payload. */
   externalLibraries?: ExternalLibraryRegistry;
   /** Durable, non-secret create intent. Replayed only on an explicit retry. */
@@ -146,8 +148,9 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
 export function decodeWorkspace(value: unknown): StoredWorkspace {
   if (
     !isObject(value) ||
-    Object.keys(value).some((key) => !['sync', 'pendingResolutions', 'paperOrganizationVersion','richNotesVersion','aiConversationsVersion', 'externalLibraries','remoteTaskIntent','remoteBatch','zoteroLibraries','incomingReceipts','reviewProject','radarState','agentState','agentConversation','agentMetadataSession','agentMetadataCooldownUntil','modelInvocations'].includes(key)) ||
+    Object.keys(value).some((key) => !['sync', 'pendingResolutions', 'paperOrganizationVersion','richNotesVersion','aiConversationsVersion','graphRelationsVersion', 'externalLibraries','remoteTaskIntent','remoteBatch','zoteroLibraries','incomingReceipts','reviewProject','radarState','agentState','agentConversation','agentMetadataSession','agentMetadataCooldownUntil','modelInvocations'].includes(key)) ||
     (value.paperOrganizationVersion !== undefined && value.paperOrganizationVersion !== 1) ||
+    (value.graphRelationsVersion!==undefined&&value.graphRelationsVersion!==1)||
     (value.richNotesVersion!==undefined&&value.richNotesVersion!==1)||(value.aiConversationsVersion!==undefined&&value.aiConversationsVersion!==1)||
     !isObject(value.pendingResolutions) ||
     !validateClientState(value.sync).ok ||
@@ -263,6 +266,7 @@ export class WorkspaceController {
   private readonly supportsPaperOrganization: () => boolean;
   private readonly supportsRichNotes:()=>boolean;
   private readonly supportsAiConversations:()=>boolean;
+  private readonly supportsGraphRelations:()=>boolean;
   private confirmedPaperOrganization: boolean | undefined;
   private scope: AccountScope | null = null;
   private context: SyncContext | null = null;
@@ -283,6 +287,7 @@ export class WorkspaceController {
     supportsPaperOrganization?: () => boolean;
     supportsRichNotes?:()=>boolean;
     supportsAiConversations?:()=>boolean;
+    supportsGraphRelations?:()=>boolean;
     binding?: WorkspaceController['binding'];
   }) {
     this.api = options.api;
@@ -294,6 +299,7 @@ export class WorkspaceController {
     this.supportsPaperOrganization = options.supportsPaperOrganization ?? (() => false);
     this.supportsRichNotes=options.supportsRichNotes??(()=>false);
     this.supportsAiConversations=options.supportsAiConversations??(()=>false);
+    this.supportsGraphRelations=options.supportsGraphRelations??(()=>false);
     this.snapshot = {
       status: 'signed-out',
       identity: null,
@@ -316,7 +322,8 @@ export class WorkspaceController {
   getContentCapabilities=(value=this.snapshot.workspace,allowOffline=true)=>{
     const remembered=allowOffline&&(!this.snapshot.online||this.snapshot.needsLogin);
     return{richNotes:this.supportsRichNotes()||Boolean(remembered&&value?.richNotesVersion),
-      aiConversations:this.supportsAiConversations()||Boolean(remembered&&value?.aiConversationsVersion)};
+      aiConversations:this.supportsAiConversations()||Boolean(remembered&&value?.aiConversationsVersion),
+      graphRelations:this.supportsGraphRelations()||Boolean(remembered&&value?.graphRelationsVersion)};
   };
   /** Captures an epoch, so A -> B -> A cannot revive old model callbacks. No IO or model execution. */
   captureModelOwner(scope: AccountScope):ModelLedgerOwner {
@@ -481,7 +488,7 @@ export class WorkspaceController {
   private async activate(identity: AccountIdentity, epoch: number, offline: boolean, guard: () => boolean): Promise<void> {
     const scope = { apiBaseUrl: this.apiBaseUrl, accountId: identity.accountId };
     const organization = !offline && this.supportsPaperOrganization();
-    const richNotes=!offline&&this.supportsRichNotes(),aiConversations=!offline&&this.supportsAiConversations();
+    const richNotes=!offline&&this.supportsRichNotes(),aiConversations=!offline&&this.supportsAiConversations(),graphRelations=!offline&&this.supportsGraphRelations();
     const workspace = await this.store.update(
         scope,
         (previous) => {
@@ -491,7 +498,7 @@ export class WorkspaceController {
               sync: createAccountState(identity.accountId, identity.device.id),
               pendingResolutions: {},
               ...(organization ? { paperOrganizationVersion: 1 as const } : {}),
-              ...(richNotes?{richNotesVersion:1 as const}:{}),...(aiConversations?{aiConversationsVersion:1 as const}:{}),
+              ...(richNotes?{richNotesVersion:1 as const}:{}),...(aiConversations?{aiConversationsVersion:1 as const}:{}),...(graphRelations?{graphRelationsVersion:1 as const}:{}),
             };
           }
           if (previous.sync.accountId !== identity.accountId)
@@ -501,14 +508,15 @@ export class WorkspaceController {
           const retained={...previous};
           if(!offline&&!richNotes)delete retained.richNotesVersion;
           if(!offline&&!aiConversations)delete retained.aiConversationsVersion;
+          if(!offline&&!graphRelations)delete retained.graphRelationsVersion;
           return {
             ...retained,
             // Re-read the feed once when opting in. Existing records and all local
             // operations remain intact while equal-revision metadata is hydrated.
-            sync: (organization && !previous.paperOrganizationVersion)||(richNotes&&!previous.richNotesVersion)||(aiConversations&&!previous.aiConversationsVersion)
+            sync: (organization && !previous.paperOrganizationVersion)||(richNotes&&!previous.richNotesVersion)||(aiConversations&&!previous.aiConversationsVersion)||(graphRelations&&!previous.graphRelationsVersion)
               ? { ...resumed, cursor: null } : resumed,
             ...(organization ? { paperOrganizationVersion: 1 as const } : {}),
-            ...(richNotes?{richNotesVersion:1 as const}:{}),...(aiConversations?{aiConversationsVersion:1 as const}:{}),
+            ...(richNotes?{richNotesVersion:1 as const}:{}),...(aiConversations?{aiConversationsVersion:1 as const}:{}),...(graphRelations?{graphRelationsVersion:1 as const}:{}),
           };
         },
         guard,
@@ -578,6 +586,10 @@ export class WorkspaceController {
   }
 
   /** A result UUID identifies one new note across retries and uncertain acknowledgements. */
+  async saveGraphRelation(input:GraphRelationPlan,guard:()=>boolean=()=>true):Promise<void>{
+    const plan=structuredClone(input);await this.save(plan.edit,plan.expected?.revision??0,sync=>{if(!guard())throw new ClientError('ACCOUNT_CHANGED');assertGraphRelationPlan(plan,listVisibleEntities(sync));});
+  }
+
   async saveNewNoteOnce(entityId: string, note: NoteData,
     beforeCommit?: (state: Readonly<AccountSyncState>) => void): Promise<boolean> {
     const validated = validateEntityData('note', note);
@@ -1352,7 +1364,7 @@ export class WorkspaceController {
           },
           pendingResolutions: {},
           ...(this.supportsPaperOrganization() ? { paperOrganizationVersion: 1 as const } : {}),
-          ...(this.supportsRichNotes()?{richNotesVersion:1 as const}:{}),...(this.supportsAiConversations()?{aiConversationsVersion:1 as const}:{}),
+          ...(this.supportsRichNotes()?{richNotesVersion:1 as const}:{}),...(this.supportsAiConversations()?{aiConversationsVersion:1 as const}:{}),...(this.supportsGraphRelations()?{graphRelationsVersion:1 as const}:{}),
         }),
         () => this.sameBinding(epoch),
       );

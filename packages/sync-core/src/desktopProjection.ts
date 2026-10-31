@@ -1,3 +1,4 @@
+import {GRAPH_RELATION_LIMITS,validateGraphRelationData} from './graphRelation.ts';
 import type { EntityDataMap, EntityType, ReadingPositionData, ValidationResult } from './types.ts';
 import { SYNC_LIMITS, UUID_PATTERN } from './schema.ts';
 import { isPlainObject, validateEntityData } from './validation.ts';
@@ -5,7 +6,7 @@ import { createRichNoteData, remapRichNoteReferences, richNoteUnresolvedId, pars
   type RichNoteData, type RichNoteAsset, type RichNoteUnresolvedReference } from './richNote.ts';
 
 type IdentityKind = EntityType | 'attachment';
-const IDENTITY_KINDS: readonly IdentityKind[] = ['paper', 'attachment', 'attachmentVersion', 'note', 'annotation', 'readingPosition'];
+const IDENTITY_KINDS: readonly IdentityKind[] = ['paper', 'attachment', 'attachmentVersion', 'note', 'annotation', 'readingPosition','graphRelation'];
 const uuid = (value: unknown): value is string => typeof value === 'string' && new RegExp(UUID_PATTERN).test(value);
 const sha256 = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
 const localId = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 512 && value.trim() === value && !/[\\/\x00-\x1f\x7f]/.test(value) && !/^(?:(?:standalone|file|https?):|[a-z]:)/i.test(value);
@@ -69,6 +70,8 @@ export interface DesktopProjectionInput {
   papers: readonly unknown[];
   /** Explicit Markdown or desktop TipTap contentJson. Unsupported notes stay untouched. */
   notes?: readonly unknown[];
+  /** Explicitly supplied saved custom/approved AI relations from the anchored library. */
+  graphRelations?:readonly unknown[];
   richNoteResources?: readonly VerifiedDesktopRichNoteResource[];
   history?: Readonly<Record<string, unknown>>;
   verifiedAttachments?: readonly VerifiedDesktopAttachment[];
@@ -242,7 +245,7 @@ export function projectDesktopLibrary(input: DesktopProjectionInput, allocateId:
   if (!dataObject(input)) return fail('INVALID_DESKTOP_SOURCE');
   if (!validateDesktopIdentityMap(input.identityMap).ok || input.identityMap.accountId !== input.accountId || input.identityMap.libraryBindingId !== input.libraryBindingId) return fail('DESKTOP_SCOPE_MISMATCH');
   if (!dataArray(input.papers) || input.papers.length > SYNC_LIMITS.maxLocalEntities || (input.notes !== undefined && !dataArray(input.notes)) || (input.history !== undefined && !dataObject(input.history))) return fail('INVALID_DESKTOP_SOURCE');
-  for (const value of [input.notes, input.verifiedAttachments, input.historyBindings, input.richNoteResources]) {
+  for (const value of [input.notes,input.graphRelations, input.verifiedAttachments, input.historyBindings, input.richNoteResources]) {
     if (value !== undefined && (!dataArray(value) || value.length > SYNC_LIMITS.maxLocalEntities)) return fail('INVALID_DESKTOP_SOURCE');
   }
   if (input.history && Object.keys(input.history).length > SYNC_LIMITS.maxLocalEntities) return fail('INVALID_DESKTOP_SOURCE');
@@ -358,5 +361,33 @@ export function projectDesktopLibrary(input: DesktopProjectionInput, allocateId:
     if (Array.isArray(candidate.annotations) && candidate.annotations.length) skip('annotation', index, 'UNSUPPORTED_LEGACY_ANCHOR');
     if (Array.isArray(candidate.blockTextMarks) && candidate.blockTextMarks.length) skip('annotation', index, 'UNSUPPORTED_STRUCTURED_TEXT_MARK');
   });
+
+  const graphRows=input.graphRelations??[];
+  if(graphRows.length>GRAPH_RELATION_LIMITS.relations)return fail('GRAPH_RELATION_LIMIT');
+  const graphSeen=new Set<string>();let graphBytes=0;
+  graphRows.forEach((candidate,index)=>{
+    const known=['id','source','target','type','label','description','confidence','weight','createdAt','updatedAt'];
+    if(!dataObject(candidate)||Reflect.ownKeys(candidate).some(k=>typeof k!=='string'||!known.includes(k))||!localId(candidate.id)||graphSeen.has(candidate.id)){skip('graphRelation',index,'INVALID_GRAPH_RELATION');return;}
+    graphSeen.add(candidate.id);
+    const endpoint=(raw:unknown)=>{
+      if(typeof raw!=='string')return null;
+      const kind=raw.startsWith('paper:')?'paper':raw.startsWith('note:')?'note':null;
+      if(!kind)return null;const id=raw.slice(kind.length+1);if(!localId(id))return null;
+      const entityId=kind==='paper'?paperIds.get(id):activeNotes.get(id)?.entityId;
+      return entityId?{entityType:kind,entityId}:null;
+    };
+    const source=endpoint(candidate.source),target=endpoint(candidate.target);
+    if(!source||!target){skip('graphRelation',index,'UNMAPPED_GRAPH_ENDPOINT');return;}
+    let data;
+    try{
+      if(typeof candidate.createdAt!=='number'||!Number.isSafeInteger(candidate.createdAt)||candidate.createdAt<0)throw Error();
+      data=validateGraphRelationData({source,target,relationType:candidate.type,label:candidate.label,description:candidate.description??'',confidence:candidate.confidence??null,weight:candidate.weight,createdAt:new Date(candidate.createdAt).toISOString(),updatedAt:candidate.updatedAt===undefined?null:typeof candidate.updatedAt==='number'&&Number.isSafeInteger(candidate.updatedAt)&&candidate.updatedAt>=candidate.createdAt?new Date(candidate.updatedAt).toISOString():'INVALID'});
+    }catch{skip('graphRelation',index,'UNSUPPORTED_GRAPH_RELATION');return;}
+    graphBytes+=new TextEncoder().encode(JSON.stringify(data)).length;
+    if(graphBytes>GRAPH_RELATION_LIMITS.accountBytes)return fail('GRAPH_RELATION_LIMIT');
+    const entityId=assignIdentity(identityMap,'graphRelation',[candidate.id],allocateId);
+    entities.push({entityType:'graphRelation',entityId,schemaVersion:1,data});
+  });
+
   return { identityMap, entities, skipped };
 }

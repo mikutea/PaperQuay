@@ -11,7 +11,7 @@ import {
   ENTITY_TYPES, ENTITY_DATA_SCHEMAS, ISO_TIMESTAMP_PATTERN, UUID_PATTERN,
   PUSH_REQUEST_SCHEMA, PUSH_RESPONSE_SCHEMA, PUSH_RESULT_SCHEMA, PULL_RESPONSE_SCHEMA,
   SYNC_OPERATION_SCHEMA, SYNC_RECORD_SCHEMA, SYNC_LIMITS,
-  SYNC_FEATURE_HEADER, PAPER_ORGANIZATION_FEATURE, projectLegacyPaper,RICH_NOTES_FEATURE,AI_CONVERSATIONS_FEATURE,supportsSyncRecord,
+  SYNC_FEATURE_HEADER, PAPER_ORGANIZATION_FEATURE, projectLegacyPaper,RICH_NOTES_FEATURE,AI_CONVERSATIONS_FEATURE,GRAPH_RELATIONS_FEATURE,supportsSyncRecord,
 } from '../../packages/sync-core/src/index.ts';
 import type { PushRequest, PushResult } from '../../packages/sync-core/src/index.ts';
 import type { TokenVerifier, VerifiedIdentity } from './auth.ts';
@@ -108,7 +108,7 @@ function organizationEnabled(request: FastifyRequest): boolean {
 function negotiatedFeatures(request:FastifyRequest){
   const value=request.headers[SYNC_FEATURE_HEADER.toLowerCase()];
   const features=typeof value==='string'?value.split(',').map(item=>item.trim()):[];
-  return{richNotes:features.includes(RICH_NOTES_FEATURE),aiConversations:features.includes(AI_CONVERSATIONS_FEATURE)};
+  return{richNotes:features.includes(RICH_NOTES_FEATURE),aiConversations:features.includes(AI_CONVERSATIONS_FEATURE),...(features.includes(GRAPH_RELATIONS_FEATURE)?{graphRelations:true}:{})};
 }
 
 function presentResult(request: FastifyRequest, result: PushResult): PushResult {
@@ -210,7 +210,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   app.get('/v1/capabilities', { onRequest: enforceRateLimit }, async () => ({
     protocolVersion: 1,
     entitySchemas: Object.fromEntries(ENTITY_TYPES.map((type) => [type, [1]])),
-    features: { ...(config.modelInferenceEnabled?{modelInference:1}:{}),paperOrganization: 1,richNotes:1,aiConversations:1,...(config.remoteTasksEnabled?{remoteTasks:1}:{}), ...(config.cloudPdfEnabled ? { privatePdfStorage: 1 } : {}),
+    features: { ...(config.modelInferenceEnabled?{modelInference:1}:{}),paperOrganization: 1,richNotes:1,aiConversations:1,graphRelations:1,...(config.remoteTasksEnabled?{remoteTasks:1}:{}), ...(config.cloudPdfEnabled ? { privatePdfStorage: 1 } : {}),
       ...(config.desktopPdfEnabled ? { desktopPdfTransfer: 1 } : {}) },
     deviceBinding: 'oidc-session',
     limits: {

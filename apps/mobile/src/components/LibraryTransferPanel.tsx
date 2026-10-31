@@ -467,7 +467,7 @@ export function LibraryTransferPanel({ entities, controller, scopeKey, accountCu
             <button type="button" className="primary" disabled={busy || !exported.result.summary.papers && !exported.result.summary.notes}
               onClick={() => void saveExport('library')}>导出文库 JSON</button>
           </>}
-          <p className="transfer-hint">不包含 PDF、批注、AI 会话、未保存草稿或账号设置。单个导出文件最多 4 MB。</p>
+          <p className="transfer-hint">不包含 PDF、批注、AI 会话、自定义或 AI 关系、未保存草稿及账号设置。图谱页面可另行导出当前可见关系，不能代替完整备份。单个导出文件最多 4 MB。</p>
           {exported?.error && <p className="inline-error" role="alert">{exported.error}</p>}
         </section>
         <section className="transfer-export">

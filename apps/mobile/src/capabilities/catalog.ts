@@ -5,7 +5,7 @@ export type FeatureMode='local'|'service'|'computer'|'external'|'mixed'|'operato
 export interface FeatureRow {id:string;title:string;group:'account'|'library'|'sync'|'reading'|'notes'|'ai'|'research'|'operations';mode:FeatureMode;state:FeatureState;reason:string;action?:FeatureAction}
 export interface FeatureEnvironment {
  ready:boolean;online:boolean;needsLogin:boolean;native:boolean;nativeAuthentication:boolean;webRtc:boolean;
- secretPersistence:'memory'|'system'|null;incomingShare:boolean;localOrganization:boolean;localRichNotes:boolean;localAiConversations:boolean;
+ secretPersistence:'memory'|'system'|null;incomingShare:boolean;localOrganization:boolean;localRichNotes:boolean;localAiConversations:boolean;localGraphRelations?:boolean;
  modelRuntime:boolean;cloudClient:boolean;desktopClient:boolean;remoteClient:boolean;aiConfigured:boolean;inspection:FeatureInspection;now:number;
 }
 export const featureGroups={account:'账号与隐私',library:'文库与导入',sync:'同步与恢复',reading:'文件与阅读',notes:'笔记与批注',ai:'模型与问答',research:'研究工作',operations:'服务与版本'} as const;
@@ -68,7 +68,7 @@ export function capabilityCatalog(e:FeatureEnvironment):FeatureRow[]{
  add('PAR-01','文献雷达与推荐证据','research','mixed',e.ready?'partial':'unavailable',e.ready?'已接入主题配置、Crossref/OpenAlex手动查询、逐页断点、来源与评分证据、候选采用和本机阅读建议。主题与雷达标记不跨端同步；真实材料、现代WebView和设备验收仍待。':'先打开此账号在本机的文库副本。',e.ready?'radar':undefined);
  add('PAR-02','多篇问答与Agent','research','mixed',!e.ready?'unavailable':'partial','多篇问答已有来源/发送预览与引用；文库Agent已接入重命名、标签建议/清理、分类的规则计划、逐项核对、原子采用与本机回执。'+(e.modelRuntime?'模型可提出计划、请求经批准的上下文及提供选择分支，每次均需预览后发送。':'当前环境未提供模型运行时，可继续使用本机规则。')+'可逐篇预览公开 DOI/标题候选、明确采用字段并逐项审批；模型与题录来源摘要随本机回执保存。远程检索/委托执行与真实模型/桌面验收仍待完成。',e.ready?'agent':undefined);
  add('PAR-03','综述章节与引文核对','research','mixed',e.ready&&e.modelRuntime?'partial':'unavailable',e.ready&&e.modelRuntime?'已接入文献与笔记材料、蓝图和章节编辑、分段断点、引文校验及Word导出；真实外部模型、实机与桌面对应业务验收仍待完成。':!e.ready?'先登录并打开此账号在本机的文库副本。':'当前运行环境未提供模型与综述工作区，本机文库和笔记仍可访问。',e.ready&&e.modelRuntime?'review':undefined);
- add('PAR-04','知识图谱','research','local',e.ready?'partial':'unavailable',e.ready?'可触控浏览当前账号的文献、笔记链接、标签、按名称重建的分类与共同作者，检索、查看关系来源并导出JSON。桌面私有参考文献/向量/自定义关系尚未同步，真实材料与设备验收仍待。':'先打开此账号在本机的文库副本。',e.ready?'graph':undefined);
+ add('PAR-04','知识图谱','research','mixed',e.ready?'partial':'unavailable',e.ready?'可触控浏览当前账号的文献、笔记链接、标签、按名称重建的分类与共同作者，检索、查看关系来源并导出JSON。'+(e.localGraphRelations?'本机可明确创建、编辑、删除及同步自定义与已采纳AI关系；材料缺失的关系可单独清理。':s?.graphRelations?'服务已声明关系同步；重新登录后协商能力，再编辑已有关系。':'关系同步尚未确认，已有关系可浏览。')+'桌面关系自动发布/回写、私有参考文献与向量关系仍待接通；真实材料和设备验收仍待。':'先打开此账号在本机的文库副本。',e.ready?'graph':undefined);
  const batchSupport=s?Boolean(s.remoteTasks):null;
  remote('PAR-05','持久批次与长任务','research','computer',batchSupport,i.batch==='unsupported'?'服务尚不支持安全的批次查询与取消，请升级后再用批次；单份远程任务仍可查询。':i.batch!=='supported'?'本次尚未确认批次查询与取消能力，请重新检查；不会自动提交或恢复任务。':'批次查询与取消已确认。提交仍需在线电脑配置、已同步版本及配额；进度保存在此设备，关闭后不会自动继续。','remote');
  if(rows.at(-1)?.id==='PAR-05'&&batchSupport&&i.batch==='unsupported'&&!gate())rows[rows.length-1].state='partial';

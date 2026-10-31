@@ -155,6 +155,7 @@ async function makeRuntime(input: PublicConfigInput): Promise<Runtime> {
     supportsPaperOrganization: () => api.supportsPaperOrganization,
     supportsRichNotes:()=>api.supportsRichNotes,
     supportsAiConversations:()=>api.supportsAiConversations,
+    supportsGraphRelations:()=>api.supportsGraphRelations,
     binding: { ...binding, prepare: (signal) => api.capabilities(signal) },
   });
   return { config, auth, controller, secretStore, modelInvocations:api.modelInvocations, inspectCapabilities:signal=>api.inspectCapabilities(signal),

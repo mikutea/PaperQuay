@@ -170,3 +170,27 @@ test('private identity maps reject duplicate opaque IDs, invalid aliases and reu
   assert.equal(validateDesktopIdentityMap({ ...original, aliases: { [JSON.stringify(['paper', privatePath])]: id(100) } }).ok, false);
   assert.deepEqual(original.aliases, {});
 });
+
+test('desktop graph projection binds current paper/note UUID endpoints through the scoped identity map and preserves both timestamps',()=>{
+ const source={...input(),notes:[{id:'note-local',paperId:'paper-local',title:'Graph note',body:'Saved markdown',format:'markdown'}],graphRelations:[{id:'relation-local',source:'paper:paper-local',target:'note:note-local',type:'custom_relation',label:'人工关系',description:'Exact description\nSecond line',confidence:undefined,weight:.58,createdAt:timestamp,updatedAt:timestamp+1000}]};
+ const before=canonicalJson({...source,graphRelations:source.graphRelations.map(({confidence:_unused,...r})=>r)});delete source.graphRelations[0].confidence;
+ const first=projectDesktopLibrary(source,allocate()),relation=entityOf(first,'graphRelation')!;assert.ok(relation);assert.equal(validateEntityData('graphRelation',relation.data).ok,true);
+ const data=relation.data as any;assert.deepEqual(data.source,{entityType:'paper',entityId:entityOf(first,'paper')!.entityId});assert.deepEqual(data.target,{entityType:'note',entityId:entityOf(first,'note')!.entityId});assert.equal(data.confidence,null);assert.equal(data.createdAt,new Date(timestamp).toISOString());assert.equal(data.updatedAt,new Date(timestamp+1000).toISOString());
+ const again=projectDesktopLibrary({...source,identityMap:first.identityMap},allocate(500));assert.equal(entityOf(again,'graphRelation')!.entityId,relation.entityId);assert.equal(validateDesktopIdentityMap(first.identityMap).ok,true);assert.equal(canonicalJson(source),before);assert(!JSON.stringify(relation).includes('relation-local'));
+ assert.throws(()=>projectDesktopLibrary({...source,accountId:id(90),identityMap:first.identityMap},allocate()),{code:'DESKTOP_SCOPE_MISMATCH'});
+});
+test('desktop saved AI relation source and score remain explicit, and unsupported endpoint kinds are reported without guessing IDs',()=>{
+ const source={...input(),notes:[{id:'note-local',paperId:null,title:'Graph note',body:'Saved markdown',format:'markdown'}],graphRelations:[{id:'approved-ai',source:'paper:paper-local',target:'note:note-local',type:'ai_suggested',label:'AI proposed, user saved',confidence:.7,weight:.66,createdAt:timestamp}]};
+ const output=projectDesktopLibrary(source,allocate()),data=entityOf(output,'graphRelation')!.data as any;assert.equal(data.relationType,'ai_suggested');assert.equal(data.confidence,.7);assert.equal(data.updatedAt,null);
+ for(const target of['tag:Evidence','note:missing','paper:C:\\private\\path']){
+  const rejected=projectDesktopLibrary({...source,identityMap:output.identityMap,graphRelations:[{...source.graphRelations[0],target}]},allocate());assert.equal(entityOf(rejected,'graphRelation'),undefined);assert.equal(rejected.skipped.find(s=>s.entityType==='graphRelation')!.code,'UNMAPPED_GRAPH_ENDPOINT');
+ }
+ const noNotes=projectDesktopLibrary({...source,identityMap:output.identityMap,notes:[]},allocate());assert.equal(entityOf(noNotes,'graphRelation'),undefined,'a historic map entry cannot revive an absent note');
+});
+test('desktop graph projection rejects unportable fields, invalid numeric values and getters without reading secrets or clipping text',()=>{
+ const source={...input(),notes:[{id:'note-local',paperId:null,title:'Graph note',body:'Saved markdown',format:'markdown'}]},base={id:'relation-local',source:'paper:paper-local',target:'note:note-local',type:'custom_relation',label:'人工关系',weight:.58,createdAt:timestamp};
+ for(const row of[{...base,apiKey:'SENTINEL_KEY'},{...base,label:'x'.repeat(81)},{...base,updatedAt:timestamp-1},{...base,weight:Infinity}]){
+  const result=projectDesktopLibrary({...source,graphRelations:[row]},allocate());assert.equal(entityOf(result,'graphRelation'),undefined);assert(result.skipped.some(s=>s.entityType==='graphRelation'));assert(!JSON.stringify(result).includes('SENTINEL'));
+ }
+ let reads=0;const getter=Object.defineProperty({...base},'label',{enumerable:true,get(){reads++;throw Error('secret');}});const result=projectDesktopLibrary({...source,graphRelations:[getter]},allocate());assert.equal(reads,0);assert.equal(entityOf(result,'graphRelation'),undefined);
+});

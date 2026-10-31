@@ -1,3 +1,4 @@
+import {GRAPH_RELATION_DATA_SCHEMA} from './graphRelation.ts';
 import { ENTITY_TYPES } from './types.ts';
 import type { EntityType } from './types.ts';
 import {RICH_NOTE_DATA_SCHEMA} from './richNote.ts';
@@ -82,6 +83,7 @@ export const ENTITY_DATA_SCHEMAS: Record<EntityType, JsonSchema> = {
   note: {oneOf:[object({ paperId: nullable(uuid), title: text(SYNC_LIMITS.maxTitleLength), body: text(SYNC_LIMITS.maxNoteBodyLength), format: { const: 'markdown' } }),RICH_NOTE_DATA_SCHEMA]},
   aiConversation:AI_CONVERSATION_DATA_SCHEMA,
   aiTemplate:AI_TEMPLATE_DATA_SCHEMA,
+  graphRelation:GRAPH_RELATION_DATA_SCHEMA,
   annotation: object({
     paperId: uuid,
     attachmentVersionId: uuid,

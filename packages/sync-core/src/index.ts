@@ -9,3 +9,5 @@ export * from './richNote.ts';
 export * from './remoteTasks.ts';
 
 export * from './modelInference.ts';
+
+export * from './graphRelation.ts';
