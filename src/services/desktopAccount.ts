@@ -1,3 +1,4 @@
+import type {ModelInferenceCapability,ModelInferenceProfile} from '../../packages/sync-core/src/modelInference';
 import { invoke } from '../platform/electron/core';
 import { listen } from '../platform/electron/event';
 import { flushReaderConfigWrites } from './readerConfig';
@@ -34,6 +35,7 @@ export interface DesktopAccountStatus {
     transport?: 'webrtc-data-v1' | 'http-relay-v1'; candidateType?: 'host' | 'srflx' | 'prflx' | 'unknown' }[];
   errorCode: string | null;
   remoteTasks?: DesktopRemoteTaskStatus;
+  modelInference?: DesktopModelStatus;
 }
 export interface DesktopRemoteTaskStatus {
   enabled: boolean; running: boolean; busy: boolean; errorCode: string | null;
@@ -43,6 +45,12 @@ export interface DesktopRemoteTaskStatus {
   profiles: { id: string; revision: number; digest: string; kind: 'parse' | 'index'; model: string }[];
   unavailable: { parse?: string; index?: string };
 }
+export interface DesktopModelStatus {
+  enabled:boolean; running:boolean; busy:boolean; errorCode:string|null; configurationToken:string|null;
+  capability:ModelInferenceCapability|null; profiles:ModelInferenceProfile[]; unconfirmed:number;
+  presets:{id:string;label:string;model:string;maxOutputTokens:number}[];
+}
+export interface DesktopModelRecord {id:string;stage:'intent'|'outcome'|'acknowledged';model:string;createdAt:string;hasOutput:boolean;canRecover:boolean;failure:string|null}
 export interface DesktopPdfCandidate {
   localPaperId: string; localAttachmentId: string; title: string; fileName: string; sizeBytes: number;
   bindingId?: string; publicationStatus?: DesktopPdfBinding['publicationStatus'];
@@ -72,5 +80,14 @@ export const desktopAccount = {
     return invoke<DesktopAccountStatus>('desktop_remote_tasks_set_enabled', enabled ? { enabled: true, consent: true, configurationToken } : { enabled: false });
   },
   clearCompletedRemoteJournals: () => invoke<{ removed: number; status: DesktopAccountStatus }>('desktop_remote_tasks_clear_completed', { confirmed: true }),
+  setModelsEnabled: async (enabled:boolean,presetId?:string,configurationToken?:string) => {
+    if(enabled)await flushReaderConfigWrites();
+    return invoke<DesktopAccountStatus>('desktop_models_set_enabled',enabled?{enabled:true,consent:true,presetId,configurationToken}:{enabled:false});
+  },
+  modelRecords:()=>invoke<{items:DesktopModelRecord[]}>('desktop_models_records'),
+  modelBackup:(id:string)=>invoke<unknown>('desktop_models_backup',{id}),
+  exportModelBackup:(id:string)=>invoke<{status:'cancelled'|'exported';bytes?:number}>('desktop_models_export',{id}),
+  retryModelSave:(id:string)=>invoke<DesktopAccountStatus>('desktop_models_retry_save',{id}),
+  clearCompletedModels:()=>invoke<{removed:number;status:DesktopAccountStatus}>('desktop_models_clear_completed',{confirmed:true}),
   onChanged: (listener: () => void) => listen('desktop-account:changed', listener),
 };

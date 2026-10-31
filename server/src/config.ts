@@ -1,3 +1,4 @@
+import {loadModelGatewayConfig,type ModelGatewayConfig} from './model-config.ts';
 import { isIP } from 'node:net';
 import { ApiError } from './errors.ts';
 
@@ -17,6 +18,8 @@ export interface ServerConfig {
   cloudPdfEnabled: boolean;
   desktopPdfEnabled: boolean;
   remoteTasksEnabled?:boolean;
+  modelInferenceEnabled?:boolean;
+  modelGateway?:ModelGatewayConfig|null;
   desktopPdfStunUrls: string[];
   cloudPdfAccountBytes: number;
   requestsPerMinute: number;
@@ -172,6 +175,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   if (!['0', '1'].includes(desktopPdfEnabled)) throw new ApiError('CONFIGURATION_INVALID', 500);
   const remoteTasksEnabled=env.PAPERQUAY_REMOTE_TASKS_ENABLED??'0';
   if(!['0','1'].includes(remoteTasksEnabled))throw new ApiError('CONFIGURATION_INVALID',500);
+  const modelInferenceEnabled=env.PAPERQUAY_MODEL_INFERENCE_ENABLED??'0';
+  if(!['0','1'].includes(modelInferenceEnabled))throw new ApiError('CONFIGURATION_INVALID',500);
   return {
     host, port, databaseUrl, oidcIssuer, oidcAudience, oidcClientIds, allowedOrigins, cursorSecret,
     bodyLimitBytes: SERVER_LIMITS.bodyLimitBytes,
@@ -181,6 +186,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     cloudPdfEnabled: cloudPdfEnabled === '1',
     desktopPdfEnabled: desktopPdfEnabled === '1',
     remoteTasksEnabled:remoteTasksEnabled==='1',
+    modelInferenceEnabled:modelInferenceEnabled==='1',
+    modelGateway:loadModelGatewayConfig(env,modelInferenceEnabled==='1'),
     desktopPdfStunUrls: checkedDesktopPdfStunUrls(env.PAPERQUAY_DESKTOP_PDF_STUN_URLS),
     cloudPdfAccountBytes: checkedCloudPdfByteLimit(Number(env.PAPERQUAY_CLOUD_PDF_ACCOUNT_BYTES ?? SERVER_LIMITS.cloudPdfAccountBytes)),
     requestsPerMinute, trustedProxyIps: trustedProxyIps(env.PAPERQUAY_TRUSTED_PROXY_IPS),

@@ -23,3 +23,8 @@ GRANT UPDATE (job_id) ON paperquay.remote_task_requests TO paperquay_runtime;
 -- Their transaction-local quota is supplied only by trusted API configuration;
 -- do not grant schema ownership, trigger management, or history deletion.
 -- This reference does not establish that a production deployment was audited.
+
+-- Model payload deletion leaves an immutable request-ID tombstone; the runtime
+-- can clear content by UPDATE but cannot delete billing/dispatch identities.
+GRANT SELECT, INSERT, UPDATE, DELETE ON paperquay.model_inference_providers TO paperquay_runtime;
+GRANT SELECT, INSERT, UPDATE ON paperquay.model_inference_jobs TO paperquay_runtime;

@@ -166,7 +166,8 @@
       "node_modules/xmlbuilder/**/*",
       "!node_modules/canvas/**/*",
       "packages/radar-core/index.cjs",
-      "packages/agent-core/index.mjs"
+      "packages/agent-core/index.mjs",
+      "packages/model-inference/index.mjs"
     ],
     "mac": {
       "target": "dmg",

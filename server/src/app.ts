@@ -1,3 +1,6 @@
+import {registerModelInferenceRoutes,MODEL_INFERENCE_CAPABILITY} from './model-inference.ts';
+import type {ModelInferenceRepository} from './model-inference-store.ts';
+import type {ModelGatewayControl} from './model-inference.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { isIP } from 'node:net';
 import Fastify, { LogController } from 'fastify';
@@ -32,6 +35,8 @@ interface AppOptions {
   cloudPdfRepository?: CloudPdfRepository;
   desktopPdfRepository?: DesktopPdfRepository;
   remoteTaskRepository?:RemoteTaskRepository;
+  modelInferenceRepository?:ModelInferenceRepository;
+  modelGatewayDriver?:ModelGatewayControl;
   verifyToken: TokenVerifier;
   logger?: FastifyServerOptions['logger'];
   /** Used only by isolated tests, never set by process environment. */
@@ -205,7 +210,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   app.get('/v1/capabilities', { onRequest: enforceRateLimit }, async () => ({
     protocolVersion: 1,
     entitySchemas: Object.fromEntries(ENTITY_TYPES.map((type) => [type, [1]])),
-    features: { paperOrganization: 1,richNotes:1,aiConversations:1,...(config.remoteTasksEnabled?{remoteTasks:1}:{}), ...(config.cloudPdfEnabled ? { privatePdfStorage: 1 } : {}),
+    features: { ...(config.modelInferenceEnabled?{modelInference:1}:{}),paperOrganization: 1,richNotes:1,aiConversations:1,...(config.remoteTasksEnabled?{remoteTasks:1}:{}), ...(config.cloudPdfEnabled ? { privatePdfStorage: 1 } : {}),
       ...(config.desktopPdfEnabled ? { desktopPdfTransfer: 1 } : {}) },
     deviceBinding: 'oidc-session',
     limits: {
@@ -229,6 +234,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       maxAccountBytes: config.cloudPdfAccountBytes, maxCopies: SERVER_LIMITS.cloudPdfMaxCopies } } : {}),
     ...(config.desktopPdfEnabled ? { desktopPdf: desktopPdfCapability(config.desktopPdfStunUrls) } : {}),
     ...(config.remoteTasksEnabled?{remoteTasks:REMOTE_TASK_CAPABILITY}:{}),
+    ...(config.modelInferenceEnabled?{modelInference:MODEL_INFERENCE_CAPABILITY}:{}),
     tombstoneRetention: 'no-pruning-in-m1',
   }));
   app.post<{ Body: DeviceRegistration }>('/v1/devices', {
@@ -296,5 +302,6 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   const desktop = await registerDesktopPdfRoutes(app, { enabled: config.desktopPdfEnabled, repository: options.desktopPdfRepository,
     authenticate, timings: options.desktopPdfTimings });
   await registerRemoteTaskRoutes(app,{enabled:config.remoteTasksEnabled,repository:options.remoteTaskRepository,authenticate});
+  await registerModelInferenceRoutes(app,{enabled:config.modelInferenceEnabled,gatewayEnabled:Boolean(config.modelGateway),repository:options.modelInferenceRepository,gateway:options.modelGatewayDriver,authenticate});
   return app;
 }

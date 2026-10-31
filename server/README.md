@@ -276,3 +276,52 @@ node --test --test-concurrency=1 tests/integration/*.test.ts
 取消与创建共用账号锁。known沿用单任务取消规则；absent写入取消预留，随后以该ID创建返回 `REMOTE_TASK_REQUEST_CANCELLED` /410；removed与cancelled均可幂等重试。取消去重请求会影响其共用任务；运行中仍为cancel_requested，直到执行者确认，不承诺外部费用退还。取消预留与普通创建回执共同计入既有2000条上限，不自动清除或重开。跨账号同UUID独立隔离。
 
 升级先应用 `009_remote_request_cancellation.sql`；增加非空默认false字段及取消预留不得指向任务的约束，既有回执不变。ready检查要求009，不回退到“部分就绪”。runtime继续只有SELECT/INSERT与UPDATE(job_id)，不授予更新取消标记的权限；新写入的域分离摘要也使旧二进制对取消预留的迟到创建失败。迁移前备份、维护窗口及正式部署仍需相应流程；本轮只迁移专用测试库。
+
+## 可选模型调用（AI-07，开发预览）
+
+模型调用使用独立的 `model-invocations-v1` 协议，不复用 PDF 解析或向量任务。迁移 `010_model_inference.sql` 增加强制账号 RLS 的 provider/job 表；先按现有维护流程备份、迁移并重新运行 runtime 授权，再启动同版本 API。该变更没有在真实服务部署，移动端业务入口仍在接入中。
+
+默认 `PAPERQUAY_MODEL_INFERENCE_ENABLED=0`。只开启这一项可让已登录的 Windows/macOS/Linux 客户端明确选择并提供一个聊天模型。电脑预设仅支持 Chat Completions，一次最多 2048 输出 tokens；每次启动与登录后默认关闭，需要新的配置确认。服务端只收到公开模型名称、版本及不可猜测的配置摘要，不接收电脑端点或密钥。凭据变更、服务能力撤回、退出账号、文库变化或关闭应用会停止本机工作器。未发布 PDF 也能独立提供模型。
+
+网关另外要求 `PAPERQUAY_MODEL_GATEWAY_ENABLED=1`，且父功能已开启。以下配置只由部署者注入进程，客户端不能通过请求覆盖：
+
+| 环境变量 | 要求 |
+| --- | --- |
+| `PAPERQUAY_MODEL_GATEWAY_ENDPOINT` | 固定的 HTTP(S) API 基址；无账号、查询或片段，不带 `chat/completions` |
+| `PAPERQUAY_MODEL_GATEWAY_MODEL` | 固定模型名称 |
+| `PAPERQUAY_MODEL_GATEWAY_API_KEY` | 部署者的私有密钥，不发送给客户端 |
+| `PAPERQUAY_MODEL_GATEWAY_ALLOWED_SUBJECTS` | 非空 JSON 字符串数组，逐项列出当前 issuer 中允许的 OIDC `sub`；禁止 `*` |
+| `PAPERQUAY_MODEL_GATEWAY_REQUIRE_KEY` | 默认 `1`；无密钥的已知本地服务需显式改为 `0` |
+| `PAPERQUAY_MODEL_GATEWAY_TOKEN_PARAMETER` | `max_tokens`（默认）或 `max_completion_tokens` |
+| `PAPERQUAY_MODEL_GATEWAY_MAX_OUTPUT_TOKENS` | 默认 2048，范围 64–8192 |
+| `PAPERQUAY_MODEL_GATEWAY_ALLOW_INSECURE_HTTP` | 默认 `0`；非回环 HTTP 基址必须另外显式开启 |
+
+网关白名单不会隐式授权所有账号。私有配置变化使公开配置摘要变化；创建或领取时配置不匹配则拒绝。适配器只发送一次固定的非流式 Chat Completions 请求，不接受工具调用，不跟随重定向，不自动替换模型或重新付费。它对 UTF-8、重复 JSON 键、大小、分片数和等待时间均设上限，保存前替换响应中出现的实际私有密钥；这不构成任意敏感信息识别。
+
+| 接口（均需已验证且已注册的当前会话） | 行为 |
+| --- | --- |
+| `GET /v1/model-inference/availability` | 当前账号的网关公开配置和在线电脑；只读 |
+| `PUT /v1/model-inference/provider` | 电脑发布 `{profiles}`，在线租期 45 秒 |
+| `DELETE /v1/model-inference/provider` | 撤回本会话电脑配置 |
+| `POST /v1/model-inference/jobs` | 完整规范请求；仅新创建、已确认提交的网关请求可启动首次执行 |
+| `GET /v1/model-inference/jobs` | 最多 50 份保留任务与当前账号配额；只读 |
+| `GET /v1/model-inference/requests/:id` | 按原 UUID 查看状态与已保存结果；只读 |
+| `POST /v1/model-inference/requests/:id/cancel` | `{}`；不存在时也保留取消身份，阻止晚到创建 |
+| `DELETE /v1/model-inference/jobs/:id` | 清理该任务内容，保留原 UUID 墓碑 |
+| `POST /v1/model-inference/jobs/:id/dispatch` | `{}`；明确启动仍在排队、从未领取的网关请求 |
+| `GET /v1/model-inference/jobs/:id/recovery` | 网关本进程保存状态；只读 |
+| `GET /v1/model-inference/jobs/:id/recovery/candidate` | 备份已收到但尚未确认保存的本进程候选结果；只读 |
+| `POST /v1/model-inference/jobs/:id/recover` | `{}`；只重试原结果或失败状态的保存，不调用模型 |
+| `DELETE /v1/model-inference/jobs/:id/recovery` | 明确丢弃该网关内存候选副本，不重新执行 |
+| `POST /v1/model-inference/provider/claim` | `{}`；本电脑领取一次尚未执行的任务 |
+| `POST /v1/model-inference/jobs/:id/heartbeat` | 原 `{fence}`；延长仍有效的执行租期 |
+| `POST /v1/model-inference/jobs/:id/complete` | 原 `{lease,output}`；保存严格验证的同一结果 |
+| `POST /v1/model-inference/jobs/:id/fail` | 原 `{lease,code}`；受限失败码，不接收上游原文 |
+
+请求 UUID、目标、配置引用、输入摘要与首次 fence 不可替换。每账号最多 1 项执行、4 项排队、50 项内容、2000 项永久身份，模型内容逻辑预算为 16 MiB；在执行前为每个尚无结果的任务预留完整 256 KiB 输出空间。单请求最多 32 条消息、192 KiB 文本输入；完整请求最多 256 KiB，结果文本最多 240 KiB。租期过期、撤销、崩溃或不确定提交不会把任务重新放回队列；确认回复丢失后先查看原 UUID，不能换 UUID 自动重发。尚未保存的晚到已知结果只接受原 fence。
+
+输入与结果自创建起可读至多 24 小时，过期即不可读；账号后续访问时才清空数据库内容，保留身份墓碑。没有后台清理调度，不能承诺闲置数据库在 24 小时后物理擦除。数据库、WAL、索引与备份容量仍需部署者管理。
+
+网关的数据库保存失败候选暂留本进程内存，限 16 份且进程最多并行 2 次上游调用；保存成功或明确丢弃后才释放相应空间；下载备份本身不会清除候选。进程终止会丢失尚未持久化的内存候选，不能声称重启恢复这些内容。电脑工作器在上游调用之前先通过系统加密存储确认执行意图；已收到结果先落加密本机记录，失败时保留本进程副本。重新打开只显示历史，只有用户明确操作才重试保存或把无结果意图标记为未知；旧登录会话不能被新设备会话静默接管。系统加密不可用或为明文后端时拒绝开启。记录最多 16 项，已保存内容由用户备份后明确清理，未确认记录保留。
+
+这一路径不改变同步实体 schema、普通 outbox/游标或 PDF/向量恢复语义。真实 OIDC 链、真实计费模型、跨设备业务、生产部署与实机仍需独立验收。

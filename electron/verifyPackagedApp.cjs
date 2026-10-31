@@ -53,6 +53,9 @@ try {
   for (const name of ['projectDesktopLibrary', 'createDesktopIdentityMap', 'queueLocalCreates', 'preparePush', 'applyPushResults', 'verifyParsedDocument', 'inspectParsedImage']) {
     if (typeof syncCore[name] !== 'function') throw new Error(`Packaged desktop sync core is missing ${name}.`);
   }
+  const modelCheck=spawnSync(process.execPath,[path.join(extractionRoot,'electron','modelInferencePackageSmoke.mjs'),extractionRoot],{stdio:'inherit',windowsHide:true});
+  if(modelCheck.error)throw modelCheck.error;
+  if(modelCheck.status!==0)throw new Error('Packaged model inference runtime failed verification.');
   const parsedConverter = require(path.join(extractionRoot, 'electron', 'generated', 'desktopParsedDocument.cjs'));
   if (typeof parsedConverter.createPortableParsedDocument !== 'function') throw new Error('Packaged parsed document converter is missing.');
   const richNoteConverter = require(path.join(extractionRoot, 'electron', 'generated', 'desktopRichNoteArchive.cjs'));

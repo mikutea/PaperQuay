@@ -5,6 +5,7 @@ const { MAX_FILE_BYTES, captureLibraryAnchor, sameLibraryAnchor, assertLibraryAn
   findAttachment, readDesktopAttachment, createDesktopPdfProvider } = require('./desktopPdfProvider.cjs');
 const { validStunUrls } = require('./desktopPeerHost.cjs');
 const { createDesktopRemoteTasks } = require('./desktopRemoteTasks.cjs');
+const { createDesktopModels } = require('./desktopModels.cjs');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const HASH = /^[0-9a-f]{64}$/;
@@ -28,7 +29,7 @@ const KNOWN_ERRORS = new Set(['AUTHENTICATION_REQUIRED', 'AUTH_REQUIRED', 'AUTH_
   'LOCAL_CAPACITY_EXCEEDED', 'ENTITY_ALREADY_EXISTS', 'INVALID_DESKTOP_SOURCE', 'INVALID_PAPER_METADATA', 'INVALID_ATTACHMENT_METADATA']);
 function publicError(error) {
   const code = error?.code || error?.message;
-  return typeof code === 'string' && (/^(?:DESKTOP_|REMOTE_)[A-Z0-9_]{1,64}$/.test(code) || ['PROFILE_CHANGED', 'SOURCE_UNAVAILABLE', 'EXTERNAL_OUTCOME_UNKNOWN'].includes(code) || KNOWN_ERRORS.has(code)) ? code : 'DESKTOP_OPERATION_FAILED';
+  return typeof code === 'string' && (/^(?:DESKTOP_|REMOTE_|MODEL_)[A-Z0-9_]{1,64}$/.test(code) || ['PROFILE_CHANGED', 'SOURCE_UNAVAILABLE', 'EXTERNAL_OUTCOME_UNKNOWN'].includes(code) || KNOWN_ERRORS.has(code)) ? code : 'DESKTOP_OPERATION_FAILED';
 }
 function normalizeUrl(value) {
   if (typeof value !== 'string' || value.length > 2048 || value !== value.trim()) fail('DESKTOP_CONFIG_INVALID');
@@ -94,6 +95,7 @@ function createDesktopAccountCommands(context, options = {}) {
   let providerIntent = 0, stoppingProvider = Promise.resolve();
   let peerHost = options.peerHost || null;
   const remoteWires = new Map();
+  const modelWires = new Map();
   const getPeerHost = () => peerHost ||= require('./desktopPeerHost.cjs').createDesktopPeerHost();
   const actionTasks = new Map(), bindingControllers = new Map(), sourceErrors = new Map();
   let core;
@@ -160,7 +162,7 @@ function createDesktopAccountCommands(context, options = {}) {
     return { config: config && { ...config }, auth: safeAuth, account: account && { ...account }, enabled, busy: busy > 0,
       capability: capability && { ...capability, ...(capability.direct ? { direct: { ...capability.direct, stunUrls: [...capability.direct.stunUrls] } } : {}) },
       bindings: (currentLibrary()?.bindings || []).filter((item) => !item.removed).map(publicBinding),
-      transfers: provider.snapshot(), remoteTasks: remoteTasks.status(), errorCode: lastError };
+      transfers: provider.snapshot(), remoteTasks: remoteTasks.status(), modelInference: models.status(), errorCode: lastError };
   }
   function activeBinding(versionId) {
     if (!enabled || !account) return null;
@@ -175,14 +177,14 @@ function createDesktopAccountCommands(context, options = {}) {
   }
   function invalidateSession(code) {
     if (closed) return;
-    void remoteTasks.stop();
+    void remoteTasks.stop(); void models.stop();
     enabled = false; providerIntent++; provider.stop(); epoch++; sessionController.abort(); sessionController = new AbortController();
     for (const controller of bindingControllers.values()) controller.abort();
     account = null; capability = null; document = null; libraryBindingId = null; scopePath = null; sourceErrors.clear();
     lastError = code; notify();
     void Promise.resolve(auth?.signOut()).catch(() => {});
     const ownedLock = lock; lock = null;
-    pendingCleanup = Promise.allSettled([pendingCleanup, mutations, actions, loginTask, remoteTasks.settled()]).then(() => releaseLock(ownedLock));
+    pendingCleanup = Promise.allSettled([pendingCleanup, mutations, actions, loginTask, remoteTasks.settled(), models.settled()]).then(() => releaseLock(ownedLock));
   }
   async function request(route, { method = 'GET', body, signal, timeoutMs = 30_000, raw = false, minimumExpiry = 0, remoteHeaders } = {}) {
     if (!config) fail('DESKTOP_CONFIG_REQUIRED');
@@ -200,10 +202,11 @@ function createDesktopAccountCommands(context, options = {}) {
       assertEpoch(captured);
       if (controller.signal.aborted) fail('DESKTOP_OPERATION_CANCELLED');
       if (minimumExpiry && (!Number.isFinite(auth.getSnapshot().expiresAt) || auth.getSnapshot().expiresAt <= minimumExpiry + 1000)) fail('AUTHENTICATION_REQUIRED');
-      if (route.startsWith('/v1/remote-tasks') && account) {
+      if ((route.startsWith('/v1/remote-tasks') || route.startsWith('/v1/model-inference')) && account) {
         const key = JSON.stringify([settings.apiBaseUrl, account.accountId, account.deviceId]);
-        remoteWires.set(key, { apiBaseUrl: settings.apiBaseUrl, token });
-        while (remoteWires.size > 16) remoteWires.delete(remoteWires.keys().next().value);
+        const wires = route.startsWith('/v1/model-inference') ? modelWires : remoteWires;
+        wires.set(key, { apiBaseUrl: settings.apiBaseUrl, token });
+        while (wires.size > 16) wires.delete(wires.keys().next().value);
       }
       const response = await fetcher(`${settings.apiBaseUrl}${route}`, {
         method, headers: { Authorization: `Bearer ${token}`, Accept: 'application/json',
@@ -223,7 +226,7 @@ function createDesktopAccountCommands(context, options = {}) {
       if (controller.signal.aborted) fail('DESKTOP_OPERATION_CANCELLED');
       if (!response.ok) {
         const responseCode = result?.error?.code;
-        const code = typeof responseCode === 'string' && (KNOWN_ERRORS.has(responseCode) || /^REMOTE_[A-Z_]{1,64}$/.test(responseCode)) ? responseCode
+        const code = typeof responseCode === 'string' && (KNOWN_ERRORS.has(responseCode) || /^(?:REMOTE_|MODEL_)[A-Z_]{1,64}$/.test(responseCode)) ? responseCode
           : response.status === 401 ? 'AUTHENTICATION_REQUIRED' : response.status === 403 ? 'SESSION_REVOKED'
             : response.status === 404 ? 'NOT_FOUND' : response.status === 429 ? 'DESKTOP_PDF_TRANSFER_BUSY' : 'DESKTOP_SERVICE_FAILED';
         if (response.status === 401 || response.status === 403) invalidateSession(code);
@@ -301,6 +304,24 @@ function createDesktopAccountCommands(context, options = {}) {
       const wire = remoteWires.get(key); if (!wire) return;
       const response = await fetcher(`${wire.apiBaseUrl}/v1/remote-tasks/provider`, { method: 'DELETE', signal: AbortSignal.timeout(3000),
         headers: { Authorization: `Bearer ${wire.token}`, Accept: 'application/json' }, redirect: 'error', credentials: 'omit', cache: 'no-store', referrerPolicy: 'no-referrer' });
+      await response.body?.cancel();
+    },
+  });
+
+  const models = createDesktopModels(context, {
+    core: syncCore(), fetch: fetcher, onChange: notify, ...options.models,
+    getContext: () => ({ config, account, epoch, library: currentLibrary() }),
+    checkContext(value) { assertEpoch(value.epoch); requireAccount();
+      if (value.library.libraryBindingId !== libraryBindingId || value.account.accountId !== account.accountId
+        || value.account.deviceId !== account.deviceId) fail('DESKTOP_OPERATION_CANCELLED');
+      assertLibraryAnchor(context, value.library.anchor);
+    },
+    ensureTokenLifetime: (expiry) => tokenForExpiry(expiry, sessionController.signal),
+    api(_snapshot, input) { return request(input.path, { method: input.method, body: input.body, signal: input.signal, timeoutMs: 15000 }); },
+    async withdrawPresence(scope) {
+      const wire = modelWires.get(JSON.stringify([scope.service, scope.accountId, scope.deviceId])); if (!wire) return;
+      const response = await fetcher(wire.apiBaseUrl + '/v1/model-inference/provider', { method: 'DELETE', signal: AbortSignal.timeout(3000),
+        headers: { Authorization: 'Bearer ' + wire.token, Accept: 'application/json' }, redirect: 'error', credentials: 'omit', cache: 'no-store', referrerPolicy: 'no-referrer' });
       await response.body?.cancel();
     },
   });
@@ -406,6 +427,8 @@ function createDesktopAccountCommands(context, options = {}) {
     if (result?.protocolVersion !== 1) fail('DESKTOP_INVALID_RESPONSE');
     remoteTasks.setCapability(result.features?.remoteTasks === 1 ? result.remoteTasks : null);
     await remoteTasks.refreshStatus();
+    models.setCapability(result.features?.modelInference === 1 ? result.modelInference : null);
+    await models.refreshStatus();
     if (result.features?.desktopPdfTransfer !== 1) return;
     const value = result.desktopPdf;
     if (!plain(value) || value.transport !== 'http-relay-v1' ||
@@ -443,6 +466,7 @@ function createDesktopAccountCommands(context, options = {}) {
   async function clearSession() {
     const stopping = stopProviderRemote();
     const remoteStopping = remoteTasks.stop();
+    const modelStopping = models.stop();
     epoch++; sessionController.abort(); sessionController = new AbortController();
     for (const controller of bindingControllers.values()) controller.abort();
     const oldAuth = auth;
@@ -450,7 +474,7 @@ function createDesktopAccountCommands(context, options = {}) {
     // Clear the visible session immediately. A cancelled native read still owns
     // its slot and private writer lock until it actually ends in the background.
     const ownedLock = lock; lock = null;
-    pendingCleanup = Promise.allSettled([pendingCleanup, mutations, actions, loginTask, stopping, remoteStopping, remoteTasks.settled()]).then(() => releaseLock(ownedLock));
+    pendingCleanup = Promise.allSettled([pendingCleanup, mutations, actions, loginTask, stopping, remoteStopping, modelStopping, remoteTasks.settled(), models.settled()]).then(() => releaseLock(ownedLock));
     notify(); await oldAuth?.signOut();
   }
   async function sendOperation(entityId, captured, signal) {
@@ -545,12 +569,24 @@ function createDesktopAccountCommands(context, options = {}) {
   }
 
   const handlers = {
-    async desktop_account_status() { await initialization; await remoteTasks.refreshStatus(); return getStatus(); },
+    async desktop_account_status() { await initialization; await Promise.all([remoteTasks.refreshStatus(), models.refreshStatus()]); return getStatus(); },
     async desktop_remote_tasks_set_enabled(args) { await initialization;
       if (args?.enabled) { requireAccount(); await refreshCapability(sessionController.signal); }
       await remoteTasks.setEnabled(args); lastError = null; return getStatus();
     },
     async desktop_remote_tasks_clear_completed(args) { requireAccount(); const result = await remoteTasks.clearCompleted(args); lastError = null; return { ...result, status: getStatus() }; },
+    async desktop_models_set_enabled(args) { await initialization;
+      if (args?.enabled) { requireAccount(); await refreshCapability(sessionController.signal); }
+      await models.setEnabled(args); lastError = null; return getStatus();
+    },
+    async desktop_models_records() { requireAccount(); return models.listRecords(); },
+    async desktop_models_backup(args) { requireAccount(); return models.backup(args); },
+    async desktop_models_export(args,event) { requireAccount();const captured=epoch,library=currentLibrary().libraryBindingId;
+      return runAction('model-backup:'+String(args?.id),async()=>{const backup=await models.backup(args);const check=()=>{assertEpoch(captured);requireAccount();if(currentLibrary().libraryBindingId!==library)fail('DESKTOP_OPERATION_CANCELLED');assertLibraryAnchor(context,currentLibrary().anchor);};check();
+        const exporter=options.modelBackupExporter||require('./modelBackupExport.cjs').createModelBackupExporter(options.modelBackupExport);return exporter.save(backup,{event,check});});
+    },
+    async desktop_models_retry_save(args) { requireAccount(); await models.retrySave(args); return getStatus(); },
+    async desktop_models_clear_completed(args) { requireAccount(); const result = await models.clearAcknowledged(args); return { ...result, status: getStatus() }; },
     async desktop_account_configure({ config: value }) {
       const settings = normalizeConfig(value); await initialization; await clearSession();
       await privateWrite(configPath, { formatVersion: 1, config: settings });
@@ -699,7 +735,7 @@ function createDesktopAccountCommands(context, options = {}) {
     },
     async desktop_provider_unbind({ bindingId }) {
       requireAccount(); if (!UUID.test(bindingId)) fail('DESKTOP_ARGUMENT_INVALID');
-      await remoteTasks.stop();
+      await remoteTasks.stop(); await models.stop();
       provider.cancelBinding(bindingId); bindingControllers.get(bindingId)?.abort();
       await commit((library) => {
         const binding = library.bindings.find((item) => item.bindingId === bindingId && !item.removed);
@@ -739,24 +775,25 @@ function createDesktopAccountCommands(context, options = {}) {
   }]));
   return {
     commands, getStatus,
-    stopProvider: () => Promise.allSettled([stopProviderRemote(), remoteTasks.stop()]),
-    configurationWillChange: (content) => remoteTasks.configurationWillChange(content),
-    configurationDidChange: () => remoteTasks.refreshStatus(),
+    stopProvider: () => Promise.allSettled([stopProviderRemote(), remoteTasks.stop(), models.stop()]),
+    configurationWillChange: (content) => Promise.all([remoteTasks.configurationWillChange(content), models.configurationWillChange(content)]),
+    configurationDidChange: () => Promise.all([remoteTasks.refreshStatus(), models.refreshStatus()]),
     close() {
       if (closed) return;
       const remoteStopping = remoteTasks.stop();
+      const modelStopping = models.stop();
       closed = true; enabled = false; providerIntent++; epoch++; sessionController.abort(); provider.stop();
       void peerHost?.close();
       for (const controller of bindingControllers.values()) controller.abort();
       authUnsubscribe?.(); auth?.close();
       const ownedLock = lock; lock = null;
-      shutdownTask = Promise.allSettled([loginStarting, loginTask, mutations, actions, provider.settled(), peerHost?.settled(), initialization, pendingCleanup, stoppingProvider, remoteStopping, remoteTasks.settled()]).then(() => { remoteWires.clear(); return releaseLock(ownedLock); });
+      shutdownTask = Promise.allSettled([loginStarting, loginTask, mutations, actions, provider.settled(), peerHost?.settled(), initialization, pendingCleanup, stoppingProvider, remoteStopping, modelStopping, remoteTasks.settled(), models.settled()]).then(() => { remoteWires.clear(); modelWires.clear(); return releaseLock(ownedLock); });
       account = null; document = null; scopePath = null; libraryBindingId = null;
     },
     // A completion hook for isolated tests and orderly backend shutdown checks.
     async settled() {
       await Promise.allSettled([loginStarting]);
-      await Promise.allSettled([loginTask, mutations, actions, provider.settled(), initialization, shutdownTask, pendingCleanup, remoteTasks.settled()]);
+      await Promise.allSettled([loginTask, mutations, actions, provider.settled(), initialization, shutdownTask, pendingCleanup, remoteTasks.settled(), models.settled()]);
     },
   };
 }

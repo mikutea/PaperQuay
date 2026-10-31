@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { FileText, Laptop, LogIn, LogOut, RefreshCw } from 'lucide-react';
-import { desktopAccount, type DesktopAccountConfig, type DesktopAccountStatus, type DesktopPdfCandidate, type DesktopRemoteVersion } from '../../services/desktopAccount';
+import { desktopAccount, type DesktopAccountConfig, type DesktopAccountStatus, type DesktopPdfCandidate, type DesktopRemoteVersion, type DesktopModelRecord } from '../../services/desktopAccount';
 import { SettingsField, SettingsInput, SettingsSelect } from './readerPreferencesPrimitives';
 import type { ReaderPreferencesLocalizer } from './readerPreferencesTypes';
 
@@ -65,6 +65,14 @@ function errorLabel(code: string | undefined | null, l: ReaderPreferencesLocaliz
     REMOTE_JOURNAL_FULL: ['本机执行记录已达到容量限制。请先停止任务并清理已完成记录。', 'Local execution journals reached their limit. Stop tasks and clear completed journals.'],
     REMOTE_JOURNAL_CORRUPT: ['本机执行记录无法验证，已停止重发，避免重复计费。', 'A local execution journal could not be verified. Resubmission stopped to avoid duplicate charges.'],
     REMOTE_CREDENTIAL_STORAGE_UNAVAILABLE: ['无法保存本机安全记录，请检查存储空间和系统加密。暂不能开启远程任务。', 'Private local records cannot be saved. Check disk space and OS encryption before enabling remote tasks.'],
+    MODEL_BACKUP_SAVE_FAILED: ['备份未能安全保存，请重新选择保存位置。','The backup could not be saved safely. Choose a save location again.'],
+    MODEL_INFERENCE_DISABLED: ['当前同步服务尚未开启模型调用。','Model invocations are disabled on this sync service.'],
+    MODEL_CONFIGURATION_CHANGED: ['模型配置已变化，请重新选择并确认。','Model configuration changed. Select and confirm it again.'],
+    MODEL_SECURE_STORAGE_UNAVAILABLE: ['系统加密存储不可用，暂不能提供模型。','OS encrypted storage is unavailable. Model execution cannot start.'],
+    MODEL_LOCAL_CAPACITY: ['本机模型记录已满。请先备份，再清理已保存记录。','Local model history is full. Back up and clear saved records first.'],
+    MODEL_SAVE_UNCONFIRMED: ['结果保存尚未确认，请在执行记录中备份或仅重试保存。','Result persistence is unconfirmed. Back up or retry saving in history.'],
+    MODEL_PROFILE_UNAVAILABLE: ['当前模型预设不可用，请检查模型设置。','The selected model preset is unavailable. Check model settings.'],
+    MODEL_BINDING_CHANGED: ['账号、设备或文库已变化，操作已停止。','The account, device or library changed. The operation stopped.'],
     REMOTE_TASKS_DISABLED: ['当前服务尚未开启远程任务。', 'Remote tasks are disabled on this service.'],
     REMOTE_TASK_LEASE_CHANGED: ['执行租约已变化，本机处理已停止。请查看账号中的任务状态。', 'The execution lease changed. Local work stopped; check the account task status.'],
     REMOTE_TASK_ARTIFACT_LIMIT: ['结果超过任务容量限制，未上传，请缩小处理范围或检查服务输出。', 'The result exceeds the task limit and was not uploaded. Reduce the scope or inspect the service output.'],
@@ -92,6 +100,11 @@ export function ReaderPreferencesDesktopAccountSection({ l }: { l: ReaderPrefere
   const [notice, setNotice] = useState('');
   const [remoteConsent, setRemoteConsent] = useState(false);
   const [clearRemoteConfirmed, setClearRemoteConfirmed] = useState(false);
+  const [modelConsent,setModelConsent]=useState(false);
+  const [modelPresetId,setModelPresetId]=useState('');
+  const [clearModelsConfirmed,setClearModelsConfirmed]=useState(false);
+  const [modelRecords,setModelRecords]=useState<DesktopModelRecord[]>([]);
+  const modelOwner=useRef<string|null>(null);
   const alive = useRef(false);
   const sequence = useRef(0);
   const initialized = useRef(false);
@@ -103,6 +116,8 @@ export function ReaderPreferencesDesktopAccountSection({ l }: { l: ReaderPrefere
       const next = await desktopAccount.status();
       if (!alive.current || request !== sequence.current) return;
       setStatus(next);
+      const owner=next.modelInference?.configurationToken??null;if(modelOwner.current!==owner){modelOwner.current=owner;setModelRecords([]);}
+      if(next.account&&next.auth.status==='signed-in'){const history=await desktopAccount.modelRecords();if(alive.current&&request===sequence.current&&owner===modelOwner.current)setModelRecords(history.items);}else setModelRecords([]);
       const accountKey = next.account?.accountId || null;
       if (activeAccount.current !== accountKey) {
         activeAccount.current = accountKey;
@@ -134,6 +149,9 @@ export function ReaderPreferencesDesktopAccountSection({ l }: { l: ReaderPrefere
   };
   const signedIn = status?.auth.status === 'signed-in' && !!status.account;
   const remote = status?.remoteTasks;
+  const models=status?.modelInference;
+  useEffect(()=>{setModelConsent(false);setClearModelsConfirmed(false);},[status?.account?.accountId,models?.configurationToken]);
+  useEffect(()=>{if(!models?.presets.some(p=>p.id===modelPresetId))setModelPresetId('');},[models?.presets,modelPresetId]);
   useEffect(() => { setRemoteConsent(false); setClearRemoteConfirmed(false); }, [status?.account?.accountId, remote?.configurationToken]);
   const signingIn = status?.auth.status === 'signing-in';
   const busy = pending || !!status?.busy;
@@ -210,6 +228,49 @@ export function ReaderPreferencesDesktopAccountSection({ l }: { l: ReaderPrefere
             : l('正在通过临时中继发送 PDF', 'Sending PDF through the temporary relay')} · {sizeLabel(transfer.sizeBytes)}</p>
         <button type="button" className={buttonClass} onClick={() => void run(() => desktopAccount.cancel(transfer.transferId))}>{l('取消传输', 'Cancel transfer')}</button>
       </div>)}
+    </SettingsField>
+
+    <SettingsField label={l('用这台电脑运行模型', 'Run models on this computer')}
+      description={l('让同账号设备使用这里选定的聊天模型。电脑会把请求中的文本发送到该模型服务，可能产生费用。每次启动后默认关闭。', 'Let your devices use the chat model selected here. This computer sends the requested text to that model service and charges may apply. Disabled after restart.')}>
+      <div data-desktop-models className="space-y-3">
+        <div role="status" className="text-sm text-[var(--pq-text)]">{models?.enabled
+          ? models.busy ? l('正在运行模型', 'Running a model request') : l('已开启，等待同账号请求', 'Enabled, waiting for your requests')
+          : l('已关闭', 'Disabled')}</div>
+        <label className="grid gap-2 text-sm text-[var(--pq-text)]">{l('提供的模型', 'Available model')}
+          <SettingsSelect className="min-h-11" aria-label={l('提供的模型', 'Available model')} value={modelPresetId} disabled={!!models?.enabled || !!models?.busy || busy} onChange={event => {setModelPresetId(event.target.value);setModelConsent(false);}}>
+            <option value="">{l('选择已保存的聊天模型', 'Choose a saved chat model')}</option>
+            {models?.presets.map(preset=><option key={preset.id} value={preset.id}>{preset.label} · {preset.model}</option>)}
+          </SettingsSelect>
+        </label>
+        {!models?.presets.length ? <p className="text-xs leading-5 text-[var(--pq-text-muted)]">{l('先在模型设置保存 Chat Completions 预设及密钥。Responses 预设暂不可用于远程运行。', 'Save a Chat Completions preset and key in model settings first. Responses presets are not supported for remote execution yet.')}</p> : null}
+        <p className="text-xs leading-5 text-[var(--pq-text-muted)]">{l('每次最多生成 2048 tokens。服务地址和密钥留在电脑；同账号设备可查看模型名称。停止会中断本机等待，已发出的请求仍可能计费。', 'Up to 2048 output tokens per request. The service address and key stay on this computer; your devices can see its model name. Stopping interrupts local waiting; issued requests may still incur charges.')}</p>
+        {!models?.enabled ? <label className="flex min-h-11 items-start gap-3 text-sm leading-6 text-[var(--pq-text-muted)]"><input className="mt-1 h-5 w-5 shrink-0" type="checkbox" checked={modelConsent} onChange={event=>setModelConsent(event.target.checked)} />
+          {l('允许同账号设备将文本交给所选模型，并了解内容发送与费用。', 'Allow my devices to send text to the selected model; I understand the data transfer and possible charges.')}</label> : null}
+        <button type="button" role="switch" aria-checked={!!models?.enabled} aria-label={l('允许这台电脑运行模型', 'Allow models on this computer')}
+          className={buttonClass+' min-h-11'} disabled={!models?.enabled&&(!signedIn||!models?.capability||!modelPresetId||!modelConsent||busy||!!models?.busy)}
+          onClick={()=>{setModelConsent(false);void run(()=>desktopAccount.setModelsEnabled(!models?.enabled,modelPresetId,models?.configurationToken??undefined));}}>
+          {models?.enabled?l('停止提供模型', 'Stop providing this model'):l('开启所选模型', 'Enable selected model')}</button>
+        {signedIn&&!models?.capability?<p className="text-xs text-[var(--pq-text-muted)]">{l('当前同步服务尚未开启模型调用。', 'Model invocations are disabled on this sync service.')}</p>:null}
+        {models?.errorCode?<p role="alert" className="text-sm leading-6 text-[var(--pq-error)]">{errorLabel(models.errorCode,l)}</p>:null}
+        <details className="rounded-xl border border-[var(--pq-border)] p-3">
+          <summary className="min-h-11 cursor-pointer py-2 text-sm text-[var(--pq-text)]">{l('本机执行记录与结果恢复', 'Local history and result recovery')}</summary>
+          <p className="my-2 text-xs leading-5 text-[var(--pq-text-muted)]">{l('重新打开记录不会重新调用模型。“仅重试保存”只提交已收到的结果；若只有执行意图，会将原任务标记为结果未知。备份包含当次提示词和结果，请妥善保存。', 'Opening history never reruns a model. “Retry saving only” submits received output; an intent without output is marked unknown. Backups contain that request’s prompt and result.')}</p>
+          {modelRecords.length?<ul className="divide-y divide-[var(--pq-border)]">{modelRecords.map(record=><li key={record.id} className="space-y-2 py-3">
+            <div className="flex flex-wrap items-start justify-between gap-2"><span className="min-w-0 break-words text-sm font-medium text-[var(--pq-text)]">{record.model}</span><span className="text-xs text-[var(--pq-text-muted)]">{record.stage==='acknowledged'?l('已保存','Saved'):record.hasOutput?l('结果待保存','Result awaiting save'):l('执行结果未知','Outcome unknown')}</span></div>
+            <p className="break-all text-xs text-[var(--pq-text-muted)]">{new Date(record.createdAt).toLocaleString()} · {record.id}</p>
+            {!record.canRecover&&record.stage!=='acknowledged'?<p className="text-xs leading-5 text-[var(--pq-text-muted)]">{l('原登录会话已变化，当前可备份这份记录。','The original sign-in session changed. You can back up this record.')}</p>:null}
+            <div className="flex flex-wrap gap-2"><button type="button" className={buttonClass+' min-h-11'} disabled={busy} onClick={()=>void run(async()=>{
+              const owner=modelOwner.current,result=await desktopAccount.exportModelBackup(record.id);if(!alive.current||owner!==modelOwner.current)return;
+              if(result.status==='exported')setNotice(l('本次请求与结果已备份。','Request and result backed up.'));
+            })}>{l('备份本次请求与结果','Back up request and result')}</button>
+            {record.canRecover?<button type="button" className={buttonClass+' min-h-11'} disabled={busy||!!models?.busy} onClick={()=>void run(()=>desktopAccount.retryModelSave(record.id))}>{l('仅重试保存','Retry saving only')}</button>:null}</div>
+          </li>)}</ul>:<p className="py-3 text-sm text-[var(--pq-text-muted)]">{l('当前账号和文库暂无本机模型执行记录。','No local model history for this account and library.')}</p>}
+          <div className="mt-3 border-t border-[var(--pq-border)] pt-3">
+            <label className="flex min-h-11 items-start gap-3 text-xs leading-5 text-[var(--pq-text-muted)]"><input className="mt-0.5 h-5 w-5 shrink-0" type="checkbox" checked={clearModelsConfirmed} onChange={event=>setClearModelsConfirmed(event.target.checked)} />{l('确认清理本机已保存记录及结果副本，保留结果未确认的记录。','Clear local saved records and result copies, preserving all unconfirmed records.')}</label>
+            <button type="button" className={buttonClass+' min-h-11 mt-2'} disabled={!signedIn||!!models?.enabled||!!models?.busy||busy||!clearModelsConfirmed} onClick={()=>{setClearModelsConfirmed(false);void run(()=>desktopAccount.clearCompletedModels());}}>{l('清理已保存的本机记录','Clear saved local records')}</button>
+          </div>
+        </details>
+      </div>
     </SettingsField>
 
     <SettingsField label={l('远程解析与向量任务', 'Remote parse and vector tasks')}

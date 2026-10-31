@@ -7,3 +7,5 @@ export * from './desktopProjection.ts';
 export * from './parsedDocument.ts';
 export * from './richNote.ts';
 export * from './remoteTasks.ts';
+
+export * from './modelInference.ts';
