@@ -35,7 +35,7 @@ export class AgentModelRunner {
    let text='',usage:AiUsage|null=null,failure:'transport'|'cancelled'|'invalid'|'limit'|null=null;
    try{
     if(!current())throw new AiError('CANCELLED');this.#publish({phase:'requesting'});
-    const result=await this.#client.generateAgent({accountScope:options.scope,config:options.provider,request,signal:run.abort.signal,current,onText:value=>{text=value;if(this.#owner(run))this.#publish({text:value});},onUsage:value=>{usage=value;if(this.#owner(run))this.#publish({usage:value});}});text=result.text;usage=result.usage;
+    const result=await this.#client.generateAgent({accountScope:options.scope,config:options.provider,request,requestId:request.id,signal:run.abort.signal,current,onText:value=>{text=value;if(this.#owner(run))this.#publish({text:value});},onUsage:value=>{usage=value;if(this.#owner(run))this.#publish({usage:value});}});text=result.text;usage=result.usage;if(result.finishReason==='length')throw new AiError('OUTPUT_TRUNCATED');if(result.finishReason==='content_filter')throw new AiError('CONTENT_FILTERED');
    }catch(error){failure=error instanceof AiError&&error.code==='CANCELLED'?'cancelled':error instanceof AgentError?'invalid':'transport';if(this.#owner(run))this.#publish({failure:error instanceof AiError?{code:error.code,...(error.retryAfterSeconds===undefined?{}:{retryAfterSeconds:error.retryAfterSeconds})}:{code:'CHANGED'}});}
    if(!this.#owner(run))return;const candidate=finishAgentModelTurn(run.started,request.id,{text,usage,failure});this.#publish({phase:'saving-result',candidate});
    try{await this.#store.save(candidate,{id:run.started.id,revision:run.started.revision},()=>this.#owner(run));if(this.#owner(run))this.#publish({candidate:null});}

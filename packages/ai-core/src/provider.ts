@@ -1,8 +1,10 @@
+import {validateAiModelExecution} from './execution.ts';
+export {validateAiModelExecution} from './execution.ts';
 import { AiError } from './errors.ts';
 import type { AiAccountScope, AiProviderConfig } from './types.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-const CONFIG_FIELDS = ['version', 'id', 'endpoint', 'model', 'stream', 'includeUsage', 'requiresKey', 'maxOutputTokens', 'tokenParameter'];
+const CONFIG_FIELDS = ['version', 'id', 'endpoint', 'model', 'stream', 'includeUsage', 'requiresKey', 'maxOutputTokens', 'tokenParameter','execution'];
 export const AI_SECRET_KEY = 'api-key';
 
 export function canonicalAiEndpoint(input: string): string {
@@ -28,6 +30,8 @@ export function defaultAiProvider(): AiProviderConfig {
 }
 export function parseAiProvider(input: unknown, requireModel = false): AiProviderConfig {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new AiError('CONFIG_INVALID');
+  if(![Object.prototype,null].includes(Object.getPrototypeOf(input)))throw new AiError('CONFIG_INVALID');
+  const descriptors=Object.getOwnPropertyDescriptors(input);if(Reflect.ownKeys(input).some(k=>typeof k!=='string')||Object.values(descriptors).some(d=>!d.enumerable||!('value'in d)))throw new AiError('CONFIG_INVALID');
   const data = input as Record<string, unknown>;
   if (Object.keys(data).some((key) => !CONFIG_FIELDS.includes(key)) || data.version !== 1
     || typeof data.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(data.id)
@@ -36,12 +40,15 @@ export function parseAiProvider(input: unknown, requireModel = false): AiProvide
     || (requireModel && !data.model) || typeof data.stream !== 'boolean' || typeof data.includeUsage !== 'boolean'
     || typeof data.requiresKey !== 'boolean' || !Number.isSafeInteger(data.maxOutputTokens)
     || Number(data.maxOutputTokens) < 64 || Number(data.maxOutputTokens) > 8192
-    || !['max_completion_tokens', 'max_tokens'].includes(String(data.tokenParameter))) throw new AiError('CONFIG_INVALID');
+    || (typeof data.tokenParameter!=='string'||!['max_completion_tokens', 'max_tokens'].includes(data.tokenParameter))) throw new AiError('CONFIG_INVALID');
+  const endpoint=canonicalAiEndpoint(data.endpoint),execution=Object.hasOwn(data,'execution')?validateAiModelExecution(data.execution):undefined;
+  if(execution&&(!/^remote_[0-9a-f]{40}$/.test(data.id)||!endpoint.endsWith('/v1/model-inference')||!data.model||data.stream||data.includeUsage||data.requiresKey||data.tokenParameter!=='max_tokens'))throw new AiError('CONFIG_INVALID');
   return {
-    version: 1, id: data.id, endpoint: canonicalAiEndpoint(data.endpoint), model: data.model,
+    version: 1, id: data.id, endpoint, model: data.model,
     stream: data.stream, includeUsage: data.includeUsage, requiresKey: data.requiresKey,
     maxOutputTokens: Number(data.maxOutputTokens),
     tokenParameter: data.tokenParameter as AiProviderConfig['tokenParameter'],
+    ...(execution?{execution}:{}),
   };
 }
 export async function aiSecretNamespace(scope: AiAccountScope, provider: AiProviderConfig): Promise<string> {

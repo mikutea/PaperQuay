@@ -513,3 +513,10 @@ test('abrupt socket loss retains only already decoded text, and invalid UTF-8 ne
     assert.equal(shown, '');
   });
 });
+
+test('private remote routes fail explicitly before any secret read or ordinary transport fallback while the routing bridge is absent',async()=>{
+ const {createModelRouteProvider}=await import('../src/modelRouting/config.ts'),remote=await createModelRouteProvider(SCOPE,{kind:'gateway'},{id:'gateway-default',revision:1,digest:'a'.repeat(64),kind:'chat',model:'synthetic-remote',maxInputBytes:192*1024,maxOutputTokens:2048,stream:false});let keyReads=0,requests=0;
+ const secrets:SecretStore={persistence:'memory',get:async()=>{keyReads++;return KEY;},set:async()=>{},remove:async()=>{}},transport:AiTransport={kind:'fetch',redirectPolicy:'error',supportsStreaming:true,request:async()=>{requests++;throw Error('Must not dispatch');}},client=new AiClient(secrets,transport);
+ await assert.rejects(client.listModels({accountScope:SCOPE,config:remote}),code('REMOTE_UNAVAILABLE'));await assert.rejects(generate(client,remote),code('REMOTE_UNAVAILABLE'));assert.equal(keyReads,0);assert.equal(requests,0);
+ const controller=new AiSessionController(client);controller.bind(SCOPE,remote,pdfContext());await controller.start('explain','');const current=controller.getSnapshot().result!;assert.equal(current.failure!.code,'REMOTE_UNAVAILABLE');const record=controller.historyRecord(current.requestId);assert.equal(record.result.failure!.code,'PROVIDER_UNAVAILABLE');assert.deepEqual(Object.keys(record.provider).sort(),['endpoint','id','model']);assert(!JSON.stringify(record).includes('profileRef'));assert.equal(createAiConversation(record).turns[0].result.failure!.code,'PROVIDER_UNAVAILABLE');controller.dispose();
+});

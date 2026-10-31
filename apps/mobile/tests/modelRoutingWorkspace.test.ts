@@ -1,0 +1,44 @@
+import {MobileModelRouter} from '../src/modelRouting/router.ts';
+import {ModelInvocationApi} from '../src/modelRouting/api.ts';
+import {createModelRouteProvider} from '../src/modelRouting/config.ts';
+import test from 'node:test';import assert from 'node:assert/strict';import {randomUUID} from 'node:crypto';import {IDBFactory} from 'fake-indexeddb';
+import {AccountStore} from '../src/storage/accountStore.ts';
+import {WorkspaceController,decodeWorkspace,type StoredWorkspace} from '../src/sync/workspace.ts';
+import {beginModelRecord,emptyModelLedger} from '../src/modelRouting/ledger.ts';
+import {prepareModelInferenceRequest} from '../../../packages/sync-core/src/modelInference.ts';
+import {createAccountState} from '../../../packages/sync-core/src/index.ts';
+const A=randomUUID(),B=randomUUID(),D=randomUUID(),base='https://sync.fixture.test',stamp=new Date().toISOString();
+function api(){let account:string=A;return{set:(value:string)=>{account=value;},register:async()=>({accountId:account,device:{id:D,name:'Fixture',platform:'web' as const,createdAt:stamp,lastSeenAt:stamp,revokedAt:null}}),push:async()=>({protocolVersion:1 as const,results:[]}),pull:async()=>({protocolVersion:1 as const,records:[],nextCursor:'0',hasMore:false}),devices:async()=>[],conflicts:async()=>({conflicts:[],hasMore:false,nextCursor:'0'}),resolveConflict:async()=>{throw Error('Unused');},revokeDevice:async()=>{}};}
+async function request(){return prepareModelInferenceRequest({id:randomUUID(),target:{kind:'gateway'},profileRef:{id:'chat-default',revision:1,digest:'a'.repeat(64)},model:'synthetic',messages:[{role:'user',content:'Explicit evidence'}],maxOutputTokens:1024});}
+test('model ledger commits in the existing account transaction, preserving unrelated local records/outbox/cursor across restart',async()=>{
+ const store=new AccountStore<StoredWorkspace>({decode:decodeWorkspace,indexedDB:new IDBFactory(),databaseName:'models-'+randomUUID()}),service=api(),controller=new WorkspaceController({api:service,apiBaseUrl:base,store,online:false});
+ await controller.bind('Fixture');await controller.save({entityType:'note',entityId:randomUUID(),mutation:'put',data:{title:'Keep',body:'Existing note',paperId:null,format:'markdown'}});const before=structuredClone(controller.getSnapshot().workspace!.sync),owner=controller.captureModelOwner({apiBaseUrl:base,accountId:A}),input=await request();
+ await owner.update(v=>beginModelRecord(v,input,'pdf',Date.now()).ledger);assert.deepEqual(controller.getSnapshot().workspace!.sync,before);
+ const saved=await store.read({apiBaseUrl:base,accountId:A});assert.equal(saved!.modelInvocations!.records[0].request.id,input.id);assert.deepEqual(saved!.sync,before);
+ await controller.bind('Fixture');assert.equal(owner.current(),false);assert.equal(owner.signal.aborted,true);const fresh=controller.captureModelOwner({apiBaseUrl:base,accountId:A});assert.equal(fresh.read().records[0].request.id,input.id);assert.equal(fresh.current(),true);controller.deactivate();await store.close();
+});
+test('A to B to A retires every old owner and never exposes or writes the other account ledger',async()=>{
+ const store=new AccountStore<StoredWorkspace>({decode:decodeWorkspace,indexedDB:new IDBFactory(),databaseName:'models-'+randomUUID()}),service=api(),controller=new WorkspaceController({api:service,apiBaseUrl:base,store});await controller.bind('Fixture');
+ const a=controller.captureModelOwner({apiBaseUrl:base,accountId:A}),input=await request();await a.update(v=>beginModelRecord(v,input,'agent',Date.now()).ledger);
+ service.set(B);await controller.bind('Fixture');const b=controller.captureModelOwner({apiBaseUrl:base,accountId:B});assert.equal(b.read().records.length,0);assert.throws(()=>a.read(),{code:'ACCOUNT_CHANGED'});await assert.rejects(a.update(v=>v),{code:'ACCOUNT_CHANGED'});
+ service.set(A);await controller.bind('Fixture');assert.equal(a.current(),false);assert.equal(b.current(),false);const again=controller.captureModelOwner({apiBaseUrl:base,accountId:A});assert.equal(again.read().records[0].request.id,input.id);assert.equal((await store.read({apiBaseUrl:base,accountId:B}))!.modelInvocations,undefined);controller.deactivate();await store.close();
+});
+test('legacy workspace decoding remains unchanged and malformed model data fails closed without a migration',()=>{
+ const old={sync:createAccountState(A,D),pendingResolutions:{}};assert.equal(decodeWorkspace(old),old);assert.equal(Object.hasOwn(decodeWorkspace(old),'modelInvocations'),false);assert.deepEqual(decodeWorkspace({...old,modelInvocations:emptyModelLedger()}).sync,old.sync);
+ for(const bad of [{version:2,revision:0,records:[],receipts:[]},{...emptyModelLedger(),token:'never'},{...emptyModelLedger(),records:[{request:'malformed'}]}])assert.throws(()=>decodeWorkspace({...old,modelInvocations:bad}),{code:'STORAGE_CORRUPT'});
+});
+
+test('real committed intent with a lost local ACK becomes visible through a read-only refresh without a create or extra write',async()=>{
+ const store=new AccountStore<StoredWorkspace>({decode:decodeWorkspace,indexedDB:new IDBFactory(),databaseName:'models-'+randomUUID()}),service=api(),realUpdate=store.update.bind(store),realRead=store.read.bind(store);let lose=false,writes=0,reads=0,posts=0;
+ store.update=async(...args)=>{writes++;const next=await realUpdate(...args);if(lose&&next.modelInvocations?.records.at(-1)?.phase==='intent'){lose=false;throw Error('Lost committed intent ACK');}return next;};store.read=async scope=>{reads++;return realRead(scope);};
+ const controller=new WorkspaceController({api:service,apiBaseUrl:base,store,online:false});await controller.bind('Fixture');await controller.save({entityType:'note',entityId:randomUUID(),mutation:'put',data:{title:'Retain',body:'Existing note',paperId:null,format:'markdown'}});
+ const scope={apiBaseUrl:base,accountId:A},owner=controller.captureModelOwner(scope),p={id:'chat-default',revision:1,digest:'a'.repeat(64),kind:'chat' as const,model:'synthetic',maxInputBytes:192*1024,maxOutputTokens:2048,stream:false as const},config=await createModelRouteProvider(scope,{kind:'gateway'},p),modelApi=new ModelInvocationApi(async(path,_signal,method='GET')=>{if(method==='POST'){posts++;throw Error('Must not create');}if(path.endsWith('/availability'))return{checkedAt:new Date().toISOString(),validUntil:new Date(Date.now()+45000).toISOString(),gateway:p,computers:[]};throw Error('Unexpected query');},()=>({}as any)),router=new MobileModelRouter({api:modelApi,owner,scope}),before=structuredClone(controller.getSnapshot().workspace!.sync),beforeWrites=writes,id=randomUUID();
+ lose=true;await assert.rejects(router.invoke({accountScope:scope,config,requestId:id,purpose:'pdf',messages:[{role:'user',content:'Explicit evidence'}],signal:new AbortController().signal}),{code:'REMOTE_UNCONFIRMED'});
+ assert.equal(posts,0);assert.equal(writes,beforeWrites+1);assert(reads>=1);assert.equal(controller.getSnapshot().workspace!.modelInvocations!.records[0].request.id,id);assert.equal(owner.read().records[0].phase,'intent');assert.deepEqual(controller.getSnapshot().workspace!.sync,before);
+ const count=writes,priorReads=reads;await router.refreshLocal(new AbortController().signal);assert.equal(writes,count);assert(reads>priorReads);assert.equal(posts,0);controller.deactivate();await assert.rejects(router.refreshLocal(new AbortController().signal),{code:'REMOTE_AUTH_REQUIRED'});await store.close();
+});
+test('a delayed local model refresh never replaces concurrent notes or their outbox with the earlier full row',async()=>{
+ const store=new AccountStore<StoredWorkspace>({decode:decodeWorkspace,indexedDB:new IDBFactory(),databaseName:'models-'+randomUUID()}),service=api(),controller=new WorkspaceController({api:service,apiBaseUrl:base,store,online:false});await controller.bind('Fixture');const scope={apiBaseUrl:base,accountId:A},owner=controller.captureModelOwner(scope),input=await request();await store.update(scope,value=>({...value!,modelInvocations:beginModelRecord(emptyModelLedger(),input,'research',Date.now()).ledger}));
+ const read=store.read.bind(store);let release!:(row:StoredWorkspace|null)=>void,entered!:()=>void;const started=new Promise<void>(resolve=>{entered=resolve;});store.read=async scope=>{const row=await read(scope);entered();return new Promise(resolve=>{release=()=>resolve(row);});};
+ const pending=owner.refresh();await started;const noteId=randomUUID();await controller.save({entityType:'note',entityId:noteId,mutation:'put',data:{title:'Concurrent',body:'Keep the new note',paperId:null,format:'markdown'}});const expected=structuredClone(controller.getSnapshot().workspace!.sync);release(null);await pending;assert.deepEqual(controller.getSnapshot().workspace!.sync,expected);assert.equal(controller.getSnapshot().workspace!.modelInvocations!.records[0].request.id,input.id);controller.deactivate();await store.close();
+});

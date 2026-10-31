@@ -41,3 +41,8 @@ test('a freshly checked empty provider list is not misreported as expired eviden
 });
 
 test('graph has a real local route without model runtime but keeps unsupported desktop sources explicit',()=>{const e=enabled();e.modelRuntime=false;e.online=false;assert.equal(row(e,'PAR-04').action,'graph');assert.equal(row(e,'PAR-04').state,'partial');assert.match(row(e,'PAR-04').reason,/桌面私有.*尚未同步/);e.ready=false;assert.equal(row(e,'PAR-04').action,undefined);assert.equal(row(e,'PAR-04').state,'unavailable');});
+
+test('gateway capability and private history are explained without inferring provider presence or enabling a missing runtime',()=>{
+ const e=enabled();assert.match(row(e,'AI-07').reason,/原请求账本.*当前服务未声明模型调用/);assert.equal(row(e,'AI-07').action,'ai-settings');
+ e.modelRuntime=false;assert.equal(row(e,'AI-07').state,'unavailable');assert.equal(row(e,'AI-07').action,undefined);assert.match(row(e,'AI-07').reason,/未提供独立模型功能/);
+});

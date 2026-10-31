@@ -90,7 +90,7 @@ export class AiSessionController {
     };
     try {
       const completed = await this.#client.generate({
-        accountScope: scope, config, context, action, question, signal: abort.signal,
+        accountScope: scope, config, context, action, question, requestId, current:()=>this.#current(epoch), signal: abort.signal,
         ...(conversation ? { conversation: validateAiConversation(conversation) } : {}),
         onText: (text) => update({ text }), onUsage: (usage) => update({ usage }),
       });

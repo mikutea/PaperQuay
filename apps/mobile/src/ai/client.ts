@@ -8,7 +8,7 @@ import { AiSseParser, ChatOutput, type ChatCompletionResult } from './stream.ts'
 import { AiRequestGuard, boundedAiLimits, cancelResponseBody, ensureDirectResponse, fetchAiTransport, readAiBody } from './transport.ts';
 import type { AiAccountScope, AiAction, AiLimits, AiProviderConfig, AiTransport, AiUsage, PreparedAiContext, SecretStore } from './types.ts';
 
-interface RequestOptions { accountScope: AiAccountScope; config: AiProviderConfig; signal?: AbortSignal; current?():boolean }
+interface RequestOptions { requestId?:string;accountScope: AiAccountScope; config: AiProviderConfig; signal?: AbortSignal; current?():boolean }
 export interface AgentGenerateOptions extends RequestOptions {request:AgentModelRequest;onText(text:string):void;onUsage?(usage:AiUsage):void}
 export interface ReviewGenerateOptions extends RequestOptions {request:ReviewRequest;onText(text:string):void;onUsage?(usage:AiUsage):void}
 export interface ResearchGenerateOptions extends RequestOptions {
@@ -92,6 +92,7 @@ export class AiClient {
   }
   async listModels(options: RequestOptions): Promise<string[]> {
     const config = parseAiProvider(options.config);
+    if(config.execution)return this.#inspectRoute(options,config);
     const guard = new AiRequestGuard(options.signal, this.#limits.probeTimeoutMs);
     try {
       const key = await this.#key(options.accountScope, config, guard);
@@ -118,28 +119,52 @@ export class AiClient {
     const config = parseAiProvider(options.config, true);
     const messages = buildConversationMessages(options.context, options.action, options.question, options.conversation);
     if (options.context.bytes > this.#limits.contextBytes) throw new AiError('CONTEXT_TOO_LARGE');
-    return this.#complete(options, messages, config);
+    return this.#complete(options, messages, config, 'pdf');
   }
   async generateResearch(options: ResearchGenerateOptions): Promise<ChatCompletionResult> {
     const config = parseAiProvider(options.config, true);
     const messages = await buildResearchMessages(options.context);
     if (new TextEncoder().encode(JSON.stringify(messages)).byteLength > this.#limits.contextBytes) throw new AiError('CONTEXT_TOO_LARGE');
-    return this.#complete(options, messages, config);
+    return this.#complete(options, messages, config, 'research');
   }
   async generateReview(options:ReviewGenerateOptions):Promise<ChatCompletionResult>{
     const request=await validateReviewRequest(options.request);
     if(options.signal?.aborted||options.current&&!options.current())throw new AiError('CANCELLED');
     const config=parseAiProvider(options.config,true);
-    return this.#complete(options,request.messages,config);
+    return this.#complete(options,request.messages,config,'review');
   }
   async generateAgent(options:AgentGenerateOptions):Promise<ChatCompletionResult>{
     const request=validateAgentModelRequest(options.request),messages=agentModelMessages(request);
     if(options.signal?.aborted||options.current&&!options.current())throw new AiError('CANCELLED');
     if(new TextEncoder().encode(JSON.stringify(messages)).length>this.#limits.contextBytes)throw new AiError('CONTEXT_TOO_LARGE');
-    return this.#complete(options,messages,parseAiProvider(options.config,true));
+    return this.#complete(options,messages,parseAiProvider(options.config,true),'agent');
   }
+  async #inspectRoute(options:RequestOptions,config:AiProviderConfig):Promise<string[]>{
+    if(!this.#transport.modelRouting)throw new AiError('REMOTE_UNAVAILABLE');
+    const guard=new AiRequestGuard(options.signal,this.#limits.probeTimeoutMs),check=()=>{guard.check();if(options.current&&!options.current())throw new AiError('CANCELLED');};
+    try{check();const result=await guard.wait(this.#transport.modelRouting.inspect({accountScope:{...options.accountScope},config,signal:guard.signal,current:options.current}));check();return result;}
+    catch(e){check();if(e instanceof AiError)throw e;throw new AiError('REMOTE_UNAVAILABLE');}
+    finally{guard.close();}
+  }
+  async #route(options:RequestOptions&{onText(text:string):void;onUsage?(usage:AiUsage):void},messages:{role:string;content:string}[],config:AiProviderConfig,purpose:'pdf'|'research'|'review'|'agent'):Promise<ChatCompletionResult>{
+    if(!this.#transport.modelRouting)throw new AiError('REMOTE_UNAVAILABLE');
+    if(!options.requestId)throw new AiError('CONFIG_INVALID');
+    if(new TextEncoder().encode(JSON.stringify({model:config.model,messages,n:1,stream:false,[config.tokenParameter]:config.maxOutputTokens})).length>this.#limits.requestBytes)throw new AiError('INPUT_TOO_LARGE');
+    const guard=new AiRequestGuard(options.signal,this.#limits.totalTimeoutMs),check=()=>{guard.check();if(options.current&&!options.current())throw new AiError('CANCELLED');};
+    try{
+      check();const result=await guard.wait(this.#transport.modelRouting.invoke({accountScope:{...options.accountScope},config,requestId:options.requestId,purpose,messages,signal:guard.signal,current:options.current}));check();
+      // Apply the same output/usage limits and finish semantics to a saved one-shot result.
+      let actualUsage:AiUsage|null=null;
+      const output=new ChatOutput(null,this.#limits,text=>{check();options.onText(text);},usage=>{check();actualUsage=usage;options.onUsage?.(usage);});
+      output.accept({choices:[{index:0,message:{content:result.text},finish_reason:result.finishReason}],...(result.usage?{usage:{prompt_tokens:result.usage.promptTokens,completion_tokens:result.usage.completionTokens,total_tokens:result.usage.totalTokens}}:{})},false);
+      check();if(!result.text.trim()&&(result.finishReason==='length'||result.finishReason==='content_filter'))return{text:result.text,usage:actualUsage,finishReason:result.finishReason};return output.finish();
+    }catch(e){check();if(e instanceof AiError)throw e;throw new AiError('REMOTE_UNCONFIRMED');}
+    finally{guard.close();}
+  }
+
   async #complete(options: RequestOptions & { onText(text: string): void; onUsage?(usage: AiUsage): void },
-    messages: { role: string; content: string }[], config: AiProviderConfig): Promise<ChatCompletionResult> {
+    messages: { role: string; content: string }[], config: AiProviderConfig, purpose:'pdf'|'research'|'review'|'agent'): Promise<ChatCompletionResult> {
+    if(config.execution)return this.#route(options,messages,config,purpose);
     const streaming = config.stream && this.#transport.supportsStreaming;
     const body = JSON.stringify({ model: config.model, messages, n: 1, stream: streaming,
       [config.tokenParameter]: config.maxOutputTokens,

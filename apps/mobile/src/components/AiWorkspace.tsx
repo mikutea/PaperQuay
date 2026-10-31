@@ -1,3 +1,4 @@
+import {ModelRoutingPanel} from './ModelRoutingPanel.tsx';
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { AiArchivePanel } from './AiArchivePanel.tsx';
 import { AiSyncPanel } from './AiSyncPanel.tsx';
@@ -107,6 +108,7 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
     void (async () => {
       try {
         if (!parsed) { setKeyState('missing'); return; }
+        if(parsed.execution){setKeyState('missing');return;}
         const namespace = await guard.wait(aiSecretNamespace(props.accountScope, parsed));
         guard.check();
         const value = await guard.wait(props.secretStore.get(namespace, AI_SECRET_KEY));
@@ -199,6 +201,10 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
     <details className="ai-settings" open={settingsOpen} onToggle={(event) => setSettingsOpen(event.currentTarget.open)}>
       <summary>模型服务 <span>{config.model || '尚未选择模型'}</span></summary>
       <div className="ai-settings-content">
+        <ModelRoutingPanel ledgerRevision={props.modelLedgerRevision} scope={props.accountScope} router={props.modelRouter} config={config} busy={busy||secretBusy}
+          onExternal={()=>{if(busy||secretBusy)return;controller.credentialsChanged();secretAbort.current?.abort();if(password.current)password.current.value='';setHasKeyDraft(false);const next=store?.loadExternal(props.accountScope)??defaultAiProvider();try{store?.save(props.accountScope,next);setConfig(next);setNotice('已恢复本机直连设置。');}catch(e){setLocalFailure(aiFailure(e));}}}
+          onChange={next=>{if(busy||secretBusy||!props.modelRouter?.current())return;controller.credentialsChanged();secretAbort.current?.abort();if(password.current)password.current.value='';setHasKeyDraft(false);try{if(!store)throw new AiError('SETTINGS_STORAGE_FAILED');store.save(props.accountScope,next);setConfig(next);setLocalFailure(null);}catch(e){setLocalFailure(aiFailure(e));throw e;}}}/>
+        {!config.execution&&<>
         <p className="ai-muted">直接连接你配置的模型服务。只有点击测试或发送才会请求模型；密钥保留在本设备。同步会话需单独明确保存。</p>
         <label htmlFor={id + '-endpoint'}>API 基础地址</label>
         <input id={id + '-endpoint'} type="url" inputMode="url" autoCapitalize="none" autoCorrect="off" spellCheck={false}
@@ -240,6 +246,7 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
           </select></div>
         </div><p className="ai-field-help">参数不兼容时请手动更改。失败请求不会自动重试。</p></details>
         <button type="button" className="text-button" disabled={secretBusy || !parsed} onClick={() => { if (saveConfig()) setNotice(store ? '模型设置已保存在当前账号的本机。' : '模型设置仅保留在当前页面。'); }}>保存模型设置</button>
+        </>}
       </div>
     </details>
 

@@ -1,3 +1,7 @@
+import {ModelInvocationApi} from './modelRouting/api.ts';
+import {ModelServiceError,isModelServiceCode} from './modelRouting/errors.ts';
+import {readModelResponse,waitForModelCall} from './modelRouting/wire.ts';
+import {validateModelInferenceCapability,type ModelInferenceCapability} from '../../../packages/sync-core/src/modelInference.ts';
 import {
   validatePullResponse,
   validatePushResponse,
@@ -139,7 +143,7 @@ async function boundedJson(response: Response): Promise<unknown> {
 
 export interface ServiceCapabilitySnapshot {
   paperOrganization:boolean;richNotes:boolean;aiConversations:boolean;
-  cloudPdf:CloudPdfCapability|null;desktopPdf:DesktopPdfCapability|null;remoteTasks:RemoteTaskCapability|null;
+  cloudPdf:CloudPdfCapability|null;desktopPdf:DesktopPdfCapability|null;remoteTasks:RemoteTaskCapability|null;modelInference:ModelInferenceCapability|null;
 }
 export class SyncApi {
   private capabilityGeneration=0;
@@ -149,6 +153,8 @@ export class SyncApi {
   cloudPdfCapability: CloudPdfCapability | null = null;
   desktopPdfCapability: DesktopPdfCapability | null = null;
   remoteTaskCapability: RemoteTaskCapability | null = null;
+  modelInferenceCapability:ModelInferenceCapability|null=null;
+  readonly modelInvocations:ModelInvocationApi;
   private readonly baseUrl: string;
   private readonly getToken: () => Promise<string>;
   private readonly fetcher: typeof fetch;
@@ -157,6 +163,7 @@ export class SyncApi {
     this.baseUrl = normalizeServiceUrl(baseUrl);
     this.getToken = getToken;
     this.getIdentityKey = getIdentityKey;
+    this.modelInvocations=new ModelInvocationApi((path,signal,method,data)=>this.request(path,signal,method,data),()=>this.modelInferenceCapability);
     // Native Window.fetch requires its Window receiver in some browsers.
     this.fetcher = fetcher ?? ((input, init) => globalThis.fetch(input, init));
   }
@@ -167,6 +174,7 @@ export class SyncApi {
     method = 'GET',
     data?: unknown,
   ): Promise<unknown> {
+    const isModel=path.startsWith('/v1/model-inference/');
     if (signal.aborted) throw new ClientError('ACCOUNT_CHANGED');
     const identityKey = this.getIdentityKey?.();
     const checkIdentity = () => {
@@ -178,9 +186,9 @@ export class SyncApi {
     signal.addEventListener('abort', onAbort, { once: true });
     const timeout = setTimeout(() => controller.abort('timeout'), 30_000);
     try {
-      const token = await this.getToken();
+      const token = await (isModel?waitForModelCall(this.getToken(),controller.signal):this.getToken());
       checkIdentity();
-      const response = await this.fetcher(`${this.baseUrl}${path}`, {
+      const pendingResponse = this.fetcher(`${this.baseUrl}${path}`, {
         method,
         body: data === undefined ? undefined : JSON.stringify(data),
         headers: {
@@ -197,10 +205,12 @@ export class SyncApi {
         referrerPolicy: 'no-referrer',
         signal: controller.signal,
       });
+      const response=await(isModel?waitForModelCall(pendingResponse.then(value=>{if(controller.signal.aborted)void value.body?.cancel().catch(()=>{});return value;}),controller.signal):pendingResponse);
       checkIdentity();
+      if(isModel&&(response.redirected||['opaque','opaqueredirect','error'].includes(response.type)||response.url&&response.url!==this.baseUrl+path)){void response.body?.cancel().catch(()=>{});throw new ModelServiceError('MODEL_RESPONSE_INVALID',502);}
       let body: unknown;
       try {
-        body = await boundedJson(response);
+        body = isModel?await readModelResponse(response,controller.signal):await boundedJson(response);
       } catch (error) {
         if (response.status === 401 || response.status === 403)
           throw errorFromResponse(response.status);
@@ -212,13 +222,14 @@ export class SyncApi {
           isObject(body) && isObject(body.error) && typeof body.error.code === 'string'
             ? body.error.code
             : undefined;
+        if(isModel&&response.status!==401&&response.status!==403&&isModelServiceCode(code))throw new ModelServiceError(code,response.status);
         throw errorFromResponse(response.status, code);
       }
       return body;
     } catch (error) {
       checkIdentity();
       if (controller.signal.reason === 'timeout') throw new ClientError('REQUEST_TIMEOUT', true);
-      if (error instanceof ClientError) throw error;
+      if (error instanceof ClientError||error instanceof ModelServiceError) throw error;
       throw new ClientError('NETWORK_UNAVAILABLE', true);
     } finally {
       clearTimeout(timeout);
@@ -232,6 +243,7 @@ export class SyncApi {
     this.cloudPdfCapability = null;
     this.desktopPdfCapability = null;
     this.remoteTaskCapability = null;
+    this.modelInferenceCapability=null;
     const body = await this.request('/v1/capabilities', signal);
     if(generation!==this.capabilityGeneration)throw new ClientError('ACCOUNT_CHANGED');
     if (!isObject(body) || body.protocolVersion !== 1) throw new ClientError('INVALID_RESPONSE');
@@ -242,6 +254,8 @@ export class SyncApi {
       try { this.remoteTaskCapability = validateRemoteTaskCapability(body.remoteTasks); }
       catch { throw new ClientError('INVALID_RESPONSE'); }
     }
+    let modelCapability:ModelInferenceCapability|null=null;
+    if(isObject(body.features)&&body.features.modelInference===1){try{modelCapability=validateModelInferenceCapability(body.modelInference);}catch{throw new ClientError('INVALID_RESPONSE');}}
     let desktopCapability: DesktopPdfCapability | null = null;
     if (isObject(body.features) && body.features.desktopPdfTransfer === 1) {
       const limits = body.desktopPdf;
@@ -262,6 +276,7 @@ export class SyncApi {
         maxCopies: Number(limits.maxCopies) };
     }
     this.desktopPdfCapability = desktopCapability;
+    this.modelInferenceCapability=modelCapability;
     return { paperOrganization: this.supportsPaperOrganization };
   }
 
@@ -274,8 +289,8 @@ export class SyncApi {
     await probe.capabilities(signal);
     if(signal.aborted||generation!==this.capabilityGeneration||identityKey!==this.getIdentityKey?.())throw new ClientError('ACCOUNT_CHANGED');
     const snapshot:ServiceCapabilitySnapshot={paperOrganization:probe.supportsPaperOrganization,richNotes:probe.supportsRichNotes,aiConversations:probe.supportsAiConversations,
-      cloudPdf:probe.cloudPdfCapability,desktopPdf:probe.desktopPdfCapability,remoteTasks:probe.remoteTaskCapability};
-    this.cloudPdfCapability=structuredClone(snapshot.cloudPdf);this.desktopPdfCapability=structuredClone(snapshot.desktopPdf);this.remoteTaskCapability=structuredClone(snapshot.remoteTasks);
+      cloudPdf:probe.cloudPdfCapability,desktopPdf:probe.desktopPdfCapability,remoteTasks:probe.remoteTaskCapability,modelInference:probe.modelInferenceCapability};
+    this.cloudPdfCapability=structuredClone(snapshot.cloudPdf);this.desktopPdfCapability=structuredClone(snapshot.desktopPdf);this.remoteTaskCapability=structuredClone(snapshot.remoteTasks);this.modelInferenceCapability=structuredClone(snapshot.modelInference);
     return structuredClone(snapshot);
   }
 

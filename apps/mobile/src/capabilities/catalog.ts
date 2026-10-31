@@ -64,7 +64,7 @@ export function capabilityCatalog(e:FeatureEnvironment):FeatureRow[]{
  add('AI-04','会话、问题模板与跨端继续','ai','mixed',!e.ready?'unavailable':e.localAiConversations?'available':'partial',e.localAiConversations?'本机已有同步会话能力；继续使用会话保存的原文，密钥不随会话同步。':s?.aiConversations?'服务已声明会话支持，当前连接尚未协商。退出后重新登录再同步，才能补取此前隐藏的会话。':'本机问答记录可保留；跨端会话与模板需要服务支持，尚未核对时不声称已经同步。',e.ready?'ai-settings':undefined);
  local('AI-05','取消、失败与费用提示','ai','生成时可停止等待；外部处理可能仍有费用。实际用量和未知费用分别呈现，检查能力不会调用模型。','ai-settings');
  remote('AI-06','远程解析与向量索引','ai','computer',s?Boolean(s.remoteTasks):null,i.providersError?'电脑配置本次未确认：'+i.providersError:present.computers?'最近检查可见解析配置 '+present.parse+' 个、索引配置 '+present.index+' 个；每类任务仍需相应电脑在线、来源和配额有效。':present.stale?'上次电脑信息已过期，请重新检查；现有任务仍可在任务页查询。':'暂未发现有效的电脑执行配置。请在同账号电脑上明确开启后重新检查。','remote');
- add('AI-07','电脑模型与专用网关','ai','mixed','partial','自定义兼容API可自行填写服务地址；专用电脑模型能力、网关授权与故障回退尚未接入，不能由一个地址推断已经支持。',e.ready?'ai-settings':undefined);
+ add('AI-07','电脑模型与专用网关','ai','mixed',e.ready?'partial':'unavailable',!e.ready?'先打开此账号在本机的文库副本。':'本机已接入模型选择、原请求账本与只保存恢复。'+(s?.modelInference?'服务已声明独立模型调用协议，可在模型设置手动查看网关或电脑公开配置。':s?'当前服务未声明模型调用，直连API设置仍保留；远程调用需部署方明确开启。':'先核对当前服务声明，再手动查看网关或电脑模型。')+' 每次发送重新核对原配置，不会自动重发或切换服务；不能由一个地址推断在线、权限或费用已经核验。真实模型与跨端验收仍待完成。',e.ready?'ai-settings':undefined);
  add('PAR-01','文献雷达与推荐证据','research','mixed',e.ready?'partial':'unavailable',e.ready?'已接入主题配置、Crossref/OpenAlex手动查询、逐页断点、来源与评分证据、候选采用和本机阅读建议。主题与雷达标记不跨端同步；真实材料、现代WebView和设备验收仍待。':'先打开此账号在本机的文库副本。',e.ready?'radar':undefined);
  add('PAR-02','多篇问答与Agent','research','mixed',!e.ready?'unavailable':'partial','多篇问答已有来源/发送预览与引用；文库Agent已接入重命名、标签建议/清理、分类的规则计划、逐项核对、原子采用与本机回执。'+(e.modelRuntime?'模型可提出计划、请求经批准的上下文及提供选择分支，每次均需预览后发送。':'当前环境未提供模型运行时，可继续使用本机规则。')+'可逐篇预览公开 DOI/标题候选、明确采用字段并逐项审批；模型与题录来源摘要随本机回执保存。远程检索/委托执行与真实模型/桌面验收仍待完成。',e.ready?'agent':undefined);
  add('PAR-03','综述章节与引文核对','research','mixed',e.ready&&e.modelRuntime?'partial':'unavailable',e.ready&&e.modelRuntime?'已接入文献与笔记材料、蓝图和章节编辑、分段断点、引文校验及Word导出；真实外部模型、实机与桌面对应业务验收仍待完成。':!e.ready?'先登录并打开此账号在本机的文库副本。':'当前运行环境未提供模型与综述工作区，本机文库和笔记仍可访问。',e.ready&&e.modelRuntime?'review':undefined);
@@ -80,7 +80,7 @@ export function capabilityCatalog(e:FeatureEnvironment):FeatureRow[]{
  add('OPS-05','可访问性与系统适配','operations','local','partial','已有明暗主题、键盘焦点、触控目标和减少动画支持；屏幕阅读器、完整动态字体与各实机隐私行为仍需验证。');
  add('OPS-06','正式发布与设备验收','operations','operator','planned','此开发版本尚未完成正式签名、升级与全部目标设备验收。功能存在不等于正式发布已通过。');
  for(const [ids,enabled,reason] of [[
-  ['AI-01','AI-02','AI-03','AI-04','AI-05'],e.modelRuntime,'此运行环境未提供独立模型功能，无法从本页打开。'],
+  ['AI-01','AI-02','AI-03','AI-04','AI-05','AI-07'],e.modelRuntime,'此运行环境未提供独立模型功能，无法从本页打开。'],
   [['PDF-04'],e.cloudClient,'此连接未提供私有副本客户端。'],
   [['PDF-02','PDF-03'],e.desktopClient,'此连接未提供电脑文件传输客户端。'],
   [['AI-06','PAR-05'],e.remoteClient,'此连接未提供远程任务客户端。']] as [string[],boolean,string][]) {

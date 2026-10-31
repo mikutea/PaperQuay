@@ -30,7 +30,7 @@ export class ResearchSession {
       const context=await validateResearchContext(input.context);if(!current())return;
       const result:ResearchResult={id:crypto.randomUUID(),context,provider:{id:config.id,endpoint:config.endpoint,model:config.model},text:'',status:'running',startedAt:new Date().toISOString(),finishedAt:null,usage:null,failure:null,cost:'unknown'};
       this.publish({busy:true,result,failure:null});
-      const completed=await this.client.generateResearch({accountScope:scope,config,context,signal:abort.signal,
+      const completed=await this.client.generateResearch({accountScope:scope,config,context,requestId:result.id,current,signal:abort.signal,
         onText:text=>{if(!current())throw new ResearchError('CHANGED');this.publish({...this.snapshot,result:{...this.snapshot.result!,text}});},
         onUsage:usage=>{if(!current())throw new ResearchError('CHANGED');this.publish({...this.snapshot,result:{...this.snapshot.result!,usage}});}});
       if(!current())return;

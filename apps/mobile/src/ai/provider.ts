@@ -13,9 +13,19 @@ export class LocalAiConfigStore {
       return parseAiProvider(JSON.parse(value));
     } catch { return defaultAiProvider(); }
   }
+  loadExternal(scope:AiAccountScope):AiProviderConfig {
+    try {const value=this.#storage.getItem(PUBLIC_CONFIG_PREFIX+'external.'+encodeURIComponent(aiAccountKey(scope)));if(value&&value.length<=8192){const config=parseAiProvider(JSON.parse(value));if(!config.execution)return config;}}catch{}
+    const current=this.load(scope);return current.execution?defaultAiProvider():current;
+  }
   save(scope: AiAccountScope, config: AiProviderConfig): void {
     const safe = parseAiProvider(config);
-    try { this.#storage.setItem(PUBLIC_CONFIG_PREFIX + encodeURIComponent(aiAccountKey(scope)), JSON.stringify(safe)); }
+    try {
+      const key=encodeURIComponent(aiAccountKey(scope)),previous=this.load(scope);
+      let hasExternal=false;try{hasExternal=this.#storage.getItem(PUBLIC_CONFIG_PREFIX+'external.'+key)!==null;}catch{}
+      if(!safe.execution&&(previous.execution||hasExternal))this.#storage.setItem(PUBLIC_CONFIG_PREFIX+'external.'+key,JSON.stringify(safe));
+      else if(safe.execution&&!previous.execution)this.#storage.setItem(PUBLIC_CONFIG_PREFIX+'external.'+key,JSON.stringify(previous));
+      this.#storage.setItem(PUBLIC_CONFIG_PREFIX+key,JSON.stringify(safe));
+    }
     catch { throw new AiError('SETTINGS_STORAGE_FAILED'); }
   }
 }

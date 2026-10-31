@@ -1,0 +1,36 @@
+import {MODEL_INFERENCE_LIMITS as L,MODEL_FAILURES,ModelInferenceValidationError,inspectModelInferenceJson,modelInferenceId,validateModelInferenceAvailability,validateModelInferenceRequest,validateModelInferenceStatus,validateModelInferenceJob,validateModelInferenceOutput} from '../../../../packages/sync-core/src/modelInference.ts';
+import type {ModelInferenceCapability,ModelInferenceRequest,ModelInferenceStatus,ModelInferenceQuota,ModelInferenceJob,ModelInferenceFailure} from '../../../../packages/sync-core/src/modelInference.ts';
+import {ModelServiceError} from './errors.ts';
+export type ModelServiceCall=(path:string,signal:AbortSignal,method?:string,data?:unknown)=>Promise<unknown>;
+export type ModelRecoveryPhase='none'|'queued'|'claiming'|'requesting'|'saving'|'save-unconfirmed';
+export interface ModelRecoveryInfo{id:string;phase:ModelRecoveryPhase;hasOutput:boolean}
+export interface ModelGatewayCandidate{format:'paperquay-gateway-unconfirmed-result';version:1;id:string;request:ModelInferenceRequest;output?:Awaited<ReturnType<typeof validateModelInferenceOutput>>;failure?:ModelInferenceFailure;unconfirmedSave:true}
+function invalid():never{throw new ModelServiceError('MODEL_RESPONSE_INVALID',502);}
+function exact(value:unknown,keys:readonly string[]):Record<string,unknown>{
+ inspectModelInferenceJson(value,2*L.requestBytes+16384);if(!value||typeof value!=='object'||Array.isArray(value)||![Object.prototype,null].includes(Object.getPrototypeOf(value)))return invalid();
+ const fields=Reflect.ownKeys(value),descriptors=Object.getOwnPropertyDescriptors(value);if(fields.length!==keys.length||keys.some(k=>!Object.hasOwn(descriptors,k))||Object.values(descriptors).some(d=>!d.enumerable||!('value'in d)))return invalid();return value as Record<string,unknown>;
+}
+function quota(value:unknown):ModelInferenceQuota{
+ const fields=['active','queued','retained','receipts','bytes','maxActive','maxQueued','maxRetained','maxReceipts','maxBytes']as const,v=exact(value,fields),maximum={active:L.active,queued:L.queued,retained:L.retained,receipts:L.receipts,bytes:L.accountBytes,maxActive:L.active,maxQueued:L.queued,maxRetained:L.retained,maxReceipts:L.receipts,maxBytes:L.accountBytes};
+ for(const field of fields)if(!Number.isSafeInteger(v[field])||Number(v[field])<(field.startsWith('max')?1:0)||Number(v[field])>maximum[field])return invalid();
+ return structuredClone(v)as unknown as ModelInferenceQuota;
+}
+function recovery(value:unknown,id:string):ModelRecoveryInfo{const v=exact(value,['id','phase','hasOutput']);if(v.id!==id||typeof v.phase!=='string'||!['none','queued','claiming','requesting','saving','save-unconfirmed'].includes(v.phase)||typeof v.hasOutput!=='boolean')return invalid();return{id,phase:v.phase as ModelRecoveryPhase,hasOutput:v.hasOutput};}
+async function checked<T>(work:()=>T|Promise<T>):Promise<T>{try{return await work();}catch(e){if(e instanceof ModelServiceError)throw e;if(e instanceof ModelInferenceValidationError)return invalid();throw e;}}
+/** Consumer routes only. Inventory/status/recovery inspection never dispatches a model. */
+export class ModelInvocationApi{
+ #call:ModelServiceCall;#capability:()=>ModelInferenceCapability|null;
+ constructor(call:ModelServiceCall,capability:()=>ModelInferenceCapability|null){this.#call=call;this.#capability=capability;}
+ #request(path:string,signal:AbortSignal,method='GET',data?:unknown){if(!this.#capability())throw new ModelServiceError('MODEL_INFERENCE_DISABLED',503);return this.#call('/v1/model-inference'+path,signal,method,data);}
+ availability(signal:AbortSignal){return checked(async()=>validateModelInferenceAvailability(await this.#request('/availability',signal)));}
+ create(input:ModelInferenceRequest,signal:AbortSignal){return checked(async()=>{const request=await validateModelInferenceRequest(input),raw=exact(await this.#request('/jobs',signal,'POST',request),['result','replayed','quota']),result=await validateModelInferenceStatus(raw.result);if(result.id!==request.id||result.status==='absent'||typeof raw.replayed!=='boolean'||result.job&&result.job.inputDigest!==request.digest)return invalid();return{result,replayed:raw.replayed,quota:quota(raw.quota)};});}
+ status(id:string,signal:AbortSignal):Promise<ModelInferenceStatus>{return checked(async()=>{id=modelInferenceId(id);const result=await validateModelInferenceStatus(await this.#request('/requests/'+id,signal));if(result.id!==id)return invalid();return result;});}
+ list(signal:AbortSignal):Promise<{jobs:ModelInferenceJob[];quota:ModelInferenceQuota}>{return checked(async()=>{const raw=exact(await this.#request('/jobs',signal),['jobs','quota']);if(!Array.isArray(raw.jobs)||raw.jobs.length>L.retained)return invalid();const jobs=raw.jobs.map(validateModelInferenceJob);if(new Set(jobs.map(j=>j.id)).size!==jobs.length)return invalid();return{jobs,quota:quota(raw.quota)};});}
+ cancel(id:string,signal:AbortSignal){return checked(async()=>{id=modelInferenceId(id);const result=await validateModelInferenceStatus(await this.#request('/requests/'+id+'/cancel',signal,'POST',{}));if(result.id!==id||result.status==='absent')return invalid();return result;});}
+ remove(id:string,signal:AbortSignal){return checked(async()=>{id=modelInferenceId(id);const result=await validateModelInferenceStatus(await this.#request('/jobs/'+id,signal,'DELETE'));if(result.id!==id)return invalid();return result;});}
+ dispatch(id:string,signal:AbortSignal){return checked(async()=>{id=modelInferenceId(id);return recovery(await this.#request('/jobs/'+id+'/dispatch',signal,'POST',{}),id);});}
+ recovery(id:string,signal:AbortSignal){return checked(async()=>{id=modelInferenceId(id);return recovery(await this.#request('/jobs/'+id+'/recovery',signal),id);});}
+ retrySave(id:string,signal:AbortSignal){return checked(async()=>{id=modelInferenceId(id);return recovery(await this.#request('/jobs/'+id+'/recover',signal,'POST',{}),id);});}
+ candidate(id:string,signal:AbortSignal):Promise<ModelGatewayCandidate>{return checked(async()=>{id=modelInferenceId(id);const value=await this.#request('/jobs/'+id+'/recovery/candidate',signal);if(!value||typeof value!=='object')return invalid();const hasOutput=Object.hasOwn(value,'output'),raw=exact(value,['format','version','id','request',hasOutput?'output':'failure','unconfirmedSave']);if(raw.format!=='paperquay-gateway-unconfirmed-result'||raw.version!==1||raw.id!==id||raw.unconfirmedSave!==true)return invalid();const request=await validateModelInferenceRequest(raw.request);if(request.id!==id||request.target.kind!=='gateway')return invalid();if(hasOutput)return{format:'paperquay-gateway-unconfirmed-result',version:1,id,request,output:await validateModelInferenceOutput(raw.output),unconfirmedSave:true};if(typeof raw.failure!=='string'||!MODEL_FAILURES.includes(raw.failure as ModelInferenceFailure))return invalid();return{format:'paperquay-gateway-unconfirmed-result',version:1,id,request,failure:raw.failure as ModelInferenceFailure,unconfirmedSave:true};});}
+ forgetCandidate(id:string,signal:AbortSignal){return checked(async()=>{id=modelInferenceId(id);const raw=exact(await this.#request('/jobs/'+id+'/recovery',signal,'DELETE'),['forgotten']);if(typeof raw.forgotten!=='boolean')return invalid();return{forgotten:raw.forgotten};});}
+}

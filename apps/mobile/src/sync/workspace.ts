@@ -1,3 +1,5 @@
+import type {ModelLedgerOwner} from '../modelRouting/ledger.ts';
+import {emptyModelLedger,readModelLedger,verifyModelLedger} from '../modelRouting/ledger.ts';
 import { validateAgentMetadataSession, beginAgentMetadataQuery, assertAgentMetadataCurrent, buildAgentMetadataProposal, metadataPublicationKey, markAgentMetadataPublished, type AgentMetadataSession, type AgentMetadataChoice } from '../agent/metadataSession.ts';
 import { validateAgentMetadataRequest, type AgentMetadataRequest } from '../agent/metadataRequest.ts';
 import{modelEvidenceFromTurn}from'../agent/evidence.ts';
@@ -118,6 +120,8 @@ export interface StoredWorkspace {
   agentMetadataCooldownUntil?:number;
   /** Account-local receipts commit with imported entities and their outbox entries. */
   incomingReceipts?: IncomingImportReceipt[];
+  /** Private model identity/result ledger; never sent through the sync outbox. */
+  modelInvocations?: import('../modelRouting/ledger.ts').ModelInvocationLedger;
 }
 export interface WorkspaceSnapshot {
   status: 'signed-out' | 'binding' | 'ready' | 'error';
@@ -142,7 +146,7 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
 export function decodeWorkspace(value: unknown): StoredWorkspace {
   if (
     !isObject(value) ||
-    Object.keys(value).some((key) => !['sync', 'pendingResolutions', 'paperOrganizationVersion','richNotesVersion','aiConversationsVersion', 'externalLibraries','remoteTaskIntent','remoteBatch','zoteroLibraries','incomingReceipts','reviewProject','radarState','agentState','agentConversation','agentMetadataSession','agentMetadataCooldownUntil'].includes(key)) ||
+    Object.keys(value).some((key) => !['sync', 'pendingResolutions', 'paperOrganizationVersion','richNotesVersion','aiConversationsVersion', 'externalLibraries','remoteTaskIntent','remoteBatch','zoteroLibraries','incomingReceipts','reviewProject','radarState','agentState','agentConversation','agentMetadataSession','agentMetadataCooldownUntil','modelInvocations'].includes(key)) ||
     (value.paperOrganizationVersion !== undefined && value.paperOrganizationVersion !== 1) ||
     (value.richNotesVersion!==undefined&&value.richNotesVersion!==1)||(value.aiConversationsVersion!==undefined&&value.aiConversationsVersion!==1)||
     !isObject(value.pendingResolutions) ||
@@ -163,6 +167,7 @@ export function decodeWorkspace(value: unknown): StoredWorkspace {
     try { validateRemoteBatch(value.remoteBatch); } catch { throw new ClientError('STORAGE_CORRUPT'); }
     if (value.remoteTaskIntent !== undefined) throw new ClientError('STORAGE_CORRUPT');
   }
+  if(value.modelInvocations!==undefined){try{readModelLedger(value.modelInvocations);}catch{throw new ClientError('STORAGE_CORRUPT');}}
   if(value.agentMetadataCooldownUntil!==undefined&&(!Number.isSafeInteger(value.agentMetadataCooldownUntil)||Number(value.agentMetadataCooldownUntil)<0||Number(value.agentMetadataCooldownUntil)>253402300799999))throw new ClientError('STORAGE_CORRUPT');
   if(value.agentMetadataSession!==undefined){try{validateAgentMetadataSession(value.agentMetadataSession);}catch{throw new ClientError('STORAGE_CORRUPT');}}
   if(value.agentConversation!==undefined){try{validateAgentConversation(value.agentConversation);}catch{throw new ClientError('STORAGE_CORRUPT');}}
@@ -313,6 +318,33 @@ export class WorkspaceController {
     return{richNotes:this.supportsRichNotes()||Boolean(remembered&&value?.richNotesVersion),
       aiConversations:this.supportsAiConversations()||Boolean(remembered&&value?.aiConversationsVersion)};
   };
+  /** Captures an epoch, so A -> B -> A cannot revive old model callbacks. No IO or model execution. */
+  captureModelOwner(scope: AccountScope):ModelLedgerOwner {
+    const epoch=this.epoch,capturedScope={...scope},capturedContext=this.context,scopeKey=JSON.stringify([scope.apiBaseUrl,scope.accountId]),current=()=>this.current(epoch)&&this.snapshot.status==='ready'&&this.scope!==null&&JSON.stringify([this.scope.apiBaseUrl,this.scope.accountId])===scopeKey;
+    const assert=()=>{if(!current())throw new ClientError('ACCOUNT_CHANGED');};
+    return{
+      signal:this.abort.signal,
+      current,
+      read:()=>{assert();return readModelLedger(this.snapshot.workspace?.modelInvocations??emptyModelLedger());},
+      refresh:async()=>{
+        assert();const saved=await this.store.read(capturedScope);assert();
+        if(!saved||!capturedContext||!sameContext(getSyncContext(saved.sync),capturedContext))throw new ClientError('ACCOUNT_CHANGED');
+        const ledger=await verifyModelLedger(saved.modelInvocations??emptyModelLedger());assert();
+        const currentWorkspace=this.snapshot.workspace;if(!currentWorkspace)throw new ClientError('ACCOUNT_CHANGED');
+        const known=readModelLedger(currentWorkspace.modelInvocations??emptyModelLedger());
+        if(ledger.revision<known.revision)return known;
+        if(ledger.revision===known.revision){if(canonicalJson(ledger)!==canonicalJson(known))throw new ClientError('STORAGE_CORRUPT');return known;}
+        // Only this private field is refreshed; concurrent notes/outbox/cursor updates stay intact.
+        this.publish({workspace:{...currentWorkspace,modelInvocations:ledger}});
+        return ledger;
+      },
+      update:async(reducer)=>{
+        assert();const next=await this.update(epoch,value=>{assert();return{...value,modelInvocations:readModelLedger(reducer(readModelLedger(value.modelInvocations??emptyModelLedger())))};});
+        assert();return readModelLedger(next.modelInvocations);
+      },
+    };
+  }
+
   private supportedContent(item:{entityType:EntityType;entityId?:string;data:EntityData|null},value:StoredWorkspace|null=this.snapshot.workspace,allowOffline=false):boolean{
     const features=this.getContentCapabilities(value,allowOffline);
     if(!supportsSyncRecord(features,item))return false;

@@ -1,7 +1,7 @@
 import { AI_ACTION_LABELS, citedPages, prepareAiContext } from './context.ts';
 import { canonicalAiEndpoint, parseAiProvider } from './provider.ts';
 import type { PdfAiContext } from './sourceTypes.ts';
-import { AI_LIMITS, type AiAction, type AiErrorCode, type AiFailure, type AiResult, type AiSourceSummary, type AiUsage, type PreparedAiContext } from './types.ts';
+import { AI_LIMITS,AI_REMOTE_ERROR_CODES, type AiAction, type AiErrorCode, type AiFailure, type AiResult, type AiSourceSummary, type AiUsage, type PreparedAiContext } from './types.ts';
 
 export const AI_ARCHIVE_LIMITS = Object.freeze({
   recordBytes: 1_048_576, templateBytes: 16_384, accountBytes: 16_777_216, records: 50, templates: 100,
@@ -168,6 +168,8 @@ function failure(value: unknown): AiFailure | null {
   if (!FAILURE_CODES.includes(raw.code as AiErrorCode)) fail();
   return { code: raw.code as AiErrorCode, ...(own(raw, 'retryAfterSeconds') ? { retryAfterSeconds: integer(raw.retryAfterSeconds, 0, 3600) } : {}) };
 }
+/** Archive/sync v1 retains its original error enum. Detailed routing errors stay in the private invocation ledger. */
+function capturedFailure(value:unknown):AiFailure|null{if(value===null)return null;const raw=object(value,['code'],['retryAfterSeconds']);return failure(AI_REMOTE_ERROR_CODES.includes(raw.code as typeof AI_REMOTE_ERROR_CODES[number])?{...raw,code:'PROVIDER_UNAVAILABLE'}:raw);}
 function result(value: unknown): AiHistoryRecord['result'] {
   const raw = object(value, ['text', 'status', 'finishReason', 'usage', 'cost', 'failure']);
   const terminal = status(raw.status), text = bytes(raw.text, AI_LIMITS.outputBytes);
@@ -235,7 +237,7 @@ export function createAiHistoryRecord(input: PdfAiContext, captured: AiResult): 
     // Source summaries and citations are derived for display, never duplicated in the archive DTO.
     const item = validateAiArchiveItem({ kind: 'record', version: 1, id: raw.requestId, revision: 1,
       createdAt: raw.startedAt, updatedAt: raw.finishedAt, context: normalized, action: raw.action, question: raw.question, provider: publicProvider,
-      result: { text: raw.text, status: raw.status, finishReason: raw.finishReason, usage: raw.usage, cost: raw.cost, failure: raw.failure } });
+      result: { text: raw.text, status: raw.status, finishReason: raw.finishReason, usage: raw.usage, cost: raw.cost, failure: capturedFailure(raw.failure) } });
     if (item.kind !== 'record') fail();
     return item;
   } catch (error) { if (error instanceof AiArchiveError) throw error; return fail(); }

@@ -41,7 +41,7 @@ export class ReviewWriter {
     try{project=await input.store.save(intent,expected,owner);}catch(error){if(owner())this.publish({storageFailure:true});throw error;}check();if(abort.signal.aborted)break;
     this.publish({currentKey:request.key??'blueprint',text:''});let raw='',usage:AiUsage|null=null,next:ReviewProject;
     try{
-     const result=await this.client.generateReview({accountScope:input.scope,config:plan.provider,request,signal:abort.signal,current:()=>{try{check();return!abort.signal.aborted;}catch{return false;}},
+     const result=await this.client.generateReview({accountScope:input.scope,config:plan.provider,request,requestId:attempt.id,signal:abort.signal,current:()=>{try{check();return!abort.signal.aborted;}catch{return false;}},
       onText:text=>{check();raw=text;this.publish({text});},onUsage:value=>{check();usage=value;}});
      check();raw=result.text;usage=result.usage??usage;
      if(result.finishReason==='length')throw new Error('OUTPUT_TRUNCATED');if(result.finishReason==='content_filter')throw new Error('CONTENT_FILTERED');

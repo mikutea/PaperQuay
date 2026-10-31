@@ -1,0 +1,42 @@
+.model-routing { padding: 18px; border: 1px solid var(--line); border-radius: 20px; background: var(--theme-surface); margin-bottom: 20px; }
+.model-route-heading,.model-invocation-heading { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; }
+.model-route-heading h3,.model-route-heading p { margin:0; }
+.model-route-heading { margin-bottom:12px; }
+.model-route-badge { padding:5px 10px; border:1px solid var(--line); border-radius:999px; font-size:.75rem; color:var(--accent-dark); background:var(--theme-selected); }
+.model-route-current { padding:14px; border-radius:14px; background:var(--theme-background); margin-bottom:12px; display:grid; gap:5px; }
+.model-route-current span,.model-route-current p { font-size:.8125rem; color:var(--muted); overflow-wrap:anywhere; margin:0; }
+.model-route-actions { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+.model-routing button,.model-routing summary { min-height:44px; }
+.model-route-choices { border:1px solid var(--line); border-radius:16px; padding:14px; margin:16px 0 0; min-width:0; }
+.model-route-choices legend { font-weight:600; padding:0 6px; }
+.model-route-choice { display:flex; align-items:center; gap:12px; min-height:64px; border-bottom:1px solid var(--line); padding:10px 0; cursor:pointer; }
+.model-route-choice input,.model-route-consent input { width:22px; min-height:22px; height:22px; margin:10px 0; flex:none; accent-color:var(--accent); }
+.model-route-choice span { display:grid; gap:3px; min-width:0; overflow-wrap:anywhere; }
+.model-route-choice small,.model-route-history>summary span,.model-invocation-heading span { color:var(--muted); font-size:.75rem; }
+.model-route-consent { display:flex; gap:10px; align-items:flex-start; padding:12px 0; font-size:.8125rem; cursor:pointer; min-height:44px; }
+.model-route-consent span { padding-top:8px; }
+.model-route-history { border-top:1px solid var(--line); padding-top:14px; margin-top:18px; }
+.model-route-history>summary { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:6px; cursor:pointer; font-weight:600; }
+.model-invocation { margin:12px 0; padding:14px; border:1px solid var(--line); border-radius:16px; }
+.model-invocation p { margin:10px 0; overflow-wrap:anywhere; }
+.model-invocation pre { max-height:240px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; background:var(--theme-background); padding:12px; border-radius:10px; font-size:.75rem; }
+.model-route-warning,.model-route-confirm { padding:12px; border:1px solid var(--line); border-radius:12px; color:var(--theme-text); background:var(--theme-background); font-size:.8125rem; }
+.model-route-warning { border-left:3px solid var(--accent); }
+.model-route-confirm { margin-top:16px; }
+.model-route-notice { margin:12px 0 0; font-size:.8125rem; color:var(--accent-dark); }
+.model-route-choices>.muted { margin:12px 0 0; }
+@media(max-width:480px) { .model-routing { padding:14px; } .model-route-actions>button { flex:1 1 145px; } .model-invocation { padding:12px; } }
+
+.model-routing { font-size:1rem; line-height:1.55; }
+.model-route-heading h3 { font-size:1.125rem; }
+.model-routing .muted { font-size:.875rem; }
+.model-route-actions>button { font-size:.875rem; white-space:normal; overflow-wrap:anywhere; }
+.model-invocation small { font-size:.75rem; }
+
+/* Keep this grouped preference section flat inside the existing model settings sheet. */
+.ai-settings-content .model-routing { border:0; padding:0; background:transparent; }
+.model-routing .model-route-choice { display:flex; align-items:center; font-weight:400; gap:12px; }
+.model-routing .model-route-choice span { flex:1; }
+.model-routing .model-route-consent { display:flex; align-items:flex-start; font-weight:400; gap:10px; }
+.model-routing .model-route-choices { background:var(--theme-background); border:0; }
+.model-routing .model-route-choice strong { font-weight:600; }

@@ -5,6 +5,11 @@ export type { PdfAiContext, PdfCitationTarget };
 
 export interface AiAccountScope { apiBaseUrl: string; accountId: string }
 export type AiAction = 'explain' | 'translate' | 'ask' | 'rewrite' | 'summarize';
+export interface AiModelExecution {version:1;target:{kind:'gateway'}|{kind:'computer';deviceId:string};profileRef:{id:string;revision:number;digest:string}}
+export interface AiModelRoutingTransport {
+  inspect(input:{accountScope:AiAccountScope;config:AiProviderConfig;signal:AbortSignal;current?():boolean}):Promise<string[]>;
+  invoke(input:{accountScope:AiAccountScope;config:AiProviderConfig;requestId:string;purpose:'pdf'|'research'|'review'|'agent';messages:{role:string;content:string}[];signal:AbortSignal;current?():boolean}):Promise<{text:string;usage:AiUsage|null;finishReason:'stop'|'length'|'content_filter';redacted:boolean}>;
+}
 export interface AiProviderConfig {
   version: 1;
   id: string;
@@ -15,6 +20,8 @@ export interface AiProviderConfig {
   requiresKey: boolean;
   maxOutputTokens: number;
   tokenParameter: 'max_completion_tokens' | 'max_tokens';
+  /** Device-private route reference; omitted for existing external API configurations. */
+  execution?:AiModelExecution;
 }
 
 /** Transport implementations must not follow redirects or persist request headers. */
@@ -22,6 +29,7 @@ export interface AiTransport {
   readonly kind: 'fetch' | 'native';
   readonly supportsStreaming: boolean;
   readonly redirectPolicy: 'error';
+  readonly modelRouting?:AiModelRoutingTransport;
   request(input: {
     url: string;
     method: 'GET' | 'POST';
@@ -67,6 +75,7 @@ export interface AiUsage {
   totalTokens: number;
 }
 
+export const AI_REMOTE_ERROR_CODES=['REMOTE_UNAVAILABLE','REMOTE_PENDING','REMOTE_UNCONFIRMED','REMOTE_PROFILE_CHANGED','REMOTE_AUTH_REQUIRED','REMOTE_CAPACITY']as const;
 export type AiErrorCode =
   | 'CONFIG_INVALID' | 'KEY_MISSING' | 'KEY_INVALID' | 'SECRET_STORAGE_FAILED'
   | 'CONTEXT_MISSING' | 'CONTEXT_INVALID' | 'CONTEXT_TOO_LARGE' | 'TEXT_MISSING'
@@ -75,7 +84,8 @@ export type AiErrorCode =
   | 'PROVIDER_UNAVAILABLE' | 'NETWORK_OR_CORS' | 'REDIRECT_BLOCKED' | 'TIMEOUT'
   | 'IDLE_TIMEOUT' | 'CANCELLED' | 'STREAM_INTERRUPTED' | 'INVALID_RESPONSE'
   | 'RESPONSE_TOO_LARGE' | 'OUTPUT_LIMIT' | 'OUTPUT_TRUNCATED' | 'CONTENT_FILTERED'
-  | 'UNSUPPORTED_RESPONSE' | 'SETTINGS_STORAGE_FAILED' | 'CONVERSATION_LIMIT';
+  | 'UNSUPPORTED_RESPONSE' | 'SETTINGS_STORAGE_FAILED' | 'CONVERSATION_LIMIT'
+  | typeof AI_REMOTE_ERROR_CODES[number];
 
 export interface AiFailure { code: AiErrorCode; retryAfterSeconds?: number }
 export interface AiSourceSummary {

@@ -229,3 +229,9 @@ test('canonical validation and result derivation are pure, deterministic and do 
   try { validateAiArchiveItem({ ...record(), apiKey: 'SENTINEL_SECRET' }); assert.fail('must reject'); }
   catch (error) { assert.ok(error instanceof AiArchiveError); assert.equal(error.message, 'INVALID_ITEM'); assert.ok(!String(error).includes('SENTINEL_SECRET')); }
 });
+
+test('private routing errors serialize through the unchanged archive/sync v1 failure enum and reject extra diagnostic fields',()=>{
+ const input=history(),captured=deriveAiHistoryResult(input);
+ for(const code of ['REMOTE_UNAVAILABLE','REMOTE_PENDING','REMOTE_UNCONFIRMED','REMOTE_PROFILE_CHANGED','REMOTE_AUTH_REQUIRED','REMOTE_CAPACITY']as const){const raw={...captured,status:'failed' as const,failure:{code}};const stored=createAiHistoryRecord(input.context,raw);assert.equal(stored.result.failure!.code,'PROVIDER_UNAVAILABLE');assert.equal(stored.provider.id,input.provider.id);assert.throws(()=>validateAiArchiveItem({...stored,result:{...stored.result,failure:{code}}}),reject());}
+ assert.throws(()=>createAiHistoryRecord(input.context,{...captured,status:'failed',failure:{code:'REMOTE_UNAVAILABLE',message:'must-not-serialize'}}as any),reject());
+});

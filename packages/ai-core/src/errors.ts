@@ -1,6 +1,12 @@
 import type { AiErrorCode, AiFailure } from './types.ts';
 
 const messages: Record<AiErrorCode, string> = {
+  REMOTE_UNAVAILABLE:'所选网关或在线电脑当前不可用，请查看模型路由；本次没有改用其他服务。',
+  REMOTE_PENDING:'上一条远程模型请求尚未结束。请先在模型执行记录中查看原请求。',
+  REMOTE_UNCONFIRMED:'远程结果的保存尚未确认。请在模型执行记录中备份或仅重试保存。',
+  REMOTE_PROFILE_CHANGED:'所选模型配置或在线状态已变化。请重新选择并确认后发起新请求。',
+  REMOTE_AUTH_REQUIRED:'账号登录已失效，原模型请求仍保留。请重新登录后查询原请求。',
+  REMOTE_CAPACITY:'远程模型队列或结果存储已满，本次未创建新的调用。',
   CONFIG_INVALID: '请检查 API 基础地址、模型和输出设置；地址不能包含账号、查询参数或片段。',
   KEY_MISSING: '此服务尚未配置本设备的 API 密钥。',
   KEY_INVALID: '密钥格式无效，请重新输入；不要包含换行或空格。',

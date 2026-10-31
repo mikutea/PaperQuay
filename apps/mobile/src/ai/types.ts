@@ -8,6 +8,8 @@ export interface AiWorkspaceProps {
   context: PdfAiContext | null;
   secretStore: SecretStore;
   transport?: AiTransport;
+  modelLedgerRevision?:number;
+  modelRouter?: import('../modelRouting/router.ts').MobileModelRouter;
   sync?: AiSyncBridge;
   onRestoreContext?(context: PdfAiContext): void;
   onSaveNote(note: NoteData, source: AiSaveContext): Promise<void>;
