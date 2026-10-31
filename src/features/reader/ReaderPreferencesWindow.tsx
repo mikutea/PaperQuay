@@ -1,5 +1,5 @@
 import clsx from 'clsx';
-import { X } from 'lucide-react';
+import { Search, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
@@ -29,6 +29,7 @@ export default function ReaderPreferencesWindow({
 }: ReaderPreferencesWindowProps) {
   const l = <T,>(zh: T, en: T) => pickLocaleText(settings.uiLanguage, zh, en);
   const sections = buildReaderPreferencesSections(l);
+  const [settingsSearch, setSettingsSearch] = useState('');
   const [activeSection, setActiveSection] = useState<PreferencesSectionKey>('general');
   const sidebarRef = useRef<HTMLElement | null>(null);
   const contentRef = useRef<HTMLElement | null>(null);
@@ -66,6 +67,8 @@ export default function ReaderPreferencesWindow({
     return null;
   }
 
+  const searchTerms: Record<string, string> = { general: '外观 主题 颜色 语言 theme language', reading: '字体 字号 页面 滚动 font size scroll', desktopAccount: '同步 登录 手机 平板 共享 账号 sync login phone PDF', models: '模型 密钥 API key embedding AI', mineru: '扫描 OCR 解析 PDF MinerU', backup: '备份 恢复 网盘 WebDAV backup restore', summaryQa: '问答 总结 概览 检索 RAG questions summary' };
+  const visibleSections = sections.filter(section => !settingsSearch.trim() || (section.title + ' ' + section.description + ' ' + (searchTerms[section.key] || '')).toLocaleLowerCase().includes(settingsSearch.trim().toLocaleLowerCase()));
   const activeSectionMeta = sections.find((section) => section.key === activeSection);
 
   const dialog = (
@@ -81,7 +84,7 @@ export default function ReaderPreferencesWindow({
         <aside
           ref={sidebarRef}
           onWheelCapture={handleSidebarWheelCapture}
-          className="flex min-h-0 w-64 shrink-0 flex-col border-r border-[var(--pq-border)] bg-[var(--pq-sidebar)] px-4 py-4 backdrop-blur-xl"
+          className="hidden min-h-0 w-64 shrink-0 flex-col sm:flex border-r border-[var(--pq-border)] bg-[var(--pq-sidebar)] px-4 py-4 backdrop-blur-xl"
         >
           <div className="shrink-0 px-3 pb-4">
             <div className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--pq-text-faint)]">
@@ -92,21 +95,23 @@ export default function ReaderPreferencesWindow({
             </div>
             <div className="mt-2 text-sm leading-6 text-[var(--pq-text-muted)]">
               {l(
-                '像桌面应用一样管理文库、阅读、解析与模型能力。',
-                'Manage library, reading, parsing, and model capabilities in a desktop-first workflow.',
+                '找到你想调整的阅读、文库或账号选项。',
+                'Find the reading, library or account option you want to adjust.',
               )}
             </div>
           </div>
 
+          <label className="relative mb-3 block"><Search className="pointer-events-none absolute left-3 top-3.5 h-4 w-4 text-[var(--pq-text-faint)]" /><span className="sr-only">{l('搜索设置', 'Search settings')}</span><input type="search" value={settingsSearch} onChange={event => setSettingsSearch(event.target.value)} placeholder={l('搜索设置', 'Search settings')} className="min-h-11 w-full rounded-xl border border-[var(--pq-border)] bg-[var(--pq-surface-1)] py-2 pl-9 pr-3 text-sm text-[var(--pq-text)]" /></label>
           <div
             data-wheel-scroll-target
             className="min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-y-contain pr-1"
           >
-            {sections.map((section) => (
+            {!visibleSections.length ? <p role="status" className="px-3 py-4 text-sm text-[var(--pq-text-muted)]">{l('没有找到，试试“翻译”“账号”或“文库”。', 'Try searching for translation, account or library.')}</p> : null}
+            {visibleSections.map((section) => (
               <button
                 key={section.key}
                 type="button"
-                onClick={() => setActiveSection(section.key)}
+                onClick={() => { setActiveSection(section.key); contentRef.current?.querySelector('[data-wheel-scroll-target]')?.scrollTo({ top: 0 }); }}
                 className={clsx(
                   'flex w-full items-start gap-3 rounded-[var(--pq-radius-md)] px-3 py-3 text-left transition-all duration-200',
                   activeSection === section.key
@@ -141,12 +146,12 @@ export default function ReaderPreferencesWindow({
             ))}
           </div>
 
-          <div className="mt-4 shrink-0 rounded-[var(--pq-radius-md)] border border-[var(--pq-border)] bg-[var(--pq-surface-1)] p-3 text-xs leading-5 text-[var(--pq-text-muted)]">
+          {activeSection === 'translation' ? <div className="mt-4 shrink-0 rounded-[var(--pq-radius-md)] border border-[var(--pq-border)] bg-[var(--pq-surface-1)] p-3 text-xs leading-5 text-[var(--pq-text-muted)]">
             {l(
               `当前翻译缓存：${translatedCount} 个结构块`,
               `Translation cache: ${translatedCount} blocks`,
             )}
-          </div>
+          </div> : null}
         </aside>
 
         <section
@@ -154,12 +159,13 @@ export default function ReaderPreferencesWindow({
           onWheelCapture={handleContentWheelCapture}
           className="flex min-w-0 flex-1 flex-col"
         >
+          <label className="border-b border-[var(--pq-border)] p-3 sm:hidden"><span className="sr-only">{l('选择设置分区', 'Choose settings section')}</span><select aria-label={l('选择设置分区', 'Choose settings section')} value={activeSection} onChange={event => { setActiveSection(event.target.value as PreferencesSectionKey); contentRef.current?.querySelector('[data-wheel-scroll-target]')?.scrollTo({ top: 0 }); }} className="min-h-11 w-full rounded-xl border border-[var(--pq-border)] bg-[var(--pq-surface-1)] px-3 text-base text-[var(--pq-text)]">{sections.map(section => <option key={section.key} value={section.key}>{section.title}</option>)}</select></label>
           <header className="flex items-center justify-between border-b border-[var(--pq-border)] bg-[var(--pq-surface-1)] px-6 py-4 backdrop-blur-xl">
             <div>
-              <div className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--pq-text-faint)]">
+              <div className="text-lg font-semibold text-[var(--pq-text)]">
                 {activeSectionMeta?.title}
               </div>
-              <div className="mt-1 text-lg font-semibold text-[var(--pq-text)]">
+              <div className="mt-1 text-sm text-[var(--pq-text-muted)]">
                 {activeSectionMeta?.description}
               </div>
             </div>
@@ -167,7 +173,7 @@ export default function ReaderPreferencesWindow({
             <button
               type="button"
               onClick={onClose}
-              className="pq-button px-3 py-2 text-sm"
+              className="pq-button min-h-11 px-3 py-2 text-sm"
             >
               <X className="mr-2 h-4 w-4" strokeWidth={1.8} />
               {l('关闭', 'Close')}
@@ -189,6 +195,7 @@ export default function ReaderPreferencesWindow({
           >
             <ReaderPreferencesContent
               activeSection={activeSection}
+              onNavigate={section => { setSettingsSearch(''); setActiveSection(normalizePreferencesSection(section) || 'general'); contentRef.current?.querySelector('[data-wheel-scroll-target]')?.scrollTo({ top: 0 }); }}
               l={l}
               settings={settings}
               {...contentProps}

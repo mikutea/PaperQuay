@@ -788,7 +788,8 @@ function createDesktopAccountCommands(context, options = {}) {
     },
     async desktop_provider_unbind({ bindingId }) {
       requireAccount(); if (!UUID.test(bindingId)) fail('DESKTOP_ARGUMENT_INVALID');
-      await remoteTasks.stop(); await models.stop();
+      // Model requests use the account and library, independently of PDF bindings.
+      await remoteTasks.stop();
       provider.cancelBinding(bindingId); bindingControllers.get(bindingId)?.abort();
       await commit((library) => {
         const binding = library.bindings.find((item) => item.bindingId === bindingId && !item.removed);

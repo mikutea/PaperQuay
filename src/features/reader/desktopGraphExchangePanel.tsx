@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { ArrowDownToLine, ArrowUpFromLine, Download, GitCompareArrows, RefreshCw, Square } from 'lucide-react';
+import { ArrowDownToLine, ArrowLeft, ArrowUpFromLine, ChevronRight, Download, RefreshCw, Square } from 'lucide-react';
 import {
   desktopGraphExchange,
   type DesktopGraphConflict,
@@ -24,7 +24,8 @@ function errorCode(error: unknown): string {
 
 function reasonLabel(code: string, l: ReaderPreferencesLocalizer): string {
   const labels: Record<string, [string, string]> = {
-    UNMAPPED_GRAPH_ENDPOINT: ['端点尚无已验证的本机绑定；关系会保留。', 'An endpoint has no verified local binding; the relation is preserved.'],
+    UNMAPPED_GRAPH_ENDPOINT: ['先把关系涉及的论文添加到账号，再重新检查。关系内容仍保留。', 'Add the papers involved in this relation to your account, then check again. The relation is preserved.'],
+    REVISION_MISMATCH: ['账号内容已更新，请重新检查后选择要保留的内容。', 'The account content changed. Check again and choose which content to keep.'],
     MISSING_LOCAL_MATERIAL: ['绑定的本机文献已不可用。', 'The linked local paper is unavailable.'],
     AMBIGUOUS_LOCAL_MAPPING: ['一份本机文献对应多个账号对象，需要先明确绑定。', 'This local paper has multiple account bindings. Resolve the binding first.'],
     AMBIGUOUS_ACCOUNT_MAPPING: ['一个账号对象对应多份本机文献，需要先明确绑定。', 'This account entity has multiple local bindings. Resolve the binding first.'],
@@ -63,9 +64,9 @@ function Reason({ code, l }: { code: string; l: ReaderPreferencesLocalizer }) {
 
 function actionLabel(action: DesktopGraphLocalRow['action'] | 'put', l: ReaderPreferencesLocalizer): string {
   const labels = {
-    create: l('新发布', 'Publish new'), update: l('更新账号关系', 'Update account relation'),
+    create: l('添加到账号', 'Add to account'), update: l('更新账号中的内容', 'Update account content'),
     restore: l('恢复账号关系', 'Restore account relation'), delete: l('删除账号关系', 'Delete account relation'),
-    none: l('无变化', 'Unchanged'), blocked: l('暂不能发布', 'Cannot publish yet'), put: l('写入关系', 'Write relation'),
+    none: l('已同步，没有变化', 'Synced, unchanged'), blocked: l('暂不能同步', 'Cannot sync yet'), put: l('保存关系修改', 'Save relation changes'),
   };
   return labels[action];
 }
@@ -113,7 +114,10 @@ function PageRows<T>({ items, renderRow, l }: { items: T[]; renderRow: (item: T)
   </>;
 }
 
+export type DesktopGraphExchangeTask = 'publish' | 'adopt' | 'pending';
+
 interface ReviewProps {
+  task: DesktopGraphExchangeTask;
   preview: DesktopGraphExchangePreview;
   disabled: boolean;
   selectedLocal: string[];
@@ -130,8 +134,40 @@ interface ReviewProps {
   l: ReaderPreferencesLocalizer;
 }
 
+function hasNoteEndpoint(data: GraphRelationData | null | undefined, raw?: unknown): boolean {
+  if (data?.source.entityType === 'note' || data?.target.entityType === 'note') return true;
+  if (!raw || typeof raw !== 'object') return false;
+  const fields = raw as Record<string, unknown>;
+  return [fields.source, fields.target].some(value => typeof value === 'string' && value.startsWith('note:'));
+}
+
+function RowReason({ code, note, l }: { code: string; note: boolean; l: ReaderPreferencesLocalizer }) {
+  return code === 'UNMAPPED_GRAPH_ENDPOINT' && note
+    ? <p title={code} className="mt-2 text-xs leading-5 text-[var(--pq-text-muted)]">{l('此类笔记关系暂不能同步，原内容仍保留。', 'This kind of note relation cannot sync yet. Its original content is preserved.')}</p>
+    : <Reason code={code} l={l} />;
+}
+
+function RelationContent({ data, title, empty, l }: { data?: GraphRelationData | null; title: string; empty?: string; l: ReaderPreferencesLocalizer }) {
+  return <section className={detailClass}>
+    <h5 className="text-sm font-medium">{title}</h5>
+    <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-[var(--pq-text-muted)]">{data ? data.description || l('未填写说明', 'No description') : empty || l('尚无内容', 'No content yet')}</p>
+    {data ? <details className="mt-1"><summary className={summaryClass}>{l('完整字段', 'Full fields')}</summary><DesktopGraphRelationDetails data={data} title={data.label} l={l} /><p className="mt-2 text-xs leading-5 text-[var(--pq-text-muted)]">{l('关系分数是原始建议分数，不代表经过校准的概率。', 'The relation score is the original suggestion score, not a calibrated probability.')}</p></details> : null}
+  </section>;
+}
+
+export function DesktopGraphExchangeTaskPicker({ disabled, pending, onTask, l }: { disabled: boolean; pending: number; onTask: (task: DesktopGraphExchangeTask) => void; l: ReaderPreferencesLocalizer }) {
+  const tasks: { key: DesktopGraphExchangeTask; title: string; description: string; icon: ReactNode }[] = [
+    { key: 'publish', title: l('把本机关系同步到账号', 'Sync local relations to your account'), description: l('选择这台电脑上的关系，让同账号设备也能看到。', 'Choose relations from this computer to view on your other devices.'), icon: <ArrowUpFromLine className="h-5 w-5 shrink-0" /> },
+    { key: 'adopt', title: l('把账号关系带到本机', 'Bring account relations to this computer'), description: l('选择账号中的关系，加入本机的账号图谱。', 'Choose account relations to add to the account graph on this computer.'), icon: <ArrowDownToLine className="h-5 w-5 shrink-0" /> },
+    { key: 'pending', title: l('处理未完成操作', 'Finish pending operations'), description: pending > 0 ? l('上次同步还有内容需要核对或继续。', 'Some content from the last sync needs review or continuation.') : l('检查上次同步的结果，处理内容不同的关系。', 'Check previous sync results and resolve differing relation content.'), icon: <RefreshCw className="h-5 w-5 shrink-0" /> },
+  ];
+  return <div className="divide-y divide-[var(--pq-border)]" data-graph-task-picker>{tasks.map(task => <button key={task.key} type="button" aria-label={task.title} className="flex min-h-16 w-full items-center gap-3 rounded-lg px-3 py-4 text-left text-[var(--pq-text)] enabled:hover:bg-[var(--pq-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--pq-accent)] disabled:cursor-not-allowed disabled:opacity-50" disabled={disabled} onClick={() => onTask(task.key)}>
+    {task.icon}<span className="min-w-0"><span className="block text-sm font-medium">{task.title}</span><span className="mt-1 block text-xs leading-5 text-[var(--pq-text-muted)]">{task.description}</span></span><ChevronRight aria-hidden className="ml-auto h-4 w-4 shrink-0 text-[var(--pq-text-muted)]" />
+  </button>)}</div>;
+}
+
 export function DesktopGraphExchangeReview(props: ReviewProps) {
-  const { preview, disabled, selectedLocal, selectedIncoming, confirmation, conflictChoices, l } = props;
+  const { task, preview, disabled, selectedLocal, selectedIncoming, confirmation, conflictChoices, l } = props;
   const local = preview.localRows.filter(row => selectedLocal.includes(row.key) && row.action !== 'none' && row.action !== 'blocked');
   const incoming = preview.incoming.filter(row => selectedIncoming.includes(row.entityId) && row.canAccept);
   const confirm = (kind: 'publish' | 'adopt') => {
@@ -139,59 +175,63 @@ export function DesktopGraphExchangeReview(props: ReviewProps) {
     const deleting = rows.filter(row => 'action' in row ? row.action === 'delete' : row.state === 'delete').length;
     const restoring = kind === 'publish' ? local.filter(row => row.action === 'restore').length : 0;
     return <div className="mt-3 space-y-2 border-l-2 border-[var(--pq-accent)] pl-3" role="group" aria-label={l('确认所选关系', 'Confirm selected relations')}>
-      <p className="text-sm font-medium">{kind === 'publish' ? l(`发布所选 ${rows.length} 条关系到当前账号`, `Publish ${rows.length} selected relations to this account`) : l(`接收所选 ${rows.length} 条到私有图谱`, `Accept ${rows.length} selected relations into the private graph`)}</p>
-      {deleting > 0 ? <p className="text-xs text-[var(--pq-error)]">{kind === 'publish' ? l(`包含 ${deleting} 条删除，将删除账号中的关系。`, `Includes ${deleting} deletions from the account.`) : l(`包含 ${deleting} 条删除，将从私有图谱移除对应关系。`, `Includes ${deleting} deletions from the private graph.`)}</p> : null}
-      {restoring > 0 ? <p className="text-xs text-[var(--pq-text-muted)]">{l(`包含 ${restoring} 条恢复，将恢复账号中已删除的关系。`, `Includes ${restoring} restores of deleted account relations.`)}</p> : null}
-      <ul className="max-h-36 list-disc overflow-y-auto pl-4 text-xs leading-5">{rows.map(row => <li key={row.key} className="break-words">{row.label}</li>)}</ul>
-      <div className="flex flex-wrap gap-2"><button type="button" className={buttonClass} disabled={disabled || rows.length === 0} onClick={kind === 'publish' ? props.onPublish : props.onAdopt}>{kind === 'publish' ? l('确认发布所选', 'Confirm publication') : l('确认接收所选', 'Confirm acceptance')}</button><button type="button" className={buttonClass} disabled={disabled} onClick={() => props.onConfirm(null)}>{l('返回选择', 'Back to selection')}</button></div>
+      <p className="text-sm font-medium">{kind === 'publish' ? l('即将把所选关系同步到账号', 'Ready to sync selected relations to your account') : l('即将把所选关系带到本机', 'Ready to bring selected relations to this computer')}</p>
+      {deleting > 0 ? <p className="text-sm text-[var(--pq-error)]">{kind === 'publish' ? l('包含 ' + deleting + ' 条删除，将删除账号中的关系。', 'Includes ' + deleting + ' deletions from the account.') : l('包含 ' + deleting + ' 条删除，将从本机账号图谱移除对应关系。', 'Includes ' + deleting + ' deletions from the local account graph.')}</p> : null}
+      {restoring > 0 ? <p className="text-sm text-[var(--pq-text-muted)]">{l('包含 ' + restoring + ' 条恢复，将恢复账号中已删除的关系。', 'Includes ' + restoring + ' restores of deleted account relations.')}</p> : null}
+      <ul className="max-h-36 list-disc overflow-y-auto pl-4 text-sm leading-6">{rows.map(row => <li key={row.key} className="break-words">{row.label}</li>)}</ul>
+      <div className="flex flex-wrap gap-2"><button type="button" className={buttonClass} disabled={disabled || rows.length === 0} onClick={kind === 'publish' ? props.onPublish : props.onAdopt}>{kind === 'publish' ? l('同步这 ' + rows.length + ' 条关系', 'Sync these ' + rows.length + ' relations') : l('带入这 ' + rows.length + ' 条关系', 'Bring in these ' + rows.length + ' relations')}</button><button type="button" className={buttonClass} disabled={disabled} onClick={() => props.onConfirm(null)}>{l('返回选择', 'Back to selection')}</button></div>
     </div>;
   };
-  return <div className="space-y-3 text-[var(--pq-text)]" data-desktop-graph-review>
-    <p className="break-words text-xs text-[var(--pq-text-muted)]">{l('检查时间：', 'Checked: ')}{preview.checkedAt}</p>
-    <details open className="border-t border-[var(--pq-border)] pt-1">
-      <summary className={summaryClass}>{l('本机关系 → 账号', 'Local relations → account')} <span className="font-normal text-[var(--pq-text-muted)]">({preview.localRows.length})</span></summary>
+  return <div className="space-y-3 text-[var(--pq-text)]" data-desktop-graph-review data-graph-task={task}>
+    {task === 'publish' ? <section aria-label={l('选择要同步的关系', 'Choose relations to sync')}>
+      <p className="text-sm leading-6 text-[var(--pq-text-muted)]">{l('勾选要同步的关系。你可以先查看内容，再预览这次修改。', 'Select relations to sync. Review their content, then preview this change.')}</p>
       {preview.localRows.length ? <PageRows key={preview.token} items={preview.localRows} l={l} renderRow={row => <li key={row.key} className="py-3">
-        <label className="flex min-h-11 items-start gap-3 text-sm"><input type="checkbox" className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--pq-accent)]" checked={selectedLocal.includes(row.key)} disabled={disabled || row.action === 'none' || row.action === 'blocked'} onChange={event => props.onToggleLocal(row.key, event.target.checked)} /><span className="min-w-0 flex-1 break-words">{row.label}<span className={`mt-1 block text-xs ${row.action === 'delete' ? 'text-[var(--pq-error)]' : 'text-[var(--pq-text-muted)]'}`}>{actionLabel(row.action, l)}</span></span></label>
-        {row.reason ? <Reason code={row.reason} l={l} /> : null}
-        <details className="ml-7"><summary className="min-h-11 cursor-pointer py-3.5 text-xs text-[var(--pq-text-muted)]">{l('查看字段差异', 'View field differences')}</summary><div className="grid min-w-0 gap-2 lg:grid-cols-2"><DesktopGraphRelationDetails data={row.local} title={l('本机内容', 'Local content')} empty={row.action === 'delete' ? l('本机关系已删除', 'Local relation deleted') : undefined} l={l} /><DesktopGraphRelationDetails data={row.remote} title={l('账号内容', 'Account content')} empty={row.action === 'restore' ? l('账号关系已删除', 'Account relation deleted') : undefined} l={l} /></div><p className="mt-2 break-all text-xs text-[var(--pq-text-muted)]">{l('本机关系 ID：', 'Local relation ID: ')}{row.localRelationId || l('无法读取', 'Unavailable')}{row.entityId ? ` / ${row.entityId}` : ''}</p></details>
-        {row.action === 'blocked' && row.raw !== undefined ? <details className="ml-7"><summary className="min-h-11 cursor-pointer py-3.5 text-xs text-[var(--pq-text-muted)]">{l('查看保留的本机原字段', 'View preserved original local fields')}</summary><pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-all rounded-xl bg-[var(--pq-surface-2)] p-3 text-xs leading-5">{JSON.stringify(row.raw, null, 2)}</pre></details> : null}
-      </li>} /> : <p className="py-3 text-sm text-[var(--pq-text-muted)]">{l('当前文库暂无可检查的本机关系。', 'This library has no local relations to review.')}</p>}
-      {confirmation === 'publish' ? confirm('publish') : <button type="button" className={buttonClass + ' mt-2'} disabled={disabled || local.length === 0} onClick={() => props.onConfirm('publish')}><ArrowUpFromLine className="h-4 w-4" />{l(`发布所选 (${local.length})…`, `Publish selected (${local.length})…`)}</button>}
-    </details>
-    <details open className="border-t border-[var(--pq-border)] pt-1">
-      <summary className={summaryClass}>{l('账号关系 → 私有图谱', 'Account relations → private graph')} <span className="font-normal text-[var(--pq-text-muted)]">({preview.incoming.length})</span></summary>
+        <label className="flex min-h-11 items-start gap-3 text-sm"><input type="checkbox" className="mt-1 h-4 w-4 shrink-0 accent-[var(--pq-accent)]" checked={selectedLocal.includes(row.key)} disabled={disabled || row.action === 'none' || row.action === 'blocked'} onChange={event => props.onToggleLocal(row.key, event.target.checked)} /><span className="min-w-0 flex-1 break-words">{row.label}<span className={'mt-1 block text-xs ' + (row.action === 'delete' ? 'text-[var(--pq-error)]' : 'text-[var(--pq-text-muted)]')}>{actionLabel(row.action, l)}</span></span></label>
+        {row.reason ? <RowReason code={row.reason} note={hasNoteEndpoint(row.local, row.raw)} l={l} /> : null}
+        <details className="ml-7"><summary className={summaryClass}>{l('查看内容与变化', 'View content and changes')}</summary><div className="grid min-w-0 gap-2 lg:grid-cols-2"><RelationContent data={row.local} title={l('本机内容', 'Local content')} empty={row.action === 'delete' ? l('本机关系已删除', 'Local relation deleted') : undefined} l={l} /><RelationContent data={row.remote} title={l('账号内容', 'Account content')} empty={row.action === 'restore' ? l('账号关系已删除', 'Account relation deleted') : undefined} l={l} /></div><p className="mt-2 break-all text-xs text-[var(--pq-text-muted)]">{l('本机关系 ID：', 'Local relation ID: ')}{row.localRelationId || l('无法读取', 'Unavailable')}{row.entityId ? ' / ' + row.entityId : ''}</p>
+          {row.action === 'blocked' && row.raw !== undefined ? <details><summary className={summaryClass}>{l('保留的本机原字段', 'Preserved original local fields')}</summary><pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-all rounded-xl bg-[var(--pq-surface-2)] p-3 text-xs leading-5">{JSON.stringify(row.raw, null, 2)}</pre></details> : null}
+        </details>
+      </li>} /> : <p className="py-3 text-sm text-[var(--pq-text-muted)]">{l('当前文库还没有可同步的关系。先在图谱中建立文献之间的关系。', 'This library has no relations to sync. Create relations between papers in the graph first.')}</p>}
+      {confirmation === 'publish' ? confirm('publish') : <button type="button" className={buttonClass + ' mt-2'} disabled={disabled || local.length === 0} onClick={() => props.onConfirm('publish')}>{l('预览同步内容 (' + local.length + ')', 'Preview sync (' + local.length + ')')}</button>}
+    </section> : null}
+    {task === 'adopt' ? <section aria-label={l('选择要带到本机的关系', 'Choose relations to bring to this computer')}>
+      <p className="text-sm leading-6 text-[var(--pq-text-muted)]">{l('勾选要带到本机的关系，保存在本机的账号图谱中。', 'Select relations to save in the account graph on this computer.')}</p>
       {preview.incoming.length ? <PageRows key={preview.token} items={preview.incoming} l={l} renderRow={row => <li key={row.key} className="py-3">
-        <label className="flex min-h-11 items-start gap-3 text-sm"><input type="checkbox" className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--pq-accent)]" checked={selectedIncoming.includes(row.entityId)} disabled={disabled || !row.canAccept} onChange={event => props.onToggleIncoming(row.entityId, event.target.checked)} /><span className="min-w-0 flex-1 break-words">{row.label}<span className={`mt-1 block text-xs ${row.state === 'delete' ? 'text-[var(--pq-error)]' : 'text-[var(--pq-text-muted)]'}`}>{{ new: l('新关系', 'New relation'), update: l('有更新', 'Updated'), delete: l('从私有图谱移除', 'Remove from private graph'), same: l('已接收，无变化', 'Accepted, unchanged'), unmapped: l('保留在账号，端点待绑定', 'Preserved in the account; endpoints unbound'), pending: l('有待处理请求', 'Pending request') }[row.state]}</span></span></label>
-        {row.reason ? <Reason code={row.reason} l={l} /> : null}
-        <details className="ml-7"><summary className="min-h-11 cursor-pointer py-3.5 text-xs text-[var(--pq-text-muted)]">{l('查看接收差异', 'View acceptance differences')}</summary><div className="grid min-w-0 gap-2 lg:grid-cols-2"><DesktopGraphRelationDetails data={row.accepted} title={l('私有图谱已有内容', 'Existing private graph content')} empty={l('尚无已接收内容', 'No accepted content')} l={l} /><DesktopGraphRelationDetails data={row.data} title={l(`账号版本 ${row.revision}`, `Account revision ${row.revision}`)} empty={row.state === 'delete' ? l('账号关系已删除', 'Account relation deleted') : undefined} l={l} /></div><p className="mt-2 break-all text-xs text-[var(--pq-text-muted)]">{l('账号关系 ID：', 'Account relation ID: ')}{row.entityId}</p></details>
-      </li>} /> : <p className="py-3 text-sm text-[var(--pq-text-muted)]">{l('账号中暂无待接收关系。', 'The account has no relations to accept.')}</p>}
-      {confirmation === 'adopt' ? confirm('adopt') : <button type="button" className={buttonClass + ' mt-2'} disabled={disabled || incoming.length === 0} onClick={() => props.onConfirm('adopt')}><ArrowDownToLine className="h-4 w-4" />{l(`接收所选 (${incoming.length})…`, `Accept selected (${incoming.length})…`)}</button>}
-    </details>
-    {preview.conflicts.length ? <details open className="border-t border-[var(--pq-border)] pt-1">
-      <summary className={summaryClass}>{l(`待决定的冲突 (${preview.conflicts.length})`, `Conflicts to decide (${preview.conflicts.length})`)}</summary>
-      <PageRows key={preview.token} items={preview.conflicts} l={l} renderRow={conflict => <li key={conflict.conflictId} className="space-y-3 py-3">
-        <p className="break-words text-sm font-medium">{conflict.label}</p>
-        <p className="text-xs text-[var(--pq-text-muted)]">{l(`账号版本 ${conflict.expectedRevision}；请查看两份内容后选择。`, `Account revision ${conflict.expectedRevision}; review both versions before choosing.`)}</p>
-        <div className="grid min-w-0 gap-2 lg:grid-cols-2"><DesktopGraphRelationDetails data={conflict.current?.data} title={l('当前账号版本', 'Current account version')} empty={conflict.current?.deletedAt ? l('已删除', 'Deleted') : l('尚无账号版本', 'No account version')} l={l} /><DesktopGraphRelationDetails data={conflict.attempted.data} title={l('本次请求：', 'This request: ') + actionLabel(conflict.attempted.mutation, l)} empty={conflict.attempted.mutation === 'delete' ? l('请求删除这条关系', 'Requests deletion of this relation') : undefined} l={l} /></div>
-        <fieldset disabled={disabled} className="flex flex-wrap gap-x-4 gap-y-2 text-xs"><legend className="sr-only">{l('选择冲突处理方式', 'Choose conflict resolution')}</legend>{(['current', 'attempted'] as const).map(choice => <label key={choice} className="flex min-h-11 items-center gap-2"><input type="radio" name={`graph-conflict-${conflict.conflictId}`} checked={conflictChoices[conflict.conflictId] === choice} onChange={() => props.onConflictChoice(conflict.conflictId, choice)} />{choice === 'current' ? l('保留当前账号版本', 'Keep current account version') : l('使用本次请求', 'Use this request')}</label>)}</fieldset>
-        <button type="button" className={buttonClass} disabled={disabled || !conflictChoices[conflict.conflictId]} onClick={() => props.onResolve(conflict)}>{l('确认这条冲突的选择', 'Confirm this conflict choice')}</button>
-      </li>} />
-    </details> : null}
-    {preview.pendingRows.length + preview.pendingResolutions.length > 0 ? <details className="border-t border-[var(--pq-border)] pt-1">
-      <summary className={summaryClass}>{l(`待处理原请求 (${preview.pendingRows.length + preview.pendingResolutions.length})`, `Pending original requests (${preview.pendingRows.length + preview.pendingResolutions.length})`)}</summary>
-      <PageRows key={preview.token} items={preview.pendingRows} l={l} renderRow={row => <li key={row.opId} className="space-y-2 py-3"><p className="break-words text-sm font-medium">{row.label}</p><p className="text-xs text-[var(--pq-text-muted)]">{actionLabel(row.mutation, l)} · {pendingLabel(row.stage, l)}</p><DesktopGraphRelationDetails data={row.data} title={l('已保存的原请求内容', 'Saved original request')} empty={row.mutation === 'delete' ? l('请求删除这条关系', 'Requests deletion of this relation') : undefined} l={l} /><p className="break-all text-xs text-[var(--pq-text-muted)]">{l('请求 ID：', 'Request ID: ')}{row.opId}</p></li>} />
-      <PageRows key={`${preview.token}:resolutions`} items={preview.pendingResolutions} l={l} renderRow={row => {
-        const conflict = preview.conflicts.find(item => item.conflictId === row.conflictId);
-        const deletes = row.choice === 'merged' ? row.mutation === 'delete' : conflict?.attempted.mutation === 'delete';
-        return <li key={row.opId} className="space-y-2 py-3"><p className="break-words text-sm font-medium">{l('已保存的冲突决定：', 'Saved conflict choice: ')}{conflict?.label || row.conflictId}</p>
-          <p className="text-xs text-[var(--pq-text-muted)]">{row.choice === 'current' ? l(`保留账号版本 ${row.expectedRevision}`, `Keep account revision ${row.expectedRevision}`) : row.choice === 'attempted' ? l('使用原始请求内容', 'Use the original attempted content') : l('使用已保存的合并内容', 'Use saved merged content')}</p>
-          {row.choice !== 'current' ? <DesktopGraphRelationDetails data={row.choice === 'merged' ? row.data : conflict?.attempted.data} title={l('原决定的内容', 'Original choice content')} empty={deletes ? l('删除关系', 'Delete relation') : l('请在冲突详情中核对原始请求。', 'Review the original request in conflict details.')} l={l} /> : null}
-          <p className="text-xs text-[var(--pq-text-muted)]">{row.lastResult?.status === 'rejected' ? l('该决定未被接受', 'This choice was rejected') : row.lastResult?.status === 'conflict' ? l('账号版本已变化，需重新选择', 'The account version changed; choose again') : l('决定的处理结果待确认', 'The choice outcome is unconfirmed')}</p>
-          {row.lastResult?.code ? <Reason code={row.lastResult.code} l={l} /> : null}<p className="break-all text-xs text-[var(--pq-text-muted)]">{l('请求 ID：', 'Request ID: ')}{row.opId}</p>
-        </li>;
-      }} />
-    </details> : null}
-    <p className="text-xs leading-5 text-[var(--pq-text-muted)]">{l('关系分数是原始建议分数，不代表经过校准的概率。', 'A relation score is the original suggestion score, not a calibrated probability.')}</p>
+        <label className="flex min-h-11 items-start gap-3 text-sm"><input type="checkbox" className="mt-1 h-4 w-4 shrink-0 accent-[var(--pq-accent)]" checked={selectedIncoming.includes(row.entityId)} disabled={disabled || !row.canAccept} onChange={event => props.onToggleIncoming(row.entityId, event.target.checked)} /><span className="min-w-0 flex-1 break-words">{row.label}<span className={'mt-1 block text-xs ' + (row.state === 'delete' ? 'text-[var(--pq-error)]' : 'text-[var(--pq-text-muted)]')}>{{ new: l('新关系', 'New relation'), update: l('有更新', 'Updated'), delete: l('从本机账号图谱移除', 'Remove from the local account graph'), same: l('已带入，没有变化', 'Already brought in, unchanged'), unmapped: l('暂不能带入，内容保留在账号', 'Cannot bring in yet; preserved in your account'), pending: l('需要先处理未完成操作', 'Finish the pending operation first') }[row.state]}</span></span></label>
+        {row.reason ? <RowReason code={row.reason} note={hasNoteEndpoint(row.data)} l={l} /> : null}
+        <details className="ml-7"><summary className={summaryClass}>{l('查看内容与变化', 'View content and changes')}</summary><div className="grid min-w-0 gap-2 lg:grid-cols-2"><RelationContent data={row.accepted} title={l('本机账号图谱中的内容', 'Content in the local account graph')} empty={l('尚未带入这条关系', 'This relation has not been brought in')} l={l} /><RelationContent data={row.data} title={l('账号中的最新内容', 'Latest account content')} empty={row.state === 'delete' ? l('账号关系已删除', 'Account relation deleted') : undefined} l={l} /></div><p className="mt-2 break-all text-xs text-[var(--pq-text-muted)]">{l('账号关系 ID：', 'Account relation ID: ')}{row.entityId}{l('；账号版本 ', '; account revision ')}{row.revision}</p></details>
+      </li>} /> : <p className="py-3 text-sm text-[var(--pq-text-muted)]">{l('账号中还没有可带到本机的关系。', 'Your account has no relations to bring to this computer.')}</p>}
+      {confirmation === 'adopt' ? confirm('adopt') : <button type="button" className={buttonClass + ' mt-2'} disabled={disabled || incoming.length === 0} onClick={() => props.onConfirm('adopt')}>{l('预览带入内容 (' + incoming.length + ')', 'Preview import (' + incoming.length + ')')}</button>}
+    </section> : null}
+    {task === 'pending' ? <>
+      {preview.conflicts.length ? <section aria-label={l('选择要保留的内容', 'Choose which content to keep')}>
+        <h4 className="text-sm font-medium">{l('这些关系有不同内容，请选择要保留的版本', 'These relations differ. Choose the content to keep.')}</h4>
+        <PageRows key={preview.token} items={preview.conflicts} l={l} renderRow={conflict => <li key={conflict.conflictId} className="space-y-3 py-3">
+          <p className="break-words text-sm font-medium">{conflict.label}</p>
+          <div className="grid min-w-0 gap-2 lg:grid-cols-2"><RelationContent data={conflict.current?.data} title={l('账号中的内容', 'Account content')} empty={conflict.current?.deletedAt ? l('已删除', 'Deleted') : l('尚无账号内容', 'No account content')} l={l} /><RelationContent data={conflict.attempted.data} title={l('本次修改', 'This change')} empty={conflict.attempted.mutation === 'delete' ? l('本次修改将删除这条关系', 'This change deletes the relation') : undefined} l={l} /></div>
+          <fieldset disabled={disabled} className="flex flex-wrap gap-x-4 gap-y-2 text-sm"><legend className="sr-only">{l('选择要保留的内容', 'Choose which content to keep')}</legend>{(['current', 'attempted'] as const).map(choice => <label key={choice} className="flex min-h-11 items-center gap-2"><input type="radio" name={'graph-conflict-' + conflict.conflictId} checked={conflictChoices[conflict.conflictId] === choice} onChange={() => props.onConflictChoice(conflict.conflictId, choice)} />{choice === 'current' ? l('保留账号内容', 'Keep account content') : l('使用本次修改', 'Use this change')}</label>)}</fieldset>
+          <button type="button" className={buttonClass} disabled={disabled || !conflictChoices[conflict.conflictId]} onClick={() => props.onResolve(conflict)}>{l('应用这项选择', 'Apply this choice')}</button>
+          <details><summary className={summaryClass}>{l('操作详情', 'Operation details')}</summary><p className="break-all text-xs text-[var(--pq-text-muted)]">{l('账号版本 ', 'Account revision ')}{conflict.expectedRevision}{' / '}{conflict.entityId}{' / '}{conflict.conflictId}</p><p className="text-xs text-[var(--pq-text-muted)]">{actionLabel(conflict.attempted.mutation, l)}</p></details>
+        </li>} />
+      </section> : null}
+      {preview.pendingRows.length + preview.pendingResolutions.length > 0 ? <section aria-label={l('上次未完成的操作', 'Unfinished operations')}>
+        <h4 className="text-sm font-medium">{l('上次未完成的操作', 'Unfinished operations')}</h4>
+        <PageRows key={preview.token} items={preview.pendingRows} l={l} renderRow={row => <li key={row.opId} className="space-y-2 py-3"><p className="break-words text-sm font-medium">{row.label}</p><p className="text-sm text-[var(--pq-text-muted)]">{pendingLabel(row.stage, l)}</p><details><summary className={summaryClass}>{l('操作详情', 'Operation details')}</summary><p className="mb-2 text-xs text-[var(--pq-text-muted)]">{actionLabel(row.mutation, l)}</p><DesktopGraphRelationDetails data={row.data} title={l('已保存的原请求内容', 'Saved original request')} empty={row.mutation === 'delete' ? l('请求删除这条关系', 'Requests deletion of this relation') : undefined} l={l} /><p className="mt-2 break-all text-xs text-[var(--pq-text-muted)]">{l('请求 ID：', 'Request ID: ')}{row.opId}</p></details></li>} />
+        <PageRows key={preview.token + ':resolutions'} items={preview.pendingResolutions} l={l} renderRow={row => {
+          const conflict = preview.conflicts.find(item => item.conflictId === row.conflictId);
+          const deletes = row.choice === 'merged' ? row.mutation === 'delete' : conflict?.attempted.mutation === 'delete';
+          return <li key={row.opId} className="space-y-2 py-3"><p className="break-words text-sm font-medium">{conflict?.label || l('已保存的关系处理决定', 'Saved relation choice')}</p>
+            <p className="text-sm text-[var(--pq-text-muted)]">{row.lastResult?.status === 'rejected' ? l('上次选择未被接受，请重新检查。', 'The last choice was rejected. Check again.') : row.lastResult?.status === 'conflict' ? l('账号内容已变化，需要重新选择。', 'Account content changed. Choose again.') : l('上次选择的处理结果待确认。', 'The result of the last choice is unconfirmed.')}</p>
+            {row.lastResult?.code ? <Reason code={row.lastResult.code} l={l} /> : null}
+            <details><summary className={summaryClass}>{l('操作详情', 'Operation details')}</summary><p className="mb-2 text-xs text-[var(--pq-text-muted)]">{row.choice === 'current' ? l('保留账号版本 ' + row.expectedRevision, 'Keep account revision ' + row.expectedRevision) : row.choice === 'attempted' ? l('使用原始请求内容', 'Use the original attempted content') : l('使用已保存的合并内容', 'Use saved merged content')}</p>
+              {row.choice !== 'current' ? <DesktopGraphRelationDetails data={row.choice === 'merged' ? row.data : conflict?.attempted.data} title={l('原决定的内容', 'Original choice content')} empty={deletes ? l('删除关系', 'Delete relation') : l('请在内容比较中核对原始修改。', 'Review the original change in the content comparison.')} l={l} /> : null}
+              <p className="mt-2 break-all text-xs text-[var(--pq-text-muted)]">{l('请求 ID：', 'Request ID: ')}{row.opId}{row.lastResult?.code ? ' / ' + row.lastResult.code : ''}</p>
+            </details>
+          </li>;
+        }} />
+      </section> : null}
+      {!preview.conflicts.length && !preview.pendingRows.length && !preview.pendingResolutions.length ? <p className="py-3 text-sm text-[var(--pq-text-muted)]">{l('没有需要处理的未完成操作。', 'There are no unfinished operations to handle.')}</p> : null}
+    </> : null}
   </div>;
 }
 
@@ -208,6 +248,7 @@ export function DesktopGraphExchangePanel(props: DesktopGraphExchangePanelProps)
 
 function OwnedGraphExchangePanel({ l, accountActive, ownerKey }: DesktopGraphExchangePanelProps) {
   const [status, setStatus] = useState<DesktopGraphExchangeStatus | null>(null);
+  const [task, setTask] = useState<DesktopGraphExchangeTask | null>(null);
   const [preview, setPreview] = useState<DesktopGraphExchangePreview | null>(null);
   const [selectedLocal, setSelectedLocal] = useState<string[]>([]);
   const [selectedIncoming, setSelectedIncoming] = useState<string[]>([]);
@@ -270,7 +311,8 @@ function OwnedGraphExchangePanel({ l, accountActive, ownerKey }: DesktopGraphExc
     }
   };
 
-  const check = () => run('preview', async () => {
+  const check = (nextTask: DesktopGraphExchangeTask) => run('preview', async () => {
+    setTask(nextTask);
     const request = sequence.current;
     clearReview();
     const next = await desktopGraphExchange.preview();
@@ -302,29 +344,36 @@ function OwnedGraphExchangePanel({ l, accountActive, ownerKey }: DesktopGraphExc
     setConfirmation(null); setter(previous => checked ? [...previous, key] : previous.filter(value => value !== key));
   };
 
-  return <SettingsField label={l('图谱关系交换', 'Graph relation exchange')} description={l('先查看差异，再选择发布到账号，或接收到当前账号的私有图谱。', 'Review differences, then choose what to publish to your account or accept into its private graph.')}>
+  const title = task === 'publish' ? l('把本机关系同步到账号', 'Sync local relations to your account') : task === 'adopt' ? l('把账号关系带到本机', 'Bring account relations to this computer') : l('处理未完成操作', 'Finish pending operations');
+  return <SettingsField label={l('同步文献关系', 'Sync paper relations')} description={l('选择这次要做的事，再查看并确认具体内容。', 'Choose what to do, then review and confirm the content.')}>
     <div className="space-y-3" data-desktop-graph-exchange>
-      {!accountActive ? <p className="text-sm text-[var(--pq-text-muted)]">{l('登录后可检查当前文库的关系。', 'Sign in to review relations in this library.')}</p> : status && !status.supported ? <p className="text-sm text-[var(--pq-text-muted)]">{l('当前账号服务尚未支持图谱关系交换。', 'This account service does not support graph relation exchange.')}</p> : null}
-      {status?.loaded ? <dl className="flex flex-wrap gap-x-5 gap-y-2 text-xs text-[var(--pq-text-muted)]">{[[l('已接收', 'Accepted'), status.accepted], [l('已绑定材料', 'Bound materials'), status.mapped], [l('映射待处理项', 'Mapping items to review'), status.unmapped], [l('待处理', 'Pending'), status.pending], [l('冲突', 'Conflicts'), status.conflicts]].map(([label, count]) => <div key={label} className="flex gap-2"><dt>{label}</dt><dd className="font-medium text-[var(--pq-text)]">{count}</dd></div>)}</dl> : null}
-      <div className="flex flex-wrap gap-2">
-        <button type="button" className={buttonClass} disabled={disabled || !status?.supported} onClick={() => void check()}><GitCompareArrows className="h-4 w-4" />{working === 'preview' ? l('正在检查…', 'Checking…') : l('检查关系差异', 'Check relation differences')}</button>
-        <button type="button" className={buttonClass} disabled={!sameOwner || busy || !status?.loaded && !status?.saveUnconfirmed} onClick={() => void run('export', async () => {
-          const request = sequence.current, result = await desktopGraphExchange.exportBackup();
-          if (alive.current && request === sequence.current && currentStatus.current?.scopeKey === ownerKey && result.status === 'exported') setNotice(l('私有图谱、待处理请求及冲突已导出备份。', 'Private graph, pending requests and conflicts exported.'));
-        })}><Download className="h-4 w-4" />{l('导出备份', 'Export backup')}</button>
-        {canStop ? <button type="button" className={buttonClass} disabled={!sameOwner || working === 'stop'} onClick={() => void change('stop', desktopGraphExchange.stop, l('已停止等待；原请求仍保留。', 'Waiting stopped; original requests are preserved.'), true)}><Square className="h-3 w-3" />{l('停止等待', 'Stop waiting')}</button> : null}
-      </div>
-      {status?.saveUnconfirmed ? <div className="space-y-2 border-l-2 border-[var(--pq-accent)] pl-3"><p className="text-xs leading-5 text-[var(--pq-text-muted)]">{l('本机保存尚未确认。仅重试保存会保留当前结果，不发送关系请求。', 'Local persistence is unconfirmed. Retry saving preserves the current result without sending relation requests.')}</p><button type="button" className={buttonClass} disabled={!sameOwner || busy} onClick={() => void change('save', desktopGraphExchange.retrySave, l('本机保存已确认，请重新检查差异。', 'Local save confirmed. Check differences again.'))}><RefreshCw className="h-4 w-4" />{l('仅重试保存', 'Retry saving only')}</button></div> : null}
-      {status && status.pending > 0 ? <div className="space-y-2"><p className="text-xs leading-5 text-[var(--pq-text-muted)]">{status.continuable > 0 ? l(`有 ${status.pending} 项待处理，其中 ${status.continuable} 个原请求可继续。继续时使用原请求标识核对或发送。`, `${status.pending} items are pending; ${status.continuable} original requests can continue. Their original identifiers are used to check or send them.`) : l(`有 ${status.pending} 项待处理。请检查差异，查看冲突或未接受的请求。`, `${status.pending} items need attention. Check differences to review conflicts or rejected requests.`)}</p>{status.continuable > 0 ? <button type="button" className={buttonClass} disabled={disabled} onClick={() => void change('continue', desktopGraphExchange.continue, l('原请求处理已返回，请检查状态或重新查看差异。', 'Original request processing returned. Review its status or check differences again.'))}>{l('继续原请求', 'Continue original requests')}</button> : null}</div> : null}
+      {!accountActive ? <p className="text-sm text-[var(--pq-text-muted)]">{l('先连接账号，就能在设备之间同步文献关系。', 'Connect your account to sync paper relations across devices.')}</p> : status && !status.supported ? <p className="text-sm text-[var(--pq-text-muted)]">{l('当前账号服务暂不支持关系同步。', 'This account service does not support relation sync yet.')}</p> : null}
+      {task ? <div className="space-y-2">
+        <button type="button" className={buttonClass} disabled={busy} onClick={() => { clearReview(); setTask(null); setNotice(''); setError(null); }}><ArrowLeft className="h-4 w-4" />{l('返回关系同步', 'Back to relation sync')}</button>
+        <div className="flex flex-wrap items-center justify-between gap-2"><h4 className="text-sm font-medium text-[var(--pq-text)]">{title}</h4><button type="button" className={buttonClass} disabled={disabled || !status?.supported} onClick={() => void check(task)}><RefreshCw className="h-4 w-4" />{working === 'preview' ? l('正在检查…', 'Checking…') : l('重新检查', 'Check again')}</button></div>
+      </div> : <DesktopGraphExchangeTaskPicker disabled={disabled || !status?.supported} pending={status?.pending || 0} onTask={value => void check(value)} l={l} />}
+      {canStop ? <button type="button" className={buttonClass} disabled={!sameOwner || working === 'stop'} onClick={() => void change('stop', desktopGraphExchange.stop, l('已停止等待，未完成的操作仍保留。', 'Waiting stopped. Unfinished operations are preserved.'), true)}><Square className="h-3 w-3" />{l('停止等待', 'Stop waiting')}</button> : null}
+      {status?.saveUnconfirmed ? <div className="space-y-2 border-l-2 border-[var(--pq-accent)] pl-3"><p className="text-sm leading-6 text-[var(--pq-text-muted)]">{l('上次结果还没有确认保存到本机。先重试保存，再继续同步。', 'The last result is not yet confirmed saved on this computer. Retry saving before continuing sync.')}</p><button type="button" className={buttonClass} disabled={!sameOwner || busy} onClick={() => void change('save', desktopGraphExchange.retrySave, l('结果已保存到本机，可以重新检查。', 'The result is saved on this computer. You can check again.'))}><RefreshCw className="h-4 w-4" />{l('仅重试保存', 'Retry saving only')}</button><p className="text-xs leading-5 text-[var(--pq-text-muted)]">{l('这一步只保存已有结果，不会重新发送关系。', 'This only saves the existing result without resending relations.')}</p></div> : null}
       {visibleError && !(status?.saveUnconfirmed && visibleError === 'GRAPH_SAVE_UNCONFIRMED') ? <div role="alert"><Reason code={visibleError} l={l} /></div> : null}
-      {notice ? <p role="status" className="text-xs leading-5 text-[var(--pq-text-muted)]">{notice}</p> : null}
-      {validPreview ? <DesktopGraphExchangeReview preview={validPreview} disabled={disabled} selectedLocal={selectedLocal} selectedIncoming={selectedIncoming} confirmation={confirmation} conflictChoices={conflictChoices} l={l}
+      {notice ? <p role="status" className="text-sm leading-6 text-[var(--pq-text-muted)]">{notice}</p> : null}
+      {task && validPreview ? <DesktopGraphExchangeReview task={task} preview={validPreview} disabled={disabled} selectedLocal={selectedLocal} selectedIncoming={selectedIncoming} confirmation={confirmation} conflictChoices={conflictChoices} l={l}
         onToggleLocal={(key, checked) => toggle(setSelectedLocal, key, checked)} onToggleIncoming={(key, checked) => toggle(setSelectedIncoming, key, checked)} onConfirm={setConfirmation}
-        onPublish={() => { if (!disabled && confirmation === 'publish') void change('publish', () => desktopGraphExchange.publish({ token: validPreview.token, keys: validPreview.localRows.filter(row => selectedLocal.includes(row.key) && row.action !== 'none' && row.action !== 'blocked').map(row => row.key) }), l('所选发布请求已处理，请查看状态并重新检查差异。', 'Selected publication requests processed. Review the status and check differences again.')); }}
-        onAdopt={() => { if (!disabled && confirmation === 'adopt') void change('adopt', () => desktopGraphExchange.adopt({ token: validPreview.token, ids: validPreview.incoming.filter(row => selectedIncoming.includes(row.entityId) && row.canAccept).map(row => row.entityId) }), l('所选关系已接收到私有图谱。', 'Selected relations accepted into the private graph.')); }}
+        onPublish={() => { if (!disabled && task === 'publish' && confirmation === 'publish') void change('publish', () => desktopGraphExchange.publish({ token: validPreview.token, keys: validPreview.localRows.filter(row => selectedLocal.includes(row.key) && row.action !== 'none' && row.action !== 'blocked').map(row => row.key) }), l('已处理所选同步操作，可以重新检查结果。', 'Selected sync operations were processed. Check again to review the result.')); }}
+        onAdopt={() => { if (!disabled && task === 'adopt' && confirmation === 'adopt') void change('adopt', () => desktopGraphExchange.adopt({ token: validPreview.token, ids: validPreview.incoming.filter(row => selectedIncoming.includes(row.entityId) && row.canAccept).map(row => row.entityId) }), l('所选关系已带到本机账号图谱。', 'Selected relations were brought into the local account graph.')); }}
         onConflictChoice={(id, choice) => setConflictChoices(previous => ({ ...previous, [id]: choice }))}
-        onResolve={conflict => { const choice = conflictChoices[conflict.conflictId]; if (!disabled && choice) void change('resolve', () => desktopGraphExchange.resolve({ conflictId: conflict.conflictId, choice, expectedRevision: conflict.expectedRevision }), l('这条冲突的选择已处理，请重新检查差异。', 'This conflict choice was processed. Check differences again.')); }} /> : null}
-      <details className="border-t border-[var(--pq-border)] pt-1"><summary className="min-h-11 cursor-pointer py-3.5 text-xs text-[var(--pq-text-muted)]">{l('范围、绑定与完整字段', 'Scope, bindings and full fields')}</summary><p className="text-xs leading-5 text-[var(--pq-text-muted)]">{l('私有图谱按服务、账号和文库分别保存；接收不会覆盖本机已有图谱。当前使用已发布或此前经 PDF 版本核验建立的唯一论文绑定。笔记等尚无显式绑定的端点会标为待绑定，保留关系及完整说明，不按标题或相同 ID 猜测。', 'Private graphs are separate for each service, account and library. Acceptance preserves the existing local graph. Papers use unique bindings established by publication or prior PDF-version verification. Notes and other endpoints without an explicit binding remain unbound, preserving the relation and its full description. Titles or matching IDs do not establish a binding.')}</p><p className="mt-2 text-xs leading-5 text-[var(--pq-text-muted)]">{l('已绑定材料统计端点材料数；映射待处理项按绑定与关系问题计数，可能涉及同一条关系。', 'Bound materials counts endpoint materials. Mapping items count binding and relation issues; several may concern one relation.')}</p><p className="mt-2 text-xs leading-5 text-[var(--pq-text-muted)]">{l('导出备份包含当前私有图谱、原请求与冲突。本地图谱原 JSON 及无法交换的原字段请随文库备份。', 'Export includes the current private graph, original requests and conflicts. Back up the original local graph JSON and unsupported fields with your library.')}</p></details>
+        onResolve={conflict => { const choice = conflictChoices[conflict.conflictId]; if (!disabled && task === 'pending' && choice) void change('resolve', () => desktopGraphExchange.resolve({ conflictId: conflict.conflictId, choice, expectedRevision: conflict.expectedRevision }), l('已处理这项选择，可以重新检查结果。', 'This choice was processed. Check again to review the result.')); }} /> : null}
+      {task === 'pending' && status && status.continuable > 0 ? <div className="space-y-2 border-t border-[var(--pq-border)] pt-3"><p className="text-sm leading-6 text-[var(--pq-text-muted)]">{l('上次操作尚未完成。继续时会先核对结果，再处理尚未完成的发送。', 'The previous operation is unfinished. Continue to check its result and complete any remaining send.')}</p><button type="button" className={buttonClass} disabled={disabled || !validPreview} onClick={() => void change('continue', desktopGraphExchange.continue, l('已继续处理，可以重新检查结果。', 'Processing continued. Check again to review the result.'))}>{l('继续处理', 'Continue processing')}</button></div> : null}
+      <details className="border-t border-[var(--pq-border)] pt-1"><summary className={summaryClass}>{l('同步详情与备份', 'Sync details and backup')}</summary>
+        {status?.loaded ? <dl className="flex flex-wrap gap-x-5 gap-y-2 text-xs text-[var(--pq-text-muted)]">{[[l('已带入', 'Brought in'), status.accepted], [l('已绑定材料', 'Bound materials'), status.mapped], [l('映射待处理项', 'Mapping items to review'), status.unmapped], [l('待处理', 'Pending'), status.pending], [l('内容不同', 'Differing content'), status.conflicts]].map(([label, count]) => <div key={label} className="flex gap-2"><dt>{label}</dt><dd className="font-medium text-[var(--pq-text)]">{count}</dd></div>)}</dl> : null}
+        {validPreview ? <p className="mt-2 break-words text-xs text-[var(--pq-text-muted)]">{l('检查时间：', 'Checked: ')}{validPreview.checkedAt}</p> : null}
+        <p className="mt-2 text-xs leading-5 text-[var(--pq-text-muted)]">{l('带入的关系按服务、账号和文库分别保存，不覆盖原有本地图谱。只有已添加到账号、且对应关系明确的论文才能同步；笔记关系暂不支持。', 'Imported relations are saved separately for each service, account and library, preserving the original local graph. Only papers added to the account with an unambiguous binding can sync. Note relations are not yet supported.')}</p>
+        <p className="mt-2 text-xs leading-5 text-[var(--pq-text-muted)]">{l('绑定材料统计论文等端点的数量；映射待处理项可能涉及同一条关系。继续处理会使用已保存的原请求标识，不创建替代请求。', 'Bound materials counts endpoints such as papers; mapping items can concern the same relation. Continuation uses the saved original request identifiers without creating replacement requests.')}</p>
+        <p className="mt-2 text-xs leading-5 text-[var(--pq-text-muted)]">{l('备份包含本机账号图谱、未完成操作与内容冲突。本地图谱原 JSON 及无法同步的原字段，请随文库备份。', 'The backup includes the local account graph, unfinished operations and content conflicts. Back up original local graph JSON and unsupported fields with your library.')}</p>
+        <button type="button" className={buttonClass + ' mt-3'} disabled={!sameOwner || busy || !status?.loaded && !status?.saveUnconfirmed} onClick={() => void run('export', async () => {
+          const request = sequence.current, result = await desktopGraphExchange.exportBackup();
+          if (alive.current && request === sequence.current && currentStatus.current?.scopeKey === ownerKey && result.status === 'exported') setNotice(l('本机账号图谱与未完成操作已导出备份。', 'The local account graph and unfinished operations were exported.'));
+        })}><Download className="h-4 w-4" />{l('导出关系备份', 'Export relation backup')}</button>
+      </details>
     </div>
   </SettingsField>;
 }

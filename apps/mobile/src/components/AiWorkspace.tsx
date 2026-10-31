@@ -28,8 +28,11 @@ export function AiWorkspace(props: AiWorkspaceProps) {
 
 function AccountAiWorkspace(props: AiWorkspaceProps) {
   const id = useId();
+  const settingsOnly = props.mode === 'settings';
+  const readingContext = settingsOnly ? null : props.context;
   const store = useMemo(localConfigStore, []);
   const [config, setConfig] = useState(() => store?.load(props.accountScope) ?? defaultAiProvider());
+  const [savedConfigIdentity, setSavedConfigIdentity] = useState(() => JSON.stringify(config));
   const [settingsOpen, setSettingsOpen] = useState(!config.model || !props.context);
   const [action, setAction] = useState<AiAction>('explain');
   const [question, setQuestion] = useState('');
@@ -56,13 +59,13 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
   }, [controller]);
   const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
   const prepared = useMemo(() => {
-    try { return { context: prepareAiContext(props.context), failure: null }; }
+    try { return { context: prepareAiContext(readingContext), failure: null }; }
     catch (error) { return { context: null, failure: aiFailure(error, 'CONTEXT_INVALID') }; }
-  }, [props.context]);
+  }, [readingContext]);
   const parsed = useMemo(() => {
     try { return parseAiProvider(config); } catch { return null; }
   }, [config]);
-  const contextIdentity = prepared.context?.identity ?? (props.context ? 'invalid' : 'missing');
+  const contextIdentity = prepared.context?.identity ?? (readingContext ? 'invalid' : 'missing');
   const configIdentity = JSON.stringify(config);
   const conversation = props.sync?.conversations.find(entry => entry.id === conversationId);
   const conversationFull = Boolean(conversation && conversation.data.turns.length >= AI_CONVERSATION_LIMITS.turns);
@@ -79,6 +82,7 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
   };
   const continuationFor = useCallback((requestId: string) => requestConversations.current.get(requestId), []);
   function startGeneration() {
+    if (settingsOnly) return;
     if (conversationFull) { setLocalFailure({ code: 'CONVERSATION_LIMIT' }); return; }
     if (!saveConfig(true)) return;
     const previous = controller.getSnapshot().result?.requestId;
@@ -94,10 +98,11 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
 
   useLayoutEffect(() => () => {
     lifecycle.current++; secretAbort.current?.abort(); controller.dispose();
+    if (password.current) password.current.value = '';
   }, [controller]);
   useLayoutEffect(() => {
     lifecycle.current++; setSaving(false); setNotice('');
-    if (parsed) controller.bind(props.accountScope, parsed, props.context);
+    if (parsed) controller.bind(props.accountScope, parsed, readingContext);
     else controller.credentialsChanged();
   }, [controller, props.accountScope.accountId, props.accountScope.apiBaseUrl, contextIdentity, configIdentity]);
 
@@ -135,7 +140,8 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
       const safe = parseAiProvider(config, requireModel);
       if (store) store.save(props.accountScope, safe);
       else setNotice('浏览器存储不可用，模型设置仅保留在当前页面。');
-      controller.bind(props.accountScope, safe, props.context);
+      controller.bind(props.accountScope, safe, readingContext);
+      setSavedConfigIdentity(JSON.stringify(config));
       setLocalFailure(null);
       return safe;
     } catch (error) { setLocalFailure(aiFailure(error, 'SETTINGS_STORAGE_FAILED')); return null; }
@@ -160,7 +166,7 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
       guard.check();
       if (secretAbort.current !== abort || abort.signal.aborted) return;
       setSecretRevision((current) => current + 1);
-      setNotice(remove ? '已移除此服务在本设备上的密钥。' : props.secretStore.persistence === 'system' ? '密钥已写入本设备的系统安全存储。' : '密钥仅存于当前应用内存，刷新后需要重新输入。');
+      setNotice(remove ? '已移除此服务在本设备上的密钥。' : props.secretStore.persistence === 'system' ? '设置已保存，访问密钥已存入此设备。' : '设置已保存。此环境的访问密钥仅保留到应用关闭或页面刷新。');
     } catch (error) {
       if (!abort.signal.aborted && secretAbort.current === abort) setLocalFailure(aiFailure(error, 'SECRET_STORAGE_FAILED'));
     } finally {
@@ -192,64 +198,87 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
   const busy = snapshot.busy !== null;
   const context = prepared.context;
   const actionName = AI_ACTION_LABELS[action];
-  return <section className="ai-workspace" aria-label="阅读辅助">
-    <header className="ai-heading">
-      <div><span className="ai-eyebrow">阅读辅助</span><h2>从正在读的内容开始</h2></div>
-      <span className="ai-device-badge">本设备配置</span>
-    </header>
-
-    <details className="ai-settings" open={settingsOpen} onToggle={(event) => setSettingsOpen(event.currentTarget.open)}>
-      <summary>模型服务 <span>{config.model || '尚未选择模型'}</span></summary>
-      <div className="ai-settings-content">
-        <ModelRoutingPanel ledgerRevision={props.modelLedgerRevision} scope={props.accountScope} router={props.modelRouter} config={config} busy={busy||secretBusy}
-          onExternal={()=>{if(busy||secretBusy)return;controller.credentialsChanged();secretAbort.current?.abort();if(password.current)password.current.value='';setHasKeyDraft(false);const next=store?.loadExternal(props.accountScope)??defaultAiProvider();try{store?.save(props.accountScope,next);setConfig(next);setNotice('已恢复本机直连设置。');}catch(e){setLocalFailure(aiFailure(e));}}}
-          onChange={next=>{if(busy||secretBusy||!props.modelRouter?.current())return;controller.credentialsChanged();secretAbort.current?.abort();if(password.current)password.current.value='';setHasKeyDraft(false);try{if(!store)throw new AiError('SETTINGS_STORAGE_FAILED');store.save(props.accountScope,next);setConfig(next);setLocalFailure(null);}catch(e){setLocalFailure(aiFailure(e));throw e;}}}/>
-        {!config.execution&&<>
-        <p className="ai-muted">直接连接你配置的模型服务。只有点击测试或发送才会请求模型；密钥保留在本设备。同步会话需单独明确保存。</p>
-        <label htmlFor={id + '-endpoint'}>API 基础地址</label>
-        <input id={id + '-endpoint'} type="url" inputMode="url" autoCapitalize="none" autoCorrect="off" spellCheck={false}
-          placeholder="https://api.example.com/v1" value={config.endpoint} onChange={(event) => editConfig({ endpoint: event.target.value })} />
-        <p className="ai-field-help">填写包含 /v1 等前缀的基础地址，不包含 /chat/completions、账号或查询参数。</p>
-        {parsed?.endpoint.startsWith('http:') && <p className="ai-warning">此地址使用 HTTP，文字和密钥不受 HTTPS 加密保护，也可能被浏览器或系统网络策略阻止。</p>}
-        {!parsed && <p className="ai-error" role="alert">{describeAiError({ code: 'CONFIG_INVALID' })}</p>}
-        <div className="ai-model-row">
-          <div><label htmlFor={id + '-model'}>模型 ID</label>
-            <input id={id + '-model'} list={id + '-models'} autoCapitalize="none" autoCorrect="off" spellCheck={false}
-              placeholder="输入模型 ID，或先测试连接" value={config.model} onChange={(event) => editConfig({ model: event.target.value })} />
-            <datalist id={id + '-models'}>{snapshot.models.map((model) => <option key={model} value={model} />)}</datalist></div>
-          <button type="button" className="secondary" disabled={busy || secretBusy || !parsed}
-            onClick={() => { if (saveConfig()) void controller.probe(); }}>{snapshot.busy === 'probe' ? '正在测试…' : '测试连接 / 获取模型'}</button>
-        </div>
-        {snapshot.connection === 'reachable' && <p className="ai-success" role="status">已连通模型列表接口，获取 {snapshot.models.length} 个模型。推理权限与费用仍需向服务商确认。</p>}
-        <div className="ai-key-header"><label htmlFor={id + '-key'}>API 密钥</label>
-          <span>{keyState === 'present' ? '本设备已配置' : keyState === 'checking' ? '正在检查存储…' : keyState === 'failed' ? '存储暂不可用' : '尚未配置'}</span></div>
-        <input id={id + '-key'} ref={password} type="password" autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false}
-          placeholder="输入新密钥；已保存的密钥不会回显" disabled={secretBusy} onChange={(event) => setHasKeyDraft(event.target.value.length > 0)} />
-        <div className="ai-key-actions">
-          <button type="button" className="secondary" disabled={secretBusy || !hasKeyDraft || !parsed} onClick={() => void changeKey(false)}>{secretBusy ? '正在处理…' : '保存本设备密钥'}</button>
-          <button type="button" className="text-button" disabled={secretBusy || keyState !== 'present' || !parsed} onClick={() => void changeKey(true)}>移除密钥</button>
-          <span className="ai-field-help">{props.secretStore.persistence === 'system' ? '使用系统 Keychain / Keystore。' : 'Web 版仅保存在内存，刷新即清除。'}</span>
-        </div>
+  const unsavedSettings = savedConfigIdentity !== configIdentity || hasKeyDraft;
+  const settingsFailure = failure?.code === 'CANCELLED' ? '已停止获取模型列表，可以稍后重新获取。'
+    : failure?.code === 'SETTINGS_STORAGE_FAILED' ? '设置未保存。请检查此设备的存储后再试，当前填写的内容仍保留。'
+    : failure?.code === 'SECRET_STORAGE_FAILED' ? '访问密钥操作未完成。请重新填写密钥后保存；已有密钥不会显示在这里。'
+    : failure ? describeAiError(failure) : '';
+  const probeHelp = !parsed ? '先填写有效的服务地址，并检查高级设置。'
+    : hasKeyDraft ? '先保存新输入的密钥，再获取模型列表。'
+    : config.requiresKey && keyState !== 'present' ? keyState === 'checking' ? '正在检查已保存的密钥…'
+      : keyState === 'failed' ? '暂时无法读取密钥，请稍后重新打开设置。' : '先填写访问密钥并保存，再获取模型列表。'
+    : '从这个服务获取模型列表；这一步不会发送文献或问题。';
+  const settingsContent = <div className="ai-settings-content" style={settingsOnly ? { paddingTop: '1rem' } : undefined}>
+    <ModelRoutingPanel ledgerRevision={props.modelLedgerRevision} scope={props.accountScope} router={props.modelRouter} config={config} busy={busy||secretBusy} showActivity={!settingsOnly}
+      onExternal={()=>{if(busy||secretBusy)return;controller.credentialsChanged();secretAbort.current?.abort();if(password.current)password.current.value='';setHasKeyDraft(false);const next=store?.loadExternal(props.accountScope)??defaultAiProvider();try{store?.save(props.accountScope,next);setConfig(next);setSavedConfigIdentity(JSON.stringify(next));setNotice('已切换到此设备保存的 AI 服务。');}catch(e){setLocalFailure(aiFailure(e));}}}
+      onChange={next=>{if(busy||secretBusy||!props.modelRouter?.current())return;controller.credentialsChanged();secretAbort.current?.abort();if(password.current)password.current.value='';setHasKeyDraft(false);try{if(!store)throw new AiError('SETTINGS_STORAGE_FAILED');store.save(props.accountScope,next);setConfig(next);setSavedConfigIdentity(JSON.stringify(next));setLocalFailure(null);}catch(e){setLocalFailure(aiFailure(e));throw e;}}}/>
+    {!config.execution&&<>
+      <label htmlFor={id + '-endpoint'}>服务地址</label>
+      <input id={id + '-endpoint'} type="url" inputMode="url" autoCapitalize="none" autoCorrect="off" spellCheck={false}
+        aria-describedby={id + '-endpoint-help'} placeholder="https://api.example.com/v1" value={config.endpoint} onChange={(event) => editConfig({ endpoint: event.target.value })} />
+      <p id={id + '-endpoint-help'} className="ai-field-help">使用服务商提供的基础地址，例如 https://api.example.com/v1。</p>
+      {parsed?.endpoint.startsWith('http:') && <p className="ai-warning">此地址使用 HTTP，文字和密钥不受 HTTPS 加密保护，也可能被浏览器或系统网络策略阻止。</p>}
+      {!parsed && <p className="ai-error" role="alert">{describeAiError({ code: 'CONFIG_INVALID' })}</p>}
+      <div className="ai-key-header"><label htmlFor={id + '-key'}>访问密钥（API Key）</label>
+        <span>{keyState === 'present' ? '已保存' : keyState === 'checking' ? '正在检查存储…' : keyState === 'failed' ? '暂时无法读取' : config.requiresKey ? '待填写' : '当前无需密钥'}</span></div>
+      <input id={id + '-key'} ref={password} type="password" autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false}
+        placeholder={keyState === 'present' ? '留空保留已保存的密钥' : '粘贴服务商提供的密钥'} disabled={secretBusy} onChange={(event) => setHasKeyDraft(event.target.value.length > 0)} />
+      <div className="ai-key-actions">
+        {keyState === 'present' && <button type="button" className="text-button" disabled={secretBusy || !parsed} onClick={() => void changeKey(true)}>移除密钥</button>}
+        <span className="ai-field-help">{props.secretStore.persistence === 'system' ? '密钥保存在此设备，不随账号同步。' : '此环境仅在本次打开期间保留密钥，刷新后需重新填写。'}</span>
+      </div>
+      <div className="ai-model-row">
+        <div><label htmlFor={id + '-model'}>模型名称</label>
+          <input id={id + '-model'} list={id + '-models'} autoCapitalize="none" autoCorrect="off" spellCheck={false}
+            placeholder="填写模型名称，或获取可用模型" value={config.model} onChange={(event) => editConfig({ model: event.target.value })} />
+          <datalist id={id + '-models'}>{snapshot.models.map((model) => <option key={model} value={model} />)}</datalist></div>
+        {snapshot.busy === 'probe' ? <button type="button" className="secondary" onClick={() => controller.cancel()}>取消获取</button>
+          : <button type="button" className="secondary" disabled={busy || secretBusy || !parsed || hasKeyDraft || (config.requiresKey && keyState !== 'present')}
+            aria-describedby={id + '-probe-help'} onClick={() => { if (saveConfig()) void controller.probe(); }}>获取可用模型</button>}
+      </div>
+      <p id={id + '-probe-help'} className="ai-field-help">{snapshot.busy === 'probe' ? '正在获取模型列表…' : probeHelp}</p>
+      {snapshot.connection === 'reachable' && <p className="ai-success" role="status">已取得 {snapshot.models.length} 个模型，请在“模型名称”中选择。能否生成回答和实际费用仍由服务商决定。</p>}
+      <details className="ai-advanced"><summary>高级兼容设置</summary>
         <div className="ai-options">
-          <label><input type="checkbox" checked={config.requiresKey} onChange={(event) => editConfig({ requiresKey: event.target.checked })} />服务需要 API 密钥</label>
-          <label><input type="checkbox" checked={config.stream} onChange={(event) => editConfig({ stream: event.target.checked })} />流式输出</label>
-          <label><input type="checkbox" checked={config.includeUsage} disabled={!config.stream} onChange={(event) => editConfig({ includeUsage: event.target.checked })} />请求用量统计</label>
+          <label><input type="checkbox" checked={config.requiresKey} onChange={(event) => editConfig({ requiresKey: event.target.checked })} />此服务需要访问密钥</label>
+          <label><input type="checkbox" checked={config.stream} onChange={(event) => editConfig({ stream: event.target.checked })} />逐步显示回答</label>
+          <label><input type="checkbox" checked={config.includeUsage} disabled={!config.stream} onChange={(event) => editConfig({ includeUsage: event.target.checked })} />请求服务商返回用量</label>
         </div>
-        {!config.requiresKey && <p className="ai-field-help">将不发送 Authorization，仅适用于你明确配置的免密服务。</p>}
-        {config.stream && props.transport?.supportsStreaming === false && <p className="ai-field-help">当前传输不支持流式读取，将等待完整响应后显示。</p>}
-        <details className="ai-advanced"><summary>兼容与输出设置</summary><div className="ai-model-row">
-          <div><label htmlFor={id + '-tokens'}>最大输出 tokens</label><input id={id + '-tokens'} type="number" min={64} max={8192} step={1} value={config.maxOutputTokens}
+        {!config.requiresKey && <p className="ai-field-help">不发送访问密钥，仅适用于你配置的免密服务。</p>}
+        {config.stream && props.transport?.supportsStreaming === false && <p className="ai-field-help">此连接会等完整回答收到后一起显示。</p>}
+        <div className="ai-model-row">
+          <div><label htmlFor={id + '-tokens'}>回答长度上限（tokens）</label><input id={id + '-tokens'} type="number" min={64} max={8192} step={1} value={config.maxOutputTokens}
             onChange={(event) => editConfig({ maxOutputTokens: Number(event.target.value) })} /></div>
-          <div><label htmlFor={id + '-parameter'}>输出上限参数</label><select id={id + '-parameter'} value={config.tokenParameter}
+          <div><label htmlFor={id + '-parameter'}>服务商使用的上限参数</label><select id={id + '-parameter'} value={config.tokenParameter}
             onChange={(event) => editConfig({ tokenParameter: event.target.value as AiProviderConfig['tokenParameter'] })}>
             <option value="max_completion_tokens">max_completion_tokens</option><option value="max_tokens">max_tokens（部分兼容服务）</option>
           </select></div>
-        </div><p className="ai-field-help">参数不兼容时请手动更改。失败请求不会自动重试。</p></details>
-        <button type="button" className="text-button" disabled={secretBusy || !parsed} onClick={() => { if (saveConfig()) setNotice(store ? '模型设置已保存在当前账号的本机。' : '模型设置仅保留在当前页面。'); }}>保存模型设置</button>
-        </>}
-      </div>
-    </details>
+        </div><p className="ai-field-help">仅在服务商要求时更改。服务地址不应包含 /chat/completions、/models、账号或查询参数。</p>
+      </details>
+      <div className="ai-key-actions"><button type="button" className="primary" disabled={busy || secretBusy || !parsed} onClick={() => {
+        if (hasKeyDraft) void changeKey(false);
+        else if (saveConfig()) setNotice(store ? '设置已保存在此设备。' : '设置仅保留在当前页面，关闭后需重新填写。');
+      }}>{secretBusy ? '正在保存…' : '保存设置'}</button></div>
+      <p className="ai-field-help" role="status">{failure?.code === 'SECRET_STORAGE_FAILED' ? '访问密钥尚未处理成功，请重新填写后保存。'
+        : unsavedSettings ? '有未保存的修改。保存不会发送问题或调用模型。'
+        : config.requiresKey && keyState !== 'present' ? '下一步：填写访问密钥并保存。'
+        : !config.model ? '下一步：填写模型名称，或获取可用模型后选择。'
+        : store ? '已保存。可回到文献中使用阅读辅助，或打开多篇文献问答。' : '仅在当前页面使用，关闭后需重新填写设置。'}</p>
+    </>}
+  </div>;
+  return <section className="ai-workspace" aria-label={settingsOnly ? 'AI 服务设置' : '阅读辅助'}>
+    <header className="ai-heading">
+      <div><span className="ai-eyebrow">{settingsOnly ? 'AI 服务' : '阅读辅助'}</span><h2>{settingsOnly ? '连接与模型' : '从正在读的内容开始'}</h2></div>
+      <span className="ai-device-badge">本设备配置</span>
+    </header>
+    {settingsOnly ? <div className="ai-settings">{settingsContent}</div> : <details className="ai-settings" open={settingsOpen} onToggle={(event) => setSettingsOpen(event.currentTarget.open)}>
+      <summary>模型服务 <span>{config.model || '尚未选择模型'}</span></summary>
+      {settingsContent}
+    </details>}
+    {settingsOnly && failure && <p className="ai-error" role="alert">{settingsFailure}</p>}
+    {settingsOnly && notice && <p className="ai-notice" role="status">{notice}</p>}
 
+    {!settingsOnly && <>
     <div className="ai-context">
       <div className="ai-context-top"><h3>本次发送范围</h3><span>{context?.scopeLabel ?? '尚未选择文字'}</span></div>
       {context ? <>
@@ -305,5 +334,6 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
       currentResult={result?.status === 'running' ? null : result} busy={busy} draft={archiveDraft}
       captureRecord={captureRecord} canCaptureRecord={canCaptureRecord} onApplyDraft={applyArchiveDraft}
       onNavigateCitation={props.onNavigateCitation} />
+    </>}
   </section>;
 }

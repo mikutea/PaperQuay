@@ -30,7 +30,7 @@ async function until(predicate: () => boolean, description: string): Promise<voi
   }
 }
 
-async function setup(options: { key?: boolean; config?: AiProviderConfig; context?: PdfAiContext; transport?: AiTransport; onSaveNote?: AiWorkspaceProps['onSaveNote']; sync?:AiWorkspaceProps['sync'] } = {}) {
+async function setup(options: { key?: boolean; mode?: AiWorkspaceProps['mode']; config?: AiProviderConfig; context?: PdfAiContext | null; transport?: AiTransport; onSaveNote?: AiWorkspaceProps['onSaveNote']; sync?:AiWorkspaceProps['sync']; modelRouter?:AiWorkspaceProps['modelRouter'] } = {}) {
   const original = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
   const values = new Map<string, string>();
   const storage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); }, removeItem: (key: string) => { values.delete(key); } };
@@ -46,8 +46,8 @@ async function setup(options: { key?: boolean; config?: AiProviderConfig; contex
       return input.method === 'GET' ? new Response(JSON.stringify({ data: [{ id: 'ui-fixture' }] })) : jsonResponse('<img src=x onerror=alert(1)> 引用 [P2]，未知 [P99]。' + KEY);
     } };
   const saved: { note: NoteData; source: AiSaveContext }[] = []; const jumps: PdfCitationTarget[] = [];
-  let props: AiWorkspaceProps = { accountScope: SCOPE, context: options.context ?? CONTEXT, secretStore: secrets, transport,
-    sync:options.sync,
+  let props: AiWorkspaceProps = { mode: options.mode, accountScope: SCOPE, context: options.context === undefined ? CONTEXT : options.context, secretStore: secrets, transport,
+    sync:options.sync, modelRouter:options.modelRouter,
     onSaveNote: options.onSaveNote ?? (async (note, source) => { saved.push({ note, source }); }), onNavigateCitation: (target) => { jumps.push(target); } };
   const password = { value: '' };
   let renderer!: ReactTestRenderer;
@@ -73,7 +73,7 @@ async function setup(options: { key?: boolean; config?: AiProviderConfig; contex
     act(() => renderer.unmount());
     if (original) Object.defineProperty(globalThis, 'localStorage', original); else Reflect.deleteProperty(globalThis, 'localStorage');
   };
-  return { renderer, button, input, update, submit, close, password, secrets, requests, saved, jumps, values };
+  return { renderer, button, input, update, submit, close, password, secrets, requests, saved, jumps, values, storage };
 }
 
 test('workspace performs no automatic model request; explicit question, result, verified citation and note save stay scoped', async () => {
@@ -140,17 +140,17 @@ test('password input is never prefilled or placed in rendered state; saving/remo
     act(() => ui.input('key').props.onChange({ target: ui.password }));
     assert.equal(await ui.secrets.get(await aiSecretNamespace(SCOPE, CONFIG), AI_SECRET_KEY), null);
     assert.equal(ui.requests.length, 0);
-    await act(async () => { ui.button('保存本设备密钥').props.onClick(); await tick(); await tick(); });
+    await act(async () => { ui.button('保存设置').props.onClick(); await tick(); await tick(); });
     await until(() => !ui.button('发送并解释').props.disabled, 'saved key availability');
     assert.equal(ui.password.value, '');
     assert.equal(await ui.secrets.get(await aiSecretNamespace(SCOPE, CONFIG), AI_SECRET_KEY), KEY);
     assert.equal(ui.button('发送并解释').props.disabled, false);
     assert.equal(JSON.stringify(ui.renderer.toJSON()).includes(KEY), false);
     assert.equal(JSON.stringify([...ui.values]).includes(KEY), false);
-    await act(async () => { ui.button('测试连接 / 获取模型').props.onClick(); await tick(); await tick(); });
-    await until(() => text(ui.renderer.root).includes('已连通模型列表接口'), 'model discovery');
+    await act(async () => { ui.button('获取可用模型').props.onClick(); await tick(); await tick(); });
+    await until(() => text(ui.renderer.root).includes('已取得 1 个模型'), 'model discovery');
     assert.equal(ui.requests.length, 1); assert.equal(ui.requests[0].method, 'GET');
-    assert.ok(text(ui.renderer.root).includes('推理权限与费用仍需向服务商确认'));
+    assert.ok(text(ui.renderer.root).includes('能否生成回答和实际费用仍由服务商决定'));
     await act(async () => { ui.button('移除密钥').props.onClick(); await tick(); await tick(); });
     await until(() => text(ui.renderer.root).includes('已移除此服务'), 'key removal');
     assert.equal(await ui.secrets.get(await aiSecretNamespace(SCOPE, CONFIG), AI_SECRET_KEY), null);
@@ -253,7 +253,7 @@ test('a pending device-key save settles after model/context changes without leav
   try {
     ui.password.value = KEY;
     act(() => ui.input('key').props.onChange({ target: ui.password }));
-    act(() => ui.button('保存本设备密钥').props.onClick());
+    act(() => ui.button('保存设置').props.onClick());
     await entered.promise;
     act(() => ui.input('model').props.onChange({ target: { value: 'changed-model' } }));
     await ui.update({ context: { ...CONTEXT, attachmentVersionId: OTHER } });
@@ -280,4 +280,131 @@ test('a full 24-turn synchronized conversation can be viewed but cannot issue a 
     await ui.submit();assert.equal(ui.requests.length,0);assert.match(text(ui.renderer.root),/此会话已达24轮上限/);
     act(()=>ui.button('结束继续，另开问答').props.onClick());assert.equal(ui.button('发送并解释').props.disabled,false);
   }finally{ui.close();}
+});
+
+test('settings mode renders only connection fields, hides reading and activity, and does not read or call task services', async () => {
+  let activityReads = 0, inventoryReads = 0;
+  const snapshot = { revision: 0, pendingIds: [] as string[] };
+  const router = { current: () => true, subscribe: () => () => {}, getSnapshot: () => snapshot,
+    readActivity: async () => { activityReads++; throw Error('Settings must not read task records'); },
+    inventory: async () => { inventoryReads++; throw Error('Explicit only'); } } as unknown as NonNullable<AiWorkspaceProps['modelRouter']>;
+  const ui = await setup({ mode: 'settings', modelRouter: router });
+  try {
+    assert.equal(ui.renderer.root.findAllByProps({ 'aria-label': 'AI 服务设置' }).length, 1);
+    assert.equal(ui.renderer.root.findAllByType('form').length, 0);
+    assert.equal(ui.renderer.root.findAllByProps({ 'aria-label': '选择辅助任务' }).length, 0);
+    assert.equal(ui.renderer.root.findAllByProps({ className: 'ai-context' }).length, 0);
+    assert.equal(ui.renderer.root.findAllByProps({ className: 'model-route-history' }).length, 0);
+    assert.doesNotMatch(text(ui.renderer.root), /从正在读的内容开始|本次发送范围|同步会话与模板|本机问答记录与问题模板|先在阅读器中选择/);
+    const fields = ui.renderer.root.findAllByType('input').filter(node => /-(endpoint|key|model)$/.test(node.props.id ?? '')).map(node => node.props.id.split('-').at(-1));
+    assert.deepEqual(fields, ['endpoint', 'key', 'model']);
+    const advanced = ui.renderer.root.findByProps({ className: 'ai-advanced' });
+    assert.equal(Boolean(advanced.props.open), false);
+    assert.equal(advanced.findAllByType('input').filter(node => node.props.type === 'checkbox').length, 3);
+    assert.equal(activityReads, 0); assert.equal(inventoryReads, 0); assert.equal(ui.requests.length, 0);
+    assert.equal(ui.saved.length, 0); assert.equal(ui.jumps.length, 0);
+  } finally { ui.close(); }
+});
+
+test('settings has one explicit save for key and model, gives a next step, and never generates a model response', async () => {
+  const config = { ...CONFIG, model: '' };
+  const ui = await setup({ mode: 'settings', context: null, config, key: false });
+  try {
+    assert.equal(ui.button('获取可用模型').props.disabled, true);
+    assert.match(text(ui.renderer.root), /先填写访问密钥并保存/);
+    ui.password.value = KEY;
+    act(() => ui.input('key').props.onChange({ target: ui.password }));
+    assert.match(text(ui.renderer.root), /先保存新输入的密钥/);
+    act(() => ui.input('model').props.onChange({ target: { value: 'saved-settings-model' } }));
+    assert.equal(ui.renderer.root.findAllByType('button').filter(node => text(node) === '保存设置').length, 1);
+    assert.equal(await ui.secrets.get(await aiSecretNamespace(SCOPE, config), AI_SECRET_KEY), null);
+    await act(async () => { ui.button('保存设置').props.onClick(); await tick(); await tick(); });
+    await until(() => !ui.button('获取可用模型').props.disabled, 'single-save key availability');
+    assert.equal(new LocalAiConfigStore(ui.storage).load(SCOPE).model, 'saved-settings-model');
+    assert.equal(await ui.secrets.get(await aiSecretNamespace(SCOPE, config), AI_SECRET_KEY), KEY);
+    assert.equal(ui.password.value, '');
+    assert.equal(JSON.stringify(ui.renderer.toJSON()).includes(KEY), false);
+    assert.equal(JSON.stringify([...ui.values]).includes(KEY), false);
+    assert.equal(ui.requests.length, 0);
+    await act(async () => { ui.button('获取可用模型').props.onClick(); await tick(); await tick(); });
+    await until(() => text(ui.renderer.root).includes('已取得 1 个模型'), 'explicit settings discovery');
+    assert.equal(ui.requests.length, 1); assert.equal(ui.requests[0].method, 'GET');
+    assert.equal(ui.requests[0].body, undefined);
+    assert.equal(ui.saved.length, 0);
+  } finally { ui.close(); }
+});
+
+test('settings discovery can be cancelled without a reading composer and ignores its late response', async () => {
+  const pending = deferred<Response>(), started = deferred<void>();
+  let requestSignal: AbortSignal | undefined;
+  const ui = await setup({ mode: 'settings', context: null, config: { ...CONFIG, requiresKey: false }, key: false,
+    transport: { kind: 'fetch', supportsStreaming: false, redirectPolicy: 'error', request: async input => { requestSignal = input.signal; started.resolve(); return pending.promise; } } });
+  try {
+    act(() => ui.button('获取可用模型').props.onClick());
+    await started.promise;
+    assert.equal(ui.renderer.root.findAllByType('form').length, 0);
+    await act(async () => { ui.button('取消获取').props.onClick(); await tick(); });
+    assert.equal(requestSignal?.aborted, true);
+    assert.match(text(ui.renderer.root), /已停止获取模型列表/);
+    pending.resolve(new Response(JSON.stringify({ data: [{ id: 'late-cancelled-model' }] })));
+    await act(async () => { await tick(); await tick(); });
+    assert.equal(ui.renderer.root.findAllByType('option').some(node => node.props.value === 'late-cancelled-model'), false);
+    assert.equal(ui.button('获取可用模型').props.disabled, false);
+  } finally { pending.resolve(new Response('{}')); ui.close(); }
+});
+
+test('settings account changes clear password drafts and discard a previous-account model list', async () => {
+  const pending = deferred<Response>(), started = deferred<void>();
+  const config = { ...CONFIG, requiresKey: false };
+  const ui = await setup({ mode: 'settings', context: null, config, key: false,
+    transport: { kind: 'fetch', supportsStreaming: false, redirectPolicy: 'error', request: async () => { started.resolve(); return pending.promise; } } });
+  try {
+    act(() => ui.button('获取可用模型').props.onClick()); await started.promise;
+    ui.password.value = 'unsaved-account-a-secret';
+    act(() => ui.input('key').props.onChange({ target: ui.password }));
+    await ui.update({ accountScope: { ...SCOPE, accountId: OTHER } });
+    assert.equal(ui.password.value, '');
+    assert.equal(ui.input('model').props.value, '');
+    assert.equal(new LocalAiConfigStore(ui.storage).load({ ...SCOPE, accountId: OTHER }).model, '');
+    pending.resolve(new Response(JSON.stringify({ data: [{ id: 'account-a-only-model' }] })));
+    await act(async () => { await tick(); await tick(); });
+    assert.equal(ui.renderer.root.findAllByType('option').some(node => node.props.value === 'account-a-only-model'), false);
+    assert.doesNotMatch(text(ui.renderer.root), /已取得/);
+    await ui.update({ accountScope: SCOPE });
+    assert.equal(ui.input('model').props.value, CONFIG.model);
+    assert.equal(ui.password.value, '');
+    assert.equal(ui.saved.length, 0);
+  } finally { pending.resolve(new Response('{}')); ui.close(); }
+});
+
+test('failed settings persistence retains editable fields and never stores a password or calls the model', async () => {
+  const ui = await setup({ mode: 'settings', context: null, key: false });
+  try {
+    act(() => ui.input('model').props.onChange({ target: { value: 'unsaved-model' } }));
+    ui.password.value = KEY;
+    act(() => ui.input('key').props.onChange({ target: ui.password }));
+    ui.storage.setItem = () => { throw Error('fixture storage failure'); };
+    await act(async () => { ui.button('保存设置').props.onClick(); await tick(); });
+    assert.match(text(ui.renderer.root), /设置未保存/);
+    assert.equal(ui.input('model').props.value, 'unsaved-model');
+    assert.equal(ui.password.value, KEY);
+    assert.equal(await ui.secrets.get(await aiSecretNamespace(SCOPE, CONFIG), AI_SECRET_KEY), null);
+    assert.equal(new LocalAiConfigStore(ui.storage).load(SCOPE).model, CONFIG.model);
+    assert.equal(ui.requests.length, 0);
+  } finally { ui.close(); }
+});
+
+test('a failed key write is not described as a completed settings save', async () => {
+  const ui = await setup({ mode: 'settings', context: null, key: false });
+  try {
+    ui.secrets.set = async () => { throw Error('fixture secure storage unavailable'); };
+    ui.password.value = KEY;
+    act(() => ui.input('key').props.onChange({ target: ui.password }));
+    await act(async () => { ui.button('保存设置').props.onClick(); await tick(); await tick(); });
+    await until(() => text(ui.renderer.root).includes('访问密钥操作未完成'), 'key-save failure');
+    assert.equal(ui.password.value, '');
+    assert.equal(ui.button('获取可用模型').props.disabled, true);
+    assert.doesNotMatch(text(ui.renderer.root), /已保存。可回到文献/);
+    assert.equal(ui.requests.length, 0);
+  } finally { ui.close(); }
 });

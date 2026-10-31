@@ -1,12 +1,13 @@
+import type { PreferencesSectionKey } from './readerShared';
 import { DesktopGraphExchangePanel } from './desktopGraphExchangePanel';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { FileText, Laptop, LogIn, LogOut, RefreshCw } from 'lucide-react';
+import { ChevronLeft, ChevronRight, FileSearch, FileText, GitBranch, Laptop, LogIn, LogOut, RefreshCw, Sparkles } from 'lucide-react';
 import { desktopAccount, type DesktopAccountConfig, type DesktopAccountStatus, type DesktopPdfCandidate, type DesktopRemoteVersion, type DesktopModelRecord } from '../../services/desktopAccount';
 import { SettingsField, SettingsInput, SettingsSelect } from './readerPreferencesPrimitives';
 import type { ReaderPreferencesLocalizer } from './readerPreferencesTypes';
 
-const EMPTY_CONFIG: DesktopAccountConfig = { apiBaseUrl: '', oidcIssuer: '', oidcClientId: '', deviceName: '' };
-const buttonClass = 'pq-button inline-flex min-h-10 items-center justify-center gap-2 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50';
+const EMPTY_CONFIG: DesktopAccountConfig = { apiBaseUrl: '', oidcIssuer: '', oidcClientId: '', deviceName: 'PaperQuay Desktop' };
+const buttonClass = 'pq-button inline-flex min-h-11 items-center justify-center gap-2 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50';
 const sizeLabel = (size: number) => `${(size / 1024 / 1024).toFixed(size < 1024 * 1024 ? 2 : 1)} MiB`;
 
 function errorLabel(code: string | undefined | null, l: ReaderPreferencesLocalizer): string {
@@ -58,7 +59,7 @@ function errorLabel(code: string | undefined | null, l: ReaderPreferencesLocaliz
     LIBRARY_CHANGED: ['文库已变化，请重新检查可读取的文件。', 'The library changed. Review the available files.'],
     NETWORK_ERROR: ['暂时无法连接服务，请检查网络后重试。', 'Cannot reach the service. Check your connection and retry.'],
     EXTERNAL_OUTCOME_UNKNOWN: ['外部服务是否受理尚不确定，已停止重发。请先核对服务记录。', 'The external outcome is unknown. Resubmission stopped; check the service records first.'],
-    SOURCE_UNAVAILABLE: ['无法取得与任务摘要一致的 PDF 或已验证解析包。请检查当前关联版本，向量任务需先完成解析。', 'The PDF or verified parse does not match this task. Check the linked version; indexing requires a completed matching parse.'],
+    SOURCE_UNAVAILABLE: ['这篇文献的文件或排版结果不可用。请重新添加文献并完成解析。', 'This paper’s file or formatted content is unavailable. Add it again and complete document parsing.'],
     PROFILE_CHANGED: ['服务配置或私有凭据已变化，旧任务已停止。请检查设置后重新确认。', 'Service configuration or private credentials changed. The old execution stopped; review settings and confirm again.'],
     REMOTE_CONFIGURATION_CHANGED: ['服务配置已变化，任务已停止。请检查设置后重新确认开启。', 'Service configuration changed. Tasks stopped; review settings before enabling again.'],
     REMOTE_BINDING_CHANGED: ['账号、文库或关联文件已变化，任务已停止。', 'The account, library or linked files changed. Tasks stopped.'],
@@ -75,7 +76,7 @@ function errorLabel(code: string | undefined | null, l: ReaderPreferencesLocaliz
     MODEL_PROFILE_UNAVAILABLE: ['当前模型预设不可用，请检查模型设置。','The selected model preset is unavailable. Check model settings.'],
     MODEL_BINDING_CHANGED: ['账号、设备或文库已变化，操作已停止。','The account, device or library changed. The operation stopped.'],
     REMOTE_TASKS_DISABLED: ['当前服务尚未开启远程任务。', 'Remote tasks are disabled on this service.'],
-    REMOTE_TASK_LEASE_CHANGED: ['执行租约已变化，本机处理已停止。请查看账号中的任务状态。', 'The execution lease changed. Local work stopped; check the account task status.'],
+    REMOTE_TASK_LEASE_CHANGED: ['任务状态已变化，这台电脑已停止处理。请在手机上查看任务进度。', 'The task status changed and this computer stopped processing it. Check its progress on your phone.'],
     REMOTE_TASK_ARTIFACT_LIMIT: ['结果超过任务容量限制，未上传，请缩小处理范围或检查服务输出。', 'The result exceeds the task limit and was not uploaded. Reduce the scope or inspect the service output.'],
   };
   const value = labels[code];
@@ -87,7 +88,12 @@ function extractCode(error: unknown): string {
   return value.match(/\b[A-Z][A-Z_]{3,70}\b/)?.[0] || 'UNKNOWN';
 }
 
-export function ReaderPreferencesDesktopAccountSection({ l }: { l: ReaderPreferencesLocalizer }) {
+export function ReaderPreferencesDesktopAccountSection({ l, onNavigate }: { l: ReaderPreferencesLocalizer; onNavigate?: (section: PreferencesSectionKey) => void }) {
+  const [activeTask, setActiveTask] = useState<'files' | 'ai' | 'processing' | 'relations' | null>(null);
+  const [connectionExpanded, setConnectionExpanded] = useState(false);
+  const [candidateSearch, setCandidateSearch] = useState('');
+  const taskPanel = useRef<HTMLElement | null>(null);
+  const overview = useRef<HTMLHeadingElement | null>(null);
   const [status, setStatus] = useState<DesktopAccountStatus | null>(null);
   const [config, setConfig] = useState<DesktopAccountConfig>(EMPTY_CONFIG);
   const [candidates, setCandidates] = useState<DesktopPdfCandidate[]>([]);
@@ -110,20 +116,23 @@ export function ReaderPreferencesDesktopAccountSection({ l }: { l: ReaderPrefere
   const sequence = useRef(0);
   const initialized = useRef(false);
   const activeAccount = useRef<string | null>(null);
+  const latestAction = useRef(0);
 
   const reload = useCallback(async () => {
     const request = ++sequence.current;
     try {
       const next = await desktopAccount.status();
       if (!alive.current || request !== sequence.current) return;
+      const accountKey = next.graphExchange?.scopeKey || (next.account ? JSON.stringify([next.config?.apiBaseUrl, next.account.accountId, next.account.deviceId]) : null);
+      if (activeAccount.current !== accountKey) {
+        activeAccount.current = accountKey; latestAction.current += 1;
+        setPending(false); setError(null); setNotice('');
+        setVersions([]); setMoreVersions(false); setVersionId(''); setCandidateKey('');
+      }
       setStatus(next);
       const owner=next.modelInference?.configurationToken??null;if(modelOwner.current!==owner){modelOwner.current=owner;setModelRecords([]);}
       if(next.account&&next.auth.status==='signed-in'){const history=await desktopAccount.modelRecords();if(alive.current&&request===sequence.current&&owner===modelOwner.current)setModelRecords(history.items);}else setModelRecords([]);
-      const accountKey = next.account?.accountId || null;
-      if (activeAccount.current !== accountKey) {
-        activeAccount.current = accountKey;
-        setVersions([]); setMoreVersions(false); setVersionId(''); setCandidateKey('');
-      }
+
       if (!initialized.current) { setConfig(next.config || EMPTY_CONFIG); initialized.current = true; }
       const local = await desktopAccount.candidates();
       if (alive.current && request === sequence.current) { setCandidates(local.items); setMoreCandidates(!!local.hasMore); }
@@ -141,12 +150,14 @@ export function ReaderPreferencesDesktopAccountSection({ l }: { l: ReaderPrefere
   }, [reload]);
 
   const run = async (operation: () => Promise<unknown>, success = '') => {
+    const action = ++latestAction.current, owner = activeAccount.current;
+    const current = () => alive.current && action === latestAction.current && owner === activeAccount.current;
     setPending(true); setError(null); setNotice('');
     try {
       await operation();
-      if (alive.current) { if (success) setNotice(success); await reload(); }
-    } catch (failure) { if (alive.current) setError(extractCode(failure)); }
-    finally { if (alive.current) setPending(false); }
+      if (current()) { if (success) setNotice(success); await reload(); }
+    } catch (failure) { if (current()) setError(extractCode(failure)); }
+    finally { if (current()) setPending(false); }
   };
   const signedIn = status?.auth.status === 'signed-in' && !!status.account;
   const remote = status?.remoteTasks;
@@ -162,64 +173,105 @@ export function ReaderPreferencesDesktopAccountSection({ l }: { l: ReaderPrefere
   const bindingLabels = {
     'pending-paper': l('等待同步题录', 'Waiting for metadata'),
     'pending-version': l('等待同步附件版本', 'Waiting for file version'),
-    published: l('可提供', 'Available'),
+    published: l('已添加，可开启共享', 'Added; ready to share'),
     blocked: l('需要处理', 'Needs attention'),
     'source-changed': l('文件已变化', 'File changed'),
   };
 
-  return <div className="space-y-4" data-desktop-account>
-    <div className="rounded-2xl border border-[var(--pq-border)] bg-[var(--pq-surface-1)] p-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 font-medium text-[var(--pq-text)]"><Laptop className="h-5 w-5 shrink-0" />{l('让同账号设备读取这台电脑的 PDF', 'Read this computer’s PDFs on your devices')}</div>
-          <p className="mt-2 text-sm leading-6 text-[var(--pq-text-muted)]">{l('选择已导入文库的 PDF，将题录和附件版本同步到账号。开启后，手机或平板可在这台电脑保持运行时取文件。', 'Select imported PDFs to sync their metadata and file versions. After enabling access, your phone or tablet can fetch them while this app is running.')}</p>
+  const configDirty = !!status?.config && Object.keys(config).some(key => config[key as keyof DesktopAccountConfig] !== status.config?.[key as keyof DesktopAccountConfig]);
+  const connecting = !!status && !signedIn && (signingIn || !!status.busy || status.auth.status === 'signed-in');
+  const visibleCandidates = candidates.filter(item => !candidateSearch.trim() || (item.title + ' ' + item.fileName).toLocaleLowerCase().includes(candidateSearch.trim().toLocaleLowerCase()));
+  const tasks = [
+    { key: 'files' as const, title: l('在手机上读电脑里的文献', 'Read this computer’s papers on my phone'), detail: l('添加文献，再开启文件共享', 'Add papers, then enable file access'), icon: FileText },
+    { key: 'ai' as const, title: l('在手机上用这台电脑的 AI', 'Use this computer’s AI on my phone'), detail: l('选择一个 AI 服务供自己的设备使用', 'Choose an AI service for your own devices'), icon: Sparkles },
+    { key: 'processing' as const, title: l('让电脑帮忙处理文献', 'Let this computer prepare papers'), detail: l('把 PDF 转成可阅读、可问答的内容', 'Prepare PDFs for reading and questions'), icon: FileSearch },
+    { key: 'relations' as const, title: l('同步文献之间的关系', 'Sync relationships between papers'), detail: l('把关系带到账号，或带到这台电脑', 'Move relationships to your account or this computer'), icon: GitBranch },
+  ];
+  useEffect(() => { if (!signedIn) setActiveTask(null); }, [signedIn]);
+  useEffect(() => { if (activeTask) taskPanel.current?.focus({ preventScroll: true }); else overview.current?.focus({ preventScroll: true }); }, [activeTask]);
+  return <div className="space-y-5" data-desktop-account>
+    <section className="rounded-[var(--pq-radius-md)] border border-[var(--pq-border)] bg-[var(--pq-surface-1)] p-5">
+      <div className="flex flex-wrap items-start gap-4">
+        <Laptop className="mt-1 h-6 w-6 shrink-0 text-[var(--pq-accent)]" />
+        <div className="min-w-0 flex-1"><h2 className="text-lg font-semibold text-[var(--pq-text)]">{l('账号与多设备', 'Account and devices')}</h2>
+          <p className="mt-1 text-sm leading-6 text-[var(--pq-text-muted)]">{signedIn ? l('已连接：' + (status.auth.displayName || status.account?.deviceName || '当前账号'), 'Connected: ' + (status.auth.displayName || status.account?.deviceName || 'Current account')) : connecting ? l('正在连接账号服务…', 'Connecting to your account…') : !status ? l('正在读取账号设置…', 'Loading account settings…') : l('连接同一个账号，在电脑、手机和平板间接续阅读。', 'Connect the same account to continue reading across your computer, phone and tablet.')}</p>
         </div>
-        <span className="rounded-full border border-[var(--pq-border)] px-3 py-1 text-xs text-[var(--pq-text-muted)]">{l('开发预览', 'Development preview')}</span>
+        {signedIn ? <button type="button" className={buttonClass} onClick={() => void run(desktopAccount.signOut)}><LogOut className="h-4 w-4" />{l('退出账号', 'Sign out')}</button>
+          : connecting ? <button type="button" className={buttonClass} onClick={() => void run(desktopAccount.cancelSignIn)}>{l('取消连接', 'Cancel connection')}</button>
+          : <button type="button" className={buttonClass} disabled={!status || busy} onClick={() => { if (!status?.config || configDirty) setConnectionExpanded(true); else void run(desktopAccount.signIn); }}><LogIn className="h-4 w-4" />{!status?.config ? l('设置账号连接', 'Set up account connection') : configDirty ? l('检查连接信息', 'Review connection details') : l('连接账号', 'Connect account')}</button>}
       </div>
-      <div className="mt-3 flex flex-wrap items-center gap-2" aria-live="polite">
-        <span className="mr-auto min-w-0 break-words text-sm text-[var(--pq-text)]">{signedIn
-          ? l(`已登录：${status.auth.displayName || status.account?.deviceName || '当前账号'}`, `Signed in: ${status.auth.displayName || status.account?.deviceName || 'Current account'}`)
-          : signingIn ? l('等待系统浏览器完成登录…', 'Waiting for sign-in in your browser…') : l('尚未登录', 'Signed out')}</span>
-        {signingIn ? <button type="button" className={buttonClass} onClick={() => void run(desktopAccount.cancelSignIn)}>{l('取消登录', 'Cancel sign-in')}</button>
-          : signedIn ? <button type="button" className={buttonClass} onClick={() => void run(desktopAccount.signOut)}><LogOut className="h-4 w-4" />{l('退出账号', 'Sign out')}</button>
-            : <button type="button" className={buttonClass} disabled={!status?.config || busy} onClick={() => void run(desktopAccount.signIn)}><LogIn className="h-4 w-4" />{l('在浏览器中登录', 'Sign in with browser')}</button>}
-      </div>
-      <p className="mt-3 text-xs leading-5 text-[var(--pq-text-muted)]">{l('每次启动需重新登录并开启。本操作不会创建云端长期副本。', 'Sign in and enable access after each restart. This does not create a permanent cloud copy.')}</p>
-    </div>
-
+      {signedIn ? <p className="mt-3 text-xs text-[var(--pq-text-muted)]">{l('共享 PDF、提供 AI 和处理文献分别控制，需要时再开启。', 'PDF access, AI and document preparation can each be enabled when needed.')}</p> : status && !connecting ? <p className="mt-3 text-xs leading-5 text-[var(--pq-text-muted)]">{l('需要你自己的同步服务。连接信息由管理员提供；尚未配置时仍可正常使用本机文库。', 'This requires your own sync service. An administrator provides the connection details. Your local library works without it.')}</p> : null}
+      {status?.config ? <button type="button" className="mt-2 min-h-11 text-sm text-[var(--pq-accent)]" onClick={() => setConnectionExpanded(value => !value)}>{connectionExpanded ? l('收起连接信息', 'Hide connection details') : l('查看或更改连接信息', 'View or change connection details')}</button> : null}
+    </section>
     {message ? <div role="alert" className="rounded-xl bg-[var(--pq-error-bg)] px-4 py-3 text-sm text-[var(--pq-error)]">{message}</div> : null}
     {notice ? <p role="status" className="text-sm text-[var(--pq-text-muted)]">{notice}</p> : null}
-    {!status && !message ? <p role="status" className="text-sm text-[var(--pq-text-muted)]">{l('正在读取账号设置…', 'Loading account settings…')}</p> : null}
-
-    <details className="rounded-2xl border border-[var(--pq-border)] bg-[var(--pq-surface-1)] p-4" open={!status?.config || undefined}>
-      <summary className="cursor-pointer text-sm font-medium text-[var(--pq-text)]">{l('账号服务设置', 'Account service settings')}</summary>
-      <form className="mt-4 grid gap-3" onSubmit={(event) => { event.preventDefault(); void run(() => desktopAccount.configure(config), l('设置已保存，可以登录。', 'Settings saved. You can now sign in.')); }}>
-        <p className="text-xs leading-5 text-[var(--pq-text-muted)]">{l('使用与你的手机或平板一致的同步服务。登录期间请先退出账号再修改。', 'Use the same sync service as your phone or tablet. Sign out before changing these settings.')}</p>
+    {connectionExpanded ? <details className="rounded-2xl border border-[var(--pq-border)] bg-[var(--pq-surface-1)] p-4" open>
+      <summary className="cursor-pointer text-sm font-medium text-[var(--pq-text)]">{l('连接信息', 'Connection details')}</summary>
+      <form className="mt-4 grid gap-3" onSubmit={(event) => { event.preventDefault(); void run(async () => { await desktopAccount.configure(config); await desktopAccount.signIn(); }); }}>
+        <p className="text-xs leading-5 text-[var(--pq-text-muted)]">{l('这些信息由同步服务管理员提供。手机和电脑需要连接同一项服务。', 'Your sync service administrator provides these details. Use the same service on your phone and computer.')}</p>
         {([
           ['apiBaseUrl', l('同步服务地址', 'Sync service URL'), 'https://sync.example.com'],
-          ['oidcIssuer', l('身份服务地址', 'Identity provider URL'), 'https://id.example.com/realms/paperquay'],
-          ['oidcClientId', l('桌面客户端 ID', 'Desktop client ID'), 'paperquay-desktop'],
+          ['oidcIssuer', l('登录服务网址', 'Sign-in service URL'), 'https://id.example.com/realms/paperquay'],
+          ['oidcClientId', l('登录应用编号', 'Sign-in application ID'), 'paperquay-desktop'],
           ['deviceName', l('这台电脑的名称', 'This computer’s name'), l('我的电脑', 'My computer')],
         ] as const).map(([key, label, placeholder]) => <label key={key} className="grid min-w-0 gap-1 text-sm text-[var(--pq-text)]">{label}
           <SettingsInput required autoComplete="off" maxLength={key.endsWith('Url') || key === 'oidcIssuer' ? 2048 : key === 'deviceName' ? 80 : 255} value={config[key]} placeholder={placeholder}
             disabled={signedIn || signingIn || busy} onChange={(event) => setConfig((previous) => ({ ...previous, [key]: event.target.value }))} />
         </label>)}
-        <div><button type="submit" className={buttonClass} disabled={signedIn || signingIn || busy || Object.values(config).some((value) => !value.trim())}>{l('保存服务设置', 'Save service settings')}</button></div>
+        <div><button type="submit" className={buttonClass} disabled={signedIn || signingIn || busy || Object.values(config).some((value) => !value.trim())}>{l('保存并连接账号', 'Save and connect')}</button></div>
       </form>
-    </details>
-
-    <SettingsField label={l('在线取文件', 'File access while online')} description={l('仅提供下方明确添加的 PDF，每个文件最多 64 MiB。关闭会停止正在进行的传输。', 'Only the PDFs added below are available, up to 64 MiB each. Turning this off stops active transfers.')}>
+    </details> : null}
+    {!activeTask ? <section><h3 ref={overview} tabIndex={-1} className="mb-3 text-sm font-medium text-[var(--pq-text-muted)]">{l('你想做什么？', 'What would you like to do?')}</h3>
+      <nav aria-label={l('多设备任务', 'Device tasks')} className="divide-y divide-[var(--pq-border)] overflow-hidden rounded-[var(--pq-radius-md)] border border-[var(--pq-border)] bg-[var(--pq-surface-1)]">
+        {tasks.map(task => <button key={task.key} type="button" data-account-task={task.key} onClick={() => { setActiveTask(task.key); setError(null); setNotice(''); }} className="flex min-h-20 w-full items-center gap-4 p-4 text-left transition-colors hover:bg-[var(--pq-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--pq-accent)] motion-reduce:transition-none"><task.icon className="h-5 w-5 shrink-0 text-[var(--pq-accent)]" /><span className="min-w-0 flex-1"><span className="block text-sm font-medium text-[var(--pq-text)]">{task.title}</span><span className="mt-1 block text-xs leading-5 text-[var(--pq-text-muted)]">{task.detail}</span></span><ChevronRight className="h-4 w-4 shrink-0 text-[var(--pq-text-faint)]" /></button>)}
+      </nav></section> : <section ref={taskPanel} tabIndex={-1} aria-label={tasks.find(task => task.key === activeTask)?.title} className="space-y-4 focus:outline-none">
+      <button type="button" className={buttonClass} onClick={() => setActiveTask(null)}><ChevronLeft className="h-4 w-4" />{l('返回多设备任务', 'Back to device tasks')}</button>
+      <h3 className="text-lg font-semibold text-[var(--pq-text)]">{tasks.find(task => task.key === activeTask)?.title}</h3>
+      {!signedIn ? <div className="space-y-3 rounded-xl bg-[var(--pq-surface-1)] p-4"><p className="text-sm leading-6 text-[var(--pq-text-muted)]">{l('先连接手机和电脑共同使用的账号，再继续这一步。', 'Connect the account used by both your phone and computer to continue.')}</p><button type="button" className={buttonClass} disabled={connecting} onClick={() => { if (status?.config && !configDirty) void run(desktopAccount.signIn); else setConnectionExpanded(true); }}>{l('连接账号', 'Connect account')}</button></div> : <>
+      {activeTask === 'files' ? status?.capability ? <div className="space-y-4"><SettingsField label={l('先添加要在手机上读的文献', 'First, add papers to read on your phone')} description={l('把选中文献加入账号，PDF 仍保存在电脑。接下来开启共享，手机才能读取文件。', 'Add the selected paper to your account. Its PDF stays on this computer. Then enable access so your phone can read it.')}>
+      <SettingsInput aria-label={l('搜索要共享的文献', 'Search papers to share')} value={candidateSearch} onChange={event => { setCandidateSearch(event.target.value); setCandidateKey(''); setVersionId(''); }} placeholder={l('输入题名或文件名', 'Search by title or file name')} />
+      <div className="flex flex-wrap gap-2">
+        <SettingsSelect aria-label={l('选择本机 PDF', 'Select local PDF')} className="min-w-0 flex-1" value={candidateKey} disabled={!signedIn || busy}
+          onChange={(event) => { setCandidateKey(event.target.value); setVersionId(''); }}>
+          <option value="">{l('选择本机 PDF…', 'Select a local PDF…')}</option>
+          {visibleCandidates.map((item) => <option key={`${item.localPaperId}:${item.localAttachmentId}`} value={`${item.localPaperId}:${item.localAttachmentId}`}>{item.title || item.fileName}{item.publicationStatus === 'published' ? l('（已添加）', ' (Added)') : ''}</option>)}
+        </SettingsSelect>
+        <button type="button" className={buttonClass} disabled={busy} aria-label={l('刷新本机 PDF 列表', 'Refresh local PDF list')} onClick={() => void run(reload)}><RefreshCw className="h-4 w-4" /></button>
+      </div>
+      <div><button type="button" className={buttonClass} disabled={!signedIn || !status?.capability || !candidate || busy || candidate.publicationStatus === 'published'}
+        onClick={() => candidate && void run(() => desktopAccount.publish(candidate.localPaperId, candidate.localAttachmentId))}>{l('添加这篇文献', 'Add this paper')}</button></div>
+      {status && candidates.length === 0 ? <p className="text-sm text-[var(--pq-text-muted)]">{l('当前文库没有可选择的 PDF。', 'There are no selectable PDFs in this library.')}</p> : null}
+      {moreCandidates ? <p className="text-xs text-[var(--pq-text-muted)]">{l('当前最多显示前 2,000 份本机 PDF。', 'The first 2,000 local PDFs are shown.')}</p> : null}
+      <details className="rounded-xl border border-[var(--pq-border)] p-3">
+        <summary className="cursor-pointer text-sm text-[var(--pq-text-muted)]">{l('手机账号中已有这篇文献？', 'Already have this paper in your phone account?')}</summary>
+        <p className="mt-3 text-xs leading-5 text-[var(--pq-text-muted)]">{l('账号中已有同一份 PDF 时，可直接关联，文件内容必须完全一致。', 'If the account already has this PDF, link it directly. The contents must match exactly.')}</p>
+        <div className="mt-3 space-y-2">
+          <button type="button" className={buttonClass} disabled={!signedIn || !status?.capability || busy} onClick={() => void run(async () => {
+            const accountId = activeAccount.current; const result = await desktopAccount.remoteVersions();
+            if (alive.current && accountId === activeAccount.current) { setVersions(result.items); setMoreVersions(!!result.hasMore); setVersionId(''); }
+          })}>{l('查看账号中的文献', 'View papers in my account')}</button>
+          <SettingsSelect aria-label={l('选择已有附件版本', 'Select existing file version')} value={versionId} disabled={!signedIn || busy} onChange={(event) => setVersionId(event.target.value)}>
+            <option value="">{l('选择已有附件版本…', 'Select an existing version…')}</option>
+            {versions.map((item) => <option key={item.attachmentVersionId} value={item.attachmentVersionId}>{item.title} · {item.fileName} · {sizeLabel(item.sizeBytes)}</option>)}
+          </SettingsSelect>
+          {moreVersions ? <p className="text-xs text-[var(--pq-text-muted)]">{l('当前最多加载前 1,000 个附件版本。', 'The first 1,000 file versions are loaded.')}</p> : null}
+          <button type="button" className={buttonClass} disabled={!signedIn || !candidate || !versionId || busy} onClick={() => candidate && void run(() => desktopAccount.bind(candidate.localPaperId, candidate.localAttachmentId, versionId))}>{l('关联这份 PDF', 'Link this PDF')}</button>
+        </div>
+      </details>
+    </SettingsField>
+<SettingsField label={l('允许手机读取已添加的 PDF', 'Allow your phone to read added PDFs')} description={l('打开后，手机可在这台电脑运行时读取已添加的文献。关闭只停止文件传输。', 'When enabled, your phone can read these papers while this app is running. Turning this off stops file transfers only.')}>
       <button type="button" role="switch" aria-checked={!!status?.enabled} aria-label={l('允许同账号设备取文件', 'Allow your devices to fetch files')}
         disabled={!status?.enabled && (!signedIn || !status.capability || !hasPublished || busy)}
         onClick={() => void run(() => desktopAccount.setEnabled(!status?.enabled))}
         className="flex min-h-14 w-full items-center justify-between gap-4 rounded-xl border border-[var(--pq-border)] bg-[var(--pq-surface-1)] p-3 text-left disabled:opacity-50">
-        <span className="min-w-0 text-sm text-[var(--pq-text)]">{status?.enabled ? l('已开启，正在等待取文件请求', 'Enabled, waiting for file requests') : l('已关闭', 'Disabled')}</span>
+        <span className="min-w-0 text-sm text-[var(--pq-text)]">{status?.enabled ? l('已开启，正在等待取文件请求', 'Enabled, waiting for file requests') : l('尚未开启', 'Not enabled')}</span>
         <span className={`relative h-6 w-11 shrink-0 rounded-full ${status?.enabled ? 'bg-[var(--pq-accent)]' : 'bg-[var(--pq-border-strong)]'}`}><span className={`absolute top-1 h-4 w-4 rounded-full bg-white ${status?.enabled ? 'left-6' : 'left-1'}`} /></span>
       </button>
       {signedIn && !status.capability ? <p className="text-xs leading-5 text-[var(--pq-text-muted)]">{l('当前服务尚未提供此功能。', 'This service does not offer this feature yet.')}</p> : null}
-      {status?.capability ? <p className="text-xs leading-5 text-[var(--pq-text-muted)]">{status.capability.direct
+      <details><summary className="min-h-11 cursor-pointer py-3 text-xs text-[var(--pq-text-muted)]">{l('传输方式与隐私', 'Transfer and privacy details')}</summary>      {status?.capability ? <p className="text-xs leading-5 text-[var(--pq-text-muted)]">{status.capability.direct
         ? l('优先尝试设备直连，失败后使用临时中继。中继服务会转发文件，但不保存 PDF。', 'Try a direct device connection first, then use the temporary relay if needed. The relay forwards the file without storing the PDF.')
         : l('通过临时中继传输。中继服务会转发文件，但不保存 PDF。', 'Files use the temporary relay, which forwards them without storing the PDF.')}</p> : null}
+</details>
       {status?.transfers.map((transfer) => <div key={transfer.transferId} data-desktop-transfer={transfer.transport || 'reading'} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--pq-border)] p-3">
         <p role="status" className="text-sm text-[var(--pq-text)]">{transfer.status === 'reading' ? l('正在校验本机 PDF', 'Checking the local PDF')
           : transfer.status === 'connecting' ? transfer.transport === 'http-relay-v1'
@@ -230,116 +282,8 @@ export function ReaderPreferencesDesktopAccountSection({ l }: { l: ReaderPrefere
         <button type="button" className={buttonClass} onClick={() => void run(() => desktopAccount.cancel(transfer.transferId))}>{l('取消传输', 'Cancel transfer')}</button>
       </div>)}
     </SettingsField>
-
-    <SettingsField label={l('用这台电脑运行模型', 'Run models on this computer')}
-      description={l('让同账号设备使用这里选定的聊天模型。电脑会把请求中的文本发送到该模型服务，可能产生费用。每次启动后默认关闭。', 'Let your devices use the chat model selected here. This computer sends the requested text to that model service and charges may apply. Disabled after restart.')}>
-      <div data-desktop-models className="space-y-3">
-        <div role="status" className="text-sm text-[var(--pq-text)]">{models?.enabled
-          ? models.busy ? l('正在运行模型', 'Running a model request') : l('已开启，等待同账号请求', 'Enabled, waiting for your requests')
-          : l('已关闭', 'Disabled')}</div>
-        <label className="grid gap-2 text-sm text-[var(--pq-text)]">{l('提供的模型', 'Available model')}
-          <SettingsSelect className="min-h-11" aria-label={l('提供的模型', 'Available model')} value={modelPresetId} disabled={!!models?.enabled || !!models?.busy || busy} onChange={event => {setModelPresetId(event.target.value);setModelConsent(false);}}>
-            <option value="">{l('选择已保存的聊天模型', 'Choose a saved chat model')}</option>
-            {models?.presets.map(preset=><option key={preset.id} value={preset.id}>{preset.label} · {preset.model}</option>)}
-          </SettingsSelect>
-        </label>
-        {!models?.presets.length ? <p className="text-xs leading-5 text-[var(--pq-text-muted)]">{l('先在模型设置保存 Chat Completions 预设及密钥。Responses 预设暂不可用于远程运行。', 'Save a Chat Completions preset and key in model settings first. Responses presets are not supported for remote execution yet.')}</p> : null}
-        <p className="text-xs leading-5 text-[var(--pq-text-muted)]">{l('每次最多生成 2048 tokens。服务地址和密钥留在电脑；同账号设备可查看模型名称。停止会中断本机等待，已发出的请求仍可能计费。', 'Up to 2048 output tokens per request. The service address and key stay on this computer; your devices can see its model name. Stopping interrupts local waiting; issued requests may still incur charges.')}</p>
-        {!models?.enabled ? <label className="flex min-h-11 items-start gap-3 text-sm leading-6 text-[var(--pq-text-muted)]"><input className="mt-1 h-5 w-5 shrink-0" type="checkbox" checked={modelConsent} onChange={event=>setModelConsent(event.target.checked)} />
-          {l('允许同账号设备将文本交给所选模型，并了解内容发送与费用。', 'Allow my devices to send text to the selected model; I understand the data transfer and possible charges.')}</label> : null}
-        <button type="button" role="switch" aria-checked={!!models?.enabled} aria-label={l('允许这台电脑运行模型', 'Allow models on this computer')}
-          className={buttonClass+' min-h-11'} disabled={!models?.enabled&&(!signedIn||!models?.capability||!modelPresetId||!modelConsent||busy||!!models?.busy)}
-          onClick={()=>{setModelConsent(false);void run(()=>desktopAccount.setModelsEnabled(!models?.enabled,modelPresetId,models?.configurationToken??undefined));}}>
-          {models?.enabled?l('停止提供模型', 'Stop providing this model'):l('开启所选模型', 'Enable selected model')}</button>
-        {signedIn&&!models?.capability?<p className="text-xs text-[var(--pq-text-muted)]">{l('当前同步服务尚未开启模型调用。', 'Model invocations are disabled on this sync service.')}</p>:null}
-        {models?.errorCode?<p role="alert" className="text-sm leading-6 text-[var(--pq-error)]">{errorLabel(models.errorCode,l)}</p>:null}
-        <details className="rounded-xl border border-[var(--pq-border)] p-3">
-          <summary className="min-h-11 cursor-pointer py-2 text-sm text-[var(--pq-text)]">{l('本机执行记录与结果恢复', 'Local history and result recovery')}</summary>
-          <p className="my-2 text-xs leading-5 text-[var(--pq-text-muted)]">{l('重新打开记录不会重新调用模型。“仅重试保存”只提交已收到的结果；若只有执行意图，会将原任务标记为结果未知。备份包含当次提示词和结果，请妥善保存。', 'Opening history never reruns a model. “Retry saving only” submits received output; an intent without output is marked unknown. Backups contain that request’s prompt and result.')}</p>
-          {modelRecords.length?<ul className="divide-y divide-[var(--pq-border)]">{modelRecords.map(record=><li key={record.id} className="space-y-2 py-3">
-            <div className="flex flex-wrap items-start justify-between gap-2"><span className="min-w-0 break-words text-sm font-medium text-[var(--pq-text)]">{record.model}</span><span className="text-xs text-[var(--pq-text-muted)]">{record.stage==='acknowledged'?l('已保存','Saved'):record.hasOutput?l('结果待保存','Result awaiting save'):l('执行结果未知','Outcome unknown')}</span></div>
-            <p className="break-all text-xs text-[var(--pq-text-muted)]">{new Date(record.createdAt).toLocaleString()} · {record.id}</p>
-            {!record.canRecover&&record.stage!=='acknowledged'?<p className="text-xs leading-5 text-[var(--pq-text-muted)]">{l('原登录会话已变化，当前可备份这份记录。','The original sign-in session changed. You can back up this record.')}</p>:null}
-            <div className="flex flex-wrap gap-2"><button type="button" className={buttonClass+' min-h-11'} disabled={busy} onClick={()=>void run(async()=>{
-              const owner=modelOwner.current,result=await desktopAccount.exportModelBackup(record.id);if(!alive.current||owner!==modelOwner.current)return;
-              if(result.status==='exported')setNotice(l('本次请求与结果已备份。','Request and result backed up.'));
-            })}>{l('备份本次请求与结果','Back up request and result')}</button>
-            {record.canRecover?<button type="button" className={buttonClass+' min-h-11'} disabled={busy||!!models?.busy} onClick={()=>void run(()=>desktopAccount.retryModelSave(record.id))}>{l('仅重试保存','Retry saving only')}</button>:null}</div>
-          </li>)}</ul>:<p className="py-3 text-sm text-[var(--pq-text-muted)]">{l('当前账号和文库暂无本机模型执行记录。','No local model history for this account and library.')}</p>}
-          <div className="mt-3 border-t border-[var(--pq-border)] pt-3">
-            <label className="flex min-h-11 items-start gap-3 text-xs leading-5 text-[var(--pq-text-muted)]"><input className="mt-0.5 h-5 w-5 shrink-0" type="checkbox" checked={clearModelsConfirmed} onChange={event=>setClearModelsConfirmed(event.target.checked)} />{l('确认清理本机已保存记录及结果副本，保留结果未确认的记录。','Clear local saved records and result copies, preserving all unconfirmed records.')}</label>
-            <button type="button" className={buttonClass+' min-h-11 mt-2'} disabled={!signedIn||!!models?.enabled||!!models?.busy||busy||!clearModelsConfirmed} onClick={()=>{setClearModelsConfirmed(false);void run(()=>desktopAccount.clearCompletedModels());}}>{l('清理已保存的本机记录','Clear saved local records')}</button>
-          </div>
-        </details>
-      </div>
-    </SettingsField>
-
-    <SettingsField label={l('远程解析与向量任务', 'Remote parse and vector tasks')}
-      description={l('仅处理下方已关联的 PDF，使用本机当前保存的 MinerU 与 embedding 服务。这会发送 PDF 或解析文本，并可能产生服务费用；重启后保持关闭。', 'Only linked PDFs below are processed, using the MinerU and embedding services saved on this computer. PDFs or parsed text are sent and service charges may apply. This stays off after restart.')}>
-      <div data-desktop-remote-tasks className="space-y-3">
-        <div role="status" className="text-sm text-[var(--pq-text)]">{remote?.enabled
-          ? remote.busy ? l('正在处理远程任务', 'Processing a remote task') : l('已开启，正在等待同账号任务', 'Enabled, waiting for your account’s tasks')
-          : l('已关闭', 'Disabled')}</div>
-        <ul className="space-y-1 text-xs text-[var(--pq-text-muted)]">
-          {remote?.profiles.map((profile) => <li key={profile.id}>{profile.kind === 'parse' ? l('解析', 'Parse') : l('向量索引', 'Vector index')} · {profile.model}</li>)}
-        </ul>
-        {!remote?.profiles.some((profile) => profile.kind === 'parse') ? <p className="text-xs text-[var(--pq-text-muted)]">{l('请先在模型设置中保存 MinerU 凭据。', 'Save MinerU credentials in model settings first.')}</p> : null}
-        {!remote?.profiles.some((profile) => profile.kind === 'index') ? <p className="text-xs text-[var(--pq-text-muted)]">{remote?.unavailable.index === 'REMOTE_INDEX_INPUT_UNSUPPORTED'
-          ? l('远程向量暂支持 plain 输入，请检查 embedding 设置。', 'Remote indexing currently supports plain input. Check embedding settings.')
-          : l('向量任务需要已保存的 embedding 凭据、模型和明确维度。', 'Indexing requires saved embedding credentials, a model, and an explicit dimension.')}</p> : null}
-        <p className="text-xs leading-5 text-[var(--pq-text-muted)]">{l('向量任务只接受与目标版本一致的已验证解析包。停止会中止本机等待及后续请求；已受理的云任务可能仍继续并计费。', 'Indexing requires a verified parsed package for the exact file version. Stopping aborts local waiting and further requests; cloud work already accepted may continue and incur charges.')}</p>
-        {!remote?.enabled ? <label className="flex items-start gap-2 text-xs leading-5 text-[var(--pq-text-muted)]"><input type="checkbox" checked={remoteConsent} onChange={(event) => setRemoteConsent(event.target.checked)} />
-          {l('允许使用当前服务处理所选文献，并已了解内容发送与费用。', 'Allow these services to process selected papers; I understand the data transfer and possible charges.')}</label> : null}
-        <button type="button" role="switch" aria-checked={!!remote?.enabled} aria-label={l('允许远程解析与向量任务', 'Allow remote parse and vector tasks')}
-          className={buttonClass} disabled={!remote?.enabled && (!signedIn || !remote?.capability || !remote.profiles.length || !hasPublished || busy || !!remote.busy || !remoteConsent)}
-          onClick={() => { const next = !remote?.enabled; setRemoteConsent(false); void run(() => desktopAccount.setRemoteTasksEnabled(next, remote?.configurationToken || undefined)); }}>
-          {remote?.enabled ? l('停止远程任务', 'Stop remote tasks') : l('开启远程任务', 'Enable remote tasks')}</button>
-        {signedIn && !remote?.capability ? <p className="text-xs text-[var(--pq-text-muted)]">{l('当前服务尚未开启远程任务。', 'Remote tasks are disabled on this service.')}</p> : null}
-        {remote?.errorCode ? <p role="alert" className="text-xs leading-5 text-[var(--pq-error)]">{errorLabel(remote.errorCode, l)}</p> : null}
-        <details className="rounded-xl border border-[var(--pq-border)] p-3"><summary className="cursor-pointer text-xs text-[var(--pq-text-muted)]">{l('清理本机已完成任务记录', 'Clear completed local task journals')}</summary>
-          <p className="mt-2 text-xs leading-5 text-[var(--pq-text-muted)]">{l('仅清理当前账号、服务和文库已完成的执行记录及其本机结果副本。保留 PDF、解析缓存、旧索引和服务端结果。请先停止远程任务。', 'Only completed execution journals and their local result copies for this account, service and library are cleared. PDFs, parsed caches, existing indexes and server results remain. Stop remote tasks first.')}</p>
-          <label className="mt-2 flex items-start gap-2 text-xs text-[var(--pq-text-muted)]"><input type="checkbox" checked={clearRemoteConfirmed} onChange={(event) => setClearRemoteConfirmed(event.target.checked)} />{l('确认清理已完成的本机执行记录', 'Confirm clearing completed local journals')}</label>
-          <button type="button" className={`${buttonClass} mt-2`} disabled={!signedIn || !!remote?.enabled || !!remote?.busy || busy || !clearRemoteConfirmed}
-            onClick={() => { setClearRemoteConfirmed(false); void run(async () => { const result = await desktopAccount.clearCompletedRemoteJournals();
-              if (alive.current) setNotice(l(`已清理 ${result.removed} 条本机执行记录。`, `Cleared ${result.removed} local task journals.`)); }); }}>{l('清理已完成记录', 'Clear completed journals')}</button>
-        </details>
-      </div>
-    </SettingsField>
-
-    <DesktopGraphExchangePanel l={l} accountActive={signedIn} ownerKey={status?.graphExchange?.scopeKey ?? null} />
-    <SettingsField label={l('添加可读取的 PDF', 'Add an available PDF')} description={l('先在文库中导入文件，再选择需要在其他设备上读取的附件。只同步选中文献的题录和附件版本。', 'Import a PDF into the library, then select the attachment to read on your other devices. Only the selected paper’s metadata and file version are synced.')}>
-      <div className="flex flex-wrap gap-2">
-        <SettingsSelect aria-label={l('选择本机 PDF', 'Select local PDF')} className="min-w-0 flex-1" value={candidateKey} disabled={!signedIn || busy}
-          onChange={(event) => { setCandidateKey(event.target.value); setVersionId(''); }}>
-          <option value="">{l('选择本机 PDF…', 'Select a local PDF…')}</option>
-          {candidates.map((item) => <option key={`${item.localPaperId}:${item.localAttachmentId}`} value={`${item.localPaperId}:${item.localAttachmentId}`}>{item.title} · {item.fileName} · {sizeLabel(item.sizeBytes)}</option>)}
-        </SettingsSelect>
-        <button type="button" className={buttonClass} disabled={busy} aria-label={l('刷新本机 PDF 列表', 'Refresh local PDF list')} onClick={() => void run(reload)}><RefreshCw className="h-4 w-4" /></button>
-      </div>
-      <div><button type="button" className={buttonClass} disabled={!signedIn || !status?.capability || !candidate || busy || candidate.publicationStatus === 'published'}
-        onClick={() => candidate && void run(() => desktopAccount.publish(candidate.localPaperId, candidate.localAttachmentId))}>{l('添加并同步题录', 'Add and sync metadata')}</button></div>
-      {status && candidates.length === 0 ? <p className="text-sm text-[var(--pq-text-muted)]">{l('当前文库没有可选择的 PDF。', 'There are no selectable PDFs in this library.')}</p> : null}
-      {moreCandidates ? <p className="text-xs text-[var(--pq-text-muted)]">{l('当前最多显示前 2,000 份本机 PDF。', 'The first 2,000 local PDFs are shown.')}</p> : null}
-      <details className="rounded-xl border border-[var(--pq-border)] p-3">
-        <summary className="cursor-pointer text-sm text-[var(--pq-text-muted)]">{l('关联账号中已有的附件版本', 'Link an existing account file version')}</summary>
-        <p className="mt-3 text-xs leading-5 text-[var(--pq-text-muted)]">{l('账号中已有同一份 PDF 时，可直接关联，文件内容必须完全一致。', 'If the account already has this PDF, link it directly. The contents must match exactly.')}</p>
-        <div className="mt-3 space-y-2">
-          <button type="button" className={buttonClass} disabled={!signedIn || !status?.capability || busy} onClick={() => void run(async () => {
-            const accountId = activeAccount.current; const result = await desktopAccount.remoteVersions();
-            if (alive.current && accountId === activeAccount.current) { setVersions(result.items); setMoreVersions(!!result.hasMore); setVersionId(''); }
-          })}>{l('加载账号中的版本', 'Load account versions')}</button>
-          <SettingsSelect aria-label={l('选择已有附件版本', 'Select existing file version')} value={versionId} disabled={!signedIn || busy} onChange={(event) => setVersionId(event.target.value)}>
-            <option value="">{l('选择已有附件版本…', 'Select an existing version…')}</option>
-            {versions.map((item) => <option key={item.attachmentVersionId} value={item.attachmentVersionId}>{item.title} · {item.fileName} · {sizeLabel(item.sizeBytes)}</option>)}
-          </SettingsSelect>
-          {moreVersions ? <p className="text-xs text-[var(--pq-text-muted)]">{l('当前最多加载前 1,000 个附件版本。', 'The first 1,000 file versions are loaded.')}</p> : null}
-          <button type="button" className={buttonClass} disabled={!signedIn || !candidate || !versionId || busy} onClick={() => candidate && void run(() => desktopAccount.bind(candidate.localPaperId, candidate.localAttachmentId, versionId))}>{l('校验并关联', 'Verify and link')}</button>
-        </div>
-      </details>
-    </SettingsField>
-
-    <section aria-label={l('已添加的 PDF', 'Added PDFs')} className="space-y-2">
-      <h3 className="text-sm font-medium text-[var(--pq-text)]">{l('已添加的 PDF', 'Added PDFs')} · {status?.bindings.length || 0}</h3>
+{!hasPublished ? <p className="text-sm text-[var(--pq-text-muted)]">{l('先添加一篇文献，上方的共享开关就可以开启。', 'Add a paper first to enable file access above.')}</p> : null}<section aria-label={l('共享文献列表', 'Shared papers')} className="space-y-2">
+      <h3 className="text-sm font-medium text-[var(--pq-text)]">{l('手机可读取的文献', 'Papers available to your phone')} · {status?.bindings.length || 0}</h3>
       {status?.bindings.map((binding) => <article key={binding.bindingId} className="rounded-xl border border-[var(--pq-border)] bg-[var(--pq-surface-1)] p-3">
         <div className="flex items-start gap-2"><FileText className="mt-1 h-4 w-4 shrink-0 text-[var(--pq-text-muted)]" /><div className="min-w-0 flex-1">
           <p className="break-words text-sm font-medium text-[var(--pq-text)]">{binding.title}</p>
@@ -349,15 +293,93 @@ export function ReaderPreferencesDesktopAccountSection({ l }: { l: ReaderPrefere
           {binding.publicationStatus !== 'published' ? <button type="button" className={buttonClass} disabled={!signedIn || busy} onClick={() => void run(() => desktopAccount.retry(binding.bindingId))}>{l('重试同步', 'Retry sync')}</button> : null}
           <button type="button" className={buttonClass} disabled={!signedIn || busy || binding.publicationStatus !== 'published'}
             onClick={() => void run(async () => {
-              const result = await desktopAccount.exportParsed(binding.bindingId);
-              if (alive.current && result.status === 'exported') setNotice(l('解析包已导出，可在手机或平板中导入。', 'Parsed document exported. Import it on your phone or tablet.'));
-            })}>{l('导出解析包', 'Export parsed document')}</button>
-          <button type="button" className={buttonClass} disabled={busy} onClick={() => void run(() => desktopAccount.unbind(binding.bindingId))}>{l('停止提供', 'Remove access')}</button>
+              const owner = activeAccount.current; const result = await desktopAccount.exportParsed(binding.bindingId);
+              if (alive.current && owner === activeAccount.current && result.status === 'exported') setNotice(l('解析包已导出，可在手机或平板中导入。', 'Parsed document exported. Import it on your phone or tablet.'));
+            })}>{l('导出给手机的排版结果', 'Export formatted content for my phone')}</button>
+          <button type="button" className={buttonClass} disabled={busy} onClick={() => void run(() => desktopAccount.unbind(binding.bindingId))}>{l('移出共享列表', 'Remove from shared papers')}</button>
         </div>
         {binding.errorCode ? <p className="mt-2 text-xs leading-5 text-[var(--pq-error)]">{errorLabel(binding.errorCode, l)}</p> : null}
       </article>)}
-      <p className="text-xs leading-5 text-[var(--pq-text-muted)]">{l('停止提供会移除这台电脑的关联；保留本机文件及账号中的题录。', 'Removing access unlinks this computer and preserves the local file and account metadata.')}</p>
+      <p className="text-xs leading-5 text-[var(--pq-text-muted)]">{l('移出列表不会删除 PDF 或账号题录；正在进行的文献处理会暂停。', 'Removing a paper keeps its PDF and account metadata. Document preparation will pause.')}</p>
       <p className="text-xs leading-5 text-[var(--pq-text-muted)]">{l('解析包需要本机重新云端解析时保存的来源证据。旧缓存或手动 JSON 请先重新解析。', 'Parsed document export requires provenance saved during a new cloud parse on this computer. Parse old caches or manually imported JSON again first.')}</p>
-    </section>
+    </section></div> : <p className="text-sm leading-6 text-[var(--pq-text-muted)]">{l('这个同步服务暂未提供电脑文件共享。请联系管理员开启，然后重新连接账号。', 'This service does not offer desktop file sharing yet. Ask the administrator to enable it, then reconnect your account.')}</p> : null}
+      {activeTask === 'ai' ? models?.capability ? <SettingsField label={l('在手机上使用这台电脑的 AI', 'Use this computer’s AI on your phone')}
+      description={l('让同账号设备使用这里选定的聊天模型。电脑会把请求中的文本发送到该模型服务，可能产生费用。每次启动后默认关闭。', 'Let your devices use the chat model selected here. This computer sends the requested text to that model service and charges may apply. Disabled after restart.')}>
+      <div data-desktop-models className="space-y-3">
+        <div role="status" className="text-sm text-[var(--pq-text)]">{models?.enabled
+          ? models.busy ? l('正在运行模型', 'Running a model request') : l('已开启，等待同账号请求', 'Enabled, waiting for your requests')
+          : l('已关闭', 'Disabled')}</div>
+        <label className="grid gap-2 text-sm text-[var(--pq-text)]">{l('手机要使用的 AI', 'AI to use on your phone')}
+          <SettingsSelect className="min-h-11" aria-label={l('手机要使用的 AI', 'AI to use on your phone')} value={modelPresetId} disabled={!!models?.enabled || !!models?.busy || busy} onChange={event => {setModelPresetId(event.target.value);setModelConsent(false);}}>
+            <option value="">{l('选择已保存的聊天模型', 'Choose a saved chat model')}</option>
+            {models?.presets.map(preset=><option key={preset.id} value={preset.id}>{preset.label} · {preset.model}</option>)}
+          </SettingsSelect>
+        </label>
+        {!models?.presets.length ? <p className="text-xs leading-5 text-[var(--pq-text-muted)]">{l('先添加一个可供其他设备使用的 AI 服务。', 'Add an AI service that your other devices can use.')}</p> : null}
+        {!models?.presets.length && onNavigate ? <button type="button" className={buttonClass} onClick={() => onNavigate('models')}>{l('添加 AI 服务', 'Add an AI service')}</button> : null}
+        <p className="text-xs leading-5 text-[var(--pq-text-muted)]">{l('使用时会把手机选中的文字发送给这个 AI，可能产生费用。地址和访问密钥保存在电脑上。', 'The text selected on your phone is sent to this AI and charges may apply. The service address and access key stay on this computer.')}</p>
+        {!models?.enabled ? <label className="flex min-h-11 items-start gap-3 text-sm leading-6 text-[var(--pq-text-muted)]"><input className="mt-1 h-5 w-5 shrink-0" type="checkbox" checked={modelConsent} onChange={event=>setModelConsent(event.target.checked)} />
+          {l('允许同账号设备将文本交给所选模型，并了解内容发送与费用。', 'Allow my devices to send text to the selected model; I understand the data transfer and possible charges.')}</label> : null}
+        <button type="button" role="switch" aria-checked={!!models?.enabled} aria-label={l('允许这台电脑运行模型', 'Allow models on this computer')}
+          className={buttonClass+' min-h-11'} disabled={!models?.enabled&&(!signedIn||!models?.capability||!modelPresetId||!modelConsent||busy||!!models?.busy)}
+          onClick={()=>{setModelConsent(false);void run(()=>desktopAccount.setModelsEnabled(!models?.enabled,modelPresetId,models?.configurationToken??undefined));}}>
+          {models?.enabled?l('停止让手机使用', 'Stop phone access'):l('允许手机使用这个 AI', 'Allow this AI on my phone')}</button>
+        {signedIn&&!models?.capability?<p className="text-xs text-[var(--pq-text-muted)]">{l('当前同步服务尚未开启模型调用。', 'Model invocations are disabled on this sync service.')}</p>:null}
+        {models?.errorCode?<p role="alert" className="text-sm leading-6 text-[var(--pq-error)]">{errorLabel(models.errorCode,l)}</p>:null}
+        <details className="rounded-xl border border-[var(--pq-border)] p-3">
+          <summary className="min-h-11 cursor-pointer py-2 text-sm text-[var(--pq-text)]">{l('查看使用记录与未保存内容', 'Usage history and unsaved work')}</summary>
+          <p className="my-2 text-xs leading-5 text-[var(--pq-text-muted)]">{l('重新打开记录不会重新调用模型。“仅重试保存”只提交已收到的结果；若只有执行意图，会将原任务标记为结果未知。备份包含当次提示词和结果，请妥善保存。', 'Opening history never reruns a model. “Retry saving only” submits received output; an intent without output is marked unknown. Backups contain that request’s prompt and result.')}</p>
+          {modelRecords.length?<ul className="divide-y divide-[var(--pq-border)]">{modelRecords.map(record=><li key={record.id} className="space-y-2 py-3">
+            <div className="flex flex-wrap items-start justify-between gap-2"><span className="min-w-0 break-words text-sm font-medium text-[var(--pq-text)]">{record.model}</span><span className="text-xs text-[var(--pq-text-muted)]">{record.stage==='acknowledged'?l('已保存','Saved'):record.hasOutput?l('结果待保存','Result awaiting save'):l('执行结果未知','Outcome unknown')}</span></div>
+            <p className="break-all text-xs text-[var(--pq-text-muted)]">{new Date(record.createdAt).toLocaleString()}</p>
+            {!record.canRecover&&record.stage!=='acknowledged'?<p className="text-xs leading-5 text-[var(--pq-text-muted)]">{l('原登录会话已变化，当前可备份这份记录。','The original sign-in session changed. You can back up this record.')}</p>:null}
+            <div className="flex flex-wrap gap-2"><button type="button" className={buttonClass+' min-h-11'} disabled={busy} onClick={()=>void run(async()=>{
+              const owner=modelOwner.current,result=await desktopAccount.exportModelBackup(record.id);if(!alive.current||owner!==modelOwner.current)return;
+              if(result.status==='exported')setNotice(l('本次请求与结果已备份。','Request and result backed up.'));
+            })}>{l('备份本次请求与结果','Back up request and result')}</button>
+            {record.canRecover?<button type="button" className={buttonClass+' min-h-11'} disabled={busy||!!models?.busy} onClick={()=>void run(()=>desktopAccount.retryModelSave(record.id))}>{l('继续保存到本机','Continue saving locally')}</button>:null}</div>
+          </li>)}</ul>:<p className="py-3 text-sm text-[var(--pq-text-muted)]">{l('当前账号和文库暂无本机模型执行记录。','No local model history for this account and library.')}</p>}
+          <div className="mt-3 border-t border-[var(--pq-border)] pt-3">
+            <label className="flex min-h-11 items-start gap-3 text-xs leading-5 text-[var(--pq-text-muted)]"><input className="mt-0.5 h-5 w-5 shrink-0" type="checkbox" checked={clearModelsConfirmed} onChange={event=>setClearModelsConfirmed(event.target.checked)} />{l('确认清理本机已保存记录及结果副本，保留结果未确认的记录。','Clear local saved records and result copies, preserving all unconfirmed records.')}</label>
+            <button type="button" className={buttonClass+' min-h-11 mt-2'} disabled={!signedIn||!!models?.enabled||!!models?.busy||busy||!clearModelsConfirmed} onClick={()=>{setClearModelsConfirmed(false);void run(()=>desktopAccount.clearCompletedModels());}}>{l('清理已保存的本机记录','Clear saved local records')}</button>
+          </div>
+        </details>
+      </div>
+    </SettingsField> : <p className="text-sm leading-6 text-[var(--pq-text-muted)]">{l('这个同步服务暂未提供电脑 AI。请联系管理员开启，然后重新连接账号。', 'This service does not offer computer AI yet. Ask the administrator to enable it, then reconnect your account.')}</p> : null}
+      {activeTask === 'processing' ? remote?.capability ? <div className="space-y-4">{!hasPublished ? <div className="rounded-xl bg-[var(--pq-surface-1)] p-4"><p className="text-sm text-[var(--pq-text-muted)]">{l('先添加需要处理的文献。AI 聊天可单独开启。', 'Add the papers to prepare first. AI chat can be enabled separately.')}</p><button type="button" className={buttonClass+' mt-2'} onClick={() => setActiveTask('files')}>{l('添加文献', 'Add papers')}</button></div> : null}<SettingsField label={l('让电脑帮手机整理文献内容', 'Let this computer prepare papers for your phone')}
+      description={l('仅处理下方已关联的 PDF，使用本机当前保存的 MinerU 与 embedding 服务。这会发送 PDF 或解析文本，并可能产生服务费用；重启后保持关闭。', 'Only linked PDFs below are processed, using the MinerU and embedding services saved on this computer. PDFs or parsed text are sent and service charges may apply. This stays off after restart.')}>
+      <div data-desktop-remote-tasks className="space-y-3">
+        <div role="status" className="text-sm text-[var(--pq-text)]">{remote?.enabled
+          ? remote.busy ? l('正在处理远程任务', 'Processing a remote task') : l('已开启，正在等待同账号任务', 'Enabled, waiting for your account’s tasks')
+          : l('已关闭', 'Disabled')}</div>
+        <ul className="space-y-1 text-xs text-[var(--pq-text-muted)]">
+          {remote?.profiles.map((profile) => <li key={profile.id}>{profile.kind === 'parse' ? l('解析', 'Parse') : l('用于文献问答的检索', 'Search for paper questions')} · {profile.model}</li>)}
+        </ul>
+        {!remote?.profiles.some((profile) => profile.kind === 'parse') ? <p className="text-xs text-[var(--pq-text-muted)]">{l('还没有连接文献解析服务。', 'A document parsing service is not connected yet.')}</p> : null}
+        {onNavigate ? <div className="flex flex-wrap gap-2"><button type="button" className={buttonClass} onClick={() => onNavigate('mineru')}>{l('设置文献解析', 'Set up document parsing')}</button><button type="button" className={buttonClass} onClick={() => onNavigate('models')}>{l('设置文献检索 AI', 'Set up search AI')}</button></div> : null}
+        {!remote?.profiles.some((profile) => profile.kind === 'index') ? <p className="text-xs text-[var(--pq-text-muted)]">{remote?.unavailable.index === 'REMOTE_INDEX_INPUT_UNSUPPORTED'
+          ? l('文献检索设置暂不兼容，请到 AI 服务检查检索选项。', 'Remote indexing currently supports plain input. Check embedding settings.')
+          : l('文献问答的检索服务还没设置好，请先到 AI 服务完成配置。', 'Indexing requires saved embedding credentials, a model, and an explicit dimension.')}</p> : null}
+        <p className="text-xs leading-5 text-[var(--pq-text-muted)]">{l('向量任务只接受与目标版本一致的已验证解析包。停止会中止本机等待及后续请求；已受理的云任务可能仍继续并计费。', 'Indexing requires a verified parsed package for the exact file version. Stopping aborts local waiting and further requests; cloud work already accepted may continue and incur charges.')}</p>
+        {!remote?.enabled ? <label className="flex items-start gap-2 text-xs leading-5 text-[var(--pq-text-muted)]"><input type="checkbox" checked={remoteConsent} onChange={(event) => setRemoteConsent(event.target.checked)} />
+          {l('允许使用当前服务处理所选文献，并已了解内容发送与费用。', 'Allow these services to process selected papers; I understand the data transfer and possible charges.')}</label> : null}
+        <button type="button" role="switch" aria-checked={!!remote?.enabled} aria-label={l('允许远程解析与向量任务', 'Allow remote parse and vector tasks')}
+          className={buttonClass} disabled={!remote?.enabled && (!signedIn || !remote?.capability || !remote.profiles.length || !hasPublished || busy || !!remote.busy || !remoteConsent)}
+          onClick={() => { const next = !remote?.enabled; setRemoteConsent(false); void run(() => desktopAccount.setRemoteTasksEnabled(next, remote?.configurationToken || undefined)); }}>
+          {remote?.enabled ? l('停止处理文献', 'Stop preparing papers') : l('允许电脑处理这些文献', 'Allow this computer to prepare these papers')}</button>
+        {signedIn && !remote?.capability ? <p className="text-xs text-[var(--pq-text-muted)]">{l('当前服务尚未开启远程任务。', 'Remote tasks are disabled on this service.')}</p> : null}
+        {remote?.errorCode ? <p role="alert" className="text-xs leading-5 text-[var(--pq-error)]">{errorLabel(remote.errorCode, l)}</p> : null}
+        <details className="rounded-xl border border-[var(--pq-border)] p-3"><summary className="cursor-pointer text-xs text-[var(--pq-text-muted)]">{l('清理本机已完成任务记录', 'Clear completed local task journals')}</summary>
+          <p className="mt-2 text-xs leading-5 text-[var(--pq-text-muted)]">{l('仅清理当前账号、服务和文库已完成的执行记录及其本机结果副本。保留 PDF、解析缓存、旧索引和服务端结果。请先停止远程任务。', 'Only completed execution journals and their local result copies for this account, service and library are cleared. PDFs, parsed caches, existing indexes and server results remain. Stop remote tasks first.')}</p>
+          <label className="mt-2 flex items-start gap-2 text-xs text-[var(--pq-text-muted)]"><input type="checkbox" checked={clearRemoteConfirmed} onChange={(event) => setClearRemoteConfirmed(event.target.checked)} />{l('确认清理已完成的本机执行记录', 'Confirm clearing completed local journals')}</label>
+          <button type="button" className={`${buttonClass} mt-2`} disabled={!signedIn || !!remote?.enabled || !!remote?.busy || busy || !clearRemoteConfirmed}
+            onClick={() => { setClearRemoteConfirmed(false); void run(async () => { const owner = activeAccount.current; const result = await desktopAccount.clearCompletedRemoteJournals();
+              if (alive.current && owner === activeAccount.current) setNotice(l(`已清理 ${result.removed} 条本机执行记录。`, `Cleared ${result.removed} local task journals.`)); }); }}>{l('清理已完成记录', 'Clear completed journals')}</button>
+        </details>
+      </div>
+    </SettingsField></div> : <p className="text-sm leading-6 text-[var(--pq-text-muted)]">{l('这个同步服务暂未提供文献处理。请联系管理员开启，然后重新连接账号。', 'This service does not offer document preparation yet. Ask the administrator to enable it, then reconnect your account.')}</p> : null}
+      {activeTask === 'relations' ? <DesktopGraphExchangePanel l={l} accountActive={signedIn} ownerKey={status?.graphExchange?.scopeKey ?? null} /> : null}
+      </>}
+    </section>}
   </div>;
 }

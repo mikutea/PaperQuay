@@ -652,12 +652,13 @@ test('a corrupted or foreign-account private mapping is preserved and never adop
   assert.equal(fs.readFileSync(file, 'utf8'), before); assert.equal(f.service.records.size, 2);
 });
 
-async function modelCommandFixture(t,{showSaveDialog}={}){
+async function modelCommandFixture(t,{showSaveDialog,pdfSharing=false,beforeModelResponse}={}){
  const f=await fixture(t),core=require('../electron/generated/desktopSyncCore.cjs'),{MODEL_INFERENCE_CAPABILITY}=await import('../server/src/model-inference.ts'),secure={isEncryptionAvailable:()=>true,getSelectedStorageBackend:()=> 'fixture-vault',encryptString:s=>Buffer.from(Buffer.from(s).toString('base64')),decryptString:b=>Buffer.from(b.toString(),'base64').toString()},configuration={secrets:{qaModelPresets:[{id:'selected-chat',label:'Selected chat',baseUrl:'https://private-model.fixture.test/v1',model:'synthetic-chat',apiKey:'PRIVATE_MODEL_COMMAND_KEY',apiMode:'chat_completions'}]}};
  let worker,profiles=[],claim=null,saved=null,modelCalls=0,claimed=false;
  f.service.onRoute=async(url,options,body)=>{
-  if(url.pathname==='/v1/capabilities')return Response.json({protocolVersion:1,features:{modelInference:1},modelInference:MODEL_INFERENCE_CAPABILITY});
-  if(url.origin==='https://private-model.fixture.test'){modelCalls++;assert.equal(options.headers.Authorization,'Bearer PRIVATE_MODEL_COMMAND_KEY');return Response.json({choices:[{index:0,message:{role:'assistant',content:'Known synthetic answer PRIVATE_MODEL_COMMAND_KEY'},finish_reason:'stop'}]});}
+  if(url.pathname==='/v1/capabilities')return Response.json({protocolVersion:1,features:{modelInference:1,...(pdfSharing?{desktopPdfTransfer:1}:{})},modelInference:MODEL_INFERENCE_CAPABILITY,
+   ...(pdfSharing?{desktopPdf:{transport:'http-relay-v1',maxFileBytes:67108864,requestTtlMs:30000,pollTimeoutMs:20000}}:{})});
+  if(url.origin==='https://private-model.fixture.test'){modelCalls++;assert.equal(options.headers.Authorization,'Bearer PRIVATE_MODEL_COMMAND_KEY');await beforeModelResponse?.(options);return Response.json({choices:[{index:0,message:{role:'assistant',content:'Known synthetic answer PRIVATE_MODEL_COMMAND_KEY'},finish_reason:'stop'}]});}
   if(url.pathname==='/v1/model-inference/provider'){if(options.method==='PUT')profiles=body.profiles;return Response.json({disabled:true});}
   if(url.pathname==='/v1/model-inference/provider/claim'){if(claimed)return Response.json({claim:null});claimed=true;const profile=profiles[0],request=await core.prepareModelInferenceRequest({id:randomUUID(),target:{kind:'computer',deviceId:f.service.deviceId},profileRef:{id:profile.id,revision:profile.revision,digest:profile.digest},model:profile.model,messages:[{role:'user',content:'Explicit synthetic command evidence'}],maxOutputTokens:1024}),at=new Date().toISOString();claim={request,lease:{fence:randomUUID()},job:{id:request.id,state:'running',target:request.target,profile,requesterDeviceId:randomUUID(),inputDigest:request.digest,inputBytes:Buffer.byteLength(core.canonicalJson(request)),outputBytes:0,outputDigest:null,createdAt:at,updatedAt:at,leaseExpiresAt:new Date(Date.now()+60000).toISOString(),failure:null}};return Response.json({claim});}
   if(url.pathname.startsWith('/v1/model-inference/jobs/')&&url.pathname.endsWith('/heartbeat'))return Response.json({job:claim.job});
@@ -673,6 +674,68 @@ test('actual desktop model commands stay independent of PDF sharing, save the re
  await assert.rejects(f.manager.commands.desktop_models_export({id:records.items[0].id,path:f.destination}),{code:'DESKTOP_ARGUMENT_INVALID'});assert.equal(fs.existsSync(f.destination),false);
  const exported=await f.manager.commands.desktop_models_export({id:records.items[0].id});assert.equal(exported.status,'exported');const text=fs.readFileSync(f.destination,'utf8'),backup=JSON.parse(text);assert.equal(backup.record.claim.request.id,f.claim().request.id);assert.equal(backup.record.outcome.output.digest,f.saved().digest);assert(!text.includes('PRIVATE_MODEL_COMMAND_KEY'));assert(!text.includes('https://private-model.fixture.test'));
  await f.manager.commands.desktop_account_sign_out();await f.manager.settled();assert.equal(f.manager.getStatus().modelInference.enabled,false);assert.deepEqual(f.manager.getStatus().modelInference.presets,[]);assert.equal(f.manager.getStatus().modelInference.configurationToken,null);assert(f.service.calls.some(c=>c.url===CONFIG.apiBaseUrl+'/v1/model-inference/provider'&&c.method==='DELETE'));assert.equal(f.modelCalls(),1);
+});
+test('removing a shared PDF preserves the running model request while cancelling current and later PDF access', async (t) => {
+  const modelEntered = deferred(), modelRelease = deferred(), pdfEntered = deferred(), pdfRelease = deferred();
+  let modelSignal;
+  const f = await modelCommandFixture(t, { pdfSharing: true, beforeModelResponse: async ({ signal }) => {
+    modelSignal = signal; modelEntered.resolve();
+    let abort;
+    try {
+      await Promise.race([modelRelease.promise, new Promise((_resolve, reject) => {
+        abort = () => reject(new DOMException('Synthetic model request aborted', 'AbortError'));
+        if (signal.aborted) abort(); else signal.addEventListener('abort', abort, { once: true });
+      })]);
+    } finally { signal.removeEventListener('abort', abort); }
+  } });
+  await f.publish(f.manager);
+  const binding = f.manager.getStatus().bindings[0], originalOpen = nativeFs.openRead;
+  let pdfReads = 0, activeModel;
+  nativeFs.openRead = async (...args) => {
+    if (args[0] === f.attachment.storedPath) {
+      pdfReads++; pdfEntered.resolve(); await pdfRelease.promise;
+    }
+    return originalOpen(...args);
+  };
+  try {
+    const requests = [0, 1].map(() => ({ requestId: randomUUID(), attachmentVersionId: binding.attachmentVersionId,
+      sha256: binding.sha256, sizeBytes: binding.sizeBytes, expiresAt: new Date(Date.now() + 30000).toISOString() }));
+    f.service.requests.push(...requests);
+    await f.enabled();
+    activeModel = f.worker().runOnce();
+    await modelEntered.promise;
+    await f.manager.commands.desktop_provider_set_enabled({ enabled: true });
+    await pdfEntered.promise;
+
+    const status = await f.manager.commands.desktop_provider_unbind({ bindingId: binding.bindingId });
+    assert.equal(status.bindings.length, 0);
+    assert.equal(status.modelInference.enabled, true, 'removing a PDF must not disable independent model execution');
+    assert.equal(status.modelInference.running, true);
+    assert.equal(status.modelInference.busy, true, 'the original model request is still running');
+    assert.equal(modelSignal.aborted, false, 'PDF removal must not abort the model HTTP request');
+    assert.equal(f.service.calls.some(call => call.method === 'DELETE' && call.url === CONFIG.apiBaseUrl + '/v1/model-inference/provider'), false);
+
+    pdfRelease.resolve();
+    await until(() => f.service.unavailable.length === 2 && f.manager.getStatus().transfers.length === 0);
+    assert.deepEqual(f.service.unavailable, requests.map(item => '/v1/desktop-pdfs/requests/' + item.requestId + '/unavailable'));
+    assert.equal(pdfReads, 1, 'the request dispatched after removal must not open the PDF again');
+    assert.equal(f.service.uploads.length, 0, 'neither the cancelled transfer nor the later request may upload PDF bytes');
+    assert.equal(f.service.records.size, 2, 'removing access preserves account metadata');
+    assert.deepEqual(fs.readFileSync(f.attachment.storedPath), PDF);
+
+    modelRelease.resolve();
+    await activeModel;
+    assert.equal(f.modelCalls(), 1);
+    assert.equal(f.claim().job.state, 'complete');
+    assert.equal(f.saved().redacted, true);
+    assert.equal((await f.manager.commands.desktop_models_records()).items[0].stage, 'acknowledged');
+    assert.equal(f.manager.getStatus().modelInference.enabled, true);
+    assert.equal(f.manager.getStatus().modelInference.errorCode, null);
+  } finally {
+    pdfRelease.resolve(); modelRelease.resolve();
+    await activeModel?.catch(() => {});
+    nativeFs.openRead = originalOpen;
+  }
 });
 test('actual model backup command rejects a dialog reply after sign out and keeps the profile lock until export settles',async t=>{
  const entered=deferred(),release=deferred();let destination;const f=await modelCommandFixture(t,{showSaveDialog:async()=>{entered.resolve();await release.promise;return{canceled:false,filePath:destination};}});destination=f.destination;await f.enabled();await f.worker().runOnce();const pending=f.manager.commands.desktop_models_export({id:f.claim().request.id}),rejected=assert.rejects(pending,{code:'DESKTOP_OPERATION_CANCELLED'});await entered.promise;await f.manager.commands.desktop_account_sign_out();assert.equal(f.manager.getStatus().account,null);assert.equal(fs.existsSync(destination),false);release.resolve();await rejected;await f.manager.settled();assert.equal(fs.existsSync(destination),false);assert.equal(f.modelCalls(),1);

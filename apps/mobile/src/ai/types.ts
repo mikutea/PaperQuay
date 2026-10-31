@@ -3,6 +3,7 @@ import type {AiAccountScope,AiSaveContext,AiTransport,PdfAiContext,PdfCitationTa
 import type { AiSyncBridge } from '../integration/aiSync.ts';
 export * from '../../../../packages/ai-core/src/types.ts';
 export interface AiWorkspaceProps {
+  mode?: 'reader' | 'settings';
   archiveEpoch?: number;
   accountScope: AiAccountScope;
   context: PdfAiContext | null;

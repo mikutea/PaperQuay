@@ -855,8 +855,8 @@ export function ConnectedApp({
           <p className="muted">选择多篇题录摘要或已核验解析片段，核对后发送，引用与结果可保存。</p>
         </section>}
         {section === 'account' && scope && runtime.secretStore && <section className="account-ai-settings">
-          <button className="secondary" onClick={() => setAiSettings(!aiSettings)}>{aiSettings ? '收起 AI 设置' : 'AI 提供商设置'}</button>
-          {aiSettings && <Suspense fallback={<p role="status">正在打开设置…</p>}><AiWorkspace accountScope={scope} context={null} archiveEpoch={archiveEpochs[accountScopeKey(scope)] ?? 0}
+          <button className="secondary" onClick={() => setAiSettings(!aiSettings)}>{aiSettings ? '收起 AI 设置' : 'AI 服务设置'}</button>
+          {aiSettings && <Suspense fallback={<p role="status">正在打开设置…</p>}><AiWorkspace mode="settings" accountScope={scope} context={null} archiveEpoch={archiveEpochs[accountScopeKey(scope)] ?? 0}
             secretStore={runtime.secretStore} transport={aiTransport} modelRouter={modelRouter} modelLedgerRevision={state.workspace?.modelInvocations?.revision} sync={aiSync} onSaveNote={async () => { throw new ClientError('ACCOUNT_CHANGED'); }} onNavigateCitation={() => {}} /></Suspense>}
         </section>}
         {section === 'conflicts' && (
