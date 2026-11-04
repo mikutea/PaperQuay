@@ -24,7 +24,13 @@ const { AgentModelWorkspace } = await import('../src/components/AgentModelWorksp
 const text = (node: ReactTestInstance): string => node.children.map(child => typeof child === 'string' ? child : text(child)).join('');
 function button(r: ReactTestRenderer, label: string) { const b = r.root.findAllByType('button').find(n => text(n) === label); assert(b, 'Missing button: ' + label); return b; }
 async function click(r: ReactTestRenderer, label: string) { const b = button(r, label); assert(!b.props.disabled, label + ' disabled'); await act(async () => b.props.onClick()); }
-async function until(check: () => boolean) { for (let i = 0; i < 200; i++) { if (check()) return; await act(async () => { await new Promise<void>(resolve => setImmediate(resolve)); }); } assert.fail('Retrieval UI did not settle'); }
+async function until(check: () => boolean) {
+  const deadline = performance.now() + 5000;
+  while (!check()) {
+    if (performance.now() >= deadline) assert.fail('Retrieval UI did not settle');
+    await act(async () => { await new Promise<void>(resolve => setTimeout(resolve, 2)); });
+  }
+}
 const checks = (r: ReactTestRenderer) => r.root.findByProps({ className: 'remote-retrieval' }).findAllByType('input').filter(n => n.props.type === 'checkbox');
 async function check(r: ReactTestRenderer, index = 0) { await until(() => !!checks(r)[index] && !checks(r)[index].props.disabled); const c = checks(r)[index]; await act(async () => c.props.onChange({ target: { checked: !c.props.checked } })); }
 async function field(r: ReactTestRenderer, label: string, value: string) {
@@ -93,7 +99,7 @@ async function setup(t: TestContext, kind: 'sheet' | 'research' | 'agent' = 'she
     }); await controller.refreshRetrievalSession(); });
     assert.equal(controller.getSnapshot().workspace!.sync.outbox.length, 0);
   }
-  return { f, extra, r, controller, store, calls, adopted, exports, network, owner, props, modelBodies, modelReplies, workspaceProps, changeSource, blockSource, rerender: async () => { await act(async () => r.update(render())); } };
+  return { f, extra, r, controller, store, calls, adopted, exports, network, owner, props, modelBodies, modelReplies, workspaceProps, makeReceipt, changeSource, blockSource, rerender: async () => { await act(async () => r.update(render())); } };
 }
 async function search(a: Awaited<ReturnType<typeof setup>>, query = 'urban') {
   await click(a.r, '查看可用来源'); await until(() => checks(a.r).length > 0); await check(a.r); await field(a.r, '检索词', query);
@@ -122,9 +128,17 @@ test('reopened unknown request is query-only until absence is confirmed, then ex
   const post = a.calls.find(call => call.method === 'POST')!; assert.deepEqual(post.body, a.f.request); assert.equal(a.calls.length, 2);
 });
 
-test('received but unsaved receipt exposes only local save recovery and export, including after source changes', async t => {
+for (const responseDelayMs of [0, 150]) {
+test('received but unsaved receipt exposes only local save recovery and export, including after source changes' + (responseDelayMs ? ' after a delayed response' : ''), async t => {
   const a = await setup(t, 'sheet', { seeded: 'prepared' }), update = a.store.update.bind(a.store); let fail = true;
   a.store.update = (scope, reducer, guard) => update(scope, value => { const next = reducer(value); if (fail && next.retrievalSession?.status === 'complete') throw new ClientError('STORAGE_FAILED'); return next; }, guard);
+  if (responseDelayMs) {
+    const response = Response.json({ replayed: false, receipt: await a.makeReceipt() });
+    let release!: (response: Response) => void;
+    a.network.wait = new Promise<Response>(resolve => { release = resolve; });
+    const timer = setTimeout(() => release(response), responseDelayMs);
+    t.after(() => { clearTimeout(timer); release(response); });
+  }
   await click(a.r, '确认检索这些来源'); await until(() => a.r.root.findAllByProps({ 'aria-label': '检索结果待保存' }).length === 1 && !button(a.r, '仅保存已收结果').props.disabled);
   assert.equal(a.calls.length, 1); assert(button(a.r, '刷新本机检索记录').props.disabled); assert(!a.r.root.findAllByType('button').some(n => text(n) === '查询原请求'));
   await a.changeSource(); await click(a.r, '导出未保存记录'); await until(() => a.exports.length === 1);
@@ -132,6 +146,7 @@ test('received but unsaved receipt exposes only local save recovery and export, 
   fail = false; await click(a.r, '仅保存已收结果'); await until(() => a.r.root.findAllByProps({ 'aria-label': '检索结果待保存' }).length === 0);
   assert.equal(a.calls.length, 1); assert(checks(a.r).every(n => n.props.disabled));
 });
+}
 
 test('a lost intent acknowledgement can refresh the actual local ledger, never resend from the obsolete prepared callback', async t => {
   const a = await setup(t, 'sheet', { seeded: 'prepared' }), update = a.store.update.bind(a.store); let lose = true;
