@@ -1,3 +1,4 @@
+import {TaskAiSettingsEntry,TaskAiSettingsSheet} from './TaskAiSettings.tsx';
 import {reviewTextMarkdown} from '../review/markdown.ts';
 import {ClientError,describeError} from '../errors.ts';
 import {FileExportError} from '../platform/exportFile.ts';
@@ -10,7 +11,7 @@ import {reviewCore,type ReviewBlueprint}from'../review/core.ts';
 import {ReviewError,REVIEW_LIMITS,createReviewProject,manualReviewBlueprint,validateReviewBlueprint,validateReviewPart,reviewCitationIds,reviewSlots,withReviewPart,composeReviewProject,assertReviewSourcesCurrent,type ReviewProject,type ReviewSelection,type ReviewSettings}from'../review/model.ts';
 import {collectReviewSources,revalidateReviewProject,reviewSelectionsSignature}from'../review/sources.ts';import {ReviewWriter,type ReviewPlan}from'../review/writer.ts';import {renderReviewWord,type ReviewWordResult}from'../review/word.ts';
 import {ReviewBlueprintEditor}from'./ReviewBlueprintEditor.tsx';import{ReaderSheet}from'./ReaderSheet.tsx';import{MarkdownPreview}from'./MarkdownPreview.tsx';import './reviewWorkspace.css';
-interface Props{scope:AiAccountScope;scopeKey:string;controller:WorkspaceController;secretStore:SecretStore;accountCurrent():boolean;onClose():void;cache?:ParsedCache;transport?:AiTransport}
+interface Props{scope:AiAccountScope;scopeKey:string;controller:WorkspaceController;secretStore:SecretStore;accountCurrent():boolean;onClose():void;cache?:ParsedCache;transport?:AiTransport;modelRouter?:import('../modelRouting/router.ts').MobileModelRouter}
 type Stage='sources'|'blueprint'|'writing'|'export';
 const errors:Record<ReviewError['code'],string>={INVALID:'内容格式不完整或无法识别，请检查蓝图和本次返回的 JSON。',LIMIT:'材料或草稿超过本机预算，请减少材料、章节或段落篇幅。',CHANGED:'账号、材料、模型或草稿已经变化。已保存的内容保留，请重新核验后预览。',CITATION:'有引用编号不属于实际材料，或正文与引用列表不一致。请使用单独的 [P1]、[N1] 等编号。',FIGURE:'有插图编号不属于已核验的材料，请重新选择或移除该编号。',INCOMPLETE:'缺少解析缓存、材料文字或尚未完成的段落，请先准备相应内容。',PENDING:'请先处理尚未保存的生成结果，避免重复请求。'};
 function message(error:unknown){return error instanceof ReviewError?errors[error.code]:error instanceof ClientError?describeError(error):error instanceof FileExportError?(error.code==='CHANGED'?errors.CHANGED:error.code==='UNAVAILABLE'?'此设备没有可用的文件分享能力。请在支持的原生应用或浏览器中导出。':'文件导出未完成，草稿仍保留，请检查系统存储后重试。'):describeAiError(aiFailure(error));}
@@ -28,6 +29,7 @@ export function ReviewWorkspace(props:Props){
  const[stage,setStage]=useState<Stage>(project?'blueprint':'sources'),[query,setQuery]=useState(''),[chosen,setChosen]=useState<ReviewSelection[]>([]);
  const[settings,setSettings]=useState<ReviewSettings>({intent:'',reviewType:'systematic',targetAudience:'研究者',outputLanguage:'中文'});
  const[phase,setPhase]=useState(''),[error,setError]=useState(''),[notice,setNotice]=useState(''),[unsaved,setUnsaved]=useState(false),[editorEpoch,setEditorEpoch]=useState(0),[confirmClear,setConfirmClear]=useState(false);
+ const[settingsOpen,setSettingsOpen]=useState(false);
  const[plan,setPlan]=useState<ReviewPlan|null>(null),[word,setWord]=useState<{projectId:string;revision:number;result:ReviewWordResult}|null>(null),[repair,setRepair]=useState('');
  const selections=project?.sources.map(s=>s.selection)??chosen,sourceSignature=reviewSelectionsSignature(entities,selections);
  const slots=project?reviewSlots(project):[],completed=slots.filter(s=>s.part).length,busy=Boolean(phase)||writing.busy;
@@ -37,6 +39,7 @@ export function ReviewWorkspace(props:Props){
  const sourcesValid=project?sourceCurrent(project):true;
  function changedEditor(key:string,value:boolean){if(value)dirty.current.add(key);else dirty.current.delete(key);writer.invalidate();setPlan(null);setWord(null);}
  function move(next:Stage){if(dirty.current.size){setUnsaved(true);return;}setStage(next);setError('');setNotice('');setPlan(null);writer.invalidate();}
+ function configureAi(){if(!ownerCurrent()||flight.current||writer.getSnapshot().busy||writer.getSnapshot().pendingSave)return;writer.invalidate();setPlan(null);setError('');setNotice('');setSettingsOpen(true);}
  function close(){if(busy){setNotice('请先停止本次等待，已完成的段落会保留。');return;}if(writing.pendingSave){setUnsaved(true);return;}if(dirty.current.size){setUnsaved(true);return;}props.onClose();}
  function discard(){if(writing.pendingSave)writer.dispose();dirty.current.clear();setEditorEpoch(n=>n+1);setUnsaved(false);setNotice('已放弃未应用的编辑，已保存的草稿仍保留。');}
  useLayoutEffect(()=>{mounted.current=true;return()=>{mounted.current=false;epoch.current++;abort.current?.abort();writer.dispose();};},[writer,owner]);
@@ -62,7 +65,8 @@ export function ReviewWorkspace(props:Props){
  function restore(){if(!project?.previousDraft)return;launch('正在恢复上一版章节…',async task=>{const old=project.previousDraft!;await save({...project,...old,previousDraft:project.blueprint?{blueprint:project.blueprint,parts:project.parts,attempt:project.attempt}:undefined},project,task.current);dirty.current.clear();setEditorEpoch(n=>n+1);setNotice('已恢复上一版蓝图与段落。');});}
  function repairOutput(){if(!project?.attempt)return;let value:unknown;try{value=JSON.parse(repair);}catch{setError(errors.INVALID);return;}if(project.attempt.kind==='blueprint'){void applyBlueprint(value as ReviewBlueprint).catch(()=>undefined);}else{const key=project.attempt.key;const part=value as {content?:unknown;citations?:unknown};try{const validated=validateReviewPart(part,new Set(project.sources.map(s=>s.context.id)),new Set(project.blueprint?.figures.map(f=>f.id)??[]));if(key)void applyPart(key,validated.content).catch(()=>undefined);}catch(e){setError(message(e));}}}
  const visible=entities.filter(e=>(e.entityType==='paper'||e.entityType==='note')&&!e.deleted&&e.data&&((e.data as PaperData|NoteData).title.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))).slice(0,100);
- return <ReaderSheet open title="文献综述" onClose={close} className="review-sheet"><div className="review-workspace">
+ return <><ReaderSheet open title="文献综述" onClose={close} className="review-sheet"><div className="review-workspace">
+ <TaskAiSettingsEntry scope={props.scope} disabled={busy||writing.pendingSave} onOpen={configureAi} />
  <nav className="review-stages app-glass" aria-label="综述步骤">{([['sources','材料'],['blueprint','蓝图'],['writing','写作'],['export','导出']] as const).map(([key,label])=><button key={key} type="button" aria-current={stage===key?'step':undefined} disabled={busy||key!=='sources'&&!project||['writing','export'].includes(key)&&!project?.blueprint} onClick={()=>move(key)}>{label}</button>)}</nav>
  <div className="review-status-line"><span>{project?'已保存在此账号的本机副本':'从你的文献与笔记开始'}</span>{project?.blueprint&&<strong>{completed}/{slots.length} 段</strong>}</div>
  {unsaved&&<div className="review-feedback" role="alert"><p>有尚未应用的编辑。先保存编辑，或明确放弃后再切换和关闭。</p><button type="button" className="secondary" disabled={busy} onClick={discard}>放弃本次未保存编辑或结果</button><button type="button" className="text-button" onClick={()=>setUnsaved(false)}>继续编辑</button></div>}
@@ -78,5 +82,5 @@ export function ReviewWorkspace(props:Props){
  {writing.pendingSave&&<div className="review-feedback" role="alert"><p>模型结果已收到，但尚未确认保存。以下操作不会重新调用模型。</p><button type="button" className="primary" disabled={busy} onClick={()=>launch('正在重试保存已收到结果…',async task=>{await writer.retrySave({get:getProject,save:(next,expected,guard)=>props.controller.saveReviewProject(next,expected,guard)},task.current);})}>只重试保存</button><button type="button" className="secondary" disabled={busy} onClick={()=>backup(writer.pendingBackup())}>备份尚未保存的结果</button></div>}
  {project?.attempt&&project.attempt.status!=='complete'&&<details className="review-last-attempt"><summary>上次请求：{project.attempt.status==='uncertain'?'结果未知，未自动重发':project.attempt.status==='cancelled'?'本机等待已取消':'未应用到有效章节'}</summary><p className="muted">{project.attempt.provider.model} · 用量{project.attempt.usage?project.attempt.usage.totalTokens+' tokens':'未知'} · 费用未知{project.attempt.outputClipped?'；以下仅保留本机预算内的一部分输出。':''}</p><pre>{project.attempt.text||writing.text||'没有可确认的模型输出。'}</pre><label className="field">手动修正本次 JSON<textarea rows={5} value={repair} onChange={e=>setRepair(e.target.value)} maxLength={REVIEW_LIMITS.outputCharacters}/></label><button type="button" className="secondary" disabled={busy||!repair.trim()||!sourcesValid} onClick={repairOutput}>校验并应用修正内容</button></details>}
  {writing.storageFailure&&!writing.pendingSave&&<p role="alert" className="inline-error">本机保存未确认，尚未继续发送模型请求。请检查存储后重新准备。</p>}{writing.failure&&<p role="alert" className="inline-error">{describeAiError(writing.failure)}</p>}{writing.problem&&<p role="alert" className="inline-error">{errors[writing.problem]}</p>}{error&&<p role="alert" className="inline-error">{error}</p>}{notice&&<p role="status" className="review-notice">{notice}</p>}
- </div></ReaderSheet>;
+ </div></ReaderSheet>{settingsOpen&&<TaskAiSettingsSheet accountScope={props.scope} secretStore={props.secretStore} transport={props.transport} modelRouter={props.modelRouter} returnTo="文献综述" onClose={()=>setSettingsOpen(false)} />}</>;
 }

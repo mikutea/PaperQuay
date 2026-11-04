@@ -1,4 +1,6 @@
 import {ModelRoutingPanel} from './ModelRoutingPanel.tsx';
+import { Icon } from './Icon.tsx';
+import { SettingsRow } from './MobileSettings.tsx';
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { AiArchivePanel } from './AiArchivePanel.tsx';
 import { AiSyncPanel } from './AiSyncPanel.tsx';
@@ -33,7 +35,11 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
   const store = useMemo(localConfigStore, []);
   const [config, setConfig] = useState(() => store?.load(props.accountScope) ?? defaultAiProvider());
   const [savedConfigIdentity, setSavedConfigIdentity] = useState(() => JSON.stringify(config));
+  const savedConfig = useRef(config);
+  const editingBaseline = useRef(JSON.stringify(config));
   const [settingsOpen, setSettingsOpen] = useState(!config.model || !props.context);
+  const [settingsView, setSettingsView] = useState<'overview' | 'external' | 'shared'>('overview');
+  const settingsHeading = useRef<HTMLHeadingElement>(null);
   const [action, setAction] = useState<AiAction>('explain');
   const [question, setQuestion] = useState('');
   const [localFailure, setLocalFailure] = useState<AiFailure | null>(null);
@@ -142,6 +148,8 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
       else setNotice('浏览器存储不可用，模型设置仅保留在当前页面。');
       controller.bind(props.accountScope, safe, readingContext);
       setSavedConfigIdentity(JSON.stringify(config));
+      savedConfig.current = safe;
+      editingBaseline.current = JSON.stringify(config);
       setLocalFailure(null);
       return safe;
     } catch (error) { setLocalFailure(aiFailure(error, 'SETTINGS_STORAGE_FAILED')); return null; }
@@ -149,7 +157,7 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
 
   async function changeKey(remove: boolean) {
     const safe = saveConfig();
-    if (!safe) return;
+    if (!safe) return false;
     controller.credentialsChanged();
     secretAbort.current?.abort();
     const abort = new AbortController(); secretAbort.current = abort;
@@ -164,11 +172,13 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
       guard.check();
       await guard.wait(remove ? props.secretStore.remove(namespace, AI_SECRET_KEY) : props.secretStore.set(namespace, AI_SECRET_KEY, value!));
       guard.check();
-      if (secretAbort.current !== abort || abort.signal.aborted) return;
+      if (secretAbort.current !== abort || abort.signal.aborted) return false;
       setSecretRevision((current) => current + 1);
       setNotice(remove ? '已移除此服务在本设备上的密钥。' : props.secretStore.persistence === 'system' ? '设置已保存，访问密钥已存入此设备。' : '设置已保存。此环境的访问密钥仅保留到应用关闭或页面刷新。');
+      return true;
     } catch (error) {
       if (!abort.signal.aborted && secretAbort.current === abort) setLocalFailure(aiFailure(error, 'SECRET_STORAGE_FAILED'));
+      return false;
     } finally {
       guard.close();
       if (secretAbort.current === abort) { setSecretBusy(false); secretAbort.current = null; }
@@ -198,7 +208,63 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
   const busy = snapshot.busy !== null;
   const context = prepared.context;
   const actionName = AI_ACTION_LABELS[action];
-  const unsavedSettings = savedConfigIdentity !== configIdentity || hasKeyDraft;
+  const unsavedSettings = (settingsOnly && settingsView === 'external' ? editingBaseline.current : savedConfigIdentity) !== configIdentity || hasKeyDraft;
+  useLayoutEffect(() => {
+    if (settingsOnly) props.onSettingsDirty?.(unsavedSettings);
+  }, [settingsOnly, props.onSettingsDirty, unsavedSettings]);
+  useEffect(() => () => { if (settingsOnly) props.onSettingsDirty?.(false); }, [settingsOnly, props.onSettingsDirty]);
+  useEffect(() => {
+    if (!settingsOnly) return;
+    settingsHeading.current?.focus({ preventScroll: true });
+    settingsHeading.current?.closest('.main-content, .reader-sheet-content')?.scrollTo?.({ top: 0 });
+  }, [settingsOnly, settingsView]);
+  function clearKeyDraft() {
+    secretAbort.current?.abort();
+    if (password.current) password.current.value = '';
+    setHasKeyDraft(false);
+  }
+  function openExternalSettings() {
+    if (busy || secretBusy) return;
+    clearKeyDraft(); setLocalFailure(null); setNotice('');
+    const next = config.execution ? store?.loadExternal(props.accountScope) ?? defaultAiProvider() : config;
+    editingBaseline.current = JSON.stringify(next); setConfig(next);
+    setSettingsView('external');
+  }
+  function cancelSettingsEdit() {
+    if (busy || secretBusy) return;
+    clearKeyDraft(); controller.credentialsChanged();
+    setConfig(savedConfig.current); setSavedConfigIdentity(JSON.stringify(savedConfig.current)); editingBaseline.current = JSON.stringify(savedConfig.current);
+    setLocalFailure(null); setNotice(''); setSettingsView('overview');
+  }
+  function useExternal() {
+    if (busy || secretBusy) return;
+    controller.credentialsChanged(); clearKeyDraft();
+    const next = store?.loadExternal(props.accountScope) ?? defaultAiProvider();
+    try {
+      store?.save(props.accountScope, next); setConfig(next); savedConfig.current = next;
+      setSavedConfigIdentity(JSON.stringify(next)); setNotice('已切换到此设备保存的 AI 服务。');
+    } catch (error) { setLocalFailure(aiFailure(error)); }
+  }
+  function useShared(next: AiProviderConfig) {
+    if (busy || secretBusy || !props.modelRouter?.current()) return;
+    controller.credentialsChanged(); clearKeyDraft();
+    try {
+      if (!store) throw new AiError('SETTINGS_STORAGE_FAILED');
+      store.save(props.accountScope, next); setConfig(next); savedConfig.current = next;
+      setSavedConfigIdentity(JSON.stringify(next)); setLocalFailure(null);
+      if (settingsOnly) { setSettingsView('overview'); setNotice('已保存模型选择。'); props.onSettingsSaved?.(); }
+    } catch (error) { setLocalFailure(aiFailure(error)); throw error; }
+  }
+  async function saveSettings() {
+    const generation = lifecycle.current;
+    const hadKeyDraft = hasKeyDraft;
+    const saved = hadKeyDraft ? await changeKey(false) : Boolean(saveConfig());
+    if (!saved || lifecycle.current !== generation) return;
+    if (!hadKeyDraft) setNotice(store ? '设置已保存在此设备。' : '设置仅保留在当前页面，关闭后需重新填写。');
+    if (settingsOnly && config.model.trim() && (!config.requiresKey || keyState === 'present' || hadKeyDraft)) {
+      setSettingsView('overview'); props.onSettingsSaved?.();
+    }
+  }
   const settingsFailure = failure?.code === 'CANCELLED' ? '已停止获取模型列表，可以稍后重新获取。'
     : failure?.code === 'SETTINGS_STORAGE_FAILED' ? '设置未保存。请检查此设备的存储后再试，当前填写的内容仍保留。'
     : failure?.code === 'SECRET_STORAGE_FAILED' ? '访问密钥操作未完成。请重新填写密钥后保存；已有密钥不会显示在这里。'
@@ -208,15 +274,15 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
     : config.requiresKey && keyState !== 'present' ? keyState === 'checking' ? '正在检查已保存的密钥…'
       : keyState === 'failed' ? '暂时无法读取密钥，请稍后重新打开设置。' : '先填写访问密钥并保存，再获取模型列表。'
     : '从这个服务获取模型列表；这一步不会发送文献或问题。';
-  const settingsContent = <div className="ai-settings-content" style={settingsOnly ? { paddingTop: '1rem' } : undefined}>
-    <ModelRoutingPanel ledgerRevision={props.modelLedgerRevision} scope={props.accountScope} router={props.modelRouter} config={config} busy={busy||secretBusy} showActivity={!settingsOnly}
-      onExternal={()=>{if(busy||secretBusy)return;controller.credentialsChanged();secretAbort.current?.abort();if(password.current)password.current.value='';setHasKeyDraft(false);const next=store?.loadExternal(props.accountScope)??defaultAiProvider();try{store?.save(props.accountScope,next);setConfig(next);setSavedConfigIdentity(JSON.stringify(next));setNotice('已切换到此设备保存的 AI 服务。');}catch(e){setLocalFailure(aiFailure(e));}}}
-      onChange={next=>{if(busy||secretBusy||!props.modelRouter?.current())return;controller.credentialsChanged();secretAbort.current?.abort();if(password.current)password.current.value='';setHasKeyDraft(false);try{if(!store)throw new AiError('SETTINGS_STORAGE_FAILED');store.save(props.accountScope,next);setConfig(next);setSavedConfigIdentity(JSON.stringify(next));setLocalFailure(null);}catch(e){setLocalFailure(aiFailure(e));throw e;}}}/>
+  const routingContent = <ModelRoutingPanel ledgerRevision={props.modelLedgerRevision} scope={props.accountScope} router={props.modelRouter} config={config} busy={busy||secretBusy} showActivity={!settingsOnly}
+    picker={settingsOnly} onExternal={useExternal} onChange={useShared} />;
+  const settingsContent = <div className="ai-settings-content">
+    {!settingsOnly && routingContent}
     {!config.execution&&<>
       <label htmlFor={id + '-endpoint'}>服务地址</label>
       <input id={id + '-endpoint'} type="url" inputMode="url" autoCapitalize="none" autoCorrect="off" spellCheck={false}
-        aria-describedby={id + '-endpoint-help'} placeholder="https://api.example.com/v1" value={config.endpoint} onChange={(event) => editConfig({ endpoint: event.target.value })} />
-      <p id={id + '-endpoint-help'} className="ai-field-help">使用服务商提供的基础地址，例如 https://api.example.com/v1。</p>
+        aria-describedby={settingsOnly ? undefined : id + '-endpoint-help'} placeholder="https://api.example.com/v1" value={config.endpoint} onChange={(event) => editConfig({ endpoint: event.target.value })} />
+      {!settingsOnly && <p id={id + '-endpoint-help'} className="ai-field-help">使用服务商提供的基础地址，例如 https://api.example.com/v1。</p>}
       {parsed?.endpoint.startsWith('http:') && <p className="ai-warning">此地址使用 HTTP，文字和密钥不受 HTTPS 加密保护，也可能被浏览器或系统网络策略阻止。</p>}
       {!parsed && <p className="ai-error" role="alert">{describeAiError({ code: 'CONFIG_INVALID' })}</p>}
       <div className="ai-key-header"><label htmlFor={id + '-key'}>访问密钥（API Key）</label>
@@ -225,7 +291,7 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
         placeholder={keyState === 'present' ? '留空保留已保存的密钥' : '粘贴服务商提供的密钥'} disabled={secretBusy} onChange={(event) => setHasKeyDraft(event.target.value.length > 0)} />
       <div className="ai-key-actions">
         {keyState === 'present' && <button type="button" className="text-button" disabled={secretBusy || !parsed} onClick={() => void changeKey(true)}>移除密钥</button>}
-        <span className="ai-field-help">{props.secretStore.persistence === 'system' ? '密钥保存在此设备，不随账号同步。' : '此环境仅在本次打开期间保留密钥，刷新后需重新填写。'}</span>
+        <span className="ai-field-help">{props.secretStore.persistence === 'system' ? '密钥保存在此设备，不随账号同步。' : settingsOnly ? '关闭或刷新后需重新填写密钥。' : '此环境仅在本次打开期间保留密钥，刷新后需重新填写。'}</span>
       </div>
       <div className="ai-model-row">
         <div><label htmlFor={id + '-model'}>模型名称</label>
@@ -238,7 +304,7 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
       </div>
       <p id={id + '-probe-help'} className="ai-field-help">{snapshot.busy === 'probe' ? '正在获取模型列表…' : probeHelp}</p>
       {snapshot.connection === 'reachable' && <p className="ai-success" role="status">已取得 {snapshot.models.length} 个模型，请在“模型名称”中选择。能否生成回答和实际费用仍由服务商决定。</p>}
-      <details className="ai-advanced"><summary>高级兼容设置</summary>
+      <details className="ai-advanced"><summary>{settingsOnly ? '更多选项' : '高级兼容设置'}</summary>
         <div className="ai-options">
           <label><input type="checkbox" checked={config.requiresKey} onChange={(event) => editConfig({ requiresKey: event.target.checked })} />此服务需要访问密钥</label>
           <label><input type="checkbox" checked={config.stream} onChange={(event) => editConfig({ stream: event.target.checked })} />逐步显示回答</label>
@@ -255,23 +321,36 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
           </select></div>
         </div><p className="ai-field-help">仅在服务商要求时更改。服务地址不应包含 /chat/completions、/models、账号或查询参数。</p>
       </details>
-      <div className="ai-key-actions"><button type="button" className="primary" disabled={busy || secretBusy || !parsed} onClick={() => {
-        if (hasKeyDraft) void changeKey(false);
-        else if (saveConfig()) setNotice(store ? '设置已保存在此设备。' : '设置仅保留在当前页面，关闭后需重新填写。');
-      }}>{secretBusy ? '正在保存…' : '保存设置'}</button></div>
-      <p className="ai-field-help" role="status">{failure?.code === 'SECRET_STORAGE_FAILED' ? '访问密钥尚未处理成功，请重新填写后保存。'
+      <div className="ai-key-actions"><button type="button" className="primary" disabled={busy || secretBusy || !parsed} onClick={() => void saveSettings()}>{secretBusy ? '正在保存…' : '保存设置'}</button></div>
+      {(!settingsOnly || unsavedSettings || failure?.code === 'SECRET_STORAGE_FAILED') && <p className="ai-field-help" role="status">{failure?.code === 'SECRET_STORAGE_FAILED' ? '访问密钥尚未处理成功，请重新填写后保存。'
         : unsavedSettings ? '有未保存的修改。保存不会发送问题或调用模型。'
         : config.requiresKey && keyState !== 'present' ? '下一步：填写访问密钥并保存。'
         : !config.model ? '下一步：填写模型名称，或获取可用模型后选择。'
-        : store ? '已保存。可回到文献中使用阅读辅助，或打开多篇文献问答。' : '仅在当前页面使用，关闭后需重新填写设置。'}</p>
+        : store ? '已保存。可回到文献中使用阅读辅助，或打开多篇文献问答。' : '仅在当前页面使用，关闭后需重新填写设置。'}</p>}
     </>}
   </div>;
-  return <section className="ai-workspace" aria-label={settingsOnly ? 'AI 服务设置' : '阅读辅助'}>
-    <header className="ai-heading">
-      <div><span className="ai-eyebrow">{settingsOnly ? 'AI 服务' : '阅读辅助'}</span><h2>{settingsOnly ? '连接与模型' : '从正在读的内容开始'}</h2></div>
+  return <section className={settingsOnly ? 'ai-workspace ai-settings-page' : 'ai-workspace'} aria-label={settingsOnly ? 'AI 服务设置' : '阅读辅助'}>
+    {settingsOnly ? <header className="settings-page-header">
+      {settingsView === 'overview' ? props.onSettingsBack && <button type="button" className="settings-back" onClick={props.onSettingsBack}><Icon name="back" />{props.settingsBackLabel ?? '设置'}</button>
+        : <button type="button" className="settings-back" disabled={busy || secretBusy} onClick={cancelSettingsEdit}><Icon name="back" />{settingsView === 'external' && unsavedSettings ? '取消修改' : 'AI 助手'}</button>}
+      <h1 tabIndex={-1} ref={settingsHeading}>{settingsView === 'overview' ? 'AI 助手' : settingsView === 'external' ? '连接自己的 AI' : '选择共享模型'}</h1>
+    </header> : <header className="ai-heading">
+      <div><span className="ai-eyebrow">阅读辅助</span><h2>从正在读的内容开始</h2></div>
       <span className="ai-device-badge">本设备配置</span>
-    </header>
-    {settingsOnly ? <div className="ai-settings">{settingsContent}</div> : <details className="ai-settings" open={settingsOpen} onToggle={(event) => setSettingsOpen(event.currentTarget.open)}>
+    </header>}
+    {settingsOnly ? settingsView === 'overview' ? <>
+      <div className="ai-current-setting"><span className="ai-current-symbol"><Icon name="sparkles" /></span><div><span>当前使用</span>
+        <strong>{config.model && (config.execution || !config.requiresKey || keyState === 'present') ? config.model : '尚未设置'}</strong>
+        {config.model && <small>{config.execution ? config.execution.target.kind === 'computer' ? '使用电脑上的模型' : '使用账号提供的模型' : config.requiresKey && keyState !== 'present' ? '还需填写访问密钥' : '使用自己的 AI 服务'}</small>}
+      </div></div>
+      <h2 className="settings-section-label">连接方式</h2>
+      <div className="settings-list">
+        <SettingsRow icon="device" label="使用账号或电脑上的 AI" detail={props.modelRouter ? '选择共享模型，无需填写密钥' : '当前服务暂不支持共享模型'} disabled={!props.modelRouter} onClick={() => { setNotice(''); setLocalFailure(null); setSettingsView('shared'); }} />
+        <SettingsRow icon="sparkles" label="连接自己的 AI 服务" detail="使用自己的服务地址和密钥" onClick={openExternalSettings} />
+      </div>
+      <p className="settings-caption">设置一次，阅读问答和文献综述都能使用。</p>
+    </> : settingsView === 'shared' ? routingContent : <div className="ai-settings">{settingsContent}</div>
+      : <details className="ai-settings" open={settingsOpen} onToggle={(event) => setSettingsOpen(event.currentTarget.open)}>
       <summary>模型服务 <span>{config.model || '尚未选择模型'}</span></summary>
       {settingsContent}
     </details>}

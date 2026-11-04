@@ -14,8 +14,14 @@ type IconName =
   | 'device'
   | 'transfer'
   | 'chevron'
+  | 'sparkles'
+  | 'cloud'
+  | 'help'
   | 'conflict';
 const paths: Record<IconName, React.ReactNode> = {
+  sparkles: <><path d="m12 3 2.3 6.7L21 12l-6.7 2.3L12 21l-2.3-6.7L3 12l6.7-2.3Z" /><path d="M20 2v4m-2-2h4" /></>,
+  cloud: <path d="M7 18a5 5 0 0 1-1-9.9A7 7 0 0 1 19.5 10a4 4 0 0 1-.5 8Z" />,
+  help: <><circle cx="12" cy="12" r="9" /><path d="M9.5 8.5a2.5 2.5 0 1 1 4 2c-1.2.7-1.5 1.3-1.5 2.5m0 3v.1" /></>,
   library: (
     <>
       <path d="M3 4v16M7 4v16M11 4v16M16 3l5 16" />

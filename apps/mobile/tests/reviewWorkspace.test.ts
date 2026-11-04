@@ -24,3 +24,31 @@ test('review UI preserves unsaved chapter edits on close until explicit save or 
 test('account invalidation before React cleanup retires a saved send callback without a model POST',async t=>{const{r,c,props,calls}=await setup(t);await capture(r,c);await click(r,'写作');await click(r,'预览尚未完成的4段请求');await until(()=>r.root.findAllByProps({'aria-label':'综述实际发送预览'}).length===1);const send=button(r,'发送以上4次请求').props.onClick;props.accountCurrent=()=>false;await act(async()=>{send();});await flush();assert.equal(calls(),0);assert.equal(c.getSnapshot().workspace?.reviewProject?.attempt,null);});
 
 test('same-account source changes retain a successful but unsaved model result for explicit backup',async t=>{const{r,c}=await setup(t);await capture(r,c);const save=c.saveReviewProject.bind(c);c.saveReviewProject=async(...args)=>{if(args[0].attempt?.status==='complete')throw Error('Synthetic disk failure');return save(...args);};await click(r,'写作');await click(r,'预览此段请求');await until(()=>r.root.findAllByProps({'aria-label':'综述实际发送预览'}).length===1);await click(r,'发送以上1次请求');await until(()=>text(r.root).includes('模型结果已收到，但尚未确认保存'));await act(async()=>{await c.save({entityType:'paper',entityId:id(2),mutation:'put',data:{...paper,abstractText:'Changed source after disk failure'}},0);});await flush();assert(text(r.root).includes('模型结果已收到，但尚未确认保存'));assert(button(r,'备份尚未保存的结果'));});
+
+test('review returns from AI settings with its source choices, intent and unsaved blueprint intact',async t=>{
+ const{r,c,calls}=await setup(t);
+ const checkbox=r.root.findAllByType('input').find(n=>n.props.type==='checkbox')!;
+ await act(async()=>checkbox.props.onChange({target:{checked:true}}));
+ await input(r,'写作意图','保留正在填写的研究意图');
+ await click(r,'更换 AI');await click(r,'返回文献综述');
+ assert.equal(r.root.findAllByType('input').find(n=>n.props.type==='checkbox')!.props.checked,true);
+ const intent=r.root.findAllByType('label').find(n=>text(n).startsWith('写作意图'))!.findByType('textarea');
+ assert.equal(intent.props.value,'保留正在填写的研究意图');
+ await click(r,'核验材料并建立草稿');await until(()=>Boolean(c.getSnapshot().workspace?.reviewProject));
+ await click(r,'手动建立蓝图');await until(()=>Boolean(c.getSnapshot().workspace?.reviewProject?.blueprint));
+ await input(r,'核心观点','仍未应用的蓝图编辑');
+ await click(r,'更换 AI');await click(r,'返回文献综述');
+ const thesis=r.root.findAllByType('label').find(n=>text(n).startsWith('核心观点'))!.findByType('textarea');
+ assert.equal(thesis.props.value,'仍未应用的蓝图编辑');assert.equal(calls(),0);
+ assert.notEqual(c.getSnapshot().workspace?.reviewProject?.blueprint?.thesis,'仍未应用的蓝图编辑');
+});
+
+test('review settings retire a prepared send even when the user returns without changing the model',async t=>{
+ const{r,c,calls}=await setup(t);await capture(r,c);await click(r,'写作');await click(r,'预览尚未完成的4段请求');
+ await until(()=>r.root.findAllByProps({'aria-label':'综述实际发送预览'}).length===1);
+ const oldSend=button(r,'发送以上4次请求').props.onClick;
+ await click(r,'更换 AI');await click(r,'返回文献综述');
+ assert.equal(r.root.findAllByProps({'aria-label':'综述实际发送预览'}).length,0);
+ await act(async()=>{oldSend();});await flush();
+ assert.equal(calls(),0);assert.equal(c.getSnapshot().workspace?.reviewProject?.attempt,null);
+});

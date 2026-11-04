@@ -35,6 +35,21 @@ async function setup(t:TestContext){
 }
 async function createSession(a:Awaited<ReturnType<typeof setup>>){await click(a.r,'用已选1篇建立会话');await wait(()=>Boolean(a.c.getSnapshot().workspace!.agentConversation));}
 async function prepare(a:Awaited<ReturnType<typeof setup>>,instruction='比较所选文献的方法'){await change(a.r,'给模型的指令',instruction);await click(a.r,'预览下一次模型请求');await wait(()=>a.r.root.findAllByProps({className:'agent-model-preview'}).length===1);}
+
+test('model Agent configures AI without losing its session or instruction and retires the old send',async t=>{
+ const a=await setup(t);
+ // Configuration checks key presence; the execution-only intent assertion is covered by the other tests.
+ a.props.secretStore.get=MemorySecretStore.prototype.get.bind(a.props.secretStore);
+ await createSession(a);await prepare(a,'保留这条尚未发送的整理指令');
+ const before=structuredClone(a.c.getSnapshot().workspace!.agentConversation),oldSend=button(a.r,'发送这一次请求').props.onClick;
+ await click(a.r,'更换 AI');await click(a.r,'返回模型整理');
+ const field=a.r.root.findAllByType('label').find(n=>text(n).startsWith('给模型的指令'))!.findByType('textarea');
+ assert.equal(field.props.value,'保留这条尚未发送的整理指令');
+ assert.deepEqual(a.c.getSnapshot().workspace!.agentConversation,before);
+ assert.equal(a.r.root.findAllByProps({className:'agent-model-preview'}).length,0);
+ await act(async()=>{oldSend();await new Promise<void>(resolve=>setImmediate(resolve));});
+ assert.equal(a.calls(),0);assert.equal(a.c.getSnapshot().workspace!.agentConversation!.turns.length,0);
+});
 const plan=(body:any)=>{const payload=JSON.parse(body.messages[1].content),p=payload.papers[0];return JSON.stringify({kind:'plan',plan:{tool:'rename',summary:'提出新标题',items:[{paperId:p.id,title:'建议改名',description:'需用户核查',before:p.title,after:'Suggested Alpha',update:{title:'Suggested Alpha'}}]}});};
 
 test('actual model Agent UI previews exact input without secrets, sends once, and only publishes a plan for separate item approval',async t=>{const a=await setup(t);await createSession(a);assert.equal(a.calls()+a.secretReads(),0);await prepare(a);assert.equal(a.calls()+a.secretReads(),0);assert(text(a.r.root).includes(a.provider.endpoint));assert(text(a.r.root).includes('Alpha'));a.replies.push(plan);const send=button(a.r,'发送这一次请求').props.onClick;await act(async()=>{send();send();});await wait(()=>a.c.getSnapshot().workspace!.agentConversation!.turns[0]?.status==='complete'&&!text(a.r.root).includes('正在保存收到的结果'));assert.equal(a.calls(),1);assert.equal(a.secretReads(),1);assert.equal(a.c.getSnapshot().workspace!.agentState,undefined);await click(a.r,'送入逐项核对');await wait(()=>a.reviewed()===1);assert.equal(a.c.getSnapshot().workspace!.agentState!.proposal!.items[0].patch.title,'Suggested Alpha');assert.equal(a.c.getSnapshot().workspace!.agentState!.receipts.length,0);assert.equal(a.c.getSnapshot().workspace!.sync.outbox.length,1);assert.equal(a.syncCalls(),0);assert.equal(a.calls(),1);});

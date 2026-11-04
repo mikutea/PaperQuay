@@ -36,3 +36,15 @@ test('settings route selection reads only an explicit model list and saves the c
   assert.equal(root.root.findAllByType('fieldset').length,0);
  }finally{if(root)await act(async()=>root.unmount());delete (globalThis as any).IS_REACT_ACT_ENVIRONMENT;}
 });
+
+test('opening the dedicated model picker loads once and aborts its read when the user returns', async () => {
+ let reads=0,changes=0,signal:AbortSignal|undefined,resolve!:(value:any)=>void;
+ const pending=new Promise(resolvePromise=>{resolve=resolvePromise;}),view={revision:0,pendingIds:[]};
+ const router={current:()=>true,subscribe:()=>()=>{},getSnapshot:()=>view,readActivity:async()=>{throw Error('No activity in settings');},inventory:async(s:AbortSignal)=>{reads++;signal=s;return pending;}}as unknown as MobileModelRouter;
+ let root!:ReactTestRenderer;
+ await act(async()=>{root=create(createElement(ModelRoutingPanel,{scope:{apiBaseUrl:'https://sync.fixture.test',accountId:randomUUID()},config:defaultAiProvider(),router,busy:false,showActivity:false,picker:true,onChange:()=>{changes++;},onExternal:()=>{throw Error('No route switch');}}));});
+ assert.equal(reads,1);assert.equal(signal?.aborted,false);assert.equal(root.root.findAllByType('input').length,0);
+ await act(async()=>root.unmount());assert.equal(signal?.aborted,true);
+ await act(async()=>{resolve({checkedAt:new Date().toISOString(),validUntil:new Date(Date.now()+30000).toISOString(),gateway:null,computers:[]});});
+ assert.equal(changes,0);assert.equal(reads,1);
+});

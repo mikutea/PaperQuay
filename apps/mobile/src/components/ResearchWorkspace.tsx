@@ -12,11 +12,13 @@ import { ResearchSession, researchResultMarkdown } from '../research/session.ts'
 import type { WorkspaceController } from '../sync/workspace.ts';
 import { MarkdownPreview } from './MarkdownPreview.tsx';
 import { ReaderSheet } from './ReaderSheet.tsx';
+import { TaskAiSettingsEntry, TaskAiSettingsSheet } from './TaskAiSettings.tsx';
 import './researchWorkspace.css';
 
 interface Props {
   scope: AiAccountScope; scopeKey: string; controller: WorkspaceController; secretStore: SecretStore;
   accountCurrent(): boolean; onClose(): void; cache?: ParsedCache; transport?: AiTransport;
+  modelRouter?: import('../modelRouting/router.ts').MobileModelRouter;
 }
 const descriptions:Record<ResearchError['code'],string>={INVALID:'来源或发送内容无效。解析来源需有已确认页数和本机核验缓存，请在阅读器中先准备。',LIMIT:'文献、文本或结果超过本机预算。请减少来源或导出结果文件。',EMPTY:'所选来源没有本机可用文本，请先准备解析缓存或明确改选题录摘要。',NO_MATCH:'没有匹配片段。请修改检索问题，或明确选择发送所选来源片段。',CHANGED:'账号、来源或输入已变化，旧操作已停止。请重新预览。'};
 function errorMessage(error:unknown){return error instanceof ResearchError?descriptions[error.code]:'本次操作未完成。请检查模型设置、连接或本机存储后重试。';}
@@ -30,6 +32,7 @@ export function ResearchWorkspace(props:Props){
   const papers=useMemo(()=>entities.filter(e=>e.entityType==='paper'&&!e.deleted&&e.data),[entities]);
   const [query,setQuery]=useState(''),[chosen,setChosen]=useState<Record<string,string|null>>({}),[question,setQuestion]=useState(''),[mode,setMode]=useState<'search'|'selected'>('search');
   const [providerPreview,setProviderPreview]=useState<AiProviderConfig|null>(null);
+  const [settingsOpen,setSettingsOpen]=useState(false);
   const preparedRef=useRef<{context:ResearchContext;provider:AiProviderConfig|null}|null>(null);
   const [context,setContext]=useState<ResearchContext|null>(null),[phase,setPhase]=useState(''),[error,setError]=useState(''),[notice,setNotice]=useState('');
   const session=useMemo(()=>new ResearchSession(new AiClient(props.secretStore,props.transport)),[props.secretStore,props.transport]);
@@ -44,6 +47,10 @@ export function ResearchWorkspace(props:Props){
   useLayoutEffect(()=>{mounted.current=true;session.activate();return()=>{mounted.current=false;epoch.current++;abort.current?.abort();session.dispose();};},[session]);
   useLayoutEffect(()=>{invalidate();},[props.scopeKey,props.scope.apiBaseUrl,sourceSignature,session]);
   function changeInputs(work:()=>void){invalidate();work();}
+  function configureAi(){
+    if(flight.current||session.getSnapshot().busy||!scopeCurrent())return;
+    preparedRef.current=null;setContext(null);setProviderPreview(null);setError('');setNotice('');setSettingsOpen(true);
+  }
   async function run(label:string,work:(task:{signal:AbortSignal;current():boolean;check():void})=>Promise<void>){
     if(flight.current||!scopeCurrent())return;flight.current=true;const token=++epoch.current,controller=new AbortController();abort.current=controller;
     const signature=sourceSignature,captured=structuredClone(selections);
@@ -62,7 +69,7 @@ export function ResearchWorkspace(props:Props){
       cache:props.cache??getParsedCache(),signal:task.signal,current:task.current});task.check();
     const prepared=await prepareResearchContext(sources,question,mode);task.check();return prepared;
   }
-  function preview(){void run('正在核验与检索本机来源…',async task=>{const prepared=await prepare(task);task.check();session.reset();setContext(prepared);let provider:AiProviderConfig|null=null;try{provider=loadConfig(props.scope);}catch{}preparedRef.current={context:prepared,provider};setProviderPreview(provider);setNotice(provider?'来源已准备。请核对实际片段、模型与地址，再明确发送。':'来源已准备；请先在账号页配置 AI 模型后重新预览。');});}
+  function preview(){void run('正在核验与检索本机来源…',async task=>{const prepared=await prepare(task);task.check();session.reset();setContext(prepared);let provider:AiProviderConfig|null=null;try{provider=loadConfig(props.scope);}catch{}preparedRef.current={context:prepared,provider};setProviderPreview(provider);setNotice(provider?'来源已准备。请核对实际片段、模型与地址，再明确发送。':'来源已准备。点击“设置 AI”选择模型，返回后重新预览即可。');});}
   function generate(){if(!context||!providerPreview||preparedRef.current?.context!==context||preparedRef.current.provider!==providerPreview||session.getSnapshot().result)return;void run('正在生成多篇问答…',async task=>{
     const prepared=await prepare(task);if(prepared.digest!==context.digest){setContext(null);throw new ResearchError('CHANGED');}
     const config=loadConfig(props.scope),configKey=JSON.stringify(config);if(configKey!==JSON.stringify(providerPreview)){preparedRef.current=null;setContext(null);setProviderPreview(null);throw new ResearchError('CHANGED');}
@@ -84,8 +91,9 @@ export function ResearchWorkspace(props:Props){
     await exportTextFile({name:exportFilename('多篇问答','md'),mime:'text/markdown',text:researchResultMarkdown(result)},task.current);task.check();setNotice('已准备问答与实际证据文件。');
   });}
   const result=resultState.result,citations=result?researchCitations(result.text,result.context):null,busy=Boolean(phase);
-  return <ReaderSheet open title="多篇文献问答" onClose={props.onClose} className="research-sheet">
+  return <><ReaderSheet open title="多篇文献问答" onClose={props.onClose} className="research-sheet">
     <div className="research-workspace">
+      <TaskAiSettingsEntry scope={props.scope} disabled={busy} onOpen={configureAi} />
       <p className="muted">选择至多{RESEARCH_LIMITS.sources}篇文献，核对来源后再发送给你配置的模型。问答仅在此窗口保留，可保存到笔记或导出。</p>
       <fieldset disabled={busy} className="research-inputs"><legend>1 · 选择文献与来源</legend>
         <label className="field" htmlFor={id+'-search'}>查找文库<input id={id+'-search'} type="search" value={query} onChange={e=>setQuery(e.target.value)} placeholder="标题、作者或关键词" /></label>
@@ -104,7 +112,7 @@ export function ResearchWorkspace(props:Props){
         <p>{context.sources.length}篇来源 · {context.evidence.length}个片段 · {context.omittedChunks}个片段未发送</p>
         <ul>{context.sources.map((s,i)=><li key={s.paperId}>S{i+1} · {s.title} · {s.kind==='parsed'?'已核验解析片段':'题录与摘要，未提供全文'} · {s.selectedChunks}/{s.totalChunks}片段</li>)}</ul>
         <details><summary>查看实际片段</summary>{context.evidence.map(e=><article key={e.id}><h4>[{e.id}] {e.pageIndex===null?'题录摘要':'第'+(e.pageIndex+1)+'页'}</h4><pre>{e.text}</pre></article>)}</details>
-        {providerPreview?<p className="research-provider" role="status">模型：{providerPreview.model}<br/>地址：{providerPreview.endpoint}</p>:<p role="status">请先在账号页配置 AI 模型，再重新准备发送内容。</p>}
+        {providerPreview?<p className="research-provider" role="status">模型：{providerPreview.model}<br/>地址：{providerPreview.endpoint}</p>:<p role="status">尚未选择模型。先点击上方“设置 AI”，返回后重新准备发送内容。</p>}
         <p className="muted">未估算费用或token，请确认服务商计费规则。每次预览只启动一次生成；需要再次提问请重新准备。</p>
         <button type="button" className="primary" disabled={busy||!providerPreview||Boolean(resultState.result)} onClick={generate}>发送以上片段并提问</button>
       </section>}
@@ -119,5 +127,5 @@ export function ResearchWorkspace(props:Props){
       {resultState.failure&&<p role="alert" className="inline-error">{describeAiError(resultState.failure)}</p>}
       {error&&<p role="alert" className="inline-error">{error}</p>}{notice&&<p role="status">{notice}</p>}
     </div>
-  </ReaderSheet>;
+  </ReaderSheet>{settingsOpen&&<TaskAiSettingsSheet accountScope={props.scope} secretStore={props.secretStore} transport={props.transport} modelRouter={props.modelRouter} returnTo="多篇问答" onClose={()=>setSettingsOpen(false)} />}</>;
 }

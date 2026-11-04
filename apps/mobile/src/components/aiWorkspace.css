@@ -61,6 +61,19 @@
 .ai-citations > span { font-size: .8125rem; color: var(--muted); }
 .ai-usage { display: flex; flex-wrap: wrap; gap: 4px 18px; border-top: 1px solid var(--line); padding-top: 12px; margin: 16px 0; color: var(--muted); font-size: .75rem; }
 .ai-workspace button { min-height: 44px; }
+.ai-workspace.ai-settings-page { padding: 0; max-width: none; }
+.ai-settings-page > .ai-settings { border: 0; border-radius: 16px; overflow: hidden; }
+.ai-settings-page .ai-settings-content { border: 0; padding: 6px 16px 16px; }
+.ai-settings-page .ai-current-setting { display: flex; align-items: center; gap: 14px; padding: 20px 16px; border-radius: 16px; background: var(--theme-surface); }
+.ai-settings-page .ai-current-symbol { width: 44px; height: 44px; flex: 0 0 44px; display: grid; place-items: center; border-radius: 13px; background: var(--theme-selected); color: var(--accent-dark); }
+.ai-current-setting > div { display: grid; gap: 3px; min-width: 0; }
+.ai-current-setting span:not(.ai-current-symbol), .ai-current-setting small { color: var(--muted); font-size: .8125rem; }
+.ai-current-setting strong { font-size: 1.0625rem; font-weight: 600; overflow-wrap: anywhere; }
+.ai-settings-page h2.settings-section-label { font-size: .8125rem; font-weight: 500; margin: 24px 16px 8px; letter-spacing: normal; }
+.ai-settings-page .settings-row-label { font-size: .9375rem; }
+.ai-settings-page .ai-key-actions > .primary { width: 100%; margin-top: 8px; }
+.ai-settings-page > .model-routing { border: 0; border-radius: 16px; }
+.ai-settings-page .ai-model-row > button { align-self: flex-start; border: 0; padding: 4px 0; color: var(--accent-dark); background: transparent; }
 @media (max-width: 600px) {
   .ai-workspace { padding: 18px 14px; }
   .ai-heading { gap: 10px; }

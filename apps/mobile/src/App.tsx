@@ -27,6 +27,7 @@ import { createAuthSession, type AuthSession } from './auth/oidc.ts';
 import { parseAppConfig, type AppConfig, type PublicConfigInput } from './config.ts';
 import { ContentPreview, EntityEditor } from './components/EntityEditor.tsx';
 import { Icon } from './components/Icon.tsx';
+import { MobileSettings, type AccountSettingsPage } from './components/MobileSettings.tsx';
 import { ClientError, describeError } from './errors.ts';
 import { assertPlatformReady, getPlatformCapabilities } from './platform.ts';
 import { accountScopeKey, createAccountStorage } from './storage/accountStore.ts';
@@ -298,6 +299,7 @@ export function ConnectedApp({
     });
   }
   const [section, setSection] = useState<Section>('library');
+  const [aiSettings, setAiSettings] = useState(false);
   const [selection, setSelection] = useState<{ type: 'paper' | 'note'; id: string } | null>(null);
   const [readingId, setReadingId] = useState<string | null>(null);
   const [readingPanel, setReadingPanel] = useState<'notes' | 'ai' | null>(null);
@@ -309,7 +311,6 @@ export function ConnectedApp({
   const [archiveEpochs, setArchiveEpochs] = useState<Record<string, number>>({});
   const liveAiContext = useRef<PdfAiContext | null>(null);
   const [citationTarget, setCitationTarget] = useState<PdfCitationTarget | null>(null);
-  const [aiSettings, setAiSettings] = useState(false);
   const [transferOpen, setTransferOpen] = useState(false);
   const [incomingOpen, setIncomingOpen] = useState<string | null>(null);
   const [incomingSelection, setIncomingSelection] = useState<{ source: PreparedSource; scope: string; subject: string } | null>(null);
@@ -781,7 +782,12 @@ export function ConnectedApp({
         </div>}
         {readingId && !readingPaper && <div className="empty-state"><p>这篇文献已删除或当前不可用。</p><button className="secondary" onClick={leaveReader}>返回文库</button></div>}
         {section === 'account' && (
-          <AccountView
+          <MobileSettings key={incomingKey}
+            displayName={authState.displayName}
+            accountStatus={!state.online ? '离线使用中' : state.needsLogin ? '需要重新登录' : '账号与设备'}
+            syncStatus={state.needsLogin ? '需要重新登录' : conflictCount ? `${conflictCount} 处需要处理` : state.syncing ? '正在同步…' : state.workspace?.sync.outbox.length ? `${state.workspace.sync.outbox.length} 项待同步` : state.lastSyncedAt ? '已同步' : '等待首次同步'}
+            openAi={aiSettings} onAiOpened={() => setAiSettings(false)}
+            renderAccount={page => <AccountView page={page}
             state={state}
             displayName={authState.displayName}
             conflicts={conflictCount}
@@ -825,40 +831,25 @@ export function ConnectedApp({
                 setUiError(describeError(problem));
               }
             }}
+          />}
+            renderAi={scope && runtime.secretStore ? onBack => <Suspense fallback={<p role="status">正在打开 AI 设置…</p>}><AiWorkspace mode="settings" accountScope={scope} context={null}
+              onSettingsBack={onBack} onSettingsDirty={dirtyChanged} archiveEpoch={archiveEpochs[accountScopeKey(scope)] ?? 0}
+              secretStore={runtime.secretStore!} transport={aiTransport} modelRouter={modelRouter} modelLedgerRevision={state.workspace?.modelInvocations?.revision} sync={aiSync}
+              onSaveNote={async () => { throw new ClientError('ACCOUNT_CHANGED'); }} onNavigateCitation={() => {}} /></Suspense> : undefined}
+            actions={{
+              capabilities: () => setCapabilityOpen(incomingKey),
+              cloud: scope && runtime.cloudPdf ? () => setCloudOpen(true) : undefined,
+              remote: scope && runtime.remoteTasks ? () => setRemoteOpen(true) : undefined,
+              agent: scope ? () => { if (canLeave()) setAgentOpen(incomingKey); } : undefined,
+              graph: scope ? () => { if (canLeave()) setGraphOpen(true); } : undefined,
+              zotero: scope && runtime.secretStore ? () => setZoteroOpen(true) : undefined,
+              incoming: scope && incomingClient?.available ? () => { if (canLeave()) setIncomingOpen(incomingKey); } : undefined,
+              export: scope ? () => setNoteExportOpen(true) : undefined,
+              research: scope && runtime.secretStore ? () => { if (canLeave()) setResearchOpen(true); } : undefined,
+              review: scope && runtime.secretStore ? () => { if (canLeave()) setReviewOpen(true); } : undefined,
+            }}
           />
         )}
-        {section === 'account' && scope && runtime.cloudPdf && <section className="account-ai-settings">
-          <button className="secondary" onClick={() => setCloudOpen(true)}>私有云 PDF</button>
-          <p className="muted">查看当前账号的云副本与可用空间。</p>
-        </section>}
-        {section === 'account' && scope && <section className="account-ai-settings"><button type="button" className="secondary" onClick={()=>setCapabilityOpen(incomingKey)}>功能与可用性</button><p className="muted">查看本机、服务与电脑的能力、准备条件和回退方式。</p></section>}
-        {section === 'account' && scope && runtime.remoteTasks && <section className="account-ai-settings">
-          <button type="button" className="secondary" onClick={() => setRemoteOpen(true)}>远程解析与索引</button>
-          <p className="muted">选择同账号在线电脑执行，查询持久任务和实际产物用量。</p>
-        </section>}
-        {section === 'account' && scope && <section className="account-ai-settings"><button type="button" className="secondary" onClick={()=>{if(canLeave())setAgentOpen(incomingKey);}}>文库 Agent</button><p className="muted">选择文献并核对规则建议，逐项确认后整理标题、标签与集合。</p></section>}
-        {section === 'account' && scope && <section className="account-ai-settings"><button type="button" className="secondary" onClick={()=>{if(canLeave())setGraphOpen(true);}}>知识图谱</button><p className="muted">浏览文献、笔记与已保存关系，核对来源后继续阅读。</p></section>}
-        {section === 'account' && scope && runtime.secretStore && <section className="account-ai-settings">
-          <button type="button" className="secondary" onClick={() => setZoteroOpen(true)}>Zotero 增量接入</button>
-          <p className="muted">读取个人库或群组库题录，比较变化后明确采用。</p>
-        </section>}
-        {section === 'account' && scope && incomingClient?.available && <section className="account-ai-settings">
-          <button type="button" className="secondary" onClick={() => { if (canLeave()) setIncomingOpen(incomingKey); }}>处理系统分享</button>
-          <p className="muted">预览本机收到的文字与书目文件，再选择是否加入当前账号。</p>
-        </section>}
-        {section === 'account' && scope && <section className="account-ai-settings">
-          <button type="button" className="secondary" onClick={() => setNoteExportOpen(true)}>导出笔记、批注与引用</button>
-        </section>}
-        {section === 'account' && scope && runtime.secretStore && <section className="account-ai-settings">
-          <button type="button" className="secondary" onClick={() => { if (canLeave()) setResearchOpen(true); }}>多篇文献问答</button>
-          <button type="button" className="secondary" onClick={()=>{if(canLeave())setReviewOpen(true);}}>文献综述</button>
-          <p className="muted">选择多篇题录摘要或已核验解析片段，核对后发送，引用与结果可保存。</p>
-        </section>}
-        {section === 'account' && scope && runtime.secretStore && <section className="account-ai-settings">
-          <button className="secondary" onClick={() => setAiSettings(!aiSettings)}>{aiSettings ? '收起 AI 设置' : 'AI 服务设置'}</button>
-          {aiSettings && <Suspense fallback={<p role="status">正在打开设置…</p>}><AiWorkspace mode="settings" accountScope={scope} context={null} archiveEpoch={archiveEpochs[accountScopeKey(scope)] ?? 0}
-            secretStore={runtime.secretStore} transport={aiTransport} modelRouter={modelRouter} modelLedgerRevision={state.workspace?.modelInvocations?.revision} sync={aiSync} onSaveNote={async () => { throw new ClientError('ACCOUNT_CHANGED'); }} onNavigateCitation={() => {}} /></Suspense>}
-        </section>}
         {section === 'conflicts' && (
           <ConflictsView
             state={state}
@@ -874,12 +865,12 @@ export function ConnectedApp({
           />
         )}
       </main>
-      {agentOpen===incomingKey&&transferScope&&scope&&<Suspense fallback={<p role="status">正在打开文库 Agent…</p>}><AgentWorkspace key={incomingKey} ai={runtime.secretStore?{scope,secretStore:runtime.secretStore,transport:aiTransport}:undefined} controller={controller} scopeKey={transferScope} accountCurrent={()=>JSON.stringify(auth.getSubject?.()??null)===authSubjectKey} onClose={()=>setAgentOpen(null)} onResearch={runtime.secretStore?()=>{if(JSON.stringify(auth.getSubject?.()??null)!==authSubjectKey||!canLeave())return;setAgentOpen(null);setResearchOpen(true);}:undefined} onOpen={paperId=>{const now=controller.getSnapshot(),sync=now.workspace?.sync;if(now.status!=='ready'||!sync||JSON.stringify([sync.accountId,sync.deviceId,sync.generation])!==transferScope||JSON.stringify(auth.getSubject?.()??null)!==authSubjectKey||!canLeave()||!listVisibleEntities(sync).some(e=>e.entityType==='paper'&&e.entityId===paperId&&!e.deleted&&e.data))return;setAgentOpen(null);openReader(paperId);}}/></Suspense>}
+      {agentOpen===incomingKey&&transferScope&&scope&&<Suspense fallback={<p role="status">正在打开文库 Agent…</p>}><AgentWorkspace key={incomingKey} ai={runtime.secretStore?{scope,secretStore:runtime.secretStore,transport:aiTransport,modelRouter}:undefined} controller={controller} scopeKey={transferScope} accountCurrent={()=>JSON.stringify(auth.getSubject?.()??null)===authSubjectKey} onClose={()=>setAgentOpen(null)} onResearch={runtime.secretStore?()=>{if(JSON.stringify(auth.getSubject?.()??null)!==authSubjectKey||!canLeave())return;setAgentOpen(null);setResearchOpen(true);}:undefined} onOpen={paperId=>{const now=controller.getSnapshot(),sync=now.workspace?.sync;if(now.status!=='ready'||!sync||JSON.stringify([sync.accountId,sync.deviceId,sync.generation])!==transferScope||JSON.stringify(auth.getSubject?.()??null)!==authSubjectKey||!canLeave()||!listVisibleEntities(sync).some(e=>e.entityType==='paper'&&e.entityId===paperId&&!e.deleted&&e.data))return;setAgentOpen(null);openReader(paperId);}}/></Suspense>}
       {radarOpen&&transferScope&&scope&&<Suspense fallback={<p role="status">正在打开文献雷达…</p>}><RadarWorkspace key={transferScope+':'+authSubjectKey} controller={controller} scope={scope} scopeKey={transferScope} secretStore={runtime.secretStore} accountCurrent={()=>JSON.stringify(auth.getSubject?.()??null)===authSubjectKey} onClose={()=>setRadarOpen(false)} onOpen={paperId=>{const s=controller.getSnapshot(),sync=s.workspace?.sync;if(s.status!=='ready'||!sync||JSON.stringify([sync.accountId,sync.deviceId,sync.generation])!==transferScope||JSON.stringify(auth.getSubject?.()??null)!==authSubjectKey||!canLeave()||!listVisibleEntities(sync).some(e=>e.entityType==='paper'&&e.entityId===paperId&&!e.deleted&&e.data))return;setRadarOpen(false);openReader(paperId);}}/></Suspense>}
       {graphOpen&&transferScope&&<Suspense fallback={<p role="status">正在打开知识图谱…</p>}><KnowledgeGraphSheet key={transferScope+':'+authSubjectKey} controller={controller} scopeKey={transferScope} accountCurrent={()=>JSON.stringify(auth.getSubject?.()??null)===authSubjectKey} onClose={()=>setGraphOpen(false)} onOpen={node=>{const s=controller.getSnapshot(),sync=s.workspace?.sync;if(s.status!=='ready'||!sync||JSON.stringify([sync.accountId,sync.deviceId,sync.generation])!==transferScope||JSON.stringify(auth.getSubject?.()??null)!==authSubjectKey||!canLeave())return;const type=node.type==='paper'?'paper':node.type==='note'?'note':null,id=type==='paper'?node.paperId:node.noteId;if(!type||!id||!listVisibleEntities(sync).some(e=>!e.deleted&&e.data&&e.entityType===type&&e.entityId===id))return;setGraphOpen(false);if(type==='paper')openReader(id);else{setSection('notes');setSelection({type:'note',id});}}}/></Suspense>}
-      {reviewOpen&&transferScope&&scope&&runtime.secretStore&&<Suspense fallback={<p className="loading-message" role="status">正在打开综述工作区…</p>}><ReviewWorkspace key={transferScope+':'+authSubjectKey} scope={scope} scopeKey={transferScope} controller={controller} secretStore={runtime.secretStore} transport={aiTransport} accountCurrent={()=>JSON.stringify(auth.getSubject?.()??null)===authSubjectKey} onClose={()=>setReviewOpen(false)}/></Suspense>}
+      {reviewOpen&&transferScope&&scope&&runtime.secretStore&&<Suspense fallback={<p className="loading-message" role="status">正在打开综述工作区…</p>}><ReviewWorkspace key={transferScope+':'+authSubjectKey} scope={scope} scopeKey={transferScope} controller={controller} secretStore={runtime.secretStore} transport={aiTransport} modelRouter={modelRouter} accountCurrent={()=>JSON.stringify(auth.getSubject?.()??null)===authSubjectKey} onClose={()=>setReviewOpen(false)}/></Suspense>}
       {researchOpen && transferScope && scope && runtime.secretStore && <Suspense fallback={<p className="loading-message" role="status">正在打开多篇问答…</p>}>
-        <ResearchWorkspace key={transferScope+':'+authSubjectKey} scope={scope} scopeKey={transferScope} controller={controller} secretStore={runtime.secretStore} transport={aiTransport}
+        <ResearchWorkspace key={transferScope+':'+authSubjectKey} scope={scope} scopeKey={transferScope} controller={controller} secretStore={runtime.secretStore} transport={aiTransport} modelRouter={modelRouter}
           accountCurrent={() => JSON.stringify(auth.getSubject?.() ?? null) === authSubjectKey} onClose={() => setResearchOpen(false)} />
       </Suspense>}
       {cloudOpen && transferScope && scope && runtime.cloudPdf && <Suspense fallback={<p className="loading-message" role="status">正在打开云副本…</p>}>
@@ -1294,6 +1285,7 @@ function ConfigForm({
 }
 
 function AccountView({
+  page,
   state,
   displayName,
   conflicts,
@@ -1305,6 +1297,7 @@ function AccountView({
   onClear,
   onRevoke,
 }: {
+  page: AccountSettingsPage;
   state: WorkspaceSnapshot;
   displayName?: string;
   conflicts: number;
@@ -1327,15 +1320,12 @@ function AccountView({
     ) ?? [];
   return (
     <div className="account-page">
-      <header className="page-heading">
-        <h1>账号</h1>
-      </header>
-      <div className="account-profile">
+      {page === 'account' && <div className="account-profile">
         <span className="account-avatar"><Icon name="account" /></span>
         <div><strong>{displayName || '我的 PaperQuay'}</strong>
           <span>{!state.online ? '离线使用中' : state.needsLogin ? '需要重新登录' : '已连接到你的文库'}</span></div>
-      </div>
-      <section className="account-section">
+      </div>}
+      {page === 'sync' && <section className="account-section">
         <h2>同步状态</h2>
         <SyncStatus state={state} conflicts={conflicts} onSync={onSync} onConflicts={onConflicts} />
         {state.lastSyncedAt && (
@@ -1352,10 +1342,10 @@ function AccountView({
             已保存在此设备，同步受阻。错误码：{entry.errorCode || 'REJECTED'}
           </p>
         ))}
-      </section>
-      <section className="account-section">
+      </section>}
+      {page === 'account' && <section className="account-section">
         <h2>登录设备</h2>
-        <p className="muted">撤销会使该登录会话的下一次请求失效。</p>
+        <p className="muted">可在这里让其他设备退出登录。</p>
         {!state.devices.length && <p className="muted">同步后会显示设备列表。</p>}
         <ul className="device-list">
           {state.devices.map((device) => (
@@ -1380,38 +1370,38 @@ function AccountView({
                   disabled={busy || state.needsLogin || !state.online}
                   onClick={() => action(() => onRevoke(device.id))}
                 >
-                  撤销
+                  退出此设备
                 </button>
               )}
             </li>
           ))}
         </ul>
-      </section>
-      <section className="account-section">
-        <h2>此设备上的内容</h2>
-        <p className="muted">清理只影响此浏览器的账号副本。未同步改动也会被清除。</p>
+      </section>}
+      {page === 'storage' && <section className="account-section">
+        <h2>本机文库</h2>
+        <p className="muted">清理此设备保存的文库和下载内容。尚未同步的修改也会被清除，云端内容会保留。</p>
         <button
           className="secondary danger-text"
           disabled={busy || state.syncing}
           onClick={() => action(onClear)}
         >
-          清除此账号的本机副本
+          清理本机文库
         </button>
-      </section>
-      <section className="account-section">
-        <h2>服务连接</h2>
+      </section>}
+      {page === 'account' && <section className="account-section">
+        <details><summary>服务连接信息</summary>
         <dl className="service-info">
           <dt>同步服务</dt>
           <dd>{new URL(config.apiBaseUrl).host}</dd>
           <dt>账号服务</dt>
           <dd>{new URL(config.oidcAuthority).host}</dd>
-        </dl>
-        <p className="muted">退出后可以更换服务。已保存的本机内容按账号和服务分别保留。</p>
+        </dl></details>
+        <p className="muted">退出后可更换账号。此设备已保存的内容会保留。</p>
         <button className="secondary" onClick={onLogout}>
           <Icon name="logout" />
           退出登录
         </button>
-      </section>
+      </section>}
     </div>
   );
 }

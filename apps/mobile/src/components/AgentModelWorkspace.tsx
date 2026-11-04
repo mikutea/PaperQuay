@@ -21,9 +21,10 @@ import {MarkdownPreview} from './MarkdownPreview.tsx';
 import './agentWorkspace.css';
 import './agentModelWorkspace.css';
 
+import {TaskAiSettingsEntry,TaskAiSettingsSheet} from './TaskAiSettings.tsx';
 interface Props {
  scope:AiAccountScope;scopeKey:string;controller:WorkspaceController;secretStore:SecretStore;initialIds:readonly string[];
- accountCurrent():boolean;onClose():void;onReviewPlan():void;cache?:ParsedCache;transport?:AiTransport;exportRuntime?:ExportRuntime;
+ accountCurrent():boolean;onClose():void;onReviewPlan():void;cache?:ParsedCache;transport?:AiTransport;exportRuntime?:ExportRuntime;modelRouter?:import('../modelRouting/router.ts').MobileModelRouter;
 }
 interface Preview {request:AgentModelRequest;provider:AiProviderConfig;revision:number}
 interface ContextPreview {contexts:AgentContext[];conversationId:string;requestId:string;revision:number}
@@ -44,6 +45,7 @@ export function AgentModelWorkspace(p:Props){
  const snapshot=useSyncExternalStore(p.controller.subscribe,p.controller.getSnapshot,p.controller.getSnapshot),conversation=snapshot.workspace?.agentConversation??null,entities=useMemo(()=>snapshot.workspace?externalLibraryEntities(snapshot.workspace):[],[snapshot.workspace]);
  const runner=useMemo(()=>new AgentModelRunner(new AiClient(p.secretStore,p.transport),{get:()=>p.controller.getSnapshot().workspace?.agentConversation??null,begin:(r,c,e,g)=>p.controller.beginAgentConversationTurn(r,c,e,g),save:(n,e,g)=>p.controller.saveAgentConversation(n,e,g)}),[owner]);
  const running=useSyncExternalStore(runner.subscribe,runner.getSnapshot,runner.getSnapshot);
+ const [settingsOpen,setSettingsOpen]=useState(false);
  const [instruction,setInstruction]=useState(''),[tool,setTool]=useState<AgentModelTool>('auto'),[preview,setPreview]=useState<Preview|null>(null),[contextChoices,setContextChoices]=useState<Record<string,string>>({}),[contextPreview,setContextPreview]=useState<ContextPreview|null>(null),[localBusy,setLocalBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState(''),[closing,setClosing]=useState(false);
  const busy=localBusy||running.phase!=='idle',last=conversation?.turns.at(-1)??null;
  function current(){const props=latest.current,s=props.controller.getSnapshot(),sync=s.workspace?.sync;return mounted.current&&activeOwner.current===owner&&props.accountCurrent()&&s.status==='ready'&&Boolean(sync)&&sync!.accountId===owner.scope.accountId&&JSON.stringify([sync!.accountId,sync!.deviceId,sync!.generation])===owner.key;}
@@ -68,10 +70,12 @@ export function AgentModelWorkspace(p:Props){
  function approveContexts(){const captured=contextPreview;if(!captured)return;void launch(async guard=>{const c=get();if(!c||c.id!==captured.conversationId||c.revision!==captured.revision)throw new AgentError('CHANGED');const fresh=await collect(c,guard);if(!guard()||canonicalJson(fresh)!==canonicalJson(captured.contexts))throw new AgentError('CHANGED');await latest.current.controller.approveAgentConversationContexts(c.id,captured.requestId,fresh,c.revision,guard);if(guard()){invalidate();setInstruction('请仅根据已明确提供的上下文片段继续；缺少正文或页码时明确说明。');setNotice('已保存明确批准的本机上下文。请预览下一次发送，不会自动继续调用模型。');}});}
  function adopt(){const expectedAgentRevision=snapshot.workspace?.agentState?.revision??null;void launch(async guard=>{const c=get(),w=latest.current.controller.getSnapshot().workspace;if(!c||!w||c.id!==conversation?.id||c.revision!==conversation.revision)throw new AgentError('CHANGED');const t=c.turns.at(-1);if(!t||(w.agentState?.revision??null)!==expectedAgentRevision)throw new AgentError('CHANGED');await latest.current.controller.adoptAgentModelPlan(c.id,t.id,expectedAgentRevision,guard);if(guard()){latest.current.onReviewPlan();}});}
  function backup(candidate=false){void launch(async guard=>{const c=candidate?runner.getSnapshot().candidate:get();if(!c)throw new AgentError('CHANGED');const text=JSON.stringify({format:'paperquay-agent-model',version:1,conversation:c,unconfirmedSave:candidate}),valid=()=>guard()&&(candidate?runner.getSnapshot().candidate===c:get()?.id===c.id&&get()?.revision===c.revision);const result=await exportTextFile({name:exportFilename(candidate?'Agent未保存结果':'Agent会话与请求记录','json'),mime:'application/json',text},valid,latest.current.exportRuntime);if(valid())setNotice(result==='share'?'已打开系统分享，请在目标应用确认接收。':'已交给浏览器下载。');});}
+ function configureAi(){const state=runner.getSnapshot();if(!current()||task.current||state.phase!=='idle'||state.candidate)return;invalidate();setSettingsOpen(true);}
  function close(){if(!current())return;if(busy||running.candidate){setClosing(true);return;}latest.current.onClose();}
  const canPrepare=Boolean(conversation&&!freshness&&last?.status!=='uncertain'&&conversation.turns.length<8&&!running.candidate&&instruction.trim());
- return <ReaderSheet open title="模型 Agent" className="agent-model-sheet" onClose={close}><div className="mobile-agent mobile-agent-model">
-  <header className="agent-intro"><p className="eyebrow">一步一步，保留依据</p><h3>模型提出建议，你来决定</h3><p className="muted">使用账号页配置的模型。每次请求先预览确切输入，再明确发送；计划、补充材料与用户选择都不会自动执行。模型可能产生费用，金额以服务商账单为准。</p></header>
+ return <><ReaderSheet open title="模型 Agent" className="agent-model-sheet" onClose={close}><div className="mobile-agent mobile-agent-model">
+  <TaskAiSettingsEntry scope={p.scope} disabled={busy||Boolean(running.candidate)} onOpen={configureAi} />
+  <header className="agent-intro"><p className="eyebrow">一步一步，保留依据</p><h3>模型提出建议，你来决定</h3><p className="muted">使用上方选择的模型。每次请求先预览确切输入，再明确发送；计划、补充材料与用户选择都不会自动执行。模型可能产生费用，金额以服务商账单为准。</p></header>
   {error&&<p role="alert" className="agent-feedback">{error}</p>}{notice&&<p role="status" className="agent-notice">{notice}</p>}{freshness&&<p role="alert" className="agent-feedback">{freshness} 已保存的结果仍可查看与备份。</p>}
   {closing&&<section className="agent-feedback"><h3>先处理本次等待与结果</h3><p>已收但未保存的结果只在此窗口保留。关闭可能只留下未确认意图，重新打开不会自动重发。</p><button type="button" className="secondary" onClick={()=>setClosing(false)}>返回处理</button><button type="button" className="secondary" onClick={()=>{if(current()){runner.stop();latest.current.onClose();}}}>确认关闭，稍后核对</button></section>}
   <section className="agent-model-session"><h3>本机会话范围</h3>{conversation?<><p>{conversation.targets.length}篇 · 已记录{conversation.turns.length}/8轮 · 已批准上下文{conversation.contexts.length}篇</p><details><summary>查看所选文献与上下文范围</summary><ul>{conversation.targets.map(t=><li key={t.id}>{t.data.title}</li>)}</ul>{conversation.contexts.map(c=><p key={c.paperId}>{c.kind==='parsed'?'解析片段':'题录摘要'} · {c.text.length}字符 · 未采用{c.omittedCharacters}字符{c.pages.length?' · 第'+c.pages.map(n=>n+1).join('、')+'页':''}</p>)}</details></>:<p>先在文库 Agent 中明确选择文献，再在这里建立会话。</p>}
@@ -90,5 +94,5 @@ export function AgentModelWorkspace(p:Props){
   </section>}
   {conversation&&<section className="agent-model-history"><h3>本机请求记录</h3>{!conversation.turns.length&&<p>尚未发送模型请求。</p>}{[...conversation.turns].reverse().map(t=><details key={t.id}><summary><span>{statuses[t.status]}<small>{t.provider.model} · {new Date(t.startedAt).toLocaleString()}</small></span></summary><p>服务：<span className="agent-model-endpoint">{t.provider.endpoint}</span></p><p>{t.usage?'输入'+t.usage.promptTokens+' / 输出'+t.usage.completionTokens+' / 总计'+t.usage.totalTokens+' tokens':'模型未返回可核对的用量'} · 费用未知</p>{t.outputNormalized&&<p role="alert">诊断文本已替换不可显示或无效字符，没有作为有效计划采用。</p>}{t.outputClipped&&<p role="alert">结果超限，仅保留诊断片段，没有按完整计划采用。</p>}{t.text&&<pre>{t.text}</pre>}<details><summary>本次确切输入与来源</summary><pre>{JSON.stringify(agentModelMessages(t.request),null,2)}</pre></details><small className="agent-id">请求：{t.id}</small></details>)}</section>}
   <footer className="agent-footer"><div className="agent-actions"><button type="button" className="secondary" disabled={busy} onClick={()=>void launch(async()=>{await latest.current.controller.refreshAgentConversation();})}>刷新会话本机状态</button><button type="button" className="secondary" disabled={busy||!conversation} onClick={()=>backup()}>导出会话与请求记录</button></div><p className="muted">记录只在此账号、此设备保存，不进入账号同步。导出含题录、摘要、批准的片段、模型设置与结果，不包含PDF和密钥；目标应用是否接收需另行确认。</p></footer>
- </div></ReaderSheet>;
+ </div></ReaderSheet>{settingsOpen&&<TaskAiSettingsSheet accountScope={p.scope} secretStore={p.secretStore} transport={p.transport} modelRouter={p.modelRouter} returnTo="模型整理" onClose={()=>setSettingsOpen(false)} />}</>;
 }
