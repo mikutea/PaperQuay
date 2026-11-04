@@ -130,11 +130,11 @@ function createDesktopNoteExchange(context, options) {
   async function fetchConflicts(owner, state, signal, budget) {
     let cursor = null, sync = state.sync; const seen = new Set(), all = new Set();
     for (let i = 0; i < limit.pullPages; i++) {
-      const query = new URLSearchParams({ limit: '1' }); if (cursor !== null) query.set('cursor', cursor);
+      const query = new URLSearchParams({ limit: '100' }); if (cursor !== null) query.set('cursor', cursor);
       const page = await api(owner, { path: '/v1/conflicts?' + query }, signal); check(owner, signal);
       budget.bytes += Buffer.byteLength(core.canonicalJson(page));
       if (budget.bytes > limit.privateBytes || !exact(page, ['conflicts', 'nextCursor', 'hasMore']) || !Array.isArray(page.conflicts)
-        || page.conflicts.length > 1 || typeof page.nextCursor !== 'string' || typeof page.hasMore !== 'boolean') fail('NOTE_STATE_INVALID');
+        || page.conflicts.length > 100 || typeof page.nextCursor !== 'string' || typeof page.hasMore !== 'boolean') fail('NOTE_STATE_INVALID');
       for (const row of page.conflicts) {
         if (!exact(row, ['conflictId', 'entityId', 'entityType', 'createdAt', 'attemptedOperation', 'observedRecord', 'currentRecord'])) fail('NOTE_STATE_INVALID');
         const op = core.validateOperation(row.attemptedOperation);
@@ -180,7 +180,7 @@ function createDesktopNoteExchange(context, options) {
     if (!exact(args, ['noteIds']) || !Array.isArray(args.noteIds) || args.noteIds.length > limit.selected || args.noteIds.some(id => !core.isDesktopLocalId(id)) || new Set(args.noteIds).size !== args.noteIds.length) fail('NOTE_SELECTION_INVALID');
     const owner = open(); online(owner, signal); const noteIds = [...args.noteIds], pages = [], budget = { bytes: 0 }; let cursor = owner.state.sync.cursor;
     for (let i = 0; i < limit.pullPages; i++) {
-      const query = new URLSearchParams({ limit: '1' }); if (cursor !== null) query.set('cursor', cursor);
+      const query = new URLSearchParams({ limit: '100' }); if (cursor !== null) query.set('cursor', cursor);
       const response = await api(owner, { path: '/v1/sync/pull?' + query }, signal); check(owner, signal);
       const parsed = core.validatePullResponse(response); if (!parsed.ok) fail('NOTE_STATE_INVALID');
       budget.bytes += Buffer.byteLength(core.canonicalJson(parsed.value)); if (budget.bytes > limit.privateBytes) fail('NOTE_STATE_FULL'); pages.push(parsed.value);

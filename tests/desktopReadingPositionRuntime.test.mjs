@@ -67,7 +67,7 @@ function fixture(t, limits = {}) {
   async function serve(owner, input) {
     const state = store(owner), url = new URL(input.path, config.apiBaseUrl);
     if (url.pathname === '/v1/sync/pull') {
-      assert.equal(url.searchParams.get('limit'), '1'); const start = Number(url.searchParams.get('cursor') || '0'), rows = state.events.slice(start, start + 1);
+      assert.equal(url.searchParams.get('limit'), '100'); const start = Number(url.searchParams.get('cursor') || '0'), rows = state.events.slice(start, start + 1);
       return { protocolVersion: 1, records: structuredClone(rows), nextCursor: String(start + rows.length), hasMore: start + rows.length < state.events.length };
     }
     if (url.pathname === '/v1/conflicts') {

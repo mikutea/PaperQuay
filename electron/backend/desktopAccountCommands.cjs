@@ -1,5 +1,6 @@
 const path = require('node:path');
 const { createHash, randomUUID } = require('node:crypto');
+const timers = require('node:timers/promises');
 const nativeFs = require('./nativeFs.cjs');
 const { MAX_FILE_BYTES, captureLibraryAnchor, sameLibraryAnchor, assertLibraryAnchor,
   findAttachment, readDesktopAttachment, createDesktopPdfProvider } = require('./desktopPdfProvider.cjs');
@@ -72,14 +73,14 @@ function parseTarget(value) {
       data.pageCount !== null && (!Number.isSafeInteger(data.pageCount) || data.pageCount < 1)) fail('DESKTOP_INVALID_RESPONSE');
   return value;
 }
-async function boundedJson(response) {
-  if (!response.body || Number(response.headers.get('content-length')) > MAX_JSON_BYTES) fail('DESKTOP_INVALID_RESPONSE');
+async function boundedJson(response, maxBytes = MAX_JSON_BYTES) {
+  if (!response.body || Number(response.headers.get('content-length')) > maxBytes) fail('DESKTOP_INVALID_RESPONSE');
   const reader = response.body.getReader(); const chunks = []; let count = 0;
   try {
     for (;;) {
       const part = await reader.read(); if (part.done) break;
       count += part.value.byteLength;
-      if (count > MAX_JSON_BYTES) { await reader.cancel(); fail('DESKTOP_INVALID_RESPONSE'); }
+      if (count > maxBytes) { await reader.cancel(); fail('DESKTOP_INVALID_RESPONSE'); }
       chunks.push(part.value);
     }
     try { return JSON.parse(Buffer.concat(chunks, count).toString('utf8')); }
@@ -193,7 +194,7 @@ function createDesktopAccountCommands(context, options = {}) {
     const ownedLock = lock; lock = null;
     pendingCleanup = Promise.allSettled([pendingCleanup, mutations, actions, loginTask, remoteTasks.settled(), models.settled(), graph.settled(), notes.settled(), papers.settled(), reading.settled()]).then(() => releaseLock(ownedLock));
   }
-  async function request(route, { method = 'GET', body, signal, timeoutMs = 30_000, raw = false, minimumExpiry = 0, remoteHeaders, graphRelations = false, richNotes = false, paperOrganization = false } = {}) {
+  async function request(route, { method = 'GET', body, signal, timeoutMs = 30_000, raw = false, minimumExpiry = 0, remoteHeaders, graphRelations = false, richNotes = false, paperOrganization = false, maxResponseBytes = MAX_JSON_BYTES } = {}) {
     if (!config) fail('DESKTOP_CONFIG_REQUIRED');
     const captured = epoch, settings = config;
     assertEpoch(captured);
@@ -228,7 +229,7 @@ function createDesktopAccountCommands(context, options = {}) {
       });
       assertEpoch(captured);
       let result;
-      try { result = await boundedJson(response); }
+      try { result = await boundedJson(response, maxResponseBytes); }
       catch (error) { if (response.status !== 401 && response.status !== 403) throw error; }
       assertEpoch(captured);
       if (controller.signal.aborted) fail('DESKTOP_OPERATION_CANCELLED');
@@ -248,6 +249,21 @@ function createDesktopAccountCommands(context, options = {}) {
       fail('NETWORK_UNAVAILABLE');
     } finally {
       clearTimeout(timer); signal?.removeEventListener('abort', cancel); sessionSignal.removeEventListener('abort', cancel);
+    }
+  }
+  async function exchangeRequest(route, input) {
+    const captured = epoch, signal = AbortSignal.any([sessionController.signal, ...(input.signal ? [input.signal] : [])]);
+    const paginated = (!input.method || input.method === 'GET') && /^\/v1\/(?:sync\/pull|conflicts)\?/.test(route);
+    if (paginated) input = { ...input, maxResponseBytes: 4 * 1024 * 1024 };
+    try { return await request(route, input); }
+    catch (error) {
+      if (error.code !== 'RATE_LIMITED' || !paginated) throw error;
+      // Retry this read once after the server's one-minute account window.
+      // The caller retains earlier pages; writes keep their existing recovery path.
+      try { await timers.setTimeout(60_000, undefined, { signal }); }
+      catch { fail('DESKTOP_OPERATION_CANCELLED'); }
+      assertEpoch(captured);
+      return request(route, input);
     }
   }
   async function validateTarget(binding, signal) {
@@ -373,7 +389,7 @@ function createDesktopAccountCommands(context, options = {}) {
         && bindingStatus(item, value.library).publicationStatus === 'published').map(item => ({ entityType: 'paper', localId: item.localPaperId, entityId: item.paperId })),
         live: { paperIds, noteIds: (context.noteStore.listAllNotes?.() || []).map(item => item.id) } };
     },
-    api(_snapshot, input) { return request(input.path, { method: input.method, body: input.body, signal: input.signal, richNotes: input.richNotes }); },
+    api(_snapshot, input) { return exchangeRequest(input.path, { method: input.method, body: input.body, signal: input.signal, richNotes: input.richNotes }); },
   });
 
   const papers = createDesktopPaperExchange(context, {
@@ -389,7 +405,7 @@ function createDesktopAccountCommands(context, options = {}) {
       return { bindings: value.library.bindings.filter(item => !item.removed && live.has(item.localPaperId) && bindingStatus(item, value.library).publicationStatus === 'published')
         .map(item => ({ entityType: 'paper', localId: item.localPaperId, entityId: item.paperId })), live: { paperIds: localIds, noteIds: [] } };
     },
-    api(_snapshot, input) { return request(input.path, { method: input.method, body: input.body, signal: input.signal, paperOrganization: input.paperOrganization }); },
+    api(_snapshot, input) { return exchangeRequest(input.path, { method: input.method, body: input.body, signal: input.signal, paperOrganization: input.paperOrganization }); },
   });
 
   const graphEvidence = createDesktopGraphEvidence(context, {
@@ -453,7 +469,7 @@ function createDesktopAccountCommands(context, options = {}) {
       if (target.version.data.pageCount !== null && target.version.data.pageCount !== capture.pageCount) fail('READING_SOURCE_CHANGED');
       return { ...binding, pageCount: capture.pageCount };
     },
-    api(_snapshot, input) { return request(input.path, { method: input.method, body: input.body, signal: input.signal }); },
+    api(_snapshot, input) { return exchangeRequest(input.path, { method: input.method, body: input.body, signal: input.signal }); },
   });
 
   function validateDocument(value, expectedService, expectedAccount) {

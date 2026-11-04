@@ -190,6 +190,27 @@ test('vector chunks preserve continuation pages, equations, tables and visible i
   await assert.rejects(buildRemoteVectorChunks({ ...f.document, blocks: [{ id: 'html', pageIndex: 0, kind: 'text', text: '', markdown: '<div>Unrepresentable content</div>' }] }), { code: 'SOURCE_UNAVAILABLE' });
   await assert.rejects(buildRemoteVectorChunks({ ...f.document, blocks: [{ id: 'html', pageIndex: 0, kind: 'text', text: '', markdown: '<!-- first -->\n<div>Visible content</div>\n<!-- last -->' }] }), { code: 'SOURCE_UNAVAILABLE' });
 });
+test('overlapping chunk text exceeding the index limit is rejected before embedding usage', async (t) => {
+  const f = await fixture(t, { kind: 'index', blocks: Array.from({ length: 18 }, (_, index) => ({
+    id: `large-${index}`, pageIndex: 0, kind: 'text', text: 'X'.repeat(100_000),
+  })) });
+  const chunks = await buildRemoteVectorChunks(f.document);
+  assert.ok(chunks.reduce((total, chunk) => total + chunk.text.length, 0) > core.REMOTE_TASK_LIMITS.indexTextCharacters);
+  let entry = await (await f.checkpoint()).read(), requests = 0;
+  const checkpoint = { read: async () => entry, write: async value => (entry = value) };
+  const adapter = createRemoteVectorAdapter({ core,
+    getConfig: async () => ({ baseUrl: 'https://embedding.example.test/v1', apiKey: 'synthetic-key', model: f.task.profile.model, dimensions: 64, batchSize: 64 }),
+    readParsed: async () => f.bytes,
+    fetch: async (_url, input) => {
+      requests++;
+      const batch = JSON.parse(input.body).input;
+      return Response.json({ data: batch.map((_text, index) => ({ index, embedding: Array(64).fill(0.25) })) });
+    } });
+  let code;
+  try { await adapter.execute(context(f, checkpoint)); } catch (error) { code = error.code; }
+  assert.deepEqual({ code, requests, stage: entry.stage }, { code: 'REMOTE_TASK_ARTIFACT_LIMIT', requests: 0, stage: 'prepared' });
+});
+
 test('actual embedding HTTP validates index ordering/dimensions and emits the bound portable artifact without old-index writes', async (t) => {
   const f = await fixture(t, { kind: 'index', blocks: [{ id: 'long', pageIndex: 0, kind: 'text', text: 'X'.repeat(1800) }] });
   const checkpoint = await f.checkpoint(); const inputs = [];

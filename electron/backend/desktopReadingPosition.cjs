@@ -123,7 +123,7 @@ function createDesktopReadingPosition(context, options) {
   async function pull(owner, state, signal, budget) {
     const pages = [], seen = new Set(); let cursor = state.sync.cursor;
     for (let index = 0; index < limit.pullPages; index++) {
-      const query = new URLSearchParams({ limit: '1' }); if (cursor !== null) query.set('cursor', cursor);
+      const query = new URLSearchParams({ limit: '100' }); if (cursor !== null) query.set('cursor', cursor);
       const response = await api(owner, { path: '/v1/sync/pull?' + query }, signal); check(owner, signal); budgetResponse(response, budget);
       const checked = core.validatePullResponse(response); if (!checked.ok) fail('READING_STATE_INVALID'); pages.push(checked.value);
       if (!checked.value.hasMore) return core.stageDesktopReadingPull(state, pages, now());
@@ -133,9 +133,9 @@ function createDesktopReadingPosition(context, options) {
   async function conflicts(owner, state, signal, budget) {
     let cursor = null, sync = state.sync; const seen = new Set(), all = new Set();
     for (let index = 0; index < limit.pullPages; index++) {
-      const query = new URLSearchParams({ limit: '1' }); if (cursor !== null) query.set('cursor', cursor);
+      const query = new URLSearchParams({ limit: '100' }); if (cursor !== null) query.set('cursor', cursor);
       const page = await api(owner, { path: '/v1/conflicts?' + query }, signal); check(owner, signal); budgetResponse(page, budget);
-      if (!exact(page, ['conflicts', 'nextCursor', 'hasMore']) || !Array.isArray(page.conflicts) || page.conflicts.length > 1
+      if (!exact(page, ['conflicts', 'nextCursor', 'hasMore']) || !Array.isArray(page.conflicts) || page.conflicts.length > 100
         || typeof page.nextCursor !== 'string' || typeof page.hasMore !== 'boolean') fail('READING_STATE_INVALID');
       for (const row of page.conflicts) {
         if (!exact(row, ['conflictId', 'entityId', 'entityType', 'createdAt', 'attemptedOperation', 'observedRecord', 'currentRecord']) || !UUID.test(row.conflictId)) fail('READING_STATE_INVALID');

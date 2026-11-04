@@ -44,12 +44,12 @@ function button(renderer: ReactTestRenderer, label: string): ReactTestInstance {
   const result = renderer.root.findAllByType('button').find((node) => text(node) === label);
   assert.ok(result, `Expected button: ${label}`); return result;
 }
-async function flush(): Promise<void> {
-  await act(async () => { await new Promise<void>((resolve) => setImmediate(resolve)); });
-}
 async function until(check: () => boolean, label: string): Promise<void> {
-  for (let attempt = 0; attempt < 40; attempt++) { if (check()) return; await flush(); }
-  assert.fail(`UI did not settle: ${label}`);
+  const deadline = performance.now() + 5000;
+  while (!check()) {
+    if (performance.now() >= deadline) assert.fail(`UI did not settle: ${label}`);
+    await act(async () => { await new Promise<void>((resolve) => setTimeout(resolve, 2)); });
+  }
 }
 async function click(renderer: ReactTestRenderer, label: string): Promise<void> {
   const target = button(renderer, label); assert.ok(!target.props.disabled, `Button is disabled: ${label}`);
@@ -137,6 +137,10 @@ test('cancelling a real panel upload cannot let its late completion unlock or ov
   });
   const env = await mountPanel(data);
   try {
+    data.token(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 150));
+      return 'synthetic-access-token';
+    });
     await click(env.renderer, '上传此 PDF 到私有云');
     await until(() => uploads === 1, 'upload request dispatched');
     await click(env.renderer, '取消等待');

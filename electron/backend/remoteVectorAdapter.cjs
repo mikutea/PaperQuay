@@ -125,7 +125,9 @@ function createRemoteVectorAdapter(options) {
       || (task.target.pageCount !== null && document.pdf.pageCount !== task.target.pageCount)) fail('SOURCE_UNAVAILABLE');
     const chunks = await buildRemoteVectorChunks(document); await check();
     const elements = chunks.length * config.dimensions;
-    if (elements > 2000000 || Buffer.byteLength(JSON.stringify(chunks)) + elements * 24 + 16384 > 16 * 1024 * 1024) fail('REMOTE_TASK_ARTIFACT_LIMIT');
+    const textCharacters = chunks.reduce((total, chunk) => total + chunk.text.length, 0);
+    if (textCharacters > core().REMOTE_TASK_LIMITS.indexTextCharacters || elements > 2000000
+      || Buffer.byteLength(JSON.stringify(chunks)) + elements * 24 + 16384 > 16 * 1024 * 1024) fail('REMOTE_TASK_ARTIFACT_LIMIT');
     const chunksDigest = sha(JSON.stringify(chunks)); let entry = await checkpoint.read();
     if (entry.artifact) return Buffer.from(entry.artifact.base64, 'base64');
     let progress = entry.vectorProgress;

@@ -926,6 +926,57 @@ async function paperCommandFixture(t, extra = {}) {
   return { ...f, manager, headers };
 }
 
+test('paper preview batches larger histories and resumes the same page after a rate-limit window', async t => {
+  const f = await paperCommandFixture(t), originalRoute = f.service.onRoute;
+  const paper = [...f.service.records.values()].find(row => row.entityType === 'paper');
+  const events = Array.from({ length: 150 }, (_, index) => ({ ...structuredClone(paper), revision: index + 1,
+    data: { ...paper.data, title: `Account edit ${index + 1}`, abstractText: 'A'.repeat(24_000) } }));
+  const cursors = [], waits = []; let limited = false;
+  t.mock.method(require('node:timers/promises'), 'setTimeout', async (ms, _value, options) => {
+    assert.equal(options.signal.aborted, false); waits.push(ms);
+  });
+  f.service.onRoute = (url, options) => {
+    if (url.pathname !== '/v1/sync/pull') return originalRoute(url, options);
+    const start = Number(url.searchParams.get('cursor') || '0'), size = Number(url.searchParams.get('limit'));
+    cursors.push(start);
+    if (cursors.length === 2 && !limited) { limited = true; return Response.json({ error: { code: 'RATE_LIMITED' } }, { status: 429 }); }
+    const records = events.slice(start, start + size);
+    return Response.json({ protocolVersion: 1, records, nextCursor: String(start + records.length), hasMore: start + records.length < events.length });
+  };
+  const before = structuredClone(f.store.load()), calls = f.service.calls.length;
+  const preview = await f.manager.commands.desktop_paper_preview({ localPaperIds: [f.paper.id] });
+  assert.deepEqual(cursors, [0, 100, 100]); assert.deepEqual(waits, [60_000]);
+  assert.equal(preview.localRows[0].remote.title, 'Account edit 150');
+  assert.deepEqual(f.store.load(), before);
+  assert.equal(f.service.calls.slice(calls).some(row => row.method !== 'GET'), false);
+});
+
+for (const command of ['desktop_paper_stop', 'desktop_account_sign_out']) test(`${command} cancels a rate-limited preview without dispatching another page`, async t => {
+  const f = await paperCommandFixture(t), originalRoute = f.service.onRoute; let reads = 0;
+  f.service.onRoute = (url, options) => {
+    if (url.pathname !== '/v1/sync/pull') return originalRoute(url, options);
+    reads++; return Response.json({ error: { code: 'RATE_LIMITED' } }, { status: 429 });
+  };
+  const task = f.manager.commands.desktop_paper_preview({ localPaperIds: [f.paper.id] });
+  const rejected = assert.rejects(task, { code: 'DESKTOP_OPERATION_CANCELLED' });
+  await until(() => reads === 1); await f.manager.commands[command](); await rejected;
+  assert.equal(reads, 1);
+});
+
+test('a rate-limited paper write remains uncertain without an automatic retry', async t => {
+  const f = await paperCommandFixture(t);
+  await f.imports.library_update_paper({ request: { paperId: f.paper.id, title: 'Explicit local edit' } });
+  const preview = await f.manager.commands.desktop_paper_preview({ localPaperIds: [f.paper.id] }), originalRoute = f.service.onRoute;
+  let writes = 0;
+  t.mock.method(require('node:timers/promises'), 'setTimeout', async () => assert.fail('A write must not enter the page retry path'));
+  f.service.onRoute = (url, options) => {
+    if (url.pathname !== '/v1/sync/push') return originalRoute(url, options);
+    writes++; return Response.json({ error: { code: 'RATE_LIMITED' } }, { status: 429 });
+  };
+  await assert.rejects(f.manager.commands.desktop_paper_publish({ token: preview.token }), { code: 'RATE_LIMITED' });
+  assert.equal(writes, 1); assert.equal(f.manager.getStatus().paperExchange.continuable, 1);
+});
+
 test('actual paper commands send current metadata and explicit reading plans, adopt only the whitelist and undo without a cloud write', async t => {
   const f = await paperCommandFixture(t); assert.equal(f.manager.getStatus().paperExchange.organizationSupported, true);
   await f.imports.library_update_paper({ request: { paperId: f.paper.id, title: 'Edited on this desktop', tags: ['Desktop tag'], isFavorite: true, userNote: 'Private local note', url: 'https://local.example.test/private' } });

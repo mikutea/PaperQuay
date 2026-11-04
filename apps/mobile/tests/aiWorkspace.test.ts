@@ -312,9 +312,14 @@ test('settings opens with simple connection choices, hides fields until asked, a
   } finally { ui.close(); }
 });
 
-test('settings has one explicit save for key and model, gives a next step, and never generates a model response', async () => {
+test('settings has one explicit save for key and model, gives a next step, and never generates a model response', async (t) => {
   const config = { ...CONFIG, model: '' };
   const ui = await setup({ mode: 'settings', context: null, config, key: false });
+  const saveKey = ui.secrets.set.bind(ui.secrets);
+  t.mock.method(ui.secrets, 'set', async (...args: Parameters<MemorySecretStore['set']>) => {
+    await new Promise<void>((resolve) => setTimeout(resolve, 150));
+    await saveKey(...args);
+  });
   try {
     ui.openSettings();
     assert.equal(ui.button('获取可用模型').props.disabled, true);
@@ -326,6 +331,7 @@ test('settings has one explicit save for key and model, gives a next step, and n
     assert.equal(ui.renderer.root.findAllByType('button').filter(node => text(node) === '保存设置').length, 1);
     assert.equal(await ui.secrets.get(await aiSecretNamespace(SCOPE, config), AI_SECRET_KEY), null);
     await act(async () => { ui.button('保存设置').props.onClick(); await tick(); await tick(); });
+    await until(() => text(ui.renderer.root).includes('设置已保存'), 'settings save completion');
     assert.equal(ui.renderer.root.findAllByType('input').length, 0);
     assert.match(text(ui.renderer.root), /saved-settings-model/);
     ui.openSettings();
