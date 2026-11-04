@@ -2,6 +2,7 @@ import {ModelInvocationApi} from './modelRouting/api.ts';
 import {ModelServiceError,isModelServiceCode} from './modelRouting/errors.ts';
 import {readModelResponse,waitForModelCall} from './modelRouting/wire.ts';
 import {validateModelInferenceCapability,type ModelInferenceCapability} from '../../../packages/sync-core/src/modelInference.ts';
+import {validateRemoteRetrievalCapability,type RemoteRetrievalCapability} from '../../../packages/sync-core/src/remoteRetrieval.ts';
 import {
   validatePullResponse,
   validatePushResponse,
@@ -144,6 +145,7 @@ async function boundedJson(response: Response): Promise<unknown> {
 export interface ServiceCapabilitySnapshot {
   paperOrganization:boolean;richNotes:boolean;aiConversations:boolean;graphRelations?:boolean;
   cloudPdf:CloudPdfCapability|null;desktopPdf:DesktopPdfCapability|null;remoteTasks:RemoteTaskCapability|null;modelInference:ModelInferenceCapability|null;
+  remoteRetrieval?:RemoteRetrievalCapability|null;
 }
 export class SyncApi {
   private capabilityGeneration=0;
@@ -155,6 +157,7 @@ export class SyncApi {
   desktopPdfCapability: DesktopPdfCapability | null = null;
   remoteTaskCapability: RemoteTaskCapability | null = null;
   modelInferenceCapability:ModelInferenceCapability|null=null;
+  remoteRetrievalCapability:RemoteRetrievalCapability|null=null;
   readonly modelInvocations:ModelInvocationApi;
   private readonly baseUrl: string;
   private readonly getToken: () => Promise<string>;
@@ -245,6 +248,7 @@ export class SyncApi {
     this.desktopPdfCapability = null;
     this.remoteTaskCapability = null;
     this.modelInferenceCapability=null;
+    this.remoteRetrievalCapability=null;
     const body = await this.request('/v1/capabilities', signal);
     if(generation!==this.capabilityGeneration)throw new ClientError('ACCOUNT_CHANGED');
     if (!isObject(body) || body.protocolVersion !== 1) throw new ClientError('INVALID_RESPONSE');
@@ -257,6 +261,8 @@ export class SyncApi {
     }
     let modelCapability:ModelInferenceCapability|null=null;
     if(isObject(body.features)&&body.features.modelInference===1){try{modelCapability=validateModelInferenceCapability(body.modelInference);}catch{throw new ClientError('INVALID_RESPONSE');}}
+    let retrievalCapability:RemoteRetrievalCapability|null=null;
+    if(isObject(body.features)&&body.features.remoteRetrieval===1){try{retrievalCapability=validateRemoteRetrievalCapability(body.remoteRetrieval);}catch{throw new ClientError('INVALID_RESPONSE');}}
     let desktopCapability: DesktopPdfCapability | null = null;
     if (isObject(body.features) && body.features.desktopPdfTransfer === 1) {
       const limits = body.desktopPdf;
@@ -279,6 +285,7 @@ export class SyncApi {
     this.supportsGraphRelations=isObject(body.features)&&body.features.graphRelations===1;
     this.desktopPdfCapability = desktopCapability;
     this.modelInferenceCapability=modelCapability;
+    this.remoteRetrievalCapability=retrievalCapability;
     return { paperOrganization: this.supportsPaperOrganization };
   }
 
@@ -291,8 +298,9 @@ export class SyncApi {
     await probe.capabilities(signal);
     if(signal.aborted||generation!==this.capabilityGeneration||identityKey!==this.getIdentityKey?.())throw new ClientError('ACCOUNT_CHANGED');
     const snapshot:ServiceCapabilitySnapshot={paperOrganization:probe.supportsPaperOrganization,richNotes:probe.supportsRichNotes,aiConversations:probe.supportsAiConversations,graphRelations:probe.supportsGraphRelations,
-      cloudPdf:probe.cloudPdfCapability,desktopPdf:probe.desktopPdfCapability,remoteTasks:probe.remoteTaskCapability,modelInference:probe.modelInferenceCapability};
+      cloudPdf:probe.cloudPdfCapability,desktopPdf:probe.desktopPdfCapability,remoteTasks:probe.remoteTaskCapability,modelInference:probe.modelInferenceCapability,remoteRetrieval:probe.remoteRetrievalCapability};
     this.cloudPdfCapability=structuredClone(snapshot.cloudPdf);this.desktopPdfCapability=structuredClone(snapshot.desktopPdf);this.remoteTaskCapability=structuredClone(snapshot.remoteTasks);this.modelInferenceCapability=structuredClone(snapshot.modelInference);
+    this.remoteRetrievalCapability=structuredClone(snapshot.remoteRetrieval??null);
     return structuredClone(snapshot);
   }
 

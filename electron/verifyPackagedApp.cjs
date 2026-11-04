@@ -50,9 +50,40 @@ try {
   if(reviewCheck.error)throw reviewCheck.error;
   if(reviewCheck.status!==0)throw new Error('Packaged review Word runtime failed verification.');
   const syncCore = require(path.join(extractionRoot, 'electron', 'generated', 'desktopSyncCore.cjs'));
-  for (const name of ['projectDesktopLibrary', 'createDesktopIdentityMap', 'queueLocalCreates', 'preparePush', 'applyPushResults', 'verifyParsedDocument', 'inspectParsedImage']) {
+  for (const name of ['projectDesktopLibrary', 'createDesktopIdentityMap', 'queueLocalCreates', 'preparePush', 'applyPushResults', 'verifyParsedDocument', 'inspectParsedImage',
+    'createDesktopNoteState', 'readDesktopNoteState', 'stageDesktopNotePublication', 'stageDesktopNoteCopyIntents', 'confirmedDesktopNoteBindings',
+    'createDesktopPaperState', 'readDesktopPaperState', 'stageDesktopPaperPublication', 'stageDesktopPaperAdoptions', 'stageDesktopPaperRestoration',
+    'validateRemoteRetrievalRequest', 'validateRemoteRetrievalResult', 'readGraphEvidence', 'verifyGraphEvidence', 'graphEvidenceMetadata',
+    'createDesktopReadingState', 'readDesktopReadingState', 'stageDesktopReadingPublication', 'stageDesktopReadingDraft', 'recordDesktopReadingDraft',
+    'desktopReadingLocalDraft', 'applyDesktopReadingPush', 'stageDesktopReadingResolution', 'applyDesktopReadingResolution']) {
     if (typeof syncCore[name] !== 'function') throw new Error(`Packaged desktop sync core is missing ${name}.`);
   }
+  const smokeScope = { serviceKey: 'a'.repeat(64), accountId: '11111111-1111-4111-8111-111111111111', libraryBindingId: '22222222-2222-4222-8222-222222222222' };
+  const smokeDevice = '33333333-3333-4333-8333-333333333333';
+  const noteState = syncCore.createDesktopNoteState(smokeScope, smokeDevice);
+  const paperState = syncCore.createDesktopPaperState(smokeScope, smokeDevice);
+  const readingState = syncCore.createDesktopReadingState(smokeScope, smokeDevice);
+  if (syncCore.readDesktopNoteState(JSON.parse(JSON.stringify(noteState)), smokeScope).sync.deviceId !== smokeDevice
+    || syncCore.readDesktopPaperState(JSON.parse(JSON.stringify(paperState)), smokeScope).sync.deviceId !== smokeDevice
+    || syncCore.readDesktopReadingState(JSON.parse(JSON.stringify(readingState)), smokeScope).sync.deviceId !== smokeDevice
+    || readingState.drafts.length || readingState.intents.length) {
+    throw new Error('Packaged desktop exchange state roundtrip failed.');
+  }
+  const exchangeModules = [
+    ['desktopNoteExchange.cjs', 'createDesktopNoteExchange'], ['desktopNoteCopy.cjs', 'desktopNoteCopy'],
+    ['desktopPaperExchange.cjs', 'createDesktopPaperExchange'], ['desktopAccountCommands.cjs', 'createDesktopAccountCommands'],
+    ['savedNoteCapture.cjs', 'createSavedNoteCapture'], ['noteBackupExport.cjs', 'createNoteBackupExporter'],
+    ['paperBackupExport.cjs', 'createPaperBackupExporter'],
+    ['desktopGraphEvidence.cjs', 'createDesktopGraphEvidence'], ['graphEvidenceExport.cjs', 'createGraphEvidenceExporter'],
+    ['desktopReadingPosition.cjs', 'createDesktopReadingPosition'], ['readingBackupExport.cjs', 'createReadingBackupExporter'],
+  ];
+  // NativeFS loads a .node DLL. Keep that DLL in a child so Windows can remove
+  // the isolated extraction only after every holder has exited.
+  const exchangeCheck = spawnSync(process.execPath, ['-e',
+    "const path=require('node:path');const [root,rows]=process.argv.slice(1);for(const [file,name]of JSON.parse(rows)){if(typeof require(path.join(root,'electron','backend',file))[name]!=='function')throw Error('Packaged desktop exchange runtime is missing '+file+':'+name);}console.log('Packaged desktop account, note, paper, graph and reading runtime modules passed.');",
+    extractionRoot, JSON.stringify(exchangeModules)], { stdio: 'inherit', windowsHide: true });
+  if (exchangeCheck.error) throw exchangeCheck.error;
+  if (exchangeCheck.status !== 0) throw new Error('Packaged desktop exchange runtime failed verification.');
   const modelCheck=spawnSync(process.execPath,[path.join(extractionRoot,'electron','modelInferencePackageSmoke.mjs'),extractionRoot],{stdio:'inherit',windowsHide:true});
   if(modelCheck.error)throw modelCheck.error;
   if(modelCheck.status!==0)throw new Error('Packaged model inference runtime failed verification.');

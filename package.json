@@ -56,12 +56,12 @@
     "openid-client": "6.8.8",
     "pdfjs-dist": "4.8.69",
     "pizzip": "^3.2.0",
+    "remark-math": "6.0.0",
     "remark-parse": "^11.0.0",
     "sql.js": "^1.13.0",
     "sqlite-vec": "^0.1.9",
     "temml": "^0.13.3",
-    "unified": "^11.0.5",
-    "remark-math": "6.0.0"
+    "unified": "^11.0.5"
   },
   "devDependencies": {
     "@electron/asar": "^3.4.1",
@@ -83,6 +83,7 @@
     "react-dom": "^18.3.1",
     "react-markdown": "^9.0.1",
     "react-pdf": "9.2.1",
+    "react-test-renderer": "18.3.1",
     "rehype-katex": "^7.0.1",
     "remark-gfm": "^4.0.0",
     "tailwind-merge": "^3.5.0",

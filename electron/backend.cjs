@@ -110,10 +110,10 @@ function createBackend({ app, libraryLocation }) {
       if (!window.webContents.isDestroyed()) window.webContents.send('paperquay:event', 'knowledge-graph:changed', {});
     }
   }
-  const desktopAccount = createDesktopAccountCommands(context, { onGraphChange: notifyGraphProjection, onChange: () => {
+  const desktopAccount = createDesktopAccountCommands(context, { onGraphChange: notifyGraphProjection, onChange: (change = {}) => {
     const { BrowserWindow } = require('electron');
     for (const window of BrowserWindow.getAllWindows()) {
-      if (!window.webContents.isDestroyed()) window.webContents.send('paperquay:event', 'desktop-account:changed', {});
+      if (!window.webContents.isDestroyed()) window.webContents.send('paperquay:event', 'desktop-account:changed', change);
     }
   } });
 

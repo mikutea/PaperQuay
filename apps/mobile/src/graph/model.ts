@@ -2,14 +2,15 @@ import {createKnowledgeGraphCore,type KnowledgeGraphNode,type KnowledgeGraphEdge
 import {type VisibleEntity,type PaperData,type NoteData} from '../../../../packages/sync-core/src/index.ts';
 import {parsedMarkdownText} from '../parsed/aiContext.ts';
 import {reviewFingerprint} from '../review/fingerprint.ts';
+import {graphEvidenceText,type GraphEvidenceView,type GraphEvidenceEdge} from './evidence.ts';
 export type {KnowledgeGraphNode,KnowledgeGraphEdge,KnowledgeGraphSnapshot};
 import {validateGraphRelationData,GRAPH_RELATION_LIMITS,type GraphRelationData} from '../../../../packages/sync-core/src/graphRelation.ts';
 export const graphCore=createKnowledgeGraphCore();
 export const GRAPH_LIMITS={items:2000,nodes:6000,edges:50000,page:40,visualNeighbors:8,exportBytes:8*1024*1024,coAuthorComparisons:50000} as const;
 export class GraphError extends Error {constructor(readonly code:'LIMIT'|'CHANGED'|'EXPORT_LIMIT'|'COAUTHOR_LIMIT'){super(code);this.name='GraphError';}}
 export interface GraphScope {tag:string;collection:string}
-export interface GraphSelection extends GraphScope {search:string;includePapers:boolean;includeNotes:boolean;includeTags:boolean;includeCategories:boolean;includeCoAuthors:boolean;includeCustomRelations:boolean;localNodeId:string;localDepth:number}
-export const defaultGraphSelection=():GraphSelection=>({tag:'',collection:'',search:'',includePapers:true,includeNotes:true,includeTags:true,includeCategories:true,includeCoAuthors:false,includeCustomRelations:true,localNodeId:'',localDepth:1});
+export interface GraphSelection extends GraphScope {search:string;includePapers:boolean;includeNotes:boolean;includeTags:boolean;includeCategories:boolean;includeCoAuthors:boolean;includeCustomRelations:boolean;includeReferences:boolean;includeEmbeddingEdges:boolean;localNodeId:string;localDepth:number}
+export const defaultGraphSelection=():GraphSelection=>({tag:'',collection:'',search:'',includePapers:true,includeNotes:true,includeTags:true,includeCategories:true,includeCoAuthors:false,includeCustomRelations:true,includeReferences:true,includeEmbeddingEdges:true,localNodeId:'',localDepth:1});
 const live=(e:VisibleEntity)=>!e.deleted&&e.data&&(e.entityType==='paper'||e.entityType==='note');
 export function graphScopeOptions(entities:readonly VisibleEntity[]){
  const tags=new Set<string>(),collections=new Set<string>();
@@ -37,15 +38,26 @@ export function graphProjection(entities:readonly VisibleEntity[],scope:GraphSco
  const identity=reviewFingerprint({scope,library,notes:projectedNotes,customRelations});
  return{context,identity,customRelations,itemCount:papers.length+notes.length,paperCount:papers.length,noteCount:notes.length};
 }
-export interface GraphResult {snapshot:KnowledgeGraphSnapshot;identity:string;selection:GraphSelection;itemCount:number;paperCount:number;noteCount:number}
-export function buildMobileGraph(entities:readonly VisibleEntity[],selection:GraphSelection):GraphResult{
- const projected=graphProjection(entities,selection),request:KnowledgeGraphRequest={...selection,includeReferences:false,includeCustomRelations:selection.includeCustomRelations,includeEmbeddingEdges:false,localNodeId:undefined,search:selection.search.trim().toLowerCase()};
+export interface GraphEvidenceProof {snapshotDigest:string;createdAt:string;edge:GraphEvidenceEdge;source:GraphEvidenceView['adoption']['snapshot']['sources'][number];target:GraphEvidenceView['adoption']['snapshot']['sources'][number]}
+export interface GraphResult {snapshot:KnowledgeGraphSnapshot;identity:string;selection:GraphSelection;itemCount:number;paperCount:number;noteCount:number;sourceEvidence:GraphEvidenceView|null;evidenceByEdgeId:Record<string,GraphEvidenceProof>}
+export function buildMobileGraph(entities:readonly VisibleEntity[],selection:GraphSelection,sourceEvidence:GraphEvidenceView|null=null):GraphResult{
+ const projected=graphProjection(entities,selection),request:KnowledgeGraphRequest={...selection,includeReferences:false,includeCustomRelations:selection.includeCustomRelations,includeEmbeddingEdges:false,localNodeId:undefined,search:''};
  if(selection.includeCoAuthors){const counts=new Map<string,Set<string>>();for(const paper of projected.context.store.load().papers)for(const a of paper.authors){const key=graphCore.normalizeAuthorKey(a.name);if(key.length<2)continue;const group=counts.get(key)??new Set<string>();group.add(paper.id);counts.set(key,group);}let pairs=0;for(const group of counts.values())if(group.size>=2&&group.size<=80){pairs+=group.size*(group.size-1)/2;if(pairs>GRAPH_LIMITS.coAuthorComparisons)throw new GraphError('COAUTHOR_LIMIT');}}
  let snapshot=createKnowledgeGraphCore({listCustomRelations:()=>projected.customRelations}).createKnowledgeGraphSnapshot(projected.context,request);
+ const evidenceByEdgeId:Record<string,GraphEvidenceProof>={};
+ if(sourceEvidence){const nodes=new Set(snapshot.nodes.map(n=>n.id)),sources=new Map(sourceEvidence.adoption.snapshot.sources.map(row=>[row.paperId,row]));
+  for(const edge of sourceEvidence.edges){if(edge.kind==='citation'&&!selection.includeReferences||edge.kind==='similarity'&&!selection.includeEmbeddingEdges)continue;
+   const source=graphCore.paperNodeId(edge.sourcePaperId),target=graphCore.paperNodeId(edge.targetPaperId);if(!nodes.has(source)||!nodes.has(target))continue;
+   const id='evidence:'+sourceEvidence.adoption.snapshot.digest+':'+edge.id;
+   snapshot.edges.push({id,source,target,type:edge.kind==='citation'?'paper_cites_paper':'related_by_embedding',label:edge.kind==='citation'?'cites':'similar',description:graphEvidenceText(edge),weight:edge.kind==='citation' ? .78 : edge.score});
+   evidenceByEdgeId[id]={snapshotDigest:sourceEvidence.adoption.snapshot.digest,createdAt:sourceEvidence.adoption.snapshot.createdAt,edge,source:sources.get(edge.sourcePaperId)!,target:sources.get(edge.targetPaperId)!};
+  }
+ }
  if(snapshot.nodes.length>GRAPH_LIMITS.nodes||snapshot.edges.length>GRAPH_LIMITS.edges)throw new GraphError('LIMIT');
+ const search=selection.search.trim().toLowerCase();if(search){const matched=new Set(snapshot.nodes.filter(node=>graphCore.matchesSearch(node,search)).map(node=>node.id)),neighbors=new Set(matched);for(const edge of snapshot.edges){if(matched.has(edge.source))neighbors.add(edge.target);if(matched.has(edge.target))neighbors.add(edge.source);}snapshot={...snapshot,nodes:snapshot.nodes.filter(node=>neighbors.has(node.id)),edges:snapshot.edges.filter(edge=>neighbors.has(edge.source)&&neighbors.has(edge.target))};}
  // A missing local center must not silently expand to the global graph.
  if(selection.localNodeId)snapshot=snapshot.nodes.some(n=>n.id===selection.localNodeId)?graphCore.filterLocalGraph(snapshot,selection.localNodeId,selection.localDepth):{...snapshot,nodes:[],edges:[]};
- return{snapshot,identity:projected.identity,selection:{...selection},itemCount:projected.itemCount,paperCount:projected.paperCount,noteCount:projected.noteCount};
+ return{snapshot,identity:sourceEvidence?reviewFingerprint({library:projected.identity,evidence:sourceEvidence.identity}):projected.identity,selection:{...selection},itemCount:projected.itemCount,paperCount:projected.paperCount,noteCount:projected.noteCount,sourceEvidence,evidenceByEdgeId};
 }
 export function graphNeighbors(snapshot:KnowledgeGraphSnapshot,nodeId:string){
  const nodes=new Map(snapshot.nodes.map(n=>[n.id,n]));return snapshot.edges.filter(e=>e.source===nodeId||e.target===nodeId).map(edge=>({edge,node:nodes.get(edge.source===nodeId?edge.target:edge.source)!})).filter(x=>x.node);
@@ -62,5 +74,6 @@ export function graphEdgeEvidence(edge:KnowledgeGraphEdge):string{
  return edge.description??edgeLabels[edge.type];
 }
 export function exportGraph(result:GraphResult):string{
- const output=JSON.stringify({format:'paperquay-knowledge-graph',version:1,generatedAt:result.snapshot.generatedAt,selection:result.selection,sourceIdentity:result.identity,sourceItems:result.itemCount,nodeCount:result.snapshot.nodes.length,edgeCount:result.snapshot.edges.length,coverage:{source:'current-account-visible-copy',collectionIdentity:'synchronized-name',supported:['paper','note','tag','collection','note-links','co-author','custom-relations','approved-ai-relations'],unavailable:['desktop-private-reference-cache','embedding-edges']},nodes:result.snapshot.nodes,edges:result.snapshot.edges.map(edge=>({...edge,evidence:graphEdgeEvidence(edge)}))},null,2);if(new TextEncoder().encode(output).byteLength>GRAPH_LIMITS.exportBytes)throw new GraphError('EXPORT_LIMIT');return output;
+ const hasReferences=Boolean(result.sourceEvidence?.adoption.snapshot.coverage.referenceCache),hasVectors=Boolean(result.sourceEvidence?.adoption.snapshot.coverage.vectorCache);
+ const output=JSON.stringify({format:'paperquay-knowledge-graph',version:1,generatedAt:result.snapshot.generatedAt,selection:result.selection,sourceIdentity:result.identity,sourceItems:result.itemCount,nodeCount:result.snapshot.nodes.length,edgeCount:result.snapshot.edges.length,coverage:{source:'current-account-visible-copy',collectionIdentity:'synchronized-name',supported:['paper','note','tag','collection','note-links','co-author','custom-relations','approved-ai-relations',...(hasReferences?['desktop-private-reference-cache']:[]),...(hasVectors?['embedding-edges']:[])],unavailable:[...(!hasReferences?['desktop-private-reference-cache']:[]),...(!hasVectors?['embedding-edges']:[])],...(result.sourceEvidence?{privateCache:{snapshotDigest:result.sourceEvidence.adoption.snapshot.digest,createdAt:result.sourceEvidence.adoption.snapshot.createdAt,adoptedAt:result.sourceEvidence.adoption.adoptedAt,hiddenEdges:result.sourceEvidence.hiddenEdges,versionPolicy:'historical-cache-unverified-pdf'}}:{})},nodes:result.snapshot.nodes,edges:result.snapshot.edges.map(edge=>({...edge,evidence:graphEdgeEvidence(edge),...(result.evidenceByEdgeId[edge.id]?{sourceProof:result.evidenceByEdgeId[edge.id]}:{})}))},null,2);if(new TextEncoder().encode(output).byteLength>GRAPH_LIMITS.exportBytes)throw new GraphError('EXPORT_LIMIT');return output;
 }

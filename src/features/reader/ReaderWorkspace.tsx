@@ -12,6 +12,7 @@ import {
   type ReaderWorkspaceDocument,
 } from './readerWorkspaceShared';
 import type { Note } from '../../types/notes';
+import type { DesktopReadingReaderAccess } from '../../services/desktopReadingReader';
 import type {
   DocumentChatAttachment,
   BlockTextMark,
@@ -109,6 +110,8 @@ interface ReaderWorkspaceProps {
   onTranslateDocument: () => void;
   onCancelTranslateDocument: () => void;
   onOpenPreferences: () => void;
+  onOpenAccountReading?: () => void;
+  onAccountReadingAccess?: (access: DesktopReadingReaderAccess | null) => void;
   notes: Note[];
   onAddSelectionToNote: () => void;
   annotations: PaperAnnotation[];
@@ -372,6 +375,7 @@ function ReadingStage(props: ReaderWorkspaceProps & { immersiveReading: boolean 
               onAnnotationSelect={onSelectAnnotation}
               onTextSelect={handlePdfTextSelect}
               onScrollPositionChange={onPdfScrollPositionChange}
+              onAccountReadingAccess={props.onAccountReadingAccess}
               onReadingHeatmapChange={onPdfReadingHeatmapChange}
               onSaveSuccess={onPdfAnnotationSaveSuccess}
             />
@@ -563,6 +567,7 @@ function ReaderWorkspace(props: ReaderWorkspaceProps) {
           onTranslateDocument={onTranslateDocument}
           onCancelTranslateDocument={onCancelTranslateDocument}
           onOpenPreferences={onOpenPreferences}
+          onOpenAccountReading={props.onOpenAccountReading}
           onEnterImmersive={() => setImmersiveReading(true)}
         />
       ) : null}

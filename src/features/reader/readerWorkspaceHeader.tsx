@@ -11,6 +11,7 @@ import {
   FileText,
   Languages,
   Maximize2,
+  MonitorSmartphone,
   MoreHorizontal,
   Settings2,
   Sparkles,
@@ -47,6 +48,7 @@ export interface ReaderWorkspaceHeaderProps {
   onTranslateDocument: () => void;
   onCancelTranslateDocument: () => void;
   onOpenPreferences: () => void;
+  onOpenAccountReading?: () => void;
   onEnterImmersive: () => void;
 }
 
@@ -315,6 +317,7 @@ function HeaderToolsMenu({
   onTranslateDocument,
   onCancelTranslateDocument,
   onOpenPreferences,
+  onOpenAccountReading,
 }: Pick<
   ReaderWorkspaceHeaderProps,
   | 'loading'
@@ -325,6 +328,7 @@ function HeaderToolsMenu({
   | 'onTranslateDocument'
   | 'onCancelTranslateDocument'
   | 'onOpenPreferences'
+  | 'onOpenAccountReading'
 >) {
   const l = useLocaleText();
   const [toolbarOpen, setToolbarOpen] = useState(false);
@@ -340,7 +344,7 @@ function HeaderToolsMenu({
     }
 
     const menuWidth = 224;
-    const estimatedMenuHeight = 196;
+    const estimatedMenuHeight = onOpenAccountReading ? 244 : 196;
     const margin = 12;
     const gap = 8;
     const left = Math.min(
@@ -353,7 +357,7 @@ function HeaderToolsMenu({
       : Math.max(margin, rect.top - estimatedMenuHeight - gap);
 
     setMenuStyle({ left, top });
-  }, []);
+  }, [onOpenAccountReading]);
 
   useEffect(() => {
     if (!toolbarOpen) {
@@ -400,6 +404,13 @@ function HeaderToolsMenu({
       style={menuStyle}
     >
       {[
+        ...(onOpenAccountReading ? [{
+          label: l('跨设备阅读位置', 'Reading positions across devices'),
+          icon: <MonitorSmartphone className="h-4 w-4" strokeWidth={1.8} />,
+          onClick: () => { buttonRef.current?.focus({ preventScroll: true }); onOpenAccountReading(); },
+          disabled: loading,
+          tone: 'default',
+        }] : []),
         {
           label: l('打开 JSON', 'Open JSON'),
           icon: <FileJson className="h-4 w-4" strokeWidth={1.8} />,
@@ -444,7 +455,7 @@ function HeaderToolsMenu({
           }}
           disabled={action.disabled}
           className={cn(
-            'flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-50',
+            'flex min-h-11 w-full items-center gap-3 rounded-xl px-3 py-2 text-sm transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-50',
             action.tone === 'danger'
               ? 'text-rose-600 hover:bg-rose-50 dark:text-rose-300 dark:hover:bg-rose-400/10'
               : 'text-slate-700 hover:bg-slate-50 dark:text-[var(--pq-text-muted)] dark:hover:bg-[var(--pq-surface-2)]',
@@ -498,6 +509,7 @@ export function ReaderWorkspaceHeader({
   onTranslateDocument,
   onCancelTranslateDocument,
   onOpenPreferences,
+  onOpenAccountReading,
   onEnterImmersive,
 }: ReaderWorkspaceHeaderProps) {
   const l = useLocaleText();
@@ -605,6 +617,7 @@ export function ReaderWorkspaceHeader({
             onTranslateDocument={onTranslateDocument}
             onCancelTranslateDocument={onCancelTranslateDocument}
             onOpenPreferences={onOpenPreferences}
+            onOpenAccountReading={onOpenAccountReading}
           />
         </div>
       </div>

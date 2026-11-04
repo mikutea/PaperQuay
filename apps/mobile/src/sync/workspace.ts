@@ -1,4 +1,5 @@
 import {assertGraphRelationPlan,type GraphRelationPlan} from '../graph/relations.ts';
+import { readRetrievalSession, beginRetrievalSession, assertRetrievalSourcesCurrent, type RetrievalSession } from '../retrieval/session.ts';
 import type {ModelLedgerOwner} from '../modelRouting/ledger.ts';
 import {emptyModelLedger,readModelLedger,verifyModelLedger} from '../modelRouting/ledger.ts';
 import { validateAgentMetadataSession, beginAgentMetadataQuery, assertAgentMetadataCurrent, buildAgentMetadataProposal, metadataPublicationKey, markAgentMetadataPublished, type AgentMetadataSession, type AgentMetadataChoice } from '../agent/metadataSession.ts';
@@ -86,6 +87,7 @@ import {
   type ExternalLibrarySummary,
 } from '../library/externalLibrary.ts';
 import type { AccountStorage, AccountScope } from '../storage/accountStore.ts';
+import { readStoredGraphEvidence, readGraphEvidenceAdoption, graphEvidenceAdoptionKey, assertGraphEvidenceAccount, assertGraphEvidenceSelection, type GraphEvidenceAdoption, type GraphEvidenceSnapshot } from '../graph/evidence.ts';
 import { validateRemoteTaskRequest, type RemoteTaskRequest } from '../../../../packages/sync-core/src/remoteTasks.ts';
 import { validateZoteroRefreshResult, type ZoteroRefreshResult } from '../library/zoteroRefresh.ts';
 import { validateZoteroLibraryState, updateZoteroCursor, zoteroCursor, type ZoteroLibraryState } from '../library/zoteroState.ts';
@@ -124,6 +126,10 @@ export interface StoredWorkspace {
   incomingReceipts?: IncomingImportReceipt[];
   /** Private model identity/result ledger; never sent through the sync outbox. */
   modelInvocations?: import('../modelRouting/ledger.ts').ModelInvocationLedger;
+  /** One private read-only search request and its integrity-checked receipt. */
+  retrievalSession?: RetrievalSession;
+  /** Explicitly selected desktop cache evidence; private to this account/device, never sync outbox content. */
+  graphEvidence?: GraphEvidenceAdoption;
 }
 export interface WorkspaceSnapshot {
   status: 'signed-out' | 'binding' | 'ready' | 'error';
@@ -148,7 +154,7 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
 export function decodeWorkspace(value: unknown): StoredWorkspace {
   if (
     !isObject(value) ||
-    Object.keys(value).some((key) => !['sync', 'pendingResolutions', 'paperOrganizationVersion','richNotesVersion','aiConversationsVersion','graphRelationsVersion', 'externalLibraries','remoteTaskIntent','remoteBatch','zoteroLibraries','incomingReceipts','reviewProject','radarState','agentState','agentConversation','agentMetadataSession','agentMetadataCooldownUntil','modelInvocations'].includes(key)) ||
+    Object.keys(value).some((key) => !['sync', 'pendingResolutions', 'paperOrganizationVersion','richNotesVersion','aiConversationsVersion','graphRelationsVersion', 'externalLibraries','remoteTaskIntent','remoteBatch','zoteroLibraries','incomingReceipts','reviewProject','radarState','agentState','agentConversation','agentMetadataSession','agentMetadataCooldownUntil','modelInvocations','retrievalSession','graphEvidence'].includes(key)) ||
     (value.paperOrganizationVersion !== undefined && value.paperOrganizationVersion !== 1) ||
     (value.graphRelationsVersion!==undefined&&value.graphRelationsVersion!==1)||
     (value.richNotesVersion!==undefined&&value.richNotesVersion!==1)||(value.aiConversationsVersion!==undefined&&value.aiConversationsVersion!==1)||
@@ -171,6 +177,8 @@ export function decodeWorkspace(value: unknown): StoredWorkspace {
     if (value.remoteTaskIntent !== undefined) throw new ClientError('STORAGE_CORRUPT');
   }
   if(value.modelInvocations!==undefined){try{readModelLedger(value.modelInvocations);}catch{throw new ClientError('STORAGE_CORRUPT');}}
+  if(value.retrievalSession!==undefined){try{readRetrievalSession(value.retrievalSession);}catch{throw new ClientError('STORAGE_CORRUPT');}}
+  if(value.graphEvidence!==undefined){try{if(readGraphEvidenceAdoption(value.graphEvidence).snapshot.accountId!==(value.sync as AccountSyncState).accountId)throw Error();}catch{throw new ClientError('STORAGE_CORRUPT');}}
   if(value.agentMetadataCooldownUntil!==undefined&&(!Number.isSafeInteger(value.agentMetadataCooldownUntil)||Number(value.agentMetadataCooldownUntil)<0||Number(value.agentMetadataCooldownUntil)>253402300799999))throw new ClientError('STORAGE_CORRUPT');
   if(value.agentMetadataSession!==undefined){try{validateAgentMetadataSession(value.agentMetadataSession);}catch{throw new ClientError('STORAGE_CORRUPT');}}
   if(value.agentConversation!==undefined){try{validateAgentConversation(value.agentConversation);}catch{throw new ClientError('STORAGE_CORRUPT');}}
@@ -230,13 +238,13 @@ export function decodeWorkspace(value: unknown): StoredWorkspace {
 export function externalLibraryEntities(workspace: StoredWorkspace): VisibleEntity[] {
   const blocked = new Set<string>();
   for (const conflict of Object.values(workspace.sync.conflicts)) {
-    if (conflict.attempted.entityType === 'paper') blocked.add(conflict.attempted.entityId);
-    if (conflict.current?.entityType === 'paper') blocked.add(conflict.current.entityId);
+    if (['paper','attachmentVersion'].includes(conflict.attempted.entityType)) blocked.add(conflict.attempted.entityType+':'+conflict.attempted.entityId);
+    if (conflict.current&&['paper','attachmentVersion'].includes(conflict.current.entityType)) blocked.add(conflict.current.entityType+':'+conflict.current.entityId);
   }
   for (const resolution of Object.values(workspace.pendingResolutions)) {
-    if (resolution.entityType === 'paper') blocked.add(resolution.entityId);
+    if (['paper','attachmentVersion'].includes(resolution.entityType)) blocked.add(resolution.entityType+':'+resolution.entityId);
   }
-  return listVisibleEntities(workspace.sync).map((entity) => entity.entityType === 'paper' && blocked.has(entity.entityId)
+  return listVisibleEntities(workspace.sync).map((entity) => blocked.has(entity.entityType+':'+entity.entityId)
     ? { ...entity, pending: true, status: 'conflict' as const } : entity);
 }
 
@@ -664,6 +672,64 @@ export class WorkspaceController {
       else if(!old||old.id!==expected.id||old.revision!==expected.revision||(conversation.id===old.id?conversation.revision!==old.revision+1:conversation.revision!==1))throw new ClientError('EDIT_CHANGED');
       return{...value,agentConversation:conversation};
     });return next.agentConversation!;
+  }
+
+  prepareGraphEvidenceFile(input:unknown):GraphEvidenceSnapshot{
+    this.assertBinding(this.epoch);if(!this.scope||this.snapshot.status!=='ready')throw new ClientError('ACCOUNT_CHANGED');
+    const snapshot=readStoredGraphEvidence(input);assertGraphEvidenceAccount(snapshot,this.scope);return snapshot;
+  }
+  async refreshGraphEvidence():Promise<GraphEvidenceAdoption|null>{
+    const scope=this.scope;if(!scope)throw new ClientError('ACCOUNT_CHANGED');
+    const next=await this.update(this.epoch,value=>{if(value.graphEvidence)assertGraphEvidenceAccount(value.graphEvidence.snapshot,scope);return value;});return next.graphEvidence??null;
+  }
+  /** Import only the exact selected cache edges, after checking sources inside the storage transaction. */
+  async adoptGraphEvidence(input:GraphEvidenceSnapshot,edgeIds:readonly string[],expected:string|null,guard:()=>boolean=()=>true):Promise<GraphEvidenceAdoption>{
+    const snapshot=readStoredGraphEvidence(input),scope=this.scope,epoch=this.epoch;if(!scope)throw new ClientError('ACCOUNT_CHANGED');assertGraphEvidenceAccount(snapshot,scope);
+    const adoption=readGraphEvidenceAdoption({version:1,snapshot,edgeIds:[...edgeIds],adoptedAt:this.now()}),desired=graphEvidenceAdoptionKey(adoption);
+    const next=await this.update(epoch,value=>{
+      if(!guard())throw new ClientError('ACCOUNT_CHANGED');
+      if(graphEvidenceAdoptionKey(value.graphEvidence)===desired)return value;
+      if(graphEvidenceAdoptionKey(value.graphEvidence)!==expected)throw new ClientError('EDIT_CHANGED');
+      try{assertGraphEvidenceSelection(snapshot,adoption.edgeIds,value);}catch{throw new ClientError('EDIT_CHANGED');}
+      return{...value,graphEvidence:adoption};
+    });return next.graphEvidence!;
+  }
+  async clearGraphEvidence(expected:string,guard:()=>boolean=()=>true):Promise<void>{
+    await this.update(this.epoch,value=>{if(!guard())throw new ClientError('ACCOUNT_CHANGED');if(!value.graphEvidence)return value;
+      if(graphEvidenceAdoptionKey(value.graphEvidence)!==expected)throw new ClientError('EDIT_CHANGED');const{graphEvidence:_evidence,...rest}=value;return rest;});
+  }
+
+  async refreshRetrievalSession():Promise<RetrievalSession|null>{const next=await this.update(this.epoch,value=>value);return next.retrievalSession??null;}
+  async saveRetrievalSession(input:RetrievalSession,expected:{requestId:string;revision:number}|null,guard:()=>boolean=()=>true):Promise<RetrievalSession>{
+    const session=readRetrievalSession(input),epoch=this.epoch;
+    const next=await this.update(epoch,value=>{
+      if(!guard())throw new ClientError('ACCOUNT_CHANGED');const old=value.retrievalSession;
+      if(old&&canonicalJson(old)===canonicalJson(session))return value;
+      if(expected===null){if(old||session.revision!==1)throw new ClientError('EDIT_CHANGED');}
+      else if(!old||old.request.requestId!==expected.requestId||old.revision!==expected.revision
+        ||(old.request.requestId===session.request.requestId?session.revision!==old.revision+1:session.revision!==1||old.status==='uncertain'))throw new ClientError('EDIT_CHANGED');
+      if(old&&old.request.requestId===session.request.requestId){
+        if(canonicalJson(old.request)!==canonicalJson(session.request)||old.receipt&&session.receipt?.resultDigest!==old.receipt.resultDigest
+          ||!({prepared:[],uncertain:['absent','complete','removed'],absent:['absent','removed'],complete:['complete','removed'],removed:['removed']}[old.status] as string[]).includes(session.status))throw new ClientError('EDIT_CHANGED');
+      }
+      return{...value,retrievalSession:session};
+    });return next.retrievalSession!;
+  }
+  /** The original request is durably marked unknown before a network action. */
+  async beginRetrievalRequest(expected:{requestId:string;revision:number},guard:()=>boolean=()=>true):Promise<RetrievalSession>{
+    const epoch=this.epoch;const next=await this.update(epoch,value=>{
+      if(!guard())throw new ClientError('ACCOUNT_CHANGED');const old=value.retrievalSession;
+      if(!old||old.request.requestId!==expected.requestId||old.revision!==expected.revision)throw new ClientError('EDIT_CHANGED');
+      try{assertRetrievalSourcesCurrent(old.request,value.sync,value.pendingResolutions);}catch{throw new ClientError('EDIT_CHANGED');}
+      return{...value,retrievalSession:beginRetrievalSession(old)};
+    });return next.retrievalSession!;
+  }
+  async clearRetrievalSession(expected:{requestId:string;revision:number},guard:()=>boolean=()=>true):Promise<void>{
+    await this.update(this.epoch,value=>{
+      if(!guard())throw new ClientError('ACCOUNT_CHANGED');const old=value.retrievalSession;
+      if(!old||old.request.requestId!==expected.requestId||old.revision!==expected.revision||old.status==='uncertain')throw new ClientError('EDIT_CHANGED');
+      const{retrievalSession:_session,...rest}=value;return rest;
+    });
   }
   /** A paid request cannot begin until this uncertain intent is durably acknowledged. No replay of an unknown model call. */
   async beginAgentConversationTurn(input:AgentModelRequest,provider:AiProviderConfig,expected:{id:string;revision:number},guard:()=>boolean=()=>true):Promise<AgentConversation>{

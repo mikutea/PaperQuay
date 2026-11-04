@@ -7,6 +7,10 @@ const { validStunUrls } = require('./desktopPeerHost.cjs');
 const { createDesktopRemoteTasks } = require('./desktopRemoteTasks.cjs');
 const { createDesktopModels } = require('./desktopModels.cjs');
 const { createDesktopGraphExchange } = require('./desktopGraphExchange.cjs');
+const { createDesktopNoteExchange } = require('./desktopNoteExchange.cjs');
+const { createDesktopPaperExchange } = require('./desktopPaperExchange.cjs');
+const { createDesktopGraphEvidence } = require('./desktopGraphEvidence.cjs');
+const { createDesktopReadingPosition } = require('./desktopReadingPosition.cjs');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const HASH = /^[0-9a-f]{64}$/;
@@ -27,10 +31,11 @@ const KNOWN_ERRORS = new Set(['AUTHENTICATION_REQUIRED', 'AUTH_REQUIRED', 'AUTH_
   'DESKTOP_PDF_TRANSFER_BUSY', 'REQUEST_TOO_LARGE', 'PDF_INTEGRITY_MISMATCH', 'INVALID_PDF', 'DESKTOP_PDF_TIMEOUT',
   'DESKTOP_PDF_DIRECT_FALLBACK', 'IDENTITY_PROVIDER_UNAVAILABLE', 'SERVICE_UNAVAILABLE', 'RATE_LIMITED', 'NETWORK_UNAVAILABLE', 'REQUEST_TIMEOUT',
   'ACCOUNT_STORAGE_LIMIT', 'ACCOUNT_ENTITY_LIMIT', 'ACCOUNT_CHANGE_LIMIT', 'ACCOUNT_RECEIPT_LIMIT', 'CONFLICT',
-  'LOCAL_CAPACITY_EXCEEDED', 'ENTITY_ALREADY_EXISTS', 'INVALID_DESKTOP_SOURCE', 'INVALID_PAPER_METADATA', 'INVALID_ATTACHMENT_METADATA', 'INVALID_GRAPH_MAPPING', 'INVALID_DESKTOP_GRAPH_RELATION', 'UNMAPPED_GRAPH_ENDPOINT']);
+  'LOCAL_CAPACITY_EXCEEDED', 'ENTITY_ALREADY_EXISTS', 'INVALID_DESKTOP_SOURCE', 'INVALID_PAPER_METADATA', 'INVALID_ATTACHMENT_METADATA', 'INVALID_GRAPH_MAPPING', 'INVALID_DESKTOP_GRAPH_RELATION', 'UNMAPPED_GRAPH_ENDPOINT',
+  'UNMAPPED_NOTE_PAPER', 'SOURCE_TOO_LARGE', 'INVALID_NOTE_SELECTION', 'INVALID_SAVED_SOURCE']);
 function publicError(error) {
   const code = error?.code || error?.message;
-  return typeof code === 'string' && (/^(?:DESKTOP_|REMOTE_|MODEL_|GRAPH_)[A-Z0-9_]{1,64}$/.test(code) || ['PROFILE_CHANGED', 'SOURCE_UNAVAILABLE', 'EXTERNAL_OUTCOME_UNKNOWN'].includes(code) || KNOWN_ERRORS.has(code)) ? code : 'DESKTOP_OPERATION_FAILED';
+  return typeof code === 'string' && (/^(?:DESKTOP_|REMOTE_|MODEL_|GRAPH_|NOTE_|PAPER_|READING_)[A-Z0-9_]{1,64}$/.test(code) || ['PROFILE_CHANGED', 'SOURCE_UNAVAILABLE', 'EXTERNAL_OUTCOME_UNKNOWN'].includes(code) || KNOWN_ERRORS.has(code)) ? code : 'DESKTOP_OPERATION_FAILED';
 }
 function normalizeUrl(value) {
   if (typeof value !== 'string' || value.length > 2048 || value !== value.trim()) fail('DESKTOP_CONFIG_INVALID');
@@ -86,7 +91,8 @@ function createDesktopAccountCommands(context, options = {}) {
   const fetcher = options.fetch || ((...args) => fetch(...args));
   const allocateId = options.randomUUID || randomUUID;
   const now = options.now || Date.now;
-  const notify = () => { try { options.onChange?.(); } catch {} try { options.onGraphChange?.(); } catch {} };
+  let reading;
+  const notify = () => { try { options.onChange?.({ readingScopeKey: reading?.status().scopeKey ?? null }); } catch {} try { options.onGraphChange?.(); } catch {} };
   const privateRoot = path.join(path.dirname(context.appPaths.configPath), 'account-sync');
   const configPath = path.join(privateRoot, 'config.json');
   let config = null, account = null, capability = null, enabled = false, lastError = null, closed = false;
@@ -163,7 +169,7 @@ function createDesktopAccountCommands(context, options = {}) {
     return { config: config && { ...config }, auth: safeAuth, account: account && { ...account }, enabled, busy: busy > 0,
       capability: capability && { ...capability, ...(capability.direct ? { direct: { ...capability.direct, stunUrls: [...capability.direct.stunUrls] } } : {}) },
       bindings: (currentLibrary()?.bindings || []).filter((item) => !item.removed).map(publicBinding),
-      transfers: provider.snapshot(), remoteTasks: remoteTasks.status(), modelInference: models.status(), graphExchange: graph.status(), errorCode: lastError };
+      transfers: provider.snapshot(), remoteTasks: remoteTasks.status(), modelInference: models.status(), graphExchange: graph.status(), noteExchange: notes.status(), paperExchange: papers.status(), graphEvidence: graphEvidence.status(), readingPosition: reading.status(), errorCode: lastError };
   }
   function activeBinding(versionId) {
     if (!enabled || !account) return null;
@@ -178,16 +184,16 @@ function createDesktopAccountCommands(context, options = {}) {
   }
   function invalidateSession(code) {
     if (closed) return;
-    void remoteTasks.stop(); void models.stop(); graph.invalidate();
+    void remoteTasks.stop(); void models.stop(); graph.invalidate(); notes.invalidate(); papers.invalidate(); graphEvidence.invalidate(); reading.invalidate();
     enabled = false; providerIntent++; provider.stop(); epoch++; sessionController.abort(); sessionController = new AbortController();
     for (const controller of bindingControllers.values()) controller.abort();
     account = null; capability = null; document = null; libraryBindingId = null; scopePath = null; sourceErrors.clear();
     lastError = code; notify();
     void Promise.resolve(auth?.signOut()).catch(() => {});
     const ownedLock = lock; lock = null;
-    pendingCleanup = Promise.allSettled([pendingCleanup, mutations, actions, loginTask, remoteTasks.settled(), models.settled(), graph.settled()]).then(() => releaseLock(ownedLock));
+    pendingCleanup = Promise.allSettled([pendingCleanup, mutations, actions, loginTask, remoteTasks.settled(), models.settled(), graph.settled(), notes.settled(), papers.settled(), reading.settled()]).then(() => releaseLock(ownedLock));
   }
-  async function request(route, { method = 'GET', body, signal, timeoutMs = 30_000, raw = false, minimumExpiry = 0, remoteHeaders, graphRelations = false } = {}) {
+  async function request(route, { method = 'GET', body, signal, timeoutMs = 30_000, raw = false, minimumExpiry = 0, remoteHeaders, graphRelations = false, richNotes = false, paperOrganization = false } = {}) {
     if (!config) fail('DESKTOP_CONFIG_REQUIRED');
     const captured = epoch, settings = config;
     assertEpoch(captured);
@@ -211,7 +217,7 @@ function createDesktopAccountCommands(context, options = {}) {
       }
       const response = await fetcher(`${settings.apiBaseUrl}${route}`, {
         method, headers: { Authorization: `Bearer ${token}`, Accept: 'application/json',
-          ...(graphRelations ? { [syncCore().SYNC_FEATURE_HEADER]: syncCore().GRAPH_RELATIONS_FEATURE } : {}),
+          ...(graphRelations || richNotes || paperOrganization ? { [syncCore().SYNC_FEATURE_HEADER]: [graphRelations && syncCore().GRAPH_RELATIONS_FEATURE, richNotes && syncCore().RICH_NOTES_FEATURE, paperOrganization && syncCore().PAPER_ORGANIZATION_FEATURE].filter(Boolean).join(',') } : {}),
           ...(body !== undefined ? raw ? { 'Content-Type': remoteHeaders ? 'application/octet-stream' : 'application/pdf', 'Content-Length': String(body.length) }
             : { 'Content-Type': 'application/json' } : {}), ...(remoteHeaders ? {
               'X-PaperQuay-Remote-Attempt': remoteHeaders['X-PaperQuay-Remote-Attempt'],
@@ -248,7 +254,6 @@ function createDesktopAccountCommands(context, options = {}) {
     const target = parseTarget(await request(`/v1/desktop-pdfs/versions/${binding.attachmentVersionId}`, { signal }));
     if (target.version.entityId !== binding.attachmentVersionId || target.paper.entityId !== binding.paperId ||
         target.version.data.sha256 !== binding.sha256 || target.version.data.sizeBytes !== binding.sizeBytes) fail('DESKTOP_PDF_CHANGED');
-    return target;
     return target;
   }
   const provider = createDesktopPdfProvider({
@@ -342,15 +347,113 @@ function createDesktopAccountCommands(context, options = {}) {
       const paperIds = papers.map(item => item.id);
       const livePapers = new Set(paperIds);
       return {
-        bindings: value.library.bindings.filter(item => !item.removed && livePapers.has(item.localPaperId)
+        bindings: [...value.library.bindings.filter(item => !item.removed && livePapers.has(item.localPaperId)
           && bindingStatus(item, value.library).publicationStatus === 'published')
           .map(item => ({ entityType: 'paper', localId: item.localPaperId, entityId: item.paperId })),
+          ...notes.bindings().map(item => ({ entityType: 'note', localId: item.localNoteId, entityId: item.entityId }))],
         live: { paperIds, noteIds: (context.noteStore.listAllNotes?.() || []).map(item => item.id) },
       };
     },
     api(_snapshot, input) { return request(input.path, {
       method: input.method, body: input.body, signal: input.signal, graphRelations: true,
     }); },
+  });
+
+  const notes = createDesktopNoteExchange(context, {
+    core: syncCore(), onChange: notify, ...options.notes,
+    getContext: () => ({ config, account, epoch, library: currentLibrary() }),
+    checkContext(value) {
+      assertEpoch(value.epoch); requireAccount();
+      if (value.library.libraryBindingId !== libraryBindingId || value.account.accountId !== account.accountId || value.account.deviceId !== account.deviceId) fail('DESKTOP_OPERATION_CANCELLED');
+      assertLibraryAnchor(context, value.library.anchor);
+    },
+    getMaterialBindings(value) {
+      const papers = context.store.load().papers || [], paperIds = papers.map(item => item.id), livePapers = new Set(paperIds);
+      return { bindings: value.library.bindings.filter(item => !item.removed && livePapers.has(item.localPaperId)
+        && bindingStatus(item, value.library).publicationStatus === 'published').map(item => ({ entityType: 'paper', localId: item.localPaperId, entityId: item.paperId })),
+        live: { paperIds, noteIds: (context.noteStore.listAllNotes?.() || []).map(item => item.id) } };
+    },
+    api(_snapshot, input) { return request(input.path, { method: input.method, body: input.body, signal: input.signal, richNotes: input.richNotes }); },
+  });
+
+  const papers = createDesktopPaperExchange(context, {
+    core: syncCore(), onChange: notify, ...options.papers,
+    getContext: () => ({ config, account, epoch, library: currentLibrary() }),
+    checkContext(value) {
+      assertEpoch(value.epoch); requireAccount();
+      if (value.library.libraryBindingId !== libraryBindingId || value.account.accountId !== account.accountId || value.account.deviceId !== account.deviceId) fail('DESKTOP_OPERATION_CANCELLED');
+      assertLibraryAnchor(context, value.library.anchor);
+    },
+    getMaterialBindings(value) {
+      const localIds = (context.store.load().papers || []).map(row => row.id), live = new Set(localIds);
+      return { bindings: value.library.bindings.filter(item => !item.removed && live.has(item.localPaperId) && bindingStatus(item, value.library).publicationStatus === 'published')
+        .map(item => ({ entityType: 'paper', localId: item.localPaperId, entityId: item.paperId })), live: { paperIds: localIds, noteIds: [] } };
+    },
+    api(_snapshot, input) { return request(input.path, { method: input.method, body: input.body, signal: input.signal, paperOrganization: input.paperOrganization }); },
+  });
+
+  const graphEvidence = createDesktopGraphEvidence(context, {
+    core: syncCore(), onChange: notify, now, ...options.graphEvidence,
+    getContext: () => ({ config, account, epoch, library: currentLibrary() }),
+    checkContext(value) {
+      assertEpoch(value.epoch); requireAccount();
+      if (value.library.libraryBindingId !== libraryBindingId || value.account.accountId !== account.accountId || value.account.deviceId !== account.deviceId) fail('DESKTOP_OPERATION_CANCELLED');
+      assertLibraryAnchor(context, value.library.anchor);
+    },
+    getMaterialBindings(value) {
+      const live = new Set((context.store.load().papers || []).map(row => row.id)), grouped = new Map();
+      for (const row of value.library.bindings) {
+        if (row.removed || !live.has(row.localPaperId) || bindingStatus(row, value.library).publicationStatus !== 'published') continue;
+        const key = JSON.stringify([row.localPaperId, row.paperId]);
+        const group = grouped.get(key) || { localPaperId: row.localPaperId, entityId: row.paperId, versions: [] };
+        const proof = { versionId: row.attachmentVersionId, sha256: row.sha256, sizeBytes: row.sizeBytes };
+        const previous = group.versions.find(item => item.versionId === proof.versionId);
+        if (previous && (previous.sha256 !== proof.sha256 || previous.sizeBytes !== proof.sizeBytes)) fail('GRAPH_EVIDENCE_BINDING_CHANGED');
+        if (!previous) group.versions.push(proof); grouped.set(key, group);
+      }
+      return { bindings: [...grouped.values()].map(row => ({ ...row, versions: row.versions.sort((a, b) => a.versionId.localeCompare(b.versionId)) })) };
+    },
+  });
+
+  function checkReadingContext(value) {
+    assertEpoch(value.epoch); requireAccount();
+    if (value.library.libraryBindingId !== libraryBindingId || value.account.accountId !== account.accountId || value.account.deviceId !== account.deviceId) fail('DESKTOP_OPERATION_CANCELLED');
+    assertLibraryAnchor(context, value.library.anchor);
+  }
+  function readingBindings(value) {
+    checkReadingContext(value);
+    const library = currentLibrary();
+    const live = new Set((context.store.load().papers || []).map(row => row.id));
+    return library.bindings.filter(row => !row.removed && live.has(row.localPaperId) && bindingStatus(row, library).publicationStatus === 'published')
+      .map(row => ({ bindingId: row.bindingId, localPaperId: row.localPaperId, localAttachmentId: row.localAttachmentId, paperId: row.paperId,
+        attachmentVersionId: row.attachmentVersionId, sha256: row.sha256, sizeBytes: row.sizeBytes, title: row.title, fileName: row.fileName }));
+  }
+  reading = createDesktopReadingPosition(context, {
+    core: syncCore(), onChange: notify, now, ...options.reading,
+    getContext: () => ({ config, account, epoch, library: currentLibrary() }),
+    checkContext: checkReadingContext,
+    getBindings: readingBindings,
+    async verifySource(value, capture, signal) {
+      checkReadingContext(value);
+      const binding = readingBindings(value).find(row => row.bindingId === capture.bindingId);
+      if (!binding || binding.sha256 !== capture.sha256 || binding.sizeBytes !== capture.sizeBytes) fail('READING_SOURCE_CHANGED');
+      const unchanged = () => { checkReadingContext(value); if (signal?.aborted) fail('DESKTOP_OPERATION_CANCELLED');
+        const latest = readingBindings({ ...value, library: currentLibrary() }).find(row => row.bindingId === binding.bindingId);
+        if (!latest || ['bindingId', 'localPaperId', 'localAttachmentId', 'paperId', 'attachmentVersionId', 'sha256', 'sizeBytes'].some(key => latest[key] !== binding[key])) fail('READING_SOURCE_CHANGED'); };
+      let verified;
+      try { verified = await readDesktopAttachment(context, { localPaperId: binding.localPaperId, localAttachmentId: binding.localAttachmentId,
+        anchor: value.library.anchor, signal, maxBytes: Math.min(MAX_FILE_BYTES, syncCore().DESKTOP_READING_LIMITS.pdfBytes), expected: binding }); }
+      catch (error) { if (/^DESKTOP_SOURCE_|^INVALID_PDF$|^DESKTOP_FILE_TOO_LARGE$/.test(error?.code || '')) fail('READING_SOURCE_CHANGED'); throw error; }
+      delete verified.bytes; unchanged();
+      if (verified.sha256 !== capture.sha256 || verified.sizeBytes !== capture.sizeBytes) fail('READING_SOURCE_CHANGED');
+      let target;
+      try { target = await validateTarget(binding, signal); }
+      catch (error) { if (['ATTACHMENT_VERSION_UNAVAILABLE', 'DESKTOP_PDF_CHANGED'].includes(error?.code)) fail('READING_SOURCE_CHANGED'); throw error; }
+      unchanged();
+      if (target.version.data.pageCount !== null && target.version.data.pageCount !== capture.pageCount) fail('READING_SOURCE_CHANGED');
+      return { ...binding, pageCount: capture.pageCount };
+    },
+    api(_snapshot, input) { return request(input.path, { method: input.method, body: input.body, signal: input.signal }); },
   });
 
   function validateDocument(value, expectedService, expectedAccount) {
@@ -451,8 +554,13 @@ function createDesktopAccountCommands(context, options = {}) {
   async function refreshCapability(signal) {
     const result = await request('/v1/capabilities', { signal });
     capability = null;
+    reading.setCapability(false);
     if (result?.protocolVersion !== 1) fail('DESKTOP_INVALID_RESPONSE');
     graph.setCapability(result.features?.graphRelations === 1);
+    notes.setCapability(true, result.features?.richNotes === 1);
+    await notes.refreshStatus();
+    papers.setCapability(true, result.features?.paperOrganization === 1);
+    await papers.refreshStatus();
     await graph.refreshStatus();
     remoteTasks.setCapability(result.features?.remoteTasks === 1 ? result.remoteTasks : null);
     await remoteTasks.refreshStatus();
@@ -474,6 +582,7 @@ function createDesktopAccountCommands(context, options = {}) {
       capability.direct = { transport: direct.transport, attemptMs: direct.attemptMs,
         maxSdpBytes: direct.maxSdpBytes, stunUrls: [...direct.stunUrls] };
     }
+    reading.setCapability(true); await reading.refreshStatus();
   }
   function stopProviderRemote() {
     const settings = config, currentAuth = auth, previousStop = stoppingProvider;
@@ -497,6 +606,10 @@ function createDesktopAccountCommands(context, options = {}) {
     const remoteStopping = remoteTasks.stop();
     const modelStopping = models.stop();
     graph.invalidate();
+    notes.invalidate();
+    papers.invalidate();
+    graphEvidence.invalidate();
+    reading.invalidate();
     epoch++; sessionController.abort(); sessionController = new AbortController();
     for (const controller of bindingControllers.values()) controller.abort();
     const oldAuth = auth;
@@ -504,7 +617,7 @@ function createDesktopAccountCommands(context, options = {}) {
     // Clear the visible session immediately. A cancelled native read still owns
     // its slot and private writer lock until it actually ends in the background.
     const ownedLock = lock; lock = null;
-    pendingCleanup = Promise.allSettled([pendingCleanup, mutations, actions, loginTask, stopping, remoteStopping, modelStopping, remoteTasks.settled(), models.settled(), graph.settled()]).then(() => releaseLock(ownedLock));
+    pendingCleanup = Promise.allSettled([pendingCleanup, mutations, actions, loginTask, stopping, remoteStopping, modelStopping, remoteTasks.settled(), models.settled(), graph.settled(), notes.settled(), papers.settled(), reading.settled()]).then(() => releaseLock(ownedLock));
     notify(); await oldAuth?.signOut();
   }
   async function sendOperation(entityId, captured, signal) {
@@ -599,6 +712,86 @@ function createDesktopAccountCommands(context, options = {}) {
   }
 
   const handlers = {
+    async desktop_reading_status() { await initialization; return reading.status(); },
+    async desktop_reading_versions(args) { requireAccount(); return reading.versions(args); },
+    async desktop_reading_preview(args) { requireAccount(); return reading.preview(args); },
+    async desktop_reading_publish(args) { requireAccount(); return reading.publish(args); },
+    async desktop_reading_track_start(args) { requireAccount(); return reading.startTracking(args); },
+    async desktop_reading_track_point(args) { requireAccount(); return reading.recordTracked(args); },
+    async desktop_reading_track_stop(args) { return reading.stopTracking(args); },
+    async desktop_reading_resume(args) { requireAccount(); return reading.resume(args); },
+    async desktop_reading_continue() { requireAccount(); return reading.continue(); },
+    async desktop_reading_stop() { await reading.stop(); return reading.status(); },
+    async desktop_reading_resolve(args) { requireAccount(); return reading.resolve(args); },
+    async desktop_reading_retry_save() { requireAccount(); return reading.retrySave(); },
+    async desktop_reading_backup() { requireAccount(); return reading.backup(); },
+    async desktop_reading_export(_args, event) {
+      requireAccount(); const captured = epoch, library = currentLibrary().libraryBindingId;
+      return runAction('reading-backup', async () => {
+        const backup = await reading.backup(), check = () => { assertEpoch(captured); requireAccount();
+          if (currentLibrary().libraryBindingId !== library) fail('DESKTOP_OPERATION_CANCELLED'); assertLibraryAnchor(context, currentLibrary().anchor); };
+        check(); const exporter = options.readingBackupExporter || require('./readingBackupExport.cjs').createReadingBackupExporter(options.readingBackupExport);
+        return exporter.save(backup, { event, check });
+      });
+    },
+    async desktop_graph_evidence_status() { await initialization; return graphEvidence.status(); },
+    async desktop_graph_evidence_list() { requireAccount(); return runAction('graph-evidence-list', () => graphEvidence.list()); },
+    async desktop_graph_evidence_preview(args) { requireAccount(); return runAction('graph-evidence-preview', () => graphEvidence.preview(args)); },
+    async desktop_graph_evidence_export(args, event) {
+      if (!exactKeys(args, ['token']) || typeof args.token !== 'string') fail('DESKTOP_ARGUMENT_INVALID');
+      requireAccount(); const captured = epoch, library = currentLibrary().libraryBindingId;
+      return runAction('graph-evidence-export', async () => {
+        const check = () => { assertEpoch(captured); requireAccount(); if (currentLibrary().libraryBindingId !== library) fail('DESKTOP_OPERATION_CANCELLED');
+          assertLibraryAnchor(context, currentLibrary().anchor); return graphEvidence.current(args.token); };
+        const snapshot = check();
+        const exporter = options.graphEvidenceExporter || require('./graphEvidenceExport.cjs').createGraphEvidenceExporter({ core: syncCore(), ...options.graphEvidenceExport });
+        return exporter.save(snapshot, { event, check, checkCurrent: check });
+      });
+    },
+    async desktop_paper_status() { await initialization; return papers.status(); },
+    async desktop_paper_list() { requireAccount(); return papers.list(); },
+    async desktop_paper_preview(args) { requireAccount(); return papers.preview(args); },
+    async desktop_paper_publish(args) { requireAccount(); return papers.publish(args); },
+    async desktop_paper_adopt(args) { requireAccount(); return papers.adopt(args); },
+    async desktop_paper_organization(args) { requireAccount(); return papers.updateOrganization(args); },
+    async desktop_paper_resume_adoptions() { requireAccount(); return papers.resumeAdoptions(); },
+    async desktop_paper_restore_adoption(args) { requireAccount(); return papers.restoreAdoption(args); },
+    async desktop_paper_continue() { requireAccount(); return papers.continue(); },
+    async desktop_paper_stop() { await papers.stop(); return papers.status(); },
+    async desktop_paper_resolve(args) { requireAccount(); return papers.resolve(args); },
+    async desktop_paper_retry_save() { requireAccount(); return papers.retrySave(); },
+    async desktop_paper_backup() { requireAccount(); return papers.backup(); },
+    async desktop_paper_export(_args, event) {
+      requireAccount(); const captured = epoch, library = currentLibrary().libraryBindingId;
+      return runAction('paper-backup', async () => {
+        const backup = await papers.backup(), check = () => { assertEpoch(captured); requireAccount();
+          if (currentLibrary().libraryBindingId !== library) fail('DESKTOP_OPERATION_CANCELLED'); assertLibraryAnchor(context, currentLibrary().anchor); };
+        check(); const exporter = options.paperBackupExporter || require('./paperBackupExport.cjs').createPaperBackupExporter(options.paperBackupExport);
+        return exporter.save(backup, { event, check });
+      });
+    },
+    async desktop_note_status() { await initialization; return notes.status(); },
+    async desktop_note_list() { requireAccount(); return notes.list(); },
+    async desktop_note_preview(args) { requireAccount(); return notes.preview(args); },
+    async desktop_note_publish(args) { requireAccount(); return notes.publish(args); },
+    async desktop_note_bind(args) { requireAccount(); return notes.bind(args); },
+    async desktop_note_delete(args) { requireAccount(); return notes.delete(args); },
+    async desktop_note_adopt(args) { requireAccount(); return notes.adopt(args); },
+    async desktop_note_continue() { requireAccount(); return notes.continue(); },
+    async desktop_note_stop() { await notes.stop(); return notes.status(); },
+    async desktop_note_resolve(args) { requireAccount(); return notes.resolve(args); },
+    async desktop_note_retry_save() { requireAccount(); return notes.retrySave(); },
+    async desktop_note_resume_copies() { requireAccount(); return notes.resumeCopies(); },
+    async desktop_note_backup() { requireAccount(); return notes.backup(); },
+    async desktop_note_export(_args, event) {
+      requireAccount(); const captured = epoch, library = currentLibrary().libraryBindingId;
+      return runAction('note-backup', async () => {
+        const backup = await notes.backup(), check = () => { assertEpoch(captured); requireAccount();
+          if (currentLibrary().libraryBindingId !== library) fail('DESKTOP_OPERATION_CANCELLED'); assertLibraryAnchor(context, currentLibrary().anchor); };
+        check(); const exporter = options.noteBackupExporter || require('./noteBackupExport.cjs').createNoteBackupExporter(options.noteBackupExport);
+        return exporter.save(backup, { event, check });
+      });
+    },
     async desktop_graph_status() { await initialization; return graph.status(); },
     async desktop_graph_preview() { requireAccount(); return graph.preview(); },
     async desktop_graph_publish(args) { requireAccount(); return graph.publish(args); },
@@ -823,7 +1016,7 @@ function createDesktopAccountCommands(context, options = {}) {
     try { if (closed) fail('DESKTOP_CLOSED'); return await handler(args, event); }
     catch (error) {
       const code = publicError(error);
-      if (code !== 'DESKTOP_OPERATION_CANCELLED' || startedAtEpoch === epoch) { lastError = code; notify(); }
+      if (!closed && (code !== 'DESKTOP_OPERATION_CANCELLED' || startedAtEpoch === epoch)) { lastError = code; notify(); }
       throw Object.assign(new Error(code), { code });
     }
   }]));
@@ -832,7 +1025,7 @@ function createDesktopAccountCommands(context, options = {}) {
     graphProjection: () => graph.projection(),
     updateGraphRelation: request => graph.updateRelation(request),
     deleteGraphRelation: id => graph.deleteRelation({ id }),
-    stopProvider: () => Promise.allSettled([stopProviderRemote(), remoteTasks.stop(), models.stop(), graph.stop()]),
+    stopProvider: () => Promise.allSettled([stopProviderRemote(), remoteTasks.stop(), models.stop(), graph.stop(), notes.stop(), papers.stop(), reading.stop()]),
     configurationWillChange: (content) => Promise.all([remoteTasks.configurationWillChange(content), models.configurationWillChange(content)]),
     configurationDidChange: () => Promise.all([remoteTasks.refreshStatus(), models.refreshStatus()]),
     close() {
@@ -840,18 +1033,22 @@ function createDesktopAccountCommands(context, options = {}) {
       const remoteStopping = remoteTasks.stop();
       const modelStopping = models.stop();
       graph.close();
+      notes.close();
+      papers.close();
+      graphEvidence.close();
+      reading.close();
       closed = true; enabled = false; providerIntent++; epoch++; sessionController.abort(); provider.stop();
       void peerHost?.close();
       for (const controller of bindingControllers.values()) controller.abort();
       authUnsubscribe?.(); auth?.close();
       const ownedLock = lock; lock = null;
-      shutdownTask = Promise.allSettled([loginStarting, loginTask, mutations, actions, provider.settled(), peerHost?.settled(), initialization, pendingCleanup, stoppingProvider, remoteStopping, modelStopping, remoteTasks.settled(), models.settled(), graph.settled()]).then(() => { remoteWires.clear(); modelWires.clear(); return releaseLock(ownedLock); });
+      shutdownTask = Promise.allSettled([loginStarting, loginTask, mutations, actions, provider.settled(), peerHost?.settled(), initialization, pendingCleanup, stoppingProvider, remoteStopping, modelStopping, remoteTasks.settled(), models.settled(), graph.settled(), notes.settled(), papers.settled(), reading.settled()]).then(() => { remoteWires.clear(); modelWires.clear(); return releaseLock(ownedLock); });
       account = null; document = null; scopePath = null; libraryBindingId = null;
     },
     // A completion hook for isolated tests and orderly backend shutdown checks.
     async settled() {
       await Promise.allSettled([loginStarting]);
-      await Promise.allSettled([loginTask, mutations, actions, provider.settled(), initialization, shutdownTask, pendingCleanup, remoteTasks.settled(), models.settled(), graph.settled()]);
+      await Promise.allSettled([loginTask, mutations, actions, provider.settled(), initialization, shutdownTask, pendingCleanup, remoteTasks.settled(), models.settled(), graph.settled(), notes.settled(), papers.settled(), reading.settled()]);
     },
   };
 }

@@ -16,6 +16,7 @@ import { ApiError, isTransientDatabaseError } from './errors.ts';
 import { checkedCloudPdfByteLimit, checkedRetainedByteLimit, SERVER_LIMITS } from './config.ts';
 import type { CloudPdfCopy, CloudPdfQuota, CloudPdfRepository, CloudPdfStatus, ConflictPage, DesktopPdfAccess, DesktopPdfRepository, DesktopPdfTarget, DesktopPdfVersionPage, Device, DevicePlatform, DeviceRegistration, ResolveRequest, SessionView, SyncRepository } from './types.ts';
 import {createRemoteTaskRepository,type RemoteTaskRepository} from './remote-task-store.ts';
+import {createRemoteRetrievalRepository,type RemoteRetrievalRepository} from './remote-retrieval-store.ts';
 
 interface AccountRow {
   id: string; epoch: string; last_seq: string; last_conflict_seq: string; entity_count: number; receipt_count: number; retained_bytes: string;
@@ -167,7 +168,7 @@ export class PostgresSyncStore implements SyncRepository, CloudPdfRepository, De
   async ready(): Promise<boolean> {
     try {
       const result = await this.pool.query<{ version: string }>('SELECT version FROM paperquay.schema_migrations ORDER BY version');
-      return result.rows.map((row) => row.version).join(',') === '001_initial.sql,002_receipt_quota.sql,003_retained_bytes_quota.sql,004_private_cloud_pdfs.sql,005_remote_tasks.sql,006_extended_sync_content.sql,007_remote_task_recovery.sql,008_remote_journal_holder.sql,009_remote_request_cancellation.sql,010_model_inference.sql,011_graph_relations.sql';
+      return result.rows.map((row) => row.version).join(',') === '001_initial.sql,002_receipt_quota.sql,003_retained_bytes_quota.sql,004_private_cloud_pdfs.sql,005_remote_tasks.sql,006_extended_sync_content.sql,007_remote_task_recovery.sql,008_remote_journal_holder.sql,009_remote_request_cancellation.sql,010_model_inference.sql,011_graph_relations.sql,012_remote_retrieval.sql';
     } catch { return false; }
   }
 
@@ -177,6 +178,10 @@ export class PostgresSyncStore implements SyncRepository, CloudPdfRepository, De
 
   remoteTasks():RemoteTaskRepository{
     return createRemoteTaskRepository({withAccount:(identity,work)=>this.withAccount(identity,false,context=>work(context))});
+  }
+
+  remoteRetrieval():RemoteRetrievalRepository{
+    return createRemoteRetrievalRepository({withAccount:(identity,work)=>this.withAccount(identity,false,context=>work(context))});
   }
 
   private async withAccount<T>(identity: VerifiedIdentity, create: boolean,

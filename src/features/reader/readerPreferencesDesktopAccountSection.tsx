@@ -1,7 +1,10 @@
 import type { PreferencesSectionKey } from './readerShared';
 import { DesktopGraphExchangePanel } from './desktopGraphExchangePanel';
+import { DesktopNoteExchangePanel } from './desktopNoteExchangePanel';
+import { DesktopPaperExchangePanel } from './desktopPaperExchangePanel';
+import { DesktopGraphEvidencePanel } from './desktopGraphEvidencePanel';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, FileSearch, FileText, GitBranch, Laptop, LogIn, LogOut, RefreshCw, Sparkles } from 'lucide-react';
+import { ChevronLeft, ChevronRight, FileSearch, FileText, GitBranch, Laptop, LogIn, LogOut, NotebookPen, RefreshCw, Sparkles } from 'lucide-react';
 import { desktopAccount, type DesktopAccountConfig, type DesktopAccountStatus, type DesktopPdfCandidate, type DesktopRemoteVersion, type DesktopModelRecord } from '../../services/desktopAccount';
 import { SettingsField, SettingsInput, SettingsSelect } from './readerPreferencesPrimitives';
 import type { ReaderPreferencesLocalizer } from './readerPreferencesTypes';
@@ -89,7 +92,7 @@ function extractCode(error: unknown): string {
 }
 
 export function ReaderPreferencesDesktopAccountSection({ l, onNavigate }: { l: ReaderPreferencesLocalizer; onNavigate?: (section: PreferencesSectionKey) => void }) {
-  const [activeTask, setActiveTask] = useState<'files' | 'ai' | 'processing' | 'relations' | null>(null);
+  const [activeTask, setActiveTask] = useState<'files' | 'ai' | 'processing' | 'relations' | 'notes' | 'papers' | 'graph-evidence' | null>(null);
   const [connectionExpanded, setConnectionExpanded] = useState(false);
   const [candidateSearch, setCandidateSearch] = useState('');
   const taskPanel = useRef<HTMLElement | null>(null);
@@ -186,6 +189,9 @@ export function ReaderPreferencesDesktopAccountSection({ l, onNavigate }: { l: R
     { key: 'ai' as const, title: l('在手机上用这台电脑的 AI', 'Use this computer’s AI on my phone'), detail: l('选择一个 AI 服务供自己的设备使用', 'Choose an AI service for your own devices'), icon: Sparkles },
     { key: 'processing' as const, title: l('让电脑帮忙处理文献', 'Let this computer prepare papers'), detail: l('把 PDF 转成可阅读、可问答的内容', 'Prepare PDFs for reading and questions'), icon: FileSearch },
     { key: 'relations' as const, title: l('同步文献之间的关系', 'Sync relationships between papers'), detail: l('把关系带到账号，或带到这台电脑', 'Move relationships to your account or this computer'), icon: GitBranch },
+    { key: 'notes' as const, title: l('在设备之间同步笔记', 'Sync notes across devices'), detail: l('发送本机笔记，或接收账号中的笔记', 'Send local notes or receive notes from your account'), icon: NotebookPen },
+    { key: 'papers' as const, title: l('同步题录与阅读安排', 'Sync paper details and reading plans'), detail: l('核对文献信息，安排接下来的阅读', 'Review paper details and plan what to read'), icon: FileText },
+    { key: 'graph-evidence' as const, title: l('导出图谱来源包', 'Export graph source package'), detail: l('检查本机引用线索与相似缓存，再保存文件', 'Review local citation clues and similarity caches, then save a file'), icon: FileSearch },
   ];
   useEffect(() => { if (!signedIn) setActiveTask(null); }, [signedIn]);
   useEffect(() => { if (activeTask) taskPanel.current?.focus({ preventScroll: true }); else overview.current?.focus({ preventScroll: true }); }, [activeTask]);
@@ -379,6 +385,9 @@ export function ReaderPreferencesDesktopAccountSection({ l, onNavigate }: { l: R
       </div>
     </SettingsField></div> : <p className="text-sm leading-6 text-[var(--pq-text-muted)]">{l('这个同步服务暂未提供文献处理。请联系管理员开启，然后重新连接账号。', 'This service does not offer document preparation yet. Ask the administrator to enable it, then reconnect your account.')}</p> : null}
       {activeTask === 'relations' ? <DesktopGraphExchangePanel l={l} accountActive={signedIn} ownerKey={status?.graphExchange?.scopeKey ?? null} /> : null}
+      {activeTask === 'notes' ? <DesktopNoteExchangePanel l={l} accountActive={signedIn} ownerKey={status?.noteExchange?.scopeKey ?? null} /> : null}
+      {activeTask === 'papers' ? <DesktopPaperExchangePanel l={l} accountActive={signedIn} ownerKey={status?.paperExchange?.scopeKey ?? null} onLinkPapers={() => setActiveTask('files')} /> : null}
+      {activeTask === 'graph-evidence' ? <DesktopGraphEvidencePanel l={l} accountActive={signedIn} status={status?.graphEvidence ?? null} onLinkPapers={() => setActiveTask('files')} /> : null}
       </>}
     </section>}
   </div>;

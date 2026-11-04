@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReaderWorkspace from './ReaderWorkspace';
+import { DesktopReadingPositionPanel } from './desktopReadingPositionPanel';
+import type { DesktopReadingReaderAccess } from '../../services/desktopReadingReader';
+import { useDesktopReadingTracking } from './useDesktopReadingTracking';
 import { updateBlockTextMarks } from '../blocks/blockTextMarks';
 import { PDF_ANNOTATION_COLOR_PRESETS } from '../pdf/annotationColors';
 import {
@@ -375,6 +378,10 @@ function DocumentReaderTab({
   const [currentDocument, setCurrentDocument] = useState<WorkspaceItem>(document);
   const [pdfSource, setPdfSource] = useState<PdfSource>(null);
   const [pdfData, setPdfData] = useState<Uint8Array | null>(null);
+  const [accountReadingOpen, setAccountReadingOpen] = useState(false);
+  const [accountReadingAccess, setAccountReadingAccess] = useState<DesktopReadingReaderAccess | null>(null);
+  const handleAccountReadingAccess = useCallback((access: DesktopReadingReaderAccess | null) => setAccountReadingAccess(access), []);
+  const accountReadingTracking = useDesktopReadingTracking(currentDocument.source === 'native-library' ? currentDocument.itemKey : null, accountReadingAccess, isActive);
   const [pdfPath, setPdfPath] = useState('');
   const pdfScrollPositionsRef = useRef<Record<string, PdfScrollPosition>>({});
   const pdfReadingHeatmapsRef = useRef<Record<string, PdfReadingHeatmap>>({});
@@ -3865,6 +3872,8 @@ function DocumentReaderTab({
         originalPdfPath={originalPdfPath}
         pdfSource={pdfSource}
         pdfData={pdfData}
+        onAccountReadingAccess={currentDocument.source === 'native-library' ? handleAccountReadingAccess : undefined}
+        onOpenAccountReading={currentDocument.source === 'native-library' ? () => setAccountReadingOpen(true) : undefined}
         pdfScrollPosition={pdfScrollPosition}
         pdfReadingHeatmap={pdfReadingHeatmap}
         onPdfScrollPositionChange={handlePdfScrollPositionChange}
@@ -3959,6 +3968,11 @@ function DocumentReaderTab({
         onAttachAssistant={handleAttachAssistant}
         showLibraryToggle={false}
       />
+      {accountReadingOpen && <DesktopReadingPositionPanel key={currentDocument.workspaceId}
+        localPaperId={currentDocument.source === 'native-library' ? currentDocument.itemKey : null}
+        reader={accountReadingAccess} tracking={accountReadingTracking} active={isActive} onClose={() => setAccountReadingOpen(false)}
+        onConfigureAccount={() => { setAccountReadingOpen(false); onOpenPreferences(); }}
+      />}
     </div>
   );
 }

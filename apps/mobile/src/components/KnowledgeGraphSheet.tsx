@@ -1,5 +1,7 @@
 import {GraphRelationOrphans} from './GraphRelationOrphans.tsx';
 import {GraphRelationEditor} from './GraphRelationEditor.tsx';
+import {GraphEvidencePanel} from './GraphEvidencePanel.tsx';
+import {graphEvidenceView} from '../graph/evidence.ts';
 import {graphRef} from '../graph/relations.ts';
 import {useLayoutEffect,useMemo,useRef,useState,useSyncExternalStore} from 'react';
 import {listVisibleEntities,canonicalJson} from '../../../../packages/sync-core/src/index.ts';
@@ -23,7 +25,8 @@ export function KnowledgeGraphSheet(props:Props){
  useLayoutEffect(()=>{mounted.current=true;return()=>{mounted.current=false;};},[]);
  const entities=useMemo(()=>state.workspace?listVisibleEntities(state.workspace.sync):[],[state.workspace]);
  const options=useMemo(()=>graphScopeOptions(entities),[entities]);
- const computed=useMemo(()=>{try{return{result:buildMobileGraph(entities,selection),error:''};}catch(e){return{result:null,error:errorMessage(e)};}},[entities,selection]);
+ const privateEvidence=useMemo(()=>graphEvidenceView(state.workspace),[state.workspace]);
+ const computed=useMemo(()=>{try{return{result:buildMobileGraph(entities,selection,privateEvidence),error:''};}catch(e){return{result:null,error:errorMessage(e)};}},[entities,selection,privateEvidence]);
  const result=computed.result,snapshot=result?.snapshot,selected=snapshot?.nodes.find(n=>n.id===focusId)??snapshot?.nodes[0]??null;
  const relationNode=draftNode??selected;
  const neighbors=useMemo(()=>selected&&snapshot?graphNeighbors(snapshot,selected.id):[],[snapshot,selected]);
@@ -37,16 +40,17 @@ export function KnowledgeGraphSheet(props:Props){
  function open(){if(!current()||!selected||!['paper','note'].includes(selected.type))return;const sync=latest.current.controller.getSnapshot().workspace?.sync;const exists=sync&&listVisibleEntities(sync).some(e=>!e.deleted&&e.data&&e.entityType===selected.type&&e.entityId===(selected.paperId&&selected.type==='paper'?selected.paperId:selected.noteId));if(exists)latest.current.onOpen(selected);else setError('此内容已删除或不在当前账号，请重新选择。');}
  async function download(){
   if(!current()||!result||flight.current)return;const captured=result;flight.current=true;setBusy(true);setError('');setNotice('');
-  const guard=()=>{if(!current()||viewRef.current!==captured)return false;const sync=latest.current.controller.getSnapshot().workspace?.sync;if(!sync)return false;try{return buildMobileGraph(listVisibleEntities(sync),captured.selection).identity===captured.identity;}catch{return false;}};
+  const guard=()=>{if(!current()||viewRef.current!==captured)return false;const workspace=latest.current.controller.getSnapshot().workspace;if(!workspace)return false;try{return buildMobileGraph(listVisibleEntities(workspace.sync),captured.selection,graphEvidenceView(workspace)).identity===captured.identity;}catch{return false;}};
   try{const mode=await exportTextFile({name:exportFilename('PaperQuay-知识图谱','json'),text:exportGraph(captured),mime:'application/json'},guard,latest.current.exportRuntime);if(guard())setNotice(mode==='share'?'已打开系统分享。':'已交给浏览器下载。');}catch(e){if(current())setError(errorMessage(e));}finally{flight.current=false;if(mounted.current)setBusy(false);}
  }
  const shown=snapshot?.nodes.slice(0,page*GRAPH_LIMITS.page)??[];
  return <ReaderSheet open title="知识图谱" className="graph-sheet" onClose={()=>navigate(props.onClose)}><div className="mobile-graph">
   {pendingNavigation&&<section className="graph-unsaved" role="alertdialog" aria-label="未保存的关系草稿"><p>关系草稿尚未保存，离开当前内容会丢弃草稿。</p><div className="graph-actions"><button ref={continueEditing} type="button" onClick={()=>setPendingNavigation(null)}>继续编辑</button><button type="button" className="secondary" onClick={()=>{if(!current())return;const action=pendingNavigation;setPendingNavigation(null);dirtyRelation.current=false;setDraftNode(null);action();}}>放弃草稿并继续</button></div></section>}
   <header className="graph-intro"><p className="eyebrow">连接材料，回到出处</p><h3>从一条关系继续阅读</h3><p className="muted">浏览此账号在本机的文献、笔记和已保存的关系。点选节点查看相邻材料；图中的关系不代表论证已核实。</p></header>
+  <GraphEvidencePanel key={props.scopeKey} controller={props.controller} scopeKey={props.scopeKey} current={current} exportRuntime={props.exportRuntime}/>
   <div className="graph-controls"><label className="field">检索节点<input type="search" value={selection.search} maxLength={512} placeholder="标题、作者、标签或编号" onChange={e=>change({search:e.target.value,localNodeId:''})}/></label>
    <details><summary>范围与关系类型</summary><div className="graph-scope-fields"><label className="field">材料标签<select value={selection.tag} onChange={e=>change({tag:e.target.value,localNodeId:''})}><option value="">全部标签</option>{options.tags.map(t=><option key={t}>{t}</option>)}</select></label><label className="field">材料分类<select value={selection.collection} onChange={e=>change({collection:e.target.value,localNodeId:''})}><option value="">全部分类</option>{options.collections.map(t=><option key={t}>{t}</option>)}</select></label></div>
-   <fieldset className="graph-types"><legend>显示内容</legend>{([['includePapers','文献'],['includeNotes','笔记'],['includeTags','标签'],['includeCategories','分类'],['includeCoAuthors','共同作者'],['includeCustomRelations','自定义与已采纳 AI 关系']] as const).map(([key,label])=><label key={key}><input type="checkbox" checked={selection[key]} onChange={e=>change({[key]:e.target.checked,localNodeId:''})}/>{label}</label>)}</fieldset><p className="muted">共同作者按题录姓名归一化匹配，同名仍需核实。标签与分类范围先筛选材料，检索再显示命中节点及其一跳邻居。</p></details>
+   <fieldset className="graph-types"><legend>显示内容</legend>{([['includePapers','文献'],['includeNotes','笔记'],['includeTags','标签'],['includeCategories','分类'],['includeCoAuthors','共同作者'],['includeCustomRelations','自定义与已采纳 AI 关系'],['includeReferences','已接收的引用候选'],['includeEmbeddingEdges','已接收的缓存相似关系']] as const).map(([key,label])=><label key={key}><input type="checkbox" checked={selection[key]} onChange={e=>change({[key]:e.target.checked,localNodeId:''})}/>{label}</label>)}</fieldset><p className="muted">共同作者按题录姓名归一化匹配，同名仍需核实。标签与分类范围先筛选材料，检索再显示命中节点及其一跳邻居。</p></details>
   </div>
   {(computed.error||error)&&<p className="graph-feedback" role="alert">{computed.error||error}</p>}{notice&&<p className="graph-notice" role="status">{notice}</p>}
   {result&&<>
@@ -68,6 +72,6 @@ export function KnowledgeGraphSheet(props:Props){
   </>}
   {relationNode&&graphRef(relationNode)&&<GraphRelationEditor key={relationNode.id} controller={props.controller} entities={entities} source={graphRef(relationNode)!} current={current} enabled={props.controller.getContentCapabilities().graphRelations} onDirty={dirty=>{dirtyRelation.current=dirty;setDraftNode(previous=>dirty?previous??relationNode:null);}}/>}
   <GraphRelationOrphans controller={props.controller} entities={entities} current={current} enabled={props.controller.getContentCapabilities().graphRelations}/>
-  <details className="graph-coverage"><summary>此图谱的来源范围</summary><p>关系算法与桌面共用。分类按同步名称重建，不含桌面原分类编号或层级。笔记历史锚点只表示关联，不证明 PDF 版本或页码已核验。</p><p>自定义及已采纳 AI 关系按账号同步；仅当两端材料在当前范围可见时显示。删除材料不会自动恢复它或删除原关系。桌面私有参考文献缓存和向量相似关系尚未同步，此页面不会调用模型。</p></details>
+  <details className="graph-coverage"><summary>此图谱的来源范围</summary><p>关系算法与桌面共用。分类按同步名称重建，不含桌面原分类编号或层级。笔记历史锚点只表示关联，不证明 PDF 版本或页码已核验。</p><p>自定义及已采纳 AI 关系按账号同步；仅当两端材料在当前范围可见时显示。删除材料不会自动恢复它或删除原关系。桌面参考文献与向量相似关系从明确选择的来源包接收，保留历史缓存证据；题录、版本或同步状态变化时暂不显示。此页面不会调用模型。</p></details>
  </div></ReaderSheet>;
 }

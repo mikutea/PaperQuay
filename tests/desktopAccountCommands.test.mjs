@@ -262,7 +262,7 @@ function fakeService() {
           const result = { opId: operation.opId, status: 'rejected', replayed: false, code: 'ACCOUNT_ENTITY_LIMIT', retryable: false };
           receipts.set(operation.opId, { operation: structuredClone(operation), result }); return result;
         }
-        const record = { entityType: operation.entityType, entityId: operation.entityId, schemaVersion: 1, revision: 1, deletedAt: null,
+        const record = { entityType: operation.entityType, entityId: operation.entityId, schemaVersion: 1, revision: (records.get(operation.entityId)?.revision || 0) + 1, deletedAt: operation.mutation === 'delete' ? new Date().toISOString() : null,
           updatedAt: new Date().toISOString(), modifiedByDeviceId: service.deviceId, data: structuredClone(operation.data) };
         records.set(record.entityId, record);
         const result = { opId: operation.opId, status: 'applied', replayed: false, record };
@@ -864,4 +864,246 @@ test('a late graph receipt keeps the profile locked after a later login capabili
   badCapability=false;
   await other.commands.desktop_account_sign_in();await other.settled();
   assert.equal(other.getStatus().account.accountId,f.service.accountId);
+});
+
+test('actual note commands negotiate rich content, bind graph endpoints and keep the source note intact', async t => {
+  const f = await fixture(t), { createNoteStore } = require('../electron/backend/noteStore.cjs');
+  f.context.noteStore = createNoteStore(f.appPaths);
+  const headers = [];
+  f.service.onRoute = (url, options) => {
+    if (url.pathname === '/v1/capabilities') return Response.json({ protocolVersion: 1, features: { desktopPdfTransfer: 1, richNotes: 1, graphRelations: 1 },
+      desktopPdf: { transport: 'http-relay-v1', maxFileBytes: 67108864, requestTtlMs: 30000, pollTimeoutMs: 20000 } });
+    if (url.pathname === '/v1/sync/pull') { headers.push(options.headers['X-PaperQuay-Features']); return Response.json({ protocolVersion: 1, records: [...f.service.records.values()], nextCursor: 'checked', hasMore: false }); }
+    if (url.pathname === '/v1/conflicts') return Response.json({ conflicts: [], nextCursor: 'checked', hasMore: false });
+  };
+  try {
+    const note = f.context.noteStore.createNote({ paperId: 'native-library:' + f.paper.id, type: 'standalone', title: 'An explicitly selected saved note', content: 'Saved truth',
+      contentJson: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Saved truth' }] }] } });
+    await f.login(); await f.publish();
+    assert.equal(f.manager.getStatus().noteExchange.richSupported, true);
+    assert.equal(f.service.calls.some(row => row.url.includes('/v1/sync/pull')), false, 'login never reads note contents');
+    const preview = await f.manager.commands.desktop_note_preview({ noteIds: [note.id] });
+    assert.equal(preview.localRows[0].action, 'create', JSON.stringify(preview.localRows));
+    await f.manager.commands.desktop_note_publish({ token: preview.token });
+    const published = [...f.service.records.values()].find(row => row.entityType === 'note');
+    assert.equal(published.data.format, 'tiptap-json'); assert.equal(published.data.body, 'Saved truth');
+    assert.deepEqual(f.context.noteStore.getNote({ id: note.id }), note);
+    assert.equal(headers[0], 'rich-notes-v1');
+    const graphFile = path.join(f.appPaths.dataDir, 'paperquay-knowledge-graph-relations.json');
+    fs.writeFileSync(graphFile, JSON.stringify({ version: 1, relations: [{ id: 'explicit-note-relation', source: 'note:' + note.id, target: 'paper:' + f.paper.id,
+      type: 'ai_suggested', label: 'Notes the method', description: 'Original local relation', confidence: null, weight: 0.5, createdAt: 0, updatedAt: null }] }));
+    const graphPreview = await f.manager.commands.desktop_graph_preview(); assert.equal(graphPreview.localRows[0].action, 'create');
+    assert.equal(graphPreview.localRows[0].local.source.entityId, published.entityId);
+    await f.manager.commands.desktop_account_sign_out(); assert.equal(f.manager.getStatus().noteExchange.scopeKey, null);
+    assert.deepEqual(f.manager.graphProjection(), { relations: [], suppressedLocalIds: [] });
+  } finally { f.manager.close(); await f.manager.settled(); f.context.noteStore.close(); }
+});
+
+test('note backup holds the account writer lock and rejects a picker response after sign out', async t => {
+  const f = await fixture(t), entered = deferred(), release = deferred();
+  const manager = f.create({ noteBackupExporter: { async save(backup, { check }) {
+    assert.equal(backup.format, 'paperquay-desktop-note-backup'); entered.resolve(); await release.promise; check(); return { status: 'exported' };
+  } } });
+  await f.login(manager);
+  const task = manager.commands.desktop_note_export({ path: 'renderer destination is ignored' });
+  const cancelled = assert.rejects(task, { code: 'DESKTOP_OPERATION_CANCELLED' }); await entered.promise; await manager.commands.desktop_account_sign_out();
+  const other = f.create();
+  try { await other.commands.desktop_account_sign_in(); await other.settled(); assert.equal(other.getStatus().errorCode, 'DESKTOP_ACCOUNT_IN_USE'); }
+  finally { release.resolve(); }
+  await cancelled; await manager.settled(); await other.commands.desktop_account_sign_in(); await other.settled();
+  assert.equal(other.getStatus().account.accountId, f.service.accountId);
+});
+
+async function paperCommandFixture(t, extra = {}) {
+  const f = await fixture(t), headers = [];
+  f.service.onRoute = (url, options) => {
+    if (url.pathname === '/v1/capabilities') return Response.json({ protocolVersion: 1, features: { desktopPdfTransfer: 1, paperOrganization: 1 },
+      desktopPdf: { transport: 'http-relay-v1', maxFileBytes: 67108864, requestTtlMs: 30000, pollTimeoutMs: 20000 } });
+    if (url.pathname === '/v1/sync/pull') { headers.push(options.headers['X-PaperQuay-Features']); return Response.json({ protocolVersion: 1, records: [...f.service.records.values()], nextCursor: 'checked', hasMore: false }); }
+    if (url.pathname === '/v1/conflicts') return Response.json({ conflicts: [], nextCursor: 'checked', hasMore: false });
+  };
+  const manager = Object.keys(extra).length ? f.create(extra) : f.manager; await f.login(manager); await f.publish(manager);
+  return { ...f, manager, headers };
+}
+
+test('actual paper commands send current metadata and explicit reading plans, adopt only the whitelist and undo without a cloud write', async t => {
+  const f = await paperCommandFixture(t); assert.equal(f.manager.getStatus().paperExchange.organizationSupported, true);
+  await f.imports.library_update_paper({ request: { paperId: f.paper.id, title: 'Edited on this desktop', tags: ['Desktop tag'], isFavorite: true, userNote: 'Private local note', url: 'https://local.example.test/private' } });
+  const original = f.store.load().papers.find(row => row.id === f.paper.id), attachments = structuredClone(original.attachments), categories = [...original.categoryIds];
+  let preview = await f.manager.commands.desktop_paper_preview({ localPaperIds: [f.paper.id] });
+  assert.equal(preview.localRows[0].action, 'update'); assert.equal(preview.localRows[0].local.title, original.title);
+  await f.manager.commands.desktop_paper_organization({ token: preview.token, localPaperId: f.paper.id, readingStatus: 'reading', queued: true, collections: ['Account reading group'] });
+  assert.equal(f.service.records.get(f.manager.getStatus().bindings[0].paperId).data.organization, undefined, 'saving a reading draft is local only');
+  preview = await f.manager.commands.desktop_paper_preview({ localPaperIds: [f.paper.id] });
+  assert.equal(preview.localRows[0].local.organization.readingStatus, 'reading'); assert.equal(preview.localRows[0].local.organization.favorite, true);
+  await f.manager.commands.desktop_paper_publish({ token: preview.token });
+  const entityId = f.manager.getStatus().bindings[0].paperId, published = f.service.records.get(entityId);
+  assert.equal(published.revision, 2); assert.equal(published.data.title, original.title); assert.deepEqual(published.data.organization.tags, ['Desktop tag']);
+  const sent = f.service.calls.filter(row => row.url.endsWith('/v1/sync/push')).at(-1); assert.doesNotMatch(JSON.stringify(sent.body), /Private local note|local\.example|storedPath|originalPath|categoryIds/);
+  assert(f.headers.every(value => value === 'paper-organization-v1'));
+  f.service.records.set(entityId, { ...published, revision: 3, data: { ...published.data, title: 'Edited on my phone', organization: { ...published.data.organization, tags: ['Phone tag'], readingStatus: 'read', queueRank: 7, collections: ['Remote name'] } } });
+  preview = await f.manager.commands.desktop_paper_preview({ localPaperIds: [] }); await f.manager.commands.desktop_paper_adopt({ token: preview.token, ids: [entityId] });
+  const adopted = f.store.load().papers.find(row => row.id === f.paper.id);
+  assert.equal(adopted.title, 'Edited on my phone'); assert.deepEqual(adopted.tags.map(row => row.name), ['Phone tag']);
+  assert.deepEqual(adopted.attachments, attachments); assert.deepEqual(adopted.categoryIds, categories); assert.equal(adopted.userNote, original.userNote); assert.equal(adopted.url, original.url); assert.equal(adopted.readingProgress, original.readingProgress);
+  preview = await f.manager.commands.desktop_paper_preview({ localPaperIds: [] }); const history = preview.adoptions.at(-1); assert.equal(history.phase, 'applied');
+  assert.equal(history.before.title, original.title); assert.equal(history.after.title, 'Edited on my phone');
+  const posts = f.service.calls.filter(row => row.method === 'POST').length;
+  await f.manager.commands.desktop_paper_restore_adoption({ adoptionId: history.adoptionId });
+  const restored = f.store.load().papers.find(row => row.id === f.paper.id); assert.equal(restored.title, original.title); assert.deepEqual(restored.tags, original.tags);
+  assert.deepEqual(restored.attachments, attachments); assert.equal(f.service.calls.filter(row => row.method === 'POST').length, posts);
+  assert.equal(f.service.records.get(entityId).data.title, 'Edited on my phone');
+});
+
+test('a parent paper binding removed after a lost receipt prevents any further replay while preserving the exact intent', async t => {
+  const f = await paperCommandFixture(t); await f.imports.library_update_paper({ request: { paperId: f.paper.id, title: 'Explicit pending update' } });
+  const preview = await f.manager.commands.desktop_paper_preview({ localPaperIds: [f.paper.id] }); f.service.loseAfter = 'paper';
+  await assert.rejects(f.manager.commands.desktop_paper_publish({ token: preview.token }), { code: 'NETWORK_UNAVAILABLE' });
+  const backup = await f.manager.commands.desktop_paper_backup(), original = backup.state.sync.outbox[0].operation;
+  const binding = f.manager.getStatus().bindings[0]; await f.manager.commands.desktop_provider_unbind({ bindingId: binding.bindingId });
+  const posts = f.service.calls.filter(row => row.method === 'POST').length;
+  await assert.rejects(f.manager.commands.desktop_paper_continue(), { code: 'PAPER_BINDING_CHANGED' });
+  assert.equal(f.service.calls.filter(row => row.method === 'POST').length, posts);
+  assert.deepEqual((await f.manager.commands.desktop_paper_backup()).state.sync.outbox[0].operation, original);
+});
+
+test('paper backup keeps the native picker under its account writer lock until a signed-out callback settles', async t => {
+  const entered = deferred(), release = deferred();
+  const f = await paperCommandFixture(t, { paperBackupExporter: { async save(backup, { check }) { assert.equal(backup.format, 'paperquay-desktop-paper-backup'); entered.resolve(); await release.promise; check(); return { status: 'exported' }; } } });
+  const task = f.manager.commands.desktop_paper_export(), cancelled = assert.rejects(task, { code: 'DESKTOP_OPERATION_CANCELLED' });
+  await entered.promise; await f.manager.commands.desktop_account_sign_out(); const other = f.create();
+  try { await other.commands.desktop_account_sign_in(); await other.settled(); assert.equal(other.getStatus().errorCode, 'DESKTOP_ACCOUNT_IN_USE'); }
+  finally { release.resolve(); }
+  await cancelled; await f.manager.settled(); await other.commands.desktop_account_sign_in(); await other.settled(); assert.equal(other.getStatus().account.accountId, f.service.accountId);
+});
+
+test('actual graph evidence commands export only selected linked cache evidence without any additional service request', async t => {
+  const destination = path.join(os.tmpdir(), 'paperquay-evidence-parent-' + randomUUID() + '.json');
+  t.after(() => fs.rmSync(destination, { force: true }));
+  const f = await graphCommandFixture(t, { graphEvidenceExport: { showSaveDialog: async () => ({ canceled: false, filePath: destination }) } });
+  f.store.saveReferences(f.paper.id, [{ id: 'actual-cached-ref', seq: 1, title: f.second.title, fetchedAt: 1 }]);
+  const before = f.service.calls.length, original = f.store.load(), reference = f.store.loadReferences(f.paper.id);
+  const list = await f.manager.commands.desktop_graph_evidence_list(); assert.equal(list.papers.filter(row => row.bound).length, 2); assert(f.manager.getStatus().graphEvidence.scopeKey);
+  const preview = await f.manager.commands.desktop_graph_evidence_preview({ localPaperIds: [f.paper.id, f.second.id], includeReferences: true, includeSimilarity: false });
+  assert.equal(preview.counts.citations, 1); assert.equal(preview.snapshot.edges[0].provenance.pdfVersionVerified, false); assert.equal(preview.snapshot.edges[0].provenance.fetchedAt, 1);
+  const result = await f.manager.commands.desktop_graph_evidence_export({ token: preview.token }); assert.equal(result.saved, true);
+  const saved = JSON.parse(fs.readFileSync(destination, 'utf8')); assert.deepEqual(saved, preview.snapshot); assert.doesNotMatch(JSON.stringify(saved), /localPaperId|storedPath|originalPath|paperquay-library/);
+  assert.equal(f.service.calls.length, before); assert.deepEqual(f.store.load(), original); assert.deepEqual(f.store.loadReferences(f.paper.id), reference);
+});
+
+test('graph evidence picker refuses a changed cache and preserves the original selected destination', async t => {
+  const entered = deferred(), release = deferred(), destination = path.join(os.tmpdir(), 'paperquay-evidence-parent-' + randomUUID() + '.json');
+  t.after(() => fs.rmSync(destination, { force: true })); fs.writeFileSync(destination, 'existing user-selected file');
+  const f = await graphCommandFixture(t, { graphEvidenceExport: { showSaveDialog: async () => { entered.resolve(); await release.promise; return { canceled: false, filePath: destination }; } } });
+  f.store.saveReferences(f.paper.id, [{ id: 'actual-cached-ref', seq: 1, title: f.second.title, fetchedAt: 0 }]);
+  const preview = await f.manager.commands.desktop_graph_evidence_preview({ localPaperIds: [f.paper.id, f.second.id], includeReferences: true, includeSimilarity: false });
+  const task = f.manager.commands.desktop_graph_evidence_export({ token: preview.token }), rejected = assert.rejects(task, { code: 'GRAPH_EVIDENCE_PREVIEW_STALE' });
+  await entered.promise; f.store.saveReferences(f.paper.id, [{ id: 'changed-ref', seq: 2, title: f.second.title, fetchedAt: 1 }]); release.resolve(); await rejected;
+  assert.equal(fs.readFileSync(destination, 'utf8'), 'existing user-selected file');
+});
+
+test('graph evidence export retains the account writer lock until an old native window settles after logout', async t => {
+  const entered = deferred(), release = deferred();
+  const f = await graphCommandFixture(t, { graphEvidenceExport: { showSaveDialog: async () => { entered.resolve(); await release.promise; return { canceled: true }; } } });
+  const preview = await f.manager.commands.desktop_graph_evidence_preview({ localPaperIds: [f.paper.id, f.second.id], includeReferences: false, includeSimilarity: false });
+  const task = f.manager.commands.desktop_graph_evidence_export({ token: preview.token }), rejected = assert.rejects(task, { code: 'DESKTOP_OPERATION_CANCELLED' });
+  await entered.promise; await f.manager.commands.desktop_account_sign_out(); const other = f.create();
+  try { await other.commands.desktop_account_sign_in(); await other.settled(); assert.equal(other.getStatus().errorCode, 'DESKTOP_ACCOUNT_IN_USE'); }
+  finally { release.resolve(); }
+  await rejected; await f.manager.settled(); await other.commands.desktop_account_sign_in(); await other.settled(); assert.equal(other.getStatus().account.accountId, f.service.accountId);
+});
+
+async function readingCommandFixture(t, extra = {}) {
+  const f = await fixture(t), events = [];
+  f.service.onRoute = async (url, options, body) => {
+    if (url.pathname === '/v1/sync/pull') {
+      const start = Number(url.searchParams.get('cursor') || 0), rows = events.slice(start, start + 1);
+      return Response.json({ protocolVersion: 1, records: rows, nextCursor: String(start + rows.length), hasMore: start + rows.length < events.length });
+    }
+    if (url.pathname === '/v1/conflicts') return Response.json({ conflicts: [], nextCursor: '0', hasMore: false });
+    if (url.pathname === '/v1/devices' && options.method !== 'POST') return Response.json({ devices: [{ id: f.service.deviceId, name: 'Synthetic current desktop', platform: 'windows', createdAt: '2026-11-04T12:00:00.000Z', lastSeenAt: '2026-11-04T12:00:00.000Z', revokedAt: null }] });
+    if (url.pathname === '/v1/sync/push' && body.operations[0].entityType === 'readingPosition') {
+      const results = body.operations.map(operation => {
+        const receipt = f.service.receipts.get(operation.opId);
+        if (receipt) { assert.deepEqual(receipt.operation, operation); return { ...receipt.result, replayed: true }; }
+        const record = { entityType: 'readingPosition', entityId: operation.entityId, schemaVersion: 1, revision: (f.service.records.get(operation.entityId)?.revision || 0) + 1,
+          deletedAt: null, updatedAt: '2026-11-04T12:00:00.000Z', modifiedByDeviceId: f.service.deviceId, data: structuredClone(operation.data) };
+        events.push(record); f.service.records.set(record.entityId, record); const result = { opId: operation.opId, status: 'applied', replayed: false, record };
+        f.service.receipts.set(operation.opId, { operation: structuredClone(operation), result }); return result;
+      });
+      return Response.json({ protocolVersion: 1, results });
+    }
+  };
+  const manager = Object.keys(extra).length ? f.create(extra) : f.manager; await f.login(manager); await f.publish(manager);
+  const binding = manager.getStatus().bindings[0], capture = { bindingId: binding.bindingId, sha256: digest(PDF), sizeBytes: PDF.length,
+    pageCount: 16, pageIndex: 3, offsetRatio: .25, observedAt: '2026-11-04T12:00:00.000Z' };
+  return { ...f, manager, binding, capture, events, readingPosts: () => f.service.calls.filter(row => row.url.endsWith('/v1/sync/push') && row.body.operations[0].entityType === 'readingPosition') };
+}
+
+test('reading commands see a newly committed real attachment binding without a session restart, verify its full bytes, and keep preview read only', async t => {
+  const f = await readingCommandFixture(t), before = f.service.calls.length;
+  const versions = await f.manager.commands.desktop_reading_versions({ localPaperId: f.paper.id, sha256: digest(PDF), sizeBytes: PDF.length, pageCount: 16 });
+  assert.equal(versions.versions.length, 1); assert.equal(versions.versions[0].bindingId, f.binding.bindingId); assert.equal(f.service.calls.length, before);
+  const preview = await f.manager.commands.desktop_reading_preview({ capture: f.capture });
+  assert.equal(preview.publicationAction, 'create'); assert.equal(preview.source.sha256, digest(fs.readFileSync(f.attachment.storedPath)));
+  assert.equal(f.readingPosts().length, 0); assert.equal(f.manager.getStatus().readingPosition.pending, 0);
+  await f.manager.commands.desktop_reading_publish({ token: preview.token }); const record = f.events[0];
+  assert.equal(record.data.pageIndex, 3); assert.equal(record.data.offsetRatio, .25); assert.equal(record.data.furthestPageIndex, 3);
+  assert.deepEqual(fs.readFileSync(f.attachment.storedPath), PDF);
+});
+test('reading verification allows title changes with the same exact version but rejects changed actual PDF bytes and known page count mismatch', async t => {
+  const f = await readingCommandFixture(t), paper = f.service.records.get(f.binding.paperId), version = f.service.records.get(f.binding.attachmentVersionId);
+  f.service.records.set(paper.entityId, { ...paper, revision: paper.revision + 1, data: { ...paper.data, title: 'Renamed account paper' } });
+  assert.equal((await f.manager.commands.desktop_reading_preview({ capture: f.capture })).source.sha256, digest(PDF));
+  f.service.records.set(version.entityId, { ...version, revision: version.revision + 1, data: { ...version.data, pageCount: 7 } });
+  await assert.rejects(f.manager.commands.desktop_reading_preview({ capture: f.capture }), { code: 'READING_SOURCE_CHANGED' });
+  f.service.records.set(version.entityId, version); const changed = Buffer.from(PDF); changed[25] ^= 1; fs.writeFileSync(f.attachment.storedPath, changed);
+  await assert.rejects(f.manager.commands.desktop_reading_preview({ capture: f.capture }), { code: 'READING_SOURCE_CHANGED' }); assert.equal(f.readingPosts().length, 0);
+});
+test('reading tracking persists actual local recent and furthest separately, makes no service request per point and publishes only after a new explicit check', async t => {
+  const f = await readingCommandFixture(t); let preview = await f.manager.commands.desktop_reading_preview({ capture: f.capture });
+  const tracking = await f.manager.commands.desktop_reading_track_start({ token: preview.token }), before = f.service.calls.length;
+  await f.manager.commands.desktop_reading_track_point({ trackingId: tracking.trackingId, sequence: 1,
+    point: { pageIndex: 2, offsetRatio: .1, furthestPageIndex: 12, furthestOffsetRatio: .8, observedAt: f.capture.observedAt } });
+  assert.equal(f.service.calls.length, before); assert.equal(f.readingPosts().length, 0);
+  const backup = await f.manager.commands.desktop_reading_backup(); assert.equal(backup.state.drafts[0].capture.pageIndex, 2); assert.equal(backup.state.drafts[0].furthestPageIndex, 12);
+  await assert.rejects(f.manager.commands.desktop_reading_publish({ token: preview.token }), { code: 'READING_PREVIEW_STALE' });
+  preview = await f.manager.commands.desktop_reading_preview({ capture: { ...f.capture, pageIndex: 1, offsetRatio: .05 } });
+  assert.equal(preview.localDraft.capture.pageIndex, 2); assert.equal(preview.localDraft.furthestPageIndex, 12);
+  await f.manager.commands.desktop_reading_publish({ token: preview.token }); assert.equal(f.events[0].data.pageIndex, 1); assert.equal(f.events[0].data.furthestPageIndex, 12);
+  await f.manager.commands.desktop_reading_track_stop({ trackingId: tracking.trackingId }); assert.equal(f.manager.getStatus().readingPosition.tracking, null);
+});
+test('reading tracking immediately rejects a parent-unbound file and the current versions picker drops that stale binding', async t => {
+  const f = await readingCommandFixture(t), preview = await f.manager.commands.desktop_reading_preview({ capture: f.capture });
+  const tracking = await f.manager.commands.desktop_reading_track_start({ token: preview.token });
+  await f.manager.commands.desktop_provider_unbind({ bindingId: f.binding.bindingId });
+  assert.equal(f.manager.getStatus().readingPosition.tracking, null, 'the parent binding change retires its tracking session immediately');
+  await assert.rejects(f.manager.commands.desktop_reading_track_point({ trackingId: tracking.trackingId, sequence: 1,
+    point: { pageIndex: 2, offsetRatio: .1, furthestPageIndex: 3, furthestOffsetRatio: .25, observedAt: f.capture.observedAt } }), { code: 'READING_TRACKING_CHANGED' });
+  const versions = await f.manager.commands.desktop_reading_versions({ localPaperId: f.paper.id, sha256: digest(PDF), sizeBytes: PDF.length, pageCount: 16 });
+  assert.deepEqual(versions.versions, []); assert.equal(f.readingPosts().length, 0);
+});
+test('reading resume returns only the selected immutable fresh record and never pushes or changes the local attachment', async t => {
+  const f = await readingCommandFixture(t); let preview = await f.manager.commands.desktop_reading_preview({ capture: f.capture });
+  await f.manager.commands.desktop_reading_publish({ token: preview.token }); preview = await f.manager.commands.desktop_reading_preview({ capture: f.capture });
+  const chosen = preview.positions[0], posts = f.readingPosts().length;
+  const result = await f.manager.commands.desktop_reading_resume({ token: preview.token, entityId: chosen.entityId, expectedRevision: chosen.revision });
+  assert.deepEqual(result.position, chosen.data); assert.equal(f.readingPosts().length, posts); assert.deepEqual(fs.readFileSync(f.attachment.storedPath), PDF);
+  f.events.push({ ...f.events[0], revision: chosen.revision + 1, data: { ...chosen.data, pageIndex: 1, deviceSequence: chosen.data.deviceSequence + 1 } });
+  await assert.rejects(f.manager.commands.desktop_reading_resume({ token: preview.token, entityId: chosen.entityId, expectedRevision: chosen.revision }), { code: 'READING_PREVIEW_STALE' });
+  assert.equal(f.readingPosts().length, posts);
+});
+test('reading account notifications expose an opaque changing epoch and cannot reuse an old owner after A-B-A login', async t => {
+  const changes = [], f = await readingCommandFixture(t, { onChange: payload => changes.push(payload) });
+  const first = f.manager.getStatus().readingPosition.scopeKey; assert(changes.some(row => row.readingScopeKey === first));
+  await f.manager.commands.desktop_account_sign_out(); assert(changes.some(row => row.readingScopeKey === null)); await f.manager.settled();
+  await f.login(f.manager, false); const second = f.manager.getStatus().readingPosition.scopeKey;
+  assert.notEqual(second, first); assert(changes.some(row => row.readingScopeKey === second));
+  assert(changes.every(row => Object.keys(row).join(',') === 'readingScopeKey'));
+});
+test('reading status requests after shutdown reject without generating another account-change notification loop', async t => {
+  const changes = [], f = await readingCommandFixture(t, { onChange: payload => changes.push(payload) });
+  f.manager.close(); await f.manager.settled(); const count = changes.length;
+  await assert.rejects(f.manager.commands.desktop_reading_status(), { code: 'DESKTOP_CLOSED' });
+  assert.equal(changes.length, count);
 });

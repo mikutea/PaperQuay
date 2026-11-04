@@ -11,7 +11,7 @@ import { exportLibraryArchive, parseLibraryArchive,
 export const DESKTOP_NOTE_EXPORT_LIMITS = Object.freeze({ notes: 500, rawCharacters: 16 * 1024 * 1024, captureBytes: 64 * 1024 * 1024 });
 const NOTE_FIELDS = ['id', 'paperId', 'type', 'title', 'format', 'body', 'contentJson', 'anchors', 'tags', 'color', 'isFavorite',
   'isPinned', 'linkedNoteIds', 'linkedPaperIds', 'linkedPaperId', 'folderId', 'aiChatId', 'aiChatMessageIds',
-  'createdAt', 'updatedAt', 'deletedAt', 'excerpt', 'pdfLocation'] as const;
+  'createdAt', 'updatedAt', 'deletedAt', 'excerpt', 'pdfLocation', 'unresolvedReferences'] as const;
 const PAPER_FIELDS = ['id', 'title', 'doi', 'year', 'publication', 'abstractText', 'authors', 'keywords'] as const;
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 function pick(value: unknown, fields: readonly string[]): unknown {

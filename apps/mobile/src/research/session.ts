@@ -46,7 +46,7 @@ export function researchResultMarkdown(result:ResearchResult):string{
   const c=result.context;
   return ['# 多篇文献问答', '', '问题：'+c.question, '状态：'+result.status+'；模型：'+result.provider.model+'；费用：未知',
     '上下文 SHA-256：'+c.digest,'开始：'+result.startedAt+'；结束：'+(result.finishedAt??'未完成'),'',result.text,'','## 实际发送的来源与片段',
-    ...c.sources.map((s,i)=>'S'+(i+1)+'：'+s.title+'；文献 '+s.paperId+'；'+(s.kind==='parsed'?'解析片段，版本 '+s.attachmentVersionId+'，PDF SHA-256 '+s.sha256+'，解析摘要 '+s.packageDigest:'题录与摘要，未提供全文')+'；采用 '+s.selectedChunks+'/'+s.totalChunks+' 个片段'),
+    ...c.sources.map((s,i)=>'S'+(i+1)+'：'+s.title+'；文献 '+s.paperId+'；'+(s.kind==='remote-index'?'远程关键词检索片段，版本 '+s.attachmentVersionId+'，PDF SHA-256 '+s.sha256+'，解析摘要 '+s.packageDigest+'，索引 SHA-256 '+s.remoteRetrieval!.source.artifactDigest+'，检索请求 '+s.remoteRetrieval!.requestId+'，结果 SHA-256 '+s.remoteRetrieval!.resultDigest:s.kind==='parsed'?'解析片段，版本 '+s.attachmentVersionId+'，PDF SHA-256 '+s.sha256+'，解析摘要 '+s.packageDigest:'题录与摘要，未提供全文')+'；采用 '+s.selectedChunks+'/'+s.totalChunks+' 个片段'),
     '',...c.evidence.map(e=>'['+e.id+'] '+(e.pageIndex===null?'题录摘要':'第 '+(e.pageIndex+1)+' 页')+'\n'+e.text+'\n'),
     '未发送片段：'+c.omittedChunks+'。引用编号存在只证明对应输入片段存在，不证明模型结论正确。'].join('\n');
 }

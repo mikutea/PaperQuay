@@ -6,12 +6,14 @@ import{normalizeAgentMetadataQuery,agentMetadataQueryUrl,type AgentMetadataQuery
 import type{DoiLookupWarningCode,DoiLookupResult}from'../library/doiLookup.ts';
 import type{AgentConversation,AgentModelTurn}from'./conversation.ts';
 import type{AgentTarget}from'./proposals.ts';
+import {readRetrievalProvenance,type RetrievalProvenance} from '../retrieval/provenance.ts';
 
 export const AGENT_EVIDENCE_LIMITS=Object.freeze({bytes:512*1024,records:64});
 export interface AgentEvidenceTarget{id:string;hash:string;revision:number}
 export interface AgentContextEvidence{
- paperId:string;kind:'metadata'|'parsed';versionId:string|null;pdfHash:string|null;packageDigest:string|null;contextDigest:string;
+ paperId:string;kind:'metadata'|'parsed'|'remote-index';versionId:string|null;pdfHash:string|null;packageDigest:string|null;contextDigest:string;
  pageSetDigest:string;pageCount:number;totalPages:number|null;characters:number;omittedCharacters:number;
+ remoteRetrieval?:RetrievalProvenance;
 }
 export interface AgentModelEvidence{
  version:1;kind:'model';conversationId:string;requestId:string;requestDigest:string;responseDigest:string;startedAt:number;finishedAt:number;
@@ -38,9 +40,14 @@ export function validateAgentEvidence(input:unknown):AgentEvidence[]{
   if(raw.kind==='model'){
    agentOnly(raw,['version','kind','conversationId','requestId','requestDigest','responseDigest','startedAt','finishedAt','provider','targets','contexts']);uuid(raw.conversationId);hash(raw.requestDigest);hash(raw.responseDigest);integer(raw.startedAt,0,253402300799999);integer(raw.finishedAt,Number(raw.startedAt),253402300799999);provider(raw.provider);
    if(!Array.isArray(raw.targets)||!raw.targets.length||raw.targets.length>64||!Array.isArray(raw.contexts)||raw.contexts.length>8)throw new AgentError('INVALID');const known=new Set<string>();for(const value of raw.targets){const t=target(value);if(known.has(t.id))throw new AgentError('INVALID');known.add(t.id);}const seen=new Set<string>();
-   for(const value of raw.contexts){const c=object(value,['paperId','kind','versionId','pdfHash','packageDigest','contextDigest','pageSetDigest','pageCount','totalPages','characters','omittedCharacters']);const id=uuid(c.paperId);if(!known.has(id)||seen.has(id))throw new AgentError('INVALID');seen.add(id);hash(c.contextDigest);hash(c.pageSetDigest);integer(c.characters,1,4000);integer(c.omittedCharacters,0,200000);integer(c.pageCount,0,2000);
+   for(const value of raw.contexts){const c=object(value,['paperId','kind','versionId','pdfHash','packageDigest','contextDigest','pageSetDigest','pageCount','totalPages','characters','omittedCharacters','remoteRetrieval']);const id=uuid(c.paperId);if(!known.has(id)||seen.has(id))throw new AgentError('INVALID');seen.add(id);hash(c.contextDigest);hash(c.pageSetDigest);integer(c.characters,1,4000);integer(c.omittedCharacters,0,c.kind==='remote-index'?2020000:200000);integer(c.pageCount,0,2000);
     if(c.kind==='metadata'){if([c.versionId,c.pdfHash,c.packageDigest,c.totalPages].some(v=>v!==null)||c.pageCount!==0||c.pageSetDigest!==reviewFingerprint([]))throw new AgentError('INVALID');}
-    else if(c.kind==='parsed'){uuid(c.versionId);hash(c.pdfHash);hash(c.packageDigest);integer(c.totalPages,1,2000);if(Number(c.pageCount)<1||Number(c.pageCount)>Number(c.totalPages))throw new AgentError('INVALID');}else throw new AgentError('INVALID');
+    else if(c.kind==='parsed'||c.kind==='remote-index'){uuid(c.versionId);hash(c.pdfHash);hash(c.packageDigest);integer(c.totalPages,1,2000);if(Number(c.pageCount)<1||Number(c.pageCount)>Number(c.totalPages))throw new AgentError('INVALID');}else throw new AgentError('INVALID');
+    if(c.kind==='remote-index'){const proof=readRetrievalProvenance(c.remoteRetrieval),pages=[...new Set(proof.evidence.map(row=>row.pageIndex))];
+      if(proof.source.target.paperId!==id||proof.source.target.attachmentVersionId!==c.versionId||proof.source.target.sha256!==c.pdfHash||proof.source.parseDigest!==c.packageDigest||proof.source.target.pageCount!==c.totalPages
+        ||pages.length!==c.pageCount||reviewFingerprint(pages)!==c.pageSetDigest||proof.evidence.reduce((n,row)=>n+row.excerptCharacters,0)+2*(proof.evidence.length-1)!==c.characters
+        ||Number(c.characters)+Number(c.omittedCharacters)!==proof.source.textCharacters+2*(proof.source.chunkCount-1))throw new AgentError('INVALID');
+    }else if(c.remoteRetrieval!==undefined)throw new AgentError('INVALID');
    }
   }else if(raw.kind==='crossref'){
    agentOnly(raw,['version','kind','requestId','target','query','apiUrl','receivedAt','doi','dataDigest','recordDigest','responseDigest','yearField','warnings']);target(raw.target);const q=normalizeAgentMetadataQuery(raw.query);if(canonicalJson(q)!==canonicalJson(raw.query)||raw.apiUrl!==agentMetadataQueryUrl(q))throw new AgentError('INVALID');integer(raw.receivedAt,0,253402300799999);hash(raw.dataDigest);hash(raw.recordDigest);hash(raw.responseDigest);const doi=normalizeAgentMetadataQuery({kind:'doi',value:raw.doi}).value;if(doi!==raw.doi||q.kind==='doi'&&q.value!==doi)throw new AgentError('INVALID');
@@ -58,7 +65,7 @@ export function assertAgentEvidenceMatches(input:AgentEvidence[],origin:'local'|
 }
 export function modelEvidenceFromTurn(conversation:AgentConversation,turn:AgentModelTurn):AgentModelEvidence{
  if(turn.status!=='complete'||turn.request.conversationId!==conversation.id)throw new AgentError('INVALID');const request=turn.request;
- return validateAgentEvidence([{version:1,kind:'model',conversationId:conversation.id,requestId:request.id,requestDigest:request.digest,responseDigest:reviewFingerprint(turn.text),startedAt:turn.startedAt,finishedAt:turn.finishedAt,provider:{id:turn.provider.id,endpoint:turn.provider.endpoint,model:turn.provider.model},targets:request.targets.map(({id,hash,revision})=>({id,hash,revision})),contexts:request.contexts.map(c=>({paperId:c.paperId,kind:c.kind,versionId:c.selection.versionId,pdfHash:c.sha256,packageDigest:c.packageDigest,contextDigest:c.digest,pageSetDigest:reviewFingerprint(c.pages),pageCount:c.pages.length,totalPages:c.totalPages,characters:c.text.length,omittedCharacters:c.omittedCharacters}))}])[0]as AgentModelEvidence;
+ return validateAgentEvidence([{version:1,kind:'model',conversationId:conversation.id,requestId:request.id,requestDigest:request.digest,responseDigest:reviewFingerprint(turn.text),startedAt:turn.startedAt,finishedAt:turn.finishedAt,provider:{id:turn.provider.id,endpoint:turn.provider.endpoint,model:turn.provider.model},targets:request.targets.map(({id,hash,revision})=>({id,hash,revision})),contexts:request.contexts.map(c=>({paperId:c.paperId,kind:c.kind,versionId:c.selection.versionId,pdfHash:c.sha256,packageDigest:c.packageDigest,contextDigest:c.digest,pageSetDigest:reviewFingerprint(c.pages),pageCount:c.pages.length,totalPages:c.totalPages,characters:c.text.length,omittedCharacters:c.omittedCharacters,...(c.remoteRetrieval?{remoteRetrieval:c.remoteRetrieval}:{})}))}])[0]as AgentModelEvidence;
 }
 
 export function assertAgentReceiptEvidence(input:unknown,origin:'local'|'model'|'metadata',originPlanId:string,changes:readonly{paperId:string;beforeHash:string}[]):void{

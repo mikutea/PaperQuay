@@ -18,6 +18,7 @@ export interface ServerConfig {
   cloudPdfEnabled: boolean;
   desktopPdfEnabled: boolean;
   remoteTasksEnabled?:boolean;
+  remoteRetrievalEnabled?:boolean;
   modelInferenceEnabled?:boolean;
   modelGateway?:ModelGatewayConfig|null;
   desktopPdfStunUrls: string[];
@@ -175,6 +176,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   if (!['0', '1'].includes(desktopPdfEnabled)) throw new ApiError('CONFIGURATION_INVALID', 500);
   const remoteTasksEnabled=env.PAPERQUAY_REMOTE_TASKS_ENABLED??'0';
   if(!['0','1'].includes(remoteTasksEnabled))throw new ApiError('CONFIGURATION_INVALID',500);
+  const remoteRetrievalEnabled=env.PAPERQUAY_REMOTE_RETRIEVAL_ENABLED??'0';
+  if(!['0','1'].includes(remoteRetrievalEnabled))throw new ApiError('CONFIGURATION_INVALID',500);
   const modelInferenceEnabled=env.PAPERQUAY_MODEL_INFERENCE_ENABLED??'0';
   if(!['0','1'].includes(modelInferenceEnabled))throw new ApiError('CONFIGURATION_INVALID',500);
   return {
@@ -186,6 +189,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     cloudPdfEnabled: cloudPdfEnabled === '1',
     desktopPdfEnabled: desktopPdfEnabled === '1',
     remoteTasksEnabled:remoteTasksEnabled==='1',
+    remoteRetrievalEnabled:remoteRetrievalEnabled==='1',
     modelInferenceEnabled:modelInferenceEnabled==='1',
     modelGateway:loadModelGatewayConfig(env,modelInferenceEnabled==='1'),
     desktopPdfStunUrls: checkedDesktopPdfStunUrls(env.PAPERQUAY_DESKTOP_PDF_STUN_URLS),

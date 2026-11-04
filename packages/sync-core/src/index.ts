@@ -17,3 +17,8 @@ export * from './desktopGraph.ts';
 export * from './desktopGraphState.ts';
 
 export * from './desktopGraphReview.ts';
+export * from './desktopNoteState.ts';
+export * from './remoteRetrieval.ts';
+export * from './desktopPaperState.ts';
+export * from './graphEvidence.ts';
+export * from './desktopReadingState.ts';

@@ -4,6 +4,58 @@ const path = require('node:path');
 const { DatabaseSync, sqlStringLiteral, withTransaction } = require('./nodeSqlite.cjs');
 const { cleanString } = require('./utils.cjs');
 const nativeFs = require('./nativeFs.cjs');
+const { isDeepStrictEqual } = require('node:util');
+
+const PAPER_EXCHANGE_FIELDS = ['title', 'year', 'publication', 'doi', 'abstractText', 'keywords', 'isFavorite', 'updatedAt', 'authors', 'tags'];
+function paperExchangeFailure(code) { throw Object.assign(new Error(code), { code }); }
+function validPaperExchangeSnapshot(value) {
+  const exact = (row, keys) => row && Object.getPrototypeOf(row) === Object.prototype && Reflect.ownKeys(row).length === keys.length
+    && Object.keys(row).sort().join(',') === [...keys].sort().join(',') && Object.values(Object.getOwnPropertyDescriptors(row)).every(item => 'value' in item);
+  const text = row => typeof row === 'string' && row.length <= 131072, nullable = row => row === null || text(row);
+  const integer = row => Number.isSafeInteger(row) && row >= 0;
+  return exact(value, PAPER_EXCHANGE_FIELDS) && text(value.title) && ['year', 'publication', 'doi', 'abstractText'].every(key => nullable(value[key]))
+    && typeof value.isFavorite === 'boolean' && integer(value.updatedAt) && Array.isArray(value.keywords) && value.keywords.length <= 1000 && value.keywords.every(text)
+    && Array.isArray(value.authors) && value.authors.length <= 1000 && value.authors.every(row => exact(row, ['id', 'name', 'givenName', 'familyName', 'sortOrder'])
+      && text(row.id) && text(row.name) && nullable(row.givenName) && nullable(row.familyName) && integer(row.sortOrder))
+    && Array.isArray(value.tags) && value.tags.length <= 1000 && value.tags.every(row => exact(row, ['id', 'name', 'color', 'sortOrder'])
+      && text(row.id) && text(row.name) && nullable(row.color) && integer(row.sortOrder)) && Buffer.byteLength(JSON.stringify(value)) <= 1024 * 1024;
+}
+function paperExchangeSnapshot(db, paperId) {
+  const row = db.prepare('SELECT title, year, publication, doi, abstract_text AS abstractText, is_favorite AS isFavorite, updated_at AS updatedAt FROM papers WHERE id = ?').get(paperId);
+  if (!row) paperExchangeFailure('PAPER_LOCAL_UNAVAILABLE');
+  return { ...row, isFavorite: Boolean(row.isFavorite),
+    keywords: db.prepare('SELECT keyword FROM paper_keywords WHERE paper_id = ? ORDER BY sort_order').all(paperId).map(item => item.keyword),
+    authors: db.prepare('SELECT id, name, given_name AS givenName, family_name AS familyName, sort_order AS sortOrder FROM authors WHERE paper_id = ? ORDER BY sort_order').all(paperId).map(item => ({ ...item })),
+    tags: db.prepare('SELECT id, name, color, sort_order AS sortOrder FROM tags WHERE paper_id = ? ORDER BY sort_order').all(paperId).map(item => ({ ...item })) };
+}
+/** Compare and update only the metadata whitelist in one IMMEDIATE transaction.
+ * The caller has durably saved old/new snapshots before entering this method.
+ * Equal post-images settle a lost acknowledgement without overwriting edits. */
+function compareAndApplyPaperMetadata(db, changes) {
+  if (!Array.isArray(changes) || !changes.length || changes.length > 16 || new Set(changes.map(row => row?.localPaperId)).size !== changes.length) paperExchangeFailure('PAPER_SELECTION_INVALID');
+  for (const row of changes) if (!row || Object.keys(row).sort().join(',') !== 'after,before,localPaperId' || typeof row.localPaperId !== 'string'
+    || !row.localPaperId || row.localPaperId.length > 512 || !validPaperExchangeSnapshot(row.before) || !validPaperExchangeSnapshot(row.after)) paperExchangeFailure('PAPER_SOURCE_UNSUPPORTED');
+  return withTransaction(db, () => {
+    const pending = [], alreadyApplied = [];
+    for (const row of changes) {
+      const current = paperExchangeSnapshot(db, row.localPaperId);
+      if (isDeepStrictEqual(current, row.after)) alreadyApplied.push(row.localPaperId);
+      else if (!isDeepStrictEqual(current, row.before)) paperExchangeFailure('PAPER_SOURCE_CHANGED');
+      else pending.push(row);
+    }
+    for (const { localPaperId, after } of pending) {
+      db.prepare('UPDATE papers SET title = ?, year = ?, publication = ?, doi = ?, abstract_text = ?, is_favorite = ?, updated_at = ? WHERE id = ?')
+        .run(after.title, after.year, after.publication, after.doi, after.abstractText, after.isFavorite ? 1 : 0, after.updatedAt, localPaperId);
+      for (const table of ['authors', 'tags', 'paper_keywords']) db.prepare(`DELETE FROM ${table} WHERE paper_id = ?`).run(localPaperId);
+      for (const author of after.authors) db.prepare('INSERT INTO authors (id, paper_id, name, given_name, family_name, sort_order) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(author.id, localPaperId, author.name, author.givenName, author.familyName, author.sortOrder);
+      for (const tag of after.tags) db.prepare('INSERT INTO tags (id, paper_id, name, color, sort_order) VALUES (?, ?, ?, ?, ?)')
+        .run(tag.id, localPaperId, tag.name, tag.color, tag.sortOrder);
+      after.keywords.forEach((keyword, index) => db.prepare('INSERT INTO paper_keywords (paper_id, keyword, sort_order) VALUES (?, ?, ?)').run(localPaperId, keyword, index));
+    }
+    return { applied: pending.map(row => row.localPaperId), alreadyApplied };
+  });
+}
 
 function readLegacyLibrary(filePath) {
   try { return JSON.parse(nativeFs.readSync(filePath, { singleLink: true }).bytes.toString('utf8')); }
@@ -708,6 +760,21 @@ function createLibraryDatabaseStore(appPaths, helpers) {
 
     saveSync(library) {
       saveLibraryToDb(db, appPaths, normalizeLibrary, library);
+    },
+
+    capturePaperMetadata(localPaperIds) {
+      if (!Array.isArray(localPaperIds) || localPaperIds.length > 1000 || new Set(localPaperIds).size !== localPaperIds.length
+        || localPaperIds.some(id => typeof id !== 'string' || !id || id.length > 512)) paperExchangeFailure('PAPER_SELECTION_INVALID');
+      // A read snapshot does not reserve the library's write lock.
+      db.exec('BEGIN');
+      try {
+        const rows = localPaperIds.map(localPaperId => ({ localPaperId, metadata: paperExchangeSnapshot(db, localPaperId) }));
+        db.exec('COMMIT'); return rows;
+      } catch (error) { try { db.exec('ROLLBACK'); } catch {} throw error; }
+    },
+
+    compareAndApplyPaperMetadata(changes) {
+      return compareAndApplyPaperMetadata(db, changes);
     },
 
     saveReferences(paperId, refs) {

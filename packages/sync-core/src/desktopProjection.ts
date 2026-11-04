@@ -1,5 +1,5 @@
 import {GRAPH_RELATION_LIMITS,validateGraphRelationData} from './graphRelation.ts';
-import type { EntityDataMap, EntityType, ReadingPositionData, ValidationResult } from './types.ts';
+import type { EntityDataMap, EntityType, PaperOrganization, ReadingPositionData, ValidationResult } from './types.ts';
 import { SYNC_LIMITS, UUID_PATTERN } from './schema.ts';
 import { isPlainObject, validateEntityData } from './validation.ts';
 import { createRichNoteData, remapRichNoteReferences, richNoteUnresolvedId, parseRichNoteUnresolvedId, RICH_NOTE_LIMITS,
@@ -10,6 +10,7 @@ const IDENTITY_KINDS: readonly IdentityKind[] = ['paper', 'attachment', 'attachm
 const uuid = (value: unknown): value is string => typeof value === 'string' && new RegExp(UUID_PATTERN).test(value);
 const sha256 = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
 const localId = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 512 && value.trim() === value && !/[\\/\x00-\x1f\x7f]/.test(value) && !/^(?:(?:standalone|file|https?):|[a-z]:)/i.test(value);
+export const isDesktopLocalId = localId;
 const dataObject = (value: unknown): value is Record<string, unknown> => isPlainObject(value) && Object.values(Object.getOwnPropertyDescriptors(value)).every((descriptor) => 'value' in descriptor);
 const dataArray = (value: unknown): value is unknown[] => Array.isArray(value) && Object.keys(value).length === value.length && Object.keys(value).every((key) => /^(0|[1-9][0-9]*)$/.test(key) && Number(key) < value.length) && Object.values(Object.getOwnPropertyDescriptors(value)).every((descriptor) => 'value' in descriptor);
 
@@ -34,6 +35,13 @@ export interface VerifiedDesktopAttachment {
 export interface VerifiedDesktopRichNoteResource {
   proof: 'verified-note-image-bytes'; accountId: string; libraryBindingId: string;
   localNoteId: string; source: string; asset: RichNoteAsset;
+}
+
+/** A trusted caller derives these only from this private map and confirmed,
+ * live account note records. File-exchange aliases are not confirmation. */
+export interface ConfirmedDesktopNoteBinding {
+  localNoteId: string;
+  entityId: string;
 }
 
 /** Evidence produced at capture time, not inferred from today's path or file bytes. */
@@ -68,8 +76,13 @@ export interface DesktopProjectionInput {
   libraryBindingId: string;
   identityMap: DesktopIdentityMap;
   papers: readonly unknown[];
+  /** Explicit negotiated organization snapshots. Category IDs, local reading
+   * progress and same-name categories are never converted by this projector. */
+  paperOrganizationEnabled?: boolean;
+  paperOrganizations?: Readonly<Record<string, PaperOrganization>>;
   /** Explicit Markdown or desktop TipTap contentJson. Unsupported notes stay untouched. */
   notes?: readonly unknown[];
+  confirmedNotes?: readonly ConfirmedDesktopNoteBinding[];
   /** Explicitly supplied saved custom/approved AI relations from the anchored library. */
   graphRelations?:readonly unknown[];
   richNoteResources?: readonly VerifiedDesktopRichNoteResource[];
@@ -135,13 +148,14 @@ function stringList(value: unknown, field?: string): unknown {
   return value.map((item) => typeof item === 'string' ? item.trim() : field && dataObject(item) && typeof item[field] === 'string' ? (item[field] as string).trim() : null);
 }
 
-function paperData(raw: Record<string, unknown>): unknown {
+function paperData(raw: Record<string, unknown>, organization?: unknown): unknown {
   const doi = nullableText(raw.doi);
   return {
     title: typeof raw.title === 'string' ? raw.title.trim() : null,
     doi: typeof doi === 'string' ? doi.replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, '').replace(/^doi:\s*/i, '').toLowerCase() : doi,
     year: nullableText(raw.year), publication: nullableText(raw.publication), abstractText: nullableText(raw.abstractText),
     authors: stringList(raw.authors, 'name'), keywords: stringList(raw.keywords),
+    ...(organization === undefined ? {} : { organization }),
   };
 }
 
@@ -183,13 +197,31 @@ function projectRichSource(raw: Record<string, unknown>, paperId: string | null,
   const document = cloneDesktopRichSource(raw.contentJson, 16 * 1024 * 1024) as Record<string, unknown>;
   const descriptions = new Map<string, RichNoteUnresolvedReference>();
   const assets = new Map<string, RichNoteAsset>(), noteLinks = new Set<string>(), paperLinks = new Set<string>();
+  const inherited = copyRichSource(raw.unresolvedReferences ?? []), declared = new Set<string>();
+  if (!dataArray(inherited)) return fail('UNSUPPORTED_RICH_NOTE');
+  for (const entry of inherited) {
+    if (!dataObject(entry) || typeof entry.kind !== 'string' || !['note', 'paper', 'folder', 'ai-chat'].includes(entry.kind)
+      || typeof entry.id !== 'string') return fail('UNSUPPORTED_RICH_NOTE');
+    const kind = entry.kind as RichNoteUnresolvedReference['kind'], parsed = parseRichNoteUnresolvedId(entry.id);
+    if (parsed && parsed.kind !== kind) return fail('UNSUPPORTED_RICH_NOTE');
+    const target = parsed ? entry.id : richNoteUnresolvedId(kind, entry.id);
+    declared.add(`${kind}:${entry.id}`);
+    if (descriptions.has(`${kind}:${target}`)) return fail('UNSUPPORTED_RICH_NOTE');
+    descriptions.set(`${kind}:${target}`, { ...entry, id: target } as RichNoteUnresolvedReference);
+  }
   const missing = (kind: RichNoteUnresolvedReference['kind'], id: string, label = '') => {
-    const target = richNoteUnresolvedId(kind, id);
-    if (!descriptions.has(`${kind}:${target}`)) descriptions.set(`${kind}:${target}`, { kind, id: target, label: label || id, reason: 'unmapped' });
+    const parsed = parseRichNoteUnresolvedId(id);
+    if (parsed && parsed.kind !== kind) return fail('UNSUPPORTED_RICH_NOTE');
+    const target = parsed ? id : richNoteUnresolvedId(kind, id);
+    if (!descriptions.has(`${kind}:${target}`)) descriptions.set(`${kind}:${target}`, { kind, id: target, label: label || parsed?.sourceId || id, reason: 'unmapped' });
     return target;
   };
+  // A plain local note ID is temporary capture input. Existing unresolved
+  // tokens are durable history and must never be rebound by a coincidental ID.
+  const note = (id: string, label = '') => parseRichNoteUnresolvedId(id) || declared.has(`note:${id}`) ? missing('note', id, label) : id;
   const paper = (id: unknown, label = ''): string => {
     if (typeof id !== 'string') return fail('UNSUPPORTED_RICH_NOTE');
+    if (parseRichNoteUnresolvedId(id) || declared.has(`paper:${id}`)) return missing('paper', id, label);
     return papers.get(id.replace(/^native-library:/, '')) ?? missing('paper', id, label);
   };
   let labelOnly = 0;
@@ -211,7 +243,7 @@ function projectRichSource(raw: Record<string, unknown>, paperId: string | null,
       if (!dataObject(attrs)) return fail('UNSUPPORTED_RICH_NOTE');
       const kind = node.type === 'wikiLink' ? 'note' : 'paper', key = kind === 'note' ? 'id' : 'paperId', original = attrs[key];
       if (typeof original === 'string') {
-        const mapped = kind === 'note' ? missing('note', original, String(attrs.label || '')) : paper(original, String(attrs.label || ''));
+        const mapped = kind === 'note' ? note(original, String(attrs.label || '')) : paper(original, String(attrs.label || ''));
         attrs[key] = mapped; (kind === 'note' ? noteLinks : paperLinks).add(mapped);
       } else if (typeof attrs.label === 'string' && attrs.label) {
         const id = `label-only:${kind}:${++labelOnly}`;
@@ -222,7 +254,7 @@ function projectRichSource(raw: Record<string, unknown>, paperId: string | null,
   };
   walk(document);
   const list = (input: unknown) => { if (input === undefined) return []; if (!dataArray(input) || !input.every((id) => typeof id === 'string')) return fail('UNSUPPORTED_RICH_NOTE'); return input as string[]; };
-  for (const id of list(raw.linkedNoteIds)) noteLinks.add(missing('note', id));
+  for (const id of list(raw.linkedNoteIds)) noteLinks.add(note(id));
   for (const id of list(raw.linkedPaperIds)) paperLinks.add(paper(id));
   const metadata: Record<string, unknown> = { type: raw.type, anchors: [], tags: copyRichSource(raw.tags ?? []), color: raw.color ?? '#fef08a',
     isFavorite: raw.isFavorite ?? false, isPinned: raw.isPinned ?? false, linkedNoteIds: [...noteLinks], linkedPaperIds: [...paperLinks],
@@ -245,11 +277,20 @@ export function projectDesktopLibrary(input: DesktopProjectionInput, allocateId:
   if (!dataObject(input)) return fail('INVALID_DESKTOP_SOURCE');
   if (!validateDesktopIdentityMap(input.identityMap).ok || input.identityMap.accountId !== input.accountId || input.identityMap.libraryBindingId !== input.libraryBindingId) return fail('DESKTOP_SCOPE_MISMATCH');
   if (!dataArray(input.papers) || input.papers.length > SYNC_LIMITS.maxLocalEntities || (input.notes !== undefined && !dataArray(input.notes)) || (input.history !== undefined && !dataObject(input.history))) return fail('INVALID_DESKTOP_SOURCE');
-  for (const value of [input.notes,input.graphRelations, input.verifiedAttachments, input.historyBindings, input.richNoteResources]) {
+  for (const value of [input.notes,input.confirmedNotes,input.graphRelations, input.verifiedAttachments, input.historyBindings, input.richNoteResources]) {
     if (value !== undefined && (!dataArray(value) || value.length > SYNC_LIMITS.maxLocalEntities)) return fail('INVALID_DESKTOP_SOURCE');
   }
   if (input.history && Object.keys(input.history).length > SYNC_LIMITS.maxLocalEntities) return fail('INVALID_DESKTOP_SOURCE');
   const identityMap = structuredClone(input.identityMap);
+  const confirmedNotes = new Map<string, string>();
+  const confirmedIds = new Set<string>();
+  for (const binding of input.confirmedNotes ?? []) {
+    if (!dataObject(binding) || Object.keys(binding).sort().join(',') !== 'entityId,localNoteId'
+      || !localId(binding.localNoteId) || !uuid(binding.entityId)
+      || identityMap.aliases[JSON.stringify(['note', binding.localNoteId])] !== binding.entityId
+      || confirmedNotes.has(binding.localNoteId) || confirmedIds.has(binding.entityId)) return fail('INVALID_CONFIRMED_NOTE_BINDING');
+    confirmedNotes.set(binding.localNoteId, binding.entityId); confirmedIds.add(binding.entityId);
+  }
   const entities: ProjectedEntity[] = [];
   const skipped: DesktopProjectionSkip[] = [];
   const paperIds = new Map<string, string>();
@@ -273,7 +314,10 @@ export function projectDesktopLibrary(input: DesktopProjectionInput, allocateId:
   }
   input.papers.forEach((candidate, index) => {
     if (!dataObject(candidate) || !localId(candidate.id) || paperIds.has(candidate.id)) { skip('paper', index, 'INVALID_LOCAL_PAPER'); return; }
-    const validated = validateEntityData('paper', paperData(candidate));
+    const organization = input.paperOrganizationEnabled === true && input.paperOrganizations !== undefined
+      ? dataObject(input.paperOrganizations) ? Object.getOwnPropertyDescriptor(input.paperOrganizations, candidate.id as string)?.value : null
+      : undefined;
+    const validated = validateEntityData('paper', paperData(candidate, organization));
     if (!validated.ok) { skip('paper', index, 'INVALID_PAPER_METADATA'); return; }
     const paperId = assignIdentity(identityMap, 'paper', [candidate.id], allocateId);
     paperIds.set(candidate.id, paperId);
@@ -321,17 +365,18 @@ export function projectDesktopLibrary(input: DesktopProjectionInput, allocateId:
   const mappedPaperIds = new Set(paperIds.values());
   const dependents = new Map<string, Set<(typeof prepared)[number]>>();
   for (const entry of prepared) if (entry.data.format === 'tiptap-json') for (const id of entry.data.metadata.linkedNoteIds) {
-    const source = parseRichNoteUnresolvedId(id)?.sourceId ?? id, values = dependents.get(source) ?? new Set(); values.add(entry); dependents.set(source, values);
+    if (parseRichNoteUnresolvedId(id)) continue;
+    const values = dependents.get(id) ?? new Set(); values.add(entry); dependents.set(id, values);
   }
   const queue = [...prepared], enqueued = new Set(queue);
   for (let cursor = 0; cursor < queue.length; cursor++) {
     const entry = queue[cursor]; enqueued.delete(entry); if (!activeNotes.has(entry.localId)) continue;
     try {
-      outputs.set(entry.localId, entry.data.format !== 'tiptap-json' ? entry.data : remapRichNoteReferences(entry.data, (kind, id, unresolved) => {
-        if (kind === 'note') return activeNotes.get(id)?.entityId ?? null;
-        if (kind === 'paper') return paperIds.get(id.replace(/^native-library:/, '')) ?? (!unresolved && mappedPaperIds.has(id) ? id : null);
+      outputs.set(entry.localId, entry.data.format !== 'tiptap-json' ? entry.data : remapRichNoteReferences(entry.data, (kind, id) => {
+        if (kind === 'note') return activeNotes.get(id)?.entityId ?? confirmedNotes.get(id) ?? null;
+        if (kind === 'paper') return mappedPaperIds.has(id) ? id : null;
         return null;
-      }, { rebindUnresolved: true }));
+      }));
     } catch {
       activeNotes.delete(entry.localId); outputs.delete(entry.localId); skip('note', entry.index, 'UNSUPPORTED_RICH_NOTE');
       for (const dependent of dependents.get(entry.localId) ?? []) if (!enqueued.has(dependent)) { queue.push(dependent); enqueued.add(dependent); }
