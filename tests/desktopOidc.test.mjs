@@ -45,8 +45,9 @@ async function fixture(options = {}) {
       const idToken = await new SignJWT(claims).setProtectedHeader({ alg: 'RS256', kid: 'test-key' })
         .setIssuer(issuer).setAudience(options.badAudience ? 'wrong-client' : 'desktop-test')
         .setSubject(isRefresh && options.changedSubject ? 'other-user' : 'test-user')
-        .setIssuedAt().setExpirationTime('5m').sign(options.badSignature ? otherKey.privateKey : key.privateKey);
-      json({ access_token: `dummy-access-${isRefresh ? 'refreshed' : 'initial'}`, token_type: 'Bearer', id_token: idToken,
+        .setIssuedAt().setExpirationTime('5m').sign(options.badSignature || isRefresh && options.badRefreshSignature ? otherKey.privateKey : key.privateKey);
+      const omitIdToken = isRefresh ? options.refreshWithoutIdToken : options.signInWithoutIdToken;
+      json({ access_token: isRefresh && options.invalidRefreshAccessToken ? '' : `dummy-access-${isRefresh ? 'refreshed' : 'initial'}`, token_type: 'Bearer', ...(omitIdToken ? {} : { id_token: idToken }),
         refresh_token: 'dummy-refresh', expires_in: isRefresh ? 300 : (options.shortExpiry ? 1 : 300) });
     } else { response.writeHead(404).end(); }
   });
@@ -155,6 +156,47 @@ test('concurrent token callers share one early refresh', async (t) => {
   const tokens = await Promise.all([f.auth.getAccessToken(), f.auth.getAccessToken(), f.auth.getAccessToken()]);
   assert.deepEqual(tokens, Array(3).fill('dummy-access-refreshed'));
   assert.equal(f.counters().refreshCount, 1);
+});
+
+test('refresh without a new ID token preserves the verified identity and shares the replacement access token', async (t) => {
+  const f = await fixture({ shortExpiry: true, refreshWithoutIdToken: true }); t.after(() => f.close());
+  await f.auth.signIn(f.config);
+  const before = f.auth.getSnapshot();
+  const tokens = await Promise.all([f.auth.getAccessToken(), f.auth.getAccessToken(), f.auth.getAccessToken()]);
+  assert.deepEqual(tokens, Array(3).fill('dummy-access-refreshed'));
+  assert.equal(f.counters().refreshCount, 1);
+  assert.equal(f.auth.getSnapshot().status, 'signed-in');
+  assert.equal(f.auth.getSnapshot().displayName, before.displayName);
+  assert(f.auth.getSnapshot().expiresAt > before.expiresAt);
+  assert.equal(await f.auth.getAccessToken(), 'dummy-access-refreshed');
+  assert.equal(f.counters().refreshCount, 1);
+});
+
+test('initial sign-in still requires a signed ID token', async (t) => {
+  const f = await fixture({ signInWithoutIdToken: true }); t.after(() => f.close());
+  await assert.rejects(f.auth.signIn(f.config), /AUTH_SIGN_IN_FAILED/);
+  await assert.rejects(f.auth.getAccessToken(), /AUTHENTICATION_REQUIRED/);
+});
+
+for (const option of ['badRefreshSignature', 'invalidRefreshAccessToken']) {
+  test(`optional refresh ID tokens do not bypass token validation: ${option}`, async (t) => {
+    const f = await fixture({ shortExpiry: true, [option]: true, refreshWithoutIdToken: option === 'invalidRefreshAccessToken' }); t.after(() => f.close());
+    await f.auth.signIn(f.config);
+    await assert.rejects(f.auth.getAccessToken(), /AUTHENTICATION_REQUIRED/);
+    assert.equal(f.auth.getSnapshot().status, 'error');
+  });
+}
+
+test('sign-out during refresh without an ID token cannot restore the previous identity', async (t) => {
+  let release;
+  const barrier = new Promise((resolve) => { release = resolve; });
+  const f = await fixture({ shortExpiry: true, refreshWithoutIdToken: true, refreshBarrier: barrier });
+  t.after(() => { release(); return f.close(); });
+  await f.auth.signIn(f.config);
+  const token = f.auth.getAccessToken();
+  await f.refreshStarted; await f.auth.signOut(); release();
+  await assert.rejects(token, /AUTHENTICATION_REQUIRED/);
+  assert.deepEqual(f.auth.getSnapshot(), { status: 'signed-out' });
 });
 
 for (const option of ['changedSubject', 'changedSid']) {

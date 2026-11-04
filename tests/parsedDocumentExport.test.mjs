@@ -27,7 +27,7 @@ function pdf() {
   return Buffer.from(output + `trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
 }
 async function fixture(t, blocks) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'paperquay-parsed-export-'));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'paperquay-parsed-export-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const profile = path.join(root, 'profile'), dataDir = path.join(profile, 'PaperQuay'), output = path.join(dataDir, '.mineru-cache', 'run');
   fs.mkdirSync(output, { recursive: true });

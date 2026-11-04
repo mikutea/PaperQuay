@@ -978,7 +978,7 @@ test('paper backup keeps the native picker under its account writer lock until a
 });
 
 test('actual graph evidence commands export only selected linked cache evidence without any additional service request', async t => {
-  const destination = path.join(os.tmpdir(), 'paperquay-evidence-parent-' + randomUUID() + '.json');
+  const destination = path.join(fs.realpathSync.native(os.tmpdir()), 'paperquay-evidence-parent-' + randomUUID() + '.json');
   t.after(() => fs.rmSync(destination, { force: true }));
   const f = await graphCommandFixture(t, { graphEvidenceExport: { showSaveDialog: async () => ({ canceled: false, filePath: destination }) } });
   f.store.saveReferences(f.paper.id, [{ id: 'actual-cached-ref', seq: 1, title: f.second.title, fetchedAt: 1 }]);
@@ -992,7 +992,7 @@ test('actual graph evidence commands export only selected linked cache evidence 
 });
 
 test('graph evidence picker refuses a changed cache and preserves the original selected destination', async t => {
-  const entered = deferred(), release = deferred(), destination = path.join(os.tmpdir(), 'paperquay-evidence-parent-' + randomUUID() + '.json');
+  const entered = deferred(), release = deferred(), destination = path.join(fs.realpathSync.native(os.tmpdir()), 'paperquay-evidence-parent-' + randomUUID() + '.json');
   t.after(() => fs.rmSync(destination, { force: true })); fs.writeFileSync(destination, 'existing user-selected file');
   const f = await graphCommandFixture(t, { graphEvidenceExport: { showSaveDialog: async () => { entered.resolve(); await release.promise; return { canceled: false, filePath: destination }; } } });
   f.store.saveReferences(f.paper.id, [{ id: 'actual-cached-ref', seq: 1, title: f.second.title, fetchedAt: 0 }]);

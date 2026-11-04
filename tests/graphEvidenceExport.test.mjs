@@ -7,7 +7,7 @@ import { createRequire } from 'node:module';
 import * as core from '../packages/sync-core/src/index.ts';
 import { evidenceSnapshot } from './fixtures/desktopGraphEvidence.mjs';
 const require = createRequire(import.meta.url), { createGraphEvidenceExporter } = require('../electron/backend/graphEvidenceExport.cjs'), nativeFs = require('../electron/backend/nativeFs.cjs');
-function temporary(t) { const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'paperquay-graph-evidence-export-')); t.after(() => { assert.equal(path.dirname(path.resolve(directory)), path.resolve(os.tmpdir())); assert(path.basename(directory).startsWith('paperquay-graph-evidence-export-')); fs.rmSync(directory, { recursive: true, force: true }); }); return path.join(directory, 'chosen.json'); }
+function temporary(t) { const directory = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'paperquay-graph-evidence-export-'))); t.after(() => { assert.equal(path.dirname(path.resolve(directory)), fs.realpathSync.native(os.tmpdir())); assert(path.basename(directory).startsWith('paperquay-graph-evidence-export-')); fs.rmSync(directory, { recursive: true, force: true }); }); return path.join(directory, 'chosen.json'); }
 test('native evidence export saves the verified compact envelope and returns no filesystem path', async t => {
   const file = temporary(t), snapshot = evidenceSnapshot(); let dialogs = 0, guards = 0;
   const exporter = createGraphEvidenceExporter({ core, showSaveDialog: async options => { dialogs++; assert.deepEqual(options.filters[0].extensions, ['json']); return { canceled: false, filePath: file }; } });

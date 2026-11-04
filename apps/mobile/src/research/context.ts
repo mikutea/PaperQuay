@@ -1,4 +1,4 @@
-import { tokenize } from '../../../../src/features/review/reviewRetrieval.ts';
+import { tokenize } from '../../../../packages/review-core/queryTokens.mts';
 import { readRetrievalProvenance, assertRetrievalExcerpt, type RetrievalProvenance } from '../retrieval/provenance.ts';
 
 export const RESEARCH_LIMITS = Object.freeze({ sources: 8, sourceCharacters: 180000, chunksPerSource: 4096, chunkCharacters: 1800, evidence: 24, contextBytes: 128 * 1024, questionBytes: 8192 });

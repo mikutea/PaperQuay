@@ -121,21 +121,28 @@ function createDesktopOidcSession({ openExternal, fetch: fetchImpl = globalThis.
 
   function captureTokens(tokens, previous) {
     const claims = tokens.claims();
-    if (!claims || typeof claims.sub !== 'string' || !claims.sub || typeof claims.iss !== 'string'
-        || (claims.sid !== undefined && typeof claims.sid !== 'string')
-        || typeof tokens.access_token !== 'string' || !tokens.access_token || tokens.access_token.length > 131072
+    // Refresh may omit an ID token (OIDC Core 12.2). Only the already verified
+    // session can supply that identity; initial sign-in still requires claims.
+    if (claims === undefined) {
+      if (!previous || tokens.id_token !== undefined) throw authError('AUTH_RESPONSE_INVALID');
+    } else if (!claims || typeof claims.sub !== 'string' || !claims.sub || typeof claims.iss !== 'string'
+        || (claims.sid !== undefined && typeof claims.sid !== 'string')) {
+      throw authError('AUTH_RESPONSE_INVALID');
+    }
+    if (typeof tokens.access_token !== 'string' || !tokens.access_token || tokens.access_token.length > 131072
         || typeof tokens.expires_in !== 'number' || !Number.isFinite(tokens.expires_in) || tokens.expires_in <= 0
         || !Number.isSafeInteger(Math.ceil(Date.now() + tokens.expires_in * 1000))
         || (tokens.refresh_token !== undefined && (typeof tokens.refresh_token !== 'string' || tokens.refresh_token.length > 131072))) {
       throw authError('AUTH_RESPONSE_INVALID');
     }
-    if (previous && (claims.sub !== previous.subject || claims.iss !== previous.issuer || claims.sid !== previous.sid)) {
+    if (claims && previous && (claims.sub !== previous.subject || claims.iss !== previous.issuer || claims.sid !== previous.sid)) {
       throw authError('AUTH_SESSION_CHANGED');
     }
     return {
       accessToken: tokens.access_token, refreshToken: tokens.refresh_token || previous?.refreshToken,
       expiresAt: Date.now() + tokens.expires_in * 1000,
-      issuer: claims.iss, subject: claims.sub, sid: claims.sid, displayName: safeDisplayName(claims) || previous?.displayName,
+      issuer: claims ? claims.iss : previous.issuer, subject: claims ? claims.sub : previous.subject,
+      sid: claims ? claims.sid : previous.sid, displayName: claims ? safeDisplayName(claims) || previous?.displayName : previous.displayName,
     };
   }
 

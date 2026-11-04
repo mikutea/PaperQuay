@@ -3,9 +3,12 @@ const {normalizeRemoteScope}=require('./remoteTaskJournal.cjs');
 const fail=code=>{throw Object.assign(new Error(code),{code});};
 const sha=value=>createHash('sha256').update(value).digest('hex');
 const clone=value=>structuredClone(value);
-const publicCode=error=>typeof error?.code==='string'&&/^(?:MODEL_[A-Z_]{1,64}|PROFILE_CHANGED|CANCELLED|OUTCOME_UNKNOWN|AUTHENTICATION_REQUIRED|SESSION_REVOKED|DESKTOP_OPERATION_CANCELLED)$/.test(error.code)?error.code:'MODEL_EXECUTION_FAILED';
+const publicCode=error=>typeof error?.code==='string'&&/^(?:MODEL_[A-Z_]{1,64}|PROFILE_CHANGED|CANCELLED|OUTCOME_UNKNOWN|AUTHENTICATION_REQUIRED|SESSION_REVOKED|DESKTOP_OPERATION_CANCELLED|RATE_LIMITED)$/.test(error.code)?error.code:'MODEL_EXECUTION_FAILED';
+const throttled=error=>error?.code==='RATE_LIMITED'||error?.statusCode===429||error?.status===429;
 function createComputerModelWorker(options){
- const core=options.core||require('../generated/desktopSyncCore.cjs'),timings={pollMs:2000,presenceMs:15000,heartbeatMs:10000,guardMs:1000,...options.timings};
+ // Four providers use at most 68 idle requests in a rolling minute, including
+ // registration, leaving room in the shared 120/minute account budget.
+ const core=options.core||require('../generated/desktopSyncCore.cjs'),timings={pollMs:5000,presenceMs:15000,heartbeatMs:10000,guardMs:1000,...options.timings};
  if(!['capture','check','getPrivate','api'].every(k=>typeof options[k]==='function')||!options.journal||Object.values(timings).some(v=>!Number.isSafeInteger(v)||v<1||v>15000))fail('MODEL_CONFIGURATION_INVALID');
  let runtime=null,startIntent=0,errorCode=null,tail=Promise.resolve(),pollTask=null,adapterPromise=null;
  const candidates=new Map(),operations=new Set();
@@ -15,10 +18,25 @@ function createComputerModelWorker(options){
  function snapshot(){return{running:!!runtime&&!runtime.abort.signal.aborted,busy:!!runtime?.active,errorCode,unconfirmed:candidates.size};}
  async function capture(){const value=await options.capture();const scope=normalizeRemoteScope(value.scope),profiles=core.validateModelInferenceProfiles(value.profiles);if(!profiles.length||typeof value.generation!=='string'||!/^[0-9a-f]{64}$/.test(value.generation))fail('MODEL_CONFIGURATION_INVALID');return{scope,profiles,generation:value.generation};}
  async function binding(run){if(runtime!==run||run.abort.signal.aborted)fail('DESKTOP_OPERATION_CANCELLED');await options.check(run.snapshot);const current=await capture();if(JSON.stringify(current)!==JSON.stringify(run.snapshot))fail('MODEL_BINDING_CHANGED');if(runtime!==run||run.abort.signal.aborted)fail('DESKTOP_OPERATION_CANCELLED');}
- const call=(run,method,path,body,signal=run.abort.signal)=>options.api(run.snapshot,{method,path:'/v1/model-inference'+path,...(body===undefined?{}:{body}),signal:AbortSignal.any([signal,AbortSignal.timeout(15000)])});
+ function pauseForRateLimit(run,error){
+  if(!throttled(error))return false;
+  if(runtime!==run||run.abort.signal.aborted)return true;
+  const now=Date.now();
+  if(run.resumeAt<=now)run.backoffMs=Math.min(300000,Math.max(60000,run.backoffMs*2));
+  run.resumeAt=Math.max(run.resumeAt,now+run.backoffMs);run.presenceRequired=true;errorCode='RATE_LIMITED';notify();return true;
+ }
+ async function call(run,method,path,body,signal=run.abort.signal){
+  try{return await options.api(run.snapshot,{method,path:'/v1/model-inference'+path,...(body===undefined?{}:{body}),signal:AbortSignal.any([signal,AbortSignal.timeout(15000)])});}
+  catch(error){pauseForRateLimit(run,error);throw error;}
+ }
+ async function advertise(run){
+  if(run.presenceTask)return run.presenceTask;
+  const task=(async()=>{await binding(run);await call(run,'PUT','/provider',{profiles:run.snapshot.profiles});await binding(run);run.presenceRequired=false;})();
+  run.presenceTask=task;try{return await task;}finally{if(run.presenceTask===task)run.presenceTask=null;}
+ }
  function track(task){operations.add(task);task.finally(()=>operations.delete(task)).catch(()=>{});return task;}
  function stopNow(run,error){if(run.abort.signal.aborted)return;errorCode=publicCode(error);run.abort.abort();for(const timer of run.timers)clearInterval(timer);run.timers.clear();notify();}
- function periodic(run,ms,work){let busy=false;const timer=setInterval(()=>{if(busy||run.abort.signal.aborted)return;busy=true;track(Promise.resolve().then(work).catch(e=>stopNow(run,e)).finally(()=>{busy=false;}));},ms);timer.unref?.();run.timers.add(timer);}
+ function periodic(run,ms,work,network=false){let busy=false;const timer=setInterval(()=>{if(busy||run.abort.signal.aborted||network&&Date.now()<run.resumeAt)return;busy=true;track(Promise.resolve().then(work).catch(e=>{if(!pauseForRateLimit(run,e))stopNow(run,e);}).finally(()=>{busy=false;}));},ms);timer.unref?.();run.timers.add(timer);}
  async function persist(run,row){
   await binding(run);const result=row.outcome.output?await call(run,'POST','/jobs/'+row.id+'/complete',{lease:row.claim.lease,output:row.outcome.output}):await call(run,'POST','/jobs/'+row.id+'/fail',{lease:row.claim.lease,code:row.outcome.failure});
   await binding(run);const status=row.outcome.output?await core.validateModelInferenceStatus(result?.result):null;
@@ -31,7 +49,8 @@ function createComputerModelWorker(options){
   if(pending.length||[...candidates.keys()].some(k=>k===key(run.snapshot.scope,candidates.get(k).row.id))){errorCode='MODEL_SAVE_UNCONFIRMED';notify();return{worked:false};}
   const capacity=await options.journal.capacity(run.snapshot.scope);if(capacity.retained>=capacity.maxRetained)fail('MODEL_LOCAL_CAPACITY');
   const response=await call(run,'POST','/provider/claim',{});await binding(run);
-  core.inspectModelInferenceJson(response,core.MODEL_INFERENCE_LIMITS.requestBytes+16384);if(!response||Object.keys(response).length!==1||!Object.hasOwn(response,'claim'))fail('MODEL_RESPONSE_INVALID');if(response.claim===null)return{worked:false};
+  core.inspectModelInferenceJson(response,core.MODEL_INFERENCE_LIMITS.requestBytes+16384);if(!response||Object.keys(response).length!==1||!Object.hasOwn(response,'claim'))fail('MODEL_RESPONSE_INVALID');
+  run.backoffMs=0;run.resumeAt=0;if(errorCode==='RATE_LIMITED'){errorCode=null;notify();}if(response.claim===null)return{worked:false};
   const claim=await core.validateModelInferenceClaim(response.claim);if(claim.request.target.kind!=='computer'||claim.request.target.deviceId!==run.snapshot.scope.deviceId||!run.snapshot.profiles.some(p=>JSON.stringify(p)===JSON.stringify(claim.job.profile)))fail('MODEL_RESPONSE_INVALID');
   const work={phase:'intent',row:{id:claim.request.id,deviceId:run.snapshot.scope.deviceId,claim,stage:'intent',outcome:null,createdAt:new Date().toISOString()},abort:new AbortController()};run.active=work;notify();
   let heartbeat=null,hbBusy=false;
@@ -52,11 +71,12 @@ function createComputerModelWorker(options){
   }catch(e){errorCode=work.row.outcome?'MODEL_SAVE_UNCONFIRMED':publicCode(e);notify();return{worked:true};}
   finally{if(heartbeat)clearInterval(heartbeat);if(run.active===work)run.active=null;notify();}
  }
- function runOnce(){if(pollTask)return pollTask;const run=runtime;if(!run||run.abort.signal.aborted)return Promise.reject(Object.assign(new Error('MODEL_WORKER_STOPPED'),{code:'MODEL_WORKER_STOPPED'}));const task=tail.then(()=>{if(runtime!==run||run.abort.signal.aborted)return{worked:false};if(run.recovering)return{worked:false};return execute(run);}).catch(e=>{stopNow(run,e);throw e;});tail=task.catch(()=>{});pollTask=track(task);task.finally(()=>{if(pollTask===task)pollTask=null;}).catch(()=>{});return pollTask;}
+ function runOnce(){if(pollTask)return pollTask;const run=runtime;if(!run||run.abort.signal.aborted)return Promise.reject(Object.assign(new Error('MODEL_WORKER_STOPPED'),{code:'MODEL_WORKER_STOPPED'}));const task=tail.then(async()=>{if(runtime!==run||run.abort.signal.aborted||run.recovering||Date.now()<run.resumeAt)return{worked:false};if(run.presenceRequired)await advertise(run);return execute(run);}).catch(e=>{if(pauseForRateLimit(run,e))return{worked:false};stopNow(run,e);throw e;});tail=task.catch(()=>{});pollTask=track(task);task.finally(()=>{if(pollTask===task)pollTask=null;}).catch(()=>{});return pollTask;}
  async function begin(optionsValue={}){
-  const requested=++startIntent;if(runtime)fail('MODEL_WORKER_BUSY');const captured=await capture();if(requested!==startIntent)fail('DESKTOP_OPERATION_CANCELLED');const run={snapshot:captured,abort:new AbortController(),timers:new Set(),active:null};runtime=run;errorCode=null;
-  try{await binding(run);if(!optionsValue.recoveryOnly)await call(run,'PUT','/provider',{profiles:captured.profiles});await binding(run);if(!optionsValue.manual&&!optionsValue.recoveryOnly){periodic(run,timings.presenceMs,async()=>{await binding(run);await call(run,'PUT','/provider',{profiles:captured.profiles});});periodic(run,timings.guardMs,()=>binding(run));periodic(run,timings.pollMs,()=>runOnce());}notify();}
-  catch(e){stopNow(run,e);runtime=null;throw e;}
+  const requested=++startIntent;if(runtime)fail('MODEL_WORKER_BUSY');const captured=await capture();if(requested!==startIntent)fail('DESKTOP_OPERATION_CANCELLED');const run={snapshot:captured,abort:new AbortController(),timers:new Set(),active:null,resumeAt:0,backoffMs:0,presenceRequired:!optionsValue.recoveryOnly,presenceTask:null};runtime=run;errorCode=null;
+  try{await binding(run);if(!optionsValue.recoveryOnly)await advertise(run);await binding(run);}
+  catch(e){if(!pauseForRateLimit(run,e)||runtime!==run||run.abort.signal.aborted){stopNow(run,e);if(runtime===run)runtime=null;throw e;}}
+  if(!optionsValue.manual&&!optionsValue.recoveryOnly){periodic(run,timings.presenceMs,()=>advertise(run),true);periodic(run,timings.guardMs,()=>binding(run));periodic(run,timings.pollMs,()=>runOnce(),true);}notify();
  }
  async function stop(){startIntent++;const run=runtime;if(run){run.abort.abort();for(const timer of run.timers)clearInterval(timer);run.timers.clear();}notify();await Promise.allSettled([tail,...operations]);if(runtime===run)runtime=null;notify();}
  async function recover(id){

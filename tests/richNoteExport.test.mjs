@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, existsSync, rmSync, mkdirSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, readFileSync, existsSync, rmSync, mkdirSync, symlinkSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -42,14 +42,14 @@ const document = (source = dataUri) => ({ type: 'doc', content: [text('中文与
   { type: 'image', attrs: { src: source, alt: '原始字节', title: null, width: 1, height: 1 } },
 ] });
 function fixture(t) {
-  const root = mkdtempSync(path.join(tmpdir(), 'paperquay-rich-export-'));
+  const root = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'paperquay-rich-export-')));
   const appPaths = { dataDir: root, notesDatabasePath: path.join(root, 'notes.sqlite') };
   const noteStore = createNoteStore(appPaths), file = path.join(root, 'export.json');
   const jobs = [];
   t.after(() => {
     for (const job of jobs) job.close();
     noteStore.close();
-    const resolved = path.resolve(root), temporary = path.resolve(tmpdir());
+    const resolved = path.resolve(root), temporary = realpathSync.native(tmpdir());
     assert.equal(path.dirname(resolved), temporary); assert.ok(path.basename(resolved).startsWith('paperquay-rich-export-'));
     rmSync(resolved, { recursive: true, force: true });
   });
