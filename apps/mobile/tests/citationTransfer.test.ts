@@ -8,7 +8,9 @@ import {
 } from '../src/library/citationTransfer.ts';
 
 const require = createRequire(import.meta.url);
-const desktop = require('../../../electron/backend/reviewCommands.cjs') as {
+// The desktop adapter delegates formatting to this same platform-free core.
+// Loading reviewCommands would require Electron in a mobile-only installation.
+const desktop = require('../../../packages/review-core/index.cjs').createReviewCore() as {
   prepareReviewDocxData(value: unknown): { references: { label: string; formattedText: string }[] };
 };
 const id = (value: number) => `00000000-0000-4000-8000-${value.toString(16).padStart(12, '0')}`;
@@ -21,7 +23,7 @@ function rejects(code: CitationTransferErrorCode, action: () => unknown) {
   assert.throws(action, (error: unknown) => error instanceof CitationTransferError && error.code === code);
 }
 
-test('PaperQuay reference text is byte-for-byte identical to the existing desktop DOCX formatter', () => {
+test('PaperQuay reference text is byte-for-byte identical to the desktop DOCX formatter core', () => {
   const cases = [paper(), paper({ title: '中文研究。', authors: ['张三', 'Institute, Lab'], publication: '期刊；', year: '2026。', doi: 'DOI: 10.1234/中文' }),
     paper({ title: 'Question?', authors: [], publication: null, year: null, doi: null }),
     paper({ title: '  A title; ', authors: ['Smith, J.;', 'Other.'], publication: 'Journal, ', year: '2025;', doi: 'doi:10.5555/test.' }),

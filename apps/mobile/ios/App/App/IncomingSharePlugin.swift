@@ -29,7 +29,7 @@ public class PaperQuayIncomingSharePlugin: CAPPlugin, CAPBridgedPlugin {
         if let activeObserver = activeObserver { NotificationCenter.default.removeObserver(activeObserver) }
     }
     private func owner(_ call: CAPPluginCall, fields: Set<String>) -> String? {
-        guard Set(call.options.keys) == fields, let value = call.getString("owner"), IncomingShareStore.validOwner(value) else {
+        guard Set(call.options.keys) == Set(fields.map { AnyHashable($0) }), let value = call.getString("owner"), IncomingShareStore.validOwner(value) else {
             call.reject("Invalid incoming share owner.", "INVALID"); return nil
         }
         return value
