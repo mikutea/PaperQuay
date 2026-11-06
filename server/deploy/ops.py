@@ -153,11 +153,15 @@ class Stack:
         self.base = ['docker', 'compose', '--project-directory', str(self.directory),
                      '--env-file', str(self.directory / 'compose.env'), '-f', str(self.directory / 'compose.production.yml')]
         for name, key, user in [('sync.env', 'PAPERQUAY_DATABASE_URL', 'paperquay_runtime'),
+                                ('sync.env', 'PAPERQUAY_ERASURE_DATABASE_URL', 'paperquay_erasure'),
                                 ('migration.env', 'PAPERQUAY_MIGRATION_DATABASE_URL', 'paperquay_migrate')]:
             url = urlsplit(read_env(self.directory / name).get(key, ''))
             require(url.scheme in ('postgresql', 'postgres') and url.hostname == 'database'
                     and url.port in (None, 5432) and url.username == user and url.path == '/paperquay',
                     'DATABASE_SCOPE_INVALID')
+        runtime = urlsplit(read_env(self.directory / 'sync.env')['PAPERQUAY_DATABASE_URL'])
+        erasure = urlsplit(read_env(self.directory / 'sync.env')['PAPERQUAY_ERASURE_DATABASE_URL'])
+        require(erasure.password and erasure.password != runtime.password, 'INDEPENDENT_ERASURE_CREDENTIAL_REQUIRED')
         # Refuse a partial backup if a deployment has acquired untracked disk
         # mounts, secrets, or services. Compose output stays only in memory.
         configuration = json.loads(capture(self.command('--profile', 'maintenance', 'config', '--format', 'json')))

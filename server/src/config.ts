@@ -6,6 +6,7 @@ export interface ServerConfig {
   host: string;
   port: number;
   databaseUrl: string;
+  erasureDatabaseUrl?: string;
   oidcIssuer: string;
   oidcAudience: string;
   oidcClientIds: string[];
@@ -153,6 +154,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
       throw new Error('invalid');
     }
   } catch { throw new ApiError('CONFIGURATION_INVALID', 500); }
+  // No fallback to runtime credentials: SQL access as the ordinary role must
+  // never confer account-erasure authority. Missing optional config fails closed.
+  const erasureDatabaseUrl = env.PAPERQUAY_ERASURE_DATABASE_URL?.trim() || undefined;
+  if (erasureDatabaseUrl) {
+    try {
+      const erasure = new URL(erasureDatabaseUrl), runtime = new URL(databaseUrl);
+      if (erasure.protocol !== runtime.protocol || erasure.host !== runtime.host || erasure.pathname !== runtime.pathname
+        || decodeURIComponent(erasure.username) !== 'paperquay_erasure' || erasure.search || erasure.hash
+        || !erasure.password || erasure.password === runtime.password || erasure.username === runtime.username) throw new Error('invalid');
+    } catch { throw new ApiError('CONFIGURATION_INVALID', 500); }
+  }
   const issuer = checkedHttpUrl(required(env, 'PAPERQUAY_OIDC_ISSUER'), true);
   const oidcIssuer = issuer.href.replace(/\/$/, '');
   const oidcAudience = required(env, 'PAPERQUAY_OIDC_AUDIENCE');
@@ -181,7 +193,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const modelInferenceEnabled=env.PAPERQUAY_MODEL_INFERENCE_ENABLED??'0';
   if(!['0','1'].includes(modelInferenceEnabled))throw new ApiError('CONFIGURATION_INVALID',500);
   return {
-    host, port, databaseUrl, oidcIssuer, oidcAudience, oidcClientIds, allowedOrigins, cursorSecret,
+    host, port, databaseUrl, erasureDatabaseUrl, oidcIssuer, oidcAudience, oidcClientIds, allowedOrigins, cursorSecret,
     bodyLimitBytes: SERVER_LIMITS.bodyLimitBytes,
     responseLimitBytes: SERVER_LIMITS.responseLimitBytes,
     entityLimitBytes: SERVER_LIMITS.entityLimitBytes,

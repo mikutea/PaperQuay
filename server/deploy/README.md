@@ -31,7 +31,7 @@
 | `runtime-config.json` | 仅包含 `apiBaseUrl`、`oidcAuthority`、`oidcClientId` 三个公开连接字段，权限 `0644`。例如 API 使用所选 HTTPS origin 下的 `/api`，issuer 使用 `/identity/realms/paperquay` |
 
 环境文件每行使用 `NAME=literal-value`，不使用引号、`export`、命令替换或环境插值。
-数据库用户名固定为 `paperquay_migrate`、`paperquay_runtime`、`paperquay_identity`。
+数据库用户名固定为 `paperquay_migrate`、`paperquay_runtime`、`paperquay_erasure`、`paperquay_identity`。
 两个数据库为 `paperquay` 和 `paperquay_identity`，内部数据库主机名为 `database`。
 Node 应用的完整变量及额度规则见 `server/src/config.ts`。
 
@@ -107,3 +107,5 @@ python3 /reviewed-source/server/deploy/ops.py --directory /private/operator rest
 真实 Fastify/Caddy 路径还核对可信入口后的两客户端限流隔离、直接连接的两客户端隔离，
 以及不可信来源伪造转发头不能重置限额；认证成功流仍由独立 OIDC 套件验证。
 同步 API 的 OIDC/事务业务另由原服务集成套件验证；该演练不包含浏览器登录或实机。
+
+账号注销额外使用 `paperquay_erasure` 独立 LOGIN 角色与独立密码。`database.env` 的 `PAPERQUAY_ERASURE_DB_PASSWORD` 只用于新集群初始化，`sync.env` 的 `PAPERQUAY_ERASURE_DATABASE_URL` 指向同一应用数据库。`grant-runtime.ts` 同时应用 `erasure-role.sql` 的窄授权。普通运行角色无此角色成员资格，也没有 `erase_account` EXECUTE；普通 SQL 凭据泄露不能调用注销 definer。API 只在确认、最近的签名认证和当前会话校验后使用最多两连接的注销池。没有该配置时注销返回不可用，绝不回退到运行角色或迁移角色。生产初始化仅适用于新专用集群；旧环境先由受控管理员创建独立角色，应用迁移及授权，再切换配置。

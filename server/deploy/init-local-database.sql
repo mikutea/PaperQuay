@@ -3,10 +3,13 @@
 -- this file or command arguments. Do not run with --echo-all/--echo-queries.
 \getenv migration_password PAPERQUAY_MIGRATION_DB_PASSWORD
 \getenv runtime_password PAPERQUAY_RUNTIME_DB_PASSWORD
+\getenv erasure_password PAPERQUAY_ERASURE_DB_PASSWORD
 CREATE ROLE paperquay_migrate LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS
   PASSWORD :'migration_password';
+CREATE ROLE paperquay_erasure LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS
+  PASSWORD :'erasure_password';
 CREATE ROLE paperquay_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS
   PASSWORD :'runtime_password';
 ALTER DATABASE paperquay_sync_test OWNER TO paperquay_migrate;
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
-GRANT CONNECT ON DATABASE paperquay_sync_test TO paperquay_migrate, paperquay_runtime;
+GRANT CONNECT ON DATABASE paperquay_sync_test TO paperquay_migrate, paperquay_runtime, paperquay_erasure;

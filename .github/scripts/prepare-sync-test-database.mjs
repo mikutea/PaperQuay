@@ -16,6 +16,8 @@ function connection(name, expectedUser, expectedDatabase) {
 const admin = connection('PAPERQUAY_TEST_ADMIN_DATABASE_URL', 'postgres', 'postgres');
 const migration = connection('PAPERQUAY_MIGRATION_DATABASE_URL', 'paperquay_migrate', 'paperquay_sync_test');
 const runtime = connection('PAPERQUAY_DATABASE_URL', 'paperquay_runtime', 'paperquay_sync_test');
+const erasure = connection('PAPERQUAY_ERASURE_DATABASE_URL', 'paperquay_erasure', 'paperquay_sync_test');
+if (erasure.url.port !== admin.url.port || erasure.password.length < 16 || erasure.password === runtime.password) throw new Error('Independent erasure credentials required.');
 if (migration.url.port !== admin.url.port || runtime.url.port !== admin.url.port
   || migration.password.length < 16 || runtime.password.length < 16) {
   throw new Error('The disposable test role settings are invalid.');
@@ -23,10 +25,10 @@ if (migration.url.port !== admin.url.port || runtime.url.port !== admin.url.port
 const client = new Client({ connectionString: admin.value });
 await client.connect();
 try {
-  const roles = await client.query("SELECT 1 FROM pg_roles WHERE rolname IN ('paperquay_migrate', 'paperquay_runtime')");
+  const roles = await client.query("SELECT 1 FROM pg_roles WHERE rolname IN ('paperquay_migrate', 'paperquay_runtime', 'paperquay_erasure')");
   const databases = await client.query("SELECT 1 FROM pg_database WHERE datname = 'paperquay_sync_test'");
   if (roles.rowCount || databases.rowCount) throw new Error('Refusing to modify existing test roles or database.');
-  for (const [name, password] of [['paperquay_migrate', migration.password], ['paperquay_runtime', runtime.password]]) {
+  for (const [name, password] of [['paperquay_migrate', migration.password], ['paperquay_runtime', runtime.password], ['paperquay_erasure', erasure.password]]) {
     await client.query(`CREATE ROLE ${name} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS PASSWORD ${escapeLiteral(password)}`);
   }
   await client.query('CREATE DATABASE paperquay_sync_test OWNER paperquay_migrate');

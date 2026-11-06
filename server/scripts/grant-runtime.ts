@@ -14,6 +14,7 @@ if (!connectionString) {
     await client.connect();
     await client.query('BEGIN');
     await client.query(await readFile(new URL('../deploy/runtime-role.sql', import.meta.url), 'utf8'));
+    await client.query(await readFile(new URL('../deploy/erasure-role.sql', import.meta.url), 'utf8'));
     await client.query('COMMIT');
     process.stdout.write('Runtime grants applied to paperquay_runtime.\n');
   } catch {

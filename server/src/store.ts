@@ -17,9 +17,11 @@ import { checkedCloudPdfByteLimit, checkedRetainedByteLimit, SERVER_LIMITS } fro
 import type { CloudPdfCopy, CloudPdfQuota, CloudPdfRepository, CloudPdfStatus, ConflictPage, DesktopPdfAccess, DesktopPdfRepository, DesktopPdfTarget, DesktopPdfVersionPage, Device, DevicePlatform, DeviceRegistration, ResolveRequest, SessionView, SyncRepository } from './types.ts';
 import {createRemoteTaskRepository,type RemoteTaskRepository} from './remote-task-store.ts';
 import {createRemoteRetrievalRepository,type RemoteRetrievalRepository} from './remote-retrieval-store.ts';
+import {createAccountPrivacyRepository,type AccountPrivacyRepository} from './account-privacy.ts';
 
 interface AccountRow {
   id: string; epoch: string; last_seq: string; last_conflict_seq: string; entity_count: number; receipt_count: number; retained_bytes: string;
+  closed_at: Date | null; closure_request_id: string | null; erase_devices_requested: boolean;
 }
 interface DeviceRow {
   id: string; name: string; platform: DevicePlatform; created_at: Date; last_seen_at: Date; revoked_at: Date | null;
@@ -52,12 +54,14 @@ type ResponsePreflight = (result: PushResult) => void;
 type RetainedWriteKind = 'entity' | 'conflict' | 'change' | 'receipt';
 interface StoreHooks {
   /** Fault/concurrency injection for isolated integration tests, never configured from HTTP or environment. */
-  beforeCommit?: (event: { kind: 'push' | 'resolve' | 'revoke' | 'cloud-put' | 'cloud-delete'; opId?: string;
+  beforeCommit?: (event: { kind: 'push' | 'resolve' | 'revoke' | 'cloud-put' | 'cloud-delete' | 'account-close'; opId?: string;
     attachmentVersionId?: string; accountId: string; deviceId: string }) => Promise<void>;
 }
 interface StoreOptions {
   connectionString?: string;
   pool?: pg.Pool;
+  erasureConnectionString?: string;
+  erasurePool?: pg.Pool;
   cursorSecret: Uint8Array;
   hooks?: StoreHooks;
   responseLimitBytes?: number;
@@ -145,6 +149,8 @@ export class PostgresSyncStore implements SyncRepository, CloudPdfRepository, De
   readonly cloudPdfEnabled: boolean;
   readonly cloudPdfAccountBytes: number;
   private readonly ownsPool: boolean;
+  private readonly erasurePool?: pg.Pool;
+  private readonly ownsErasurePool: boolean;
 
   constructor(options: StoreOptions) {
     this.maxAccountRetainedBytes = checkedRetainedByteLimit(options.maxAccountRetainedBytes ?? SERVER_LIMITS.maxAccountRetainedBytes);
@@ -158,17 +164,25 @@ export class PostgresSyncStore implements SyncRepository, CloudPdfRepository, De
     this.pool = options.pool ?? new pg.Pool(poolOptions);
     // A disconnected idle client must not crash the server or print driver errors/credentials.
     this.pool.on('error', () => undefined);
+    this.ownsErasurePool = Boolean(options.erasureConnectionString && !options.erasurePool);
+    this.erasurePool = options.erasurePool ?? (options.erasureConnectionString ? new pg.Pool({
+      ...poolOptions, connectionString: options.erasureConnectionString, max: 2, application_name: 'paperquay-erasure',
+    }) : undefined);
+    this.erasurePool?.on('error', () => undefined);
     this.cursors = new CursorCodec(options.cursorSecret);
     this.hooks = options.hooks ?? {};
     this.responseLimitBytes = options.responseLimitBytes ?? SERVER_LIMITS.responseLimitBytes;
   }
 
-  async close(): Promise<void> { if (this.ownsPool) await this.pool.end(); }
+  async close(): Promise<void> {
+    await Promise.all([this.ownsPool ? this.pool.end() : undefined,
+      this.ownsErasurePool ? this.erasurePool?.end() : undefined]);
+  }
 
   async ready(): Promise<boolean> {
     try {
       const result = await this.pool.query<{ version: string }>('SELECT version FROM paperquay.schema_migrations ORDER BY version');
-      return result.rows.map((row) => row.version).join(',') === '001_initial.sql,002_receipt_quota.sql,003_retained_bytes_quota.sql,004_private_cloud_pdfs.sql,005_remote_tasks.sql,006_extended_sync_content.sql,007_remote_task_recovery.sql,008_remote_journal_holder.sql,009_remote_request_cancellation.sql,010_model_inference.sql,011_graph_relations.sql,012_remote_retrieval.sql';
+      return result.rows.map((row) => row.version).join(',') === '001_initial.sql,002_receipt_quota.sql,003_retained_bytes_quota.sql,004_private_cloud_pdfs.sql,005_remote_tasks.sql,006_extended_sync_content.sql,007_remote_task_recovery.sql,008_remote_journal_holder.sql,009_remote_request_cancellation.sql,010_model_inference.sql,011_graph_relations.sql,012_remote_retrieval.sql,013_account_privacy.sql';
     } catch { return false; }
   }
 
@@ -184,9 +198,21 @@ export class PostgresSyncStore implements SyncRepository, CloudPdfRepository, De
     return createRemoteRetrievalRepository({withAccount:(identity,work)=>this.withAccount(identity,false,context=>work(context))});
   }
 
+  privacy(): AccountPrivacyRepository {
+    return createAccountPrivacyRepository({pool:this.pool,
+      withAccount:(identity,work)=>this.withAccount(identity,false,work,true,true),
+      withClosureAccount:async(identity,work)=>{
+        if (!this.erasurePool) throw new ApiError('ACCOUNT_CLOSURE_UNAVAILABLE',503);
+        return this.withAccount(identity,false,work,true,true,this.erasurePool);
+      },
+      checkAccess:identity=>this.me(identity),
+      beforeCloseCommit:context=>this.hooks.beforeCommit?.({kind:'account-close',accountId:context.account.id,deviceId:context.device.id})
+        ?? Promise.resolve()});
+  }
+
   private async withAccount<T>(identity: VerifiedIdentity, create: boolean,
-    action: (context: TransactionContext) => Promise<T>, requireDevice = true): Promise<T> {
-    const client = await this.pool.connect();
+    action: (context: TransactionContext) => Promise<T>, requireDevice = true, allowClosed = false, pool = this.pool): Promise<T> {
+    const client = await pool.connect();
     try {
       await client.query('BEGIN');
       await client.query("SET LOCAL statement_timeout = '15s'");
@@ -198,13 +224,15 @@ export class PostgresSyncStore implements SyncRepository, CloudPdfRepository, De
         await client.query(`INSERT INTO paperquay.accounts(id, issuer, subject, epoch)
           VALUES ($1,$2,$3,$4) ON CONFLICT (issuer, subject) DO NOTHING`, [randomUUID(), identity.issuer, identity.subject, randomUUID()]);
       }
-      const accounts = await client.query<AccountRow>(`SELECT id, epoch, last_seq, last_conflict_seq, entity_count, receipt_count, retained_bytes
+      const accounts = await client.query<AccountRow>(`SELECT id, epoch, last_seq, last_conflict_seq, entity_count, receipt_count, retained_bytes,
+        closed_at,closure_request_id,erase_devices_requested
         FROM paperquay.accounts WHERE issuer = $1 AND subject = $2 FOR UPDATE`, [identity.issuer, identity.subject]);
       const account = accounts.rows[0];
       if (!account) throw new ApiError('DEVICE_NOT_REGISTERED', 403);
+      if (account.closed_at && !allowClosed) throw new ApiError('ACCOUNT_CLOSED', 410);
       await client.query("SELECT set_config('paperquay.account_id', $1, true)", [account.id]);
       let device: DeviceRow | undefined;
-      if (requireDevice) {
+      if (requireDevice && !account.closed_at) {
         const devices = await client.query<DeviceRow>(`SELECT ${deviceColumns} FROM paperquay.devices
           WHERE account_id = $1 AND session_id = $2`, [account.id, identity.sessionId]);
         device = devices.rows[0];
@@ -260,9 +288,10 @@ export class PostgresSyncStore implements SyncRepository, CloudPdfRepository, De
       await client.query("SET LOCAL statement_timeout = '1s'");
       await client.query("SET LOCAL lock_timeout = '1s'");
       await client.query("SELECT set_config('paperquay.issuer', $1, true), set_config('paperquay.subject', $2, true)", [identity.issuer, identity.subject]);
-      const accounts = await client.query<{ id: string }>('SELECT id FROM paperquay.accounts WHERE issuer = $1 AND subject = $2', [identity.issuer, identity.subject]);
+      const accounts = await client.query<{ id: string; closed_at: Date | null }>('SELECT id,closed_at FROM paperquay.accounts WHERE issuer = $1 AND subject = $2', [identity.issuer, identity.subject]);
       const accountId = accounts.rows[0]?.id;
       if (!accountId) throw new ApiError('DEVICE_NOT_REGISTERED', 403);
+      if (accounts.rows[0].closed_at) throw new ApiError('ACCOUNT_CLOSED', 410);
       await client.query("SELECT set_config('paperquay.account_id', $1, true)", [accountId]);
       const devices = await client.query<DeviceRow>('SELECT ' + deviceColumns + ' FROM paperquay.devices WHERE account_id = $1 AND session_id = $2', [accountId, identity.sessionId]);
       const device = devices.rows[0];

@@ -10,6 +10,8 @@ export interface VerifiedIdentity {
   clientId: string;
   /** Expiry from the verified JWT, never from a request field. Desktop leases require it. */
   expiresAtMs?: number;
+  /** Optional signed OIDC auth_time. Refresh-token issuance is not reauthentication. */
+  authenticatedAtMs?: number;
 }
 export type TokenVerifier = (authorization: string | undefined) => Promise<VerifiedIdentity>;
 
@@ -82,10 +84,13 @@ export async function createOidcVerifier(options: OidcOptions): Promise<TokenVer
       if (!options.clientIds.includes(clientId)
         || (typeof payload.client_id === 'string' && payload.client_id !== clientId)
         || !Number.isSafeInteger(payload.iat) || !Number.isSafeInteger(payload.exp)
+        || payload.auth_time !== undefined && (!Number.isSafeInteger(payload.auth_time)
+          || (payload.auth_time as number) <= 0 || (payload.auth_time as number) > Math.floor(Date.now() / 1000) + 5)
         || (payload.iat as number) > Math.floor(Date.now() / 1000) + 5) {
         throw new ApiError('AUTHENTICATION_REQUIRED', 401);
       }
-      return { issuer, subject, sessionId, clientId, expiresAtMs: (payload.exp as number) * 1000 };
+      return { issuer, subject, sessionId, clientId, expiresAtMs: (payload.exp as number) * 1000,
+        ...(payload.auth_time === undefined ? {} : { authenticatedAtMs: (payload.auth_time as number) * 1000 }) };
     } catch (error) {
       if (error instanceof ApiError) throw error;
       const code = error && typeof error === 'object' && 'code' in error ? error.code : '';

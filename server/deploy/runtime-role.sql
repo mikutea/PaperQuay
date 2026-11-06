@@ -32,3 +32,10 @@ GRANT SELECT, INSERT, UPDATE ON paperquay.model_inference_jobs TO paperquay_runt
 -- Retrieval content may be cleared, but neither old request identities nor results can be rewritten or deleted.
 GRANT SELECT, INSERT ON paperquay.remote_retrieval_requests TO paperquay_runtime;
 GRANT UPDATE (state,request_payload,result_payload) ON paperquay.remote_retrieval_requests TO paperquay_runtime;
+
+-- Erasure is restricted to one verified account/session in explicit functions.
+-- Runtime retains no DELETE privilege over sync or billing/request history.
+GRANT SELECT ON paperquay.account_erasure_devices TO paperquay_runtime;
+GRANT EXECUTE ON FUNCTION paperquay.erasure_context_matches(uuid) TO paperquay_runtime;
+REVOKE ALL ON FUNCTION paperquay.erase_account(uuid,uuid,text,boolean) FROM paperquay_runtime;
+GRANT EXECUTE ON FUNCTION paperquay.acknowledge_account_erasure(uuid,uuid,text) TO paperquay_runtime;
