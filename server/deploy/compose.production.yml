@@ -17,7 +17,7 @@ services:
       - ./init-production.sql:/docker-entrypoint-initdb.d/010-paperquay.sql:ro
     networks: [database]
     healthcheck:
-      test: [CMD-SHELL, "pg_isready -U postgres -d postgres"]
+      test: [CMD-SHELL, "pg_isready -h 127.0.0.1 -U postgres -d postgres"]
       interval: 5s
       timeout: 3s
       retries: 30
@@ -51,6 +51,7 @@ services:
       PAPERQUAY_HOST: 0.0.0.0
       PAPERQUAY_ALLOW_NON_LOOPBACK: "1"
       PAPERQUAY_PORT: "4311"
+      PAPERQUAY_TRUSTED_PROXY_IPS: ${PAPERQUAY_WEB_IP:?set the fixed web container address}
     networks: [application, database]
     depends_on:
       database: {condition: service_healthy}
@@ -69,7 +70,11 @@ services:
     image: ${PAPERQUAY_WEB_IMAGE:?pin the reviewed web image}
     volumes: [./runtime-config.json:/srv/runtime-config.json:ro]
     ports: ["127.0.0.1:${PAPERQUAY_LOCAL_PORT:?set an unused loopback port}:8080"]
-    networks: [application]
+    environment:
+      PAPERQUAY_INGRESS_PROXY_IPS: ${PAPERQUAY_INGRESS_PROXY_IPS:?set only the verified ingress peer addresses}
+    networks:
+      application:
+        ipv4_address: ${PAPERQUAY_WEB_IP:?set the fixed web container address}
     restart: unless-stopped
     mem_limit: 128m
     read_only: true
@@ -87,7 +92,10 @@ services:
     read_only: true
     tmpfs: ["/tmp:size=16m,uid=1000,gid=1000"]
 networks:
-  application: {}
+  application:
+    ipam:
+      config:
+        - subnet: ${PAPERQUAY_APPLICATION_SUBNET:?set an unused private IPv4 subnet}
   database: {internal: true}
 volumes:
   database: {}

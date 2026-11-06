@@ -8,6 +8,7 @@ import argparse
 import contextlib
 import datetime
 import hashlib
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -51,6 +52,11 @@ def digest(path):
         for block in iter(lambda: stream.read(1024 * 1024), b''):
             value.update(block)
     return value.hexdigest()
+
+
+def check_archive_sizes(sizes, code='BACKUP_INVALID'):
+    require(all(0 <= size <= MAX_ARCHIVE_BYTES for size in sizes)
+            and sum(sizes) <= MAX_ARCHIVE_BYTES, code)
 
 
 def run(args, **kwargs):
@@ -111,6 +117,25 @@ def read_env(path):
     return result
 
 
+def proxy_addresses(env):
+    try:
+        network = ipaddress.ip_network(env.get('PAPERQUAY_APPLICATION_SUBNET', ''), strict=True)
+        web = ipaddress.ip_address(env.get('PAPERQUAY_WEB_IP', ''))
+        peers = env.get('PAPERQUAY_INGRESS_PROXY_IPS', '').split()
+        ingress = [ipaddress.ip_address(value) for value in peers]
+        private = ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16')
+        require(network.version == 4 and any(network.subnet_of(ipaddress.ip_network(value)) for value in private)
+                and 24 <= network.prefixlen <= 28
+                and web.version == 4 and web in network and web not in (network.network_address, network.broadcast_address)
+                and web != network.network_address + 1
+                and 1 <= len(ingress) <= 8
+                and all(not value.is_unspecified and not value.is_multicast for value in ingress),
+                'PROXY_SCOPE_INVALID')
+    except ValueError:
+        raise OpsError('PROXY_SCOPE_INVALID') from None
+    return str(web)
+
+
 class Stack:
     def __init__(self, directory):
         self.directory = private_directory(directory)
@@ -124,6 +149,7 @@ class Stack:
         self.project = self.env.get('PAPERQUAY_PROJECT', '')
         require(re.fullmatch(r'paperquay-[a-z0-9][a-z0-9-]{0,39}', self.project), 'PROJECT_INVALID')
         require(all(PIN.fullmatch(self.env.get(key, '')) for key in IMAGE_KEYS.values()), 'IMAGE_DIGEST_REQUIRED')
+        web_address = proxy_addresses(self.env)
         self.base = ['docker', 'compose', '--project-directory', str(self.directory),
                      '--env-file', str(self.directory / 'compose.env'), '-f', str(self.directory / 'compose.production.yml')]
         for name, key, user in [('sync.env', 'PAPERQUAY_DATABASE_URL', 'paperquay_runtime'),
@@ -137,6 +163,11 @@ class Stack:
         configuration = json.loads(capture(self.command('--profile', 'maintenance', 'config', '--format', 'json')))
         require(configuration.get('name') == self.project
                 and set(configuration.get('services', {})) == {*SERVICES, 'migrate'}, 'STACK_SCOPE_INVALID')
+        require(configuration['services']['sync'].get('environment', {}).get('PAPERQUAY_TRUSTED_PROXY_IPS') == web_address
+                and configuration['services']['web'].get('networks', {}).get('application', {}).get('ipv4_address') == web_address
+                and configuration['services']['web'].get('environment', {}).get('PAPERQUAY_INGRESS_PROXY_IPS')
+                    == self.env['PAPERQUAY_INGRESS_PROXY_IPS'],
+                'PROXY_SCOPE_INVALID')
         mounts = {'database': {'/var/lib/postgresql': ('volume', 'database'),
                               '/docker-entrypoint-initdb.d/010-paperquay.sql': ('bind', str(self.directory / 'init-production.sql'))},
                   'identity': {}, 'sync': {}, 'migrate': {},
@@ -296,6 +327,10 @@ def backup(stack, output, recipient):
         run(['docker', 'image', 'save', '--output', str(stage / 'images.tar'), *sorted(set(images.values()))], stdout=subprocess.DEVNULL)
         manifest['files']['images.tar'] = {'bytes': (stage / 'images.tar').stat().st_size, 'sha256': digest(stage / 'images.tar')}
         (stage / 'manifest.json').write_text(json.dumps(manifest, sort_keys=True), 'utf-8')
+        # Match the recovery reader's complete uncompressed payload limit,
+        # including the manifest itself. Never publish an unusable receipt.
+        check_archive_sizes([(stage / name).stat().st_size for name in ('manifest.json', *manifest['files'])],
+                            'BACKUP_TOO_LARGE')
         # Services resume before compression/encryption. No plain backup leaves
         # the restricted temporary directory; even config and cursor keys are encrypted.
         partial = output.with_name(output.name + '.partial')
@@ -334,8 +369,8 @@ def unpack(archive_path, target):
     with tarfile.open(archive_path, mode='r:gz') as archive:
         members = archive.getmembers()
         require(len(members) == len(allowed) and {m.name for m in members} == allowed
-                and all(m.isfile() and 0 <= m.size <= MAX_ARCHIVE_BYTES for m in members)
-                and sum(m.size for m in members) <= MAX_ARCHIVE_BYTES, 'BACKUP_INVALID')
+                and all(m.isfile() for m in members), 'BACKUP_INVALID')
+        check_archive_sizes([m.size for m in members])
         (target / 'settings').mkdir(mode=0o700)
         for member in members:
             destination = target / member.name
@@ -394,7 +429,7 @@ def restore_drill(stack, backup_path, expected_hash, identity_path):
         # Failure intentionally retains the labelled, network-isolated clone for
         # diagnosis. No command below references a source database volume.
         for _ in range(90):
-            ready = subprocess.run(['docker', 'exec', name, 'pg_isready', '-U', 'paperquay_restore_bootstrap'],
+            ready = subprocess.run(['docker', 'exec', name, 'pg_isready', '-h', '127.0.0.1', '-U', 'paperquay_restore_bootstrap'],
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
             if ready.returncode == 0:
                 break

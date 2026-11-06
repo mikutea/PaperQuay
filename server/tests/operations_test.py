@@ -1,4 +1,5 @@
 """Recovery input and service-state boundaries; no production access."""
+import contextlib
 import importlib.util
 import io
 import json
@@ -6,6 +7,7 @@ from pathlib import Path
 import tarfile
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('paperquay_ops', Path(__file__).resolve().parents[1] / 'deploy/ops.py')
@@ -62,6 +64,65 @@ class OperationsTests(unittest.TestCase):
         archive, target = self.archive(lambda _manifest, source: (source / 'cluster.sql').write_text('tampered'))
         with self.assertRaisesRegex(ops.OpsError, 'BACKUP_CHECKSUM_MISMATCH'):
             ops.unpack(archive, target)
+
+    def test_complete_payload_limit_includes_manifest_and_all_settings(self):
+        archive, target = self.archive()
+        with tarfile.open(archive) as source:
+            total = sum(member.size for member in source.getmembers())
+        with patch.object(ops, 'MAX_ARCHIVE_BYTES', total - 1):
+            with self.assertRaisesRegex(ops.OpsError, 'BACKUP_INVALID'):
+                ops.unpack(archive, target)
+        self.assertEqual(list(target.iterdir()), [])
+        with patch.object(ops, 'MAX_ARCHIVE_BYTES', total):
+            ops.unpack(archive, target)
+        self.assertTrue((target / 'cluster.sql').is_file())
+
+    def test_oversized_backup_is_rejected_before_encryption_or_publication(self):
+        settings = self.directory / 'operator'
+        settings.mkdir()
+        for name in ops.SETTINGS:
+            (settings / name).write_text('synthetic-settings', 'utf-8')
+
+        class Stack:
+            directory = settings
+            project = 'paperquay-synthetic'
+
+            def container(self, service):
+                return 'fixture-' + service, {'Image': 'sha256:' + 'a' * 64}
+
+        def capture(args):
+            if 'pg_database WHERE NOT datistemplate' in args[-1]:
+                return json.dumps(sorted(['postgres', *ops.DATABASES]))
+            if args[1:3] == ['image', 'inspect']:
+                return '[{"Size": 1}]'
+            return '1'
+
+        def run(args, **kwargs):
+            if 'pg_dumpall' in args:
+                kwargs['stdout'].write(b'-- synthetic cluster')
+            elif args[1:3] == ['image', 'save']:
+                Path(args[args.index('--output') + 1]).write_bytes(b'synthetic images')
+            else:
+                raise AssertionError('Unexpected external operation')
+
+        output = self.directory / 'oversized.age'
+        with contextlib.ExitStack() as scope:
+            scope.enter_context(patch.object(ops, 'private_directory', return_value=self.directory))
+            scope.enter_context(patch.object(ops.shutil, 'which', return_value='synthetic-age'))
+            scope.enter_context(patch.object(ops.shutil, 'disk_usage', return_value=SimpleNamespace(free=10**15)))
+            scope.enter_context(patch.object(ops, 'capture', side_effect=capture))
+            scope.enter_context(patch.object(ops, 'run', side_effect=run))
+            scope.enter_context(patch.object(ops, 'quiesce', return_value=contextlib.nullcontext()))
+            scope.enter_context(patch.object(ops, 'current_schema', return_value=ops.known_schema()))
+            scope.enter_context(patch.object(ops, 'fingerprints', return_value={'synthetic': True}))
+            scope.enter_context(patch.object(ops, 'MAX_ARCHIVE_BYTES', 128))
+            encrypt = scope.enter_context(patch.object(ops.subprocess, 'Popen'))
+            with self.assertRaisesRegex(ops.OpsError, 'BACKUP_TOO_LARGE'):
+                ops.backup(Stack(), output, 'age1' + 'a' * 58)
+            encrypt.assert_not_called()
+        self.assertFalse(output.exists())
+        self.assertFalse(output.with_name(output.name + '.partial').exists())
+        self.assertEqual(sorted(path.name for path in self.directory.iterdir()), ['operator'])
 
     def test_future_backup_is_rejected_before_docker_runs(self):
         archive, target = self.archive(lambda manifest, _source: manifest['schema'].append(
@@ -133,6 +194,20 @@ class OperationsTests(unittest.TestCase):
             path.write_text(text, 'utf-8')
             with self.assertRaises(ops.OpsError):
                 ops.read_env(path)
+
+    def test_proxy_scope_requires_fixed_private_web_and_exact_ingress_peers(self):
+        env = {'PAPERQUAY_APPLICATION_SUBNET': '172.30.71.0/24',
+               'PAPERQUAY_WEB_IP': '172.30.71.2', 'PAPERQUAY_INGRESS_PROXY_IPS': '172.30.71.1 127.0.0.1'}
+        self.assertEqual(ops.proxy_addresses(env), '172.30.71.2')
+        for change in ({'PAPERQUAY_WEB_IP': '172.30.71.1'}, {'PAPERQUAY_WEB_IP': '172.30.71.0'},
+                       {'PAPERQUAY_WEB_IP': '172.30.71.255'}, {'PAPERQUAY_WEB_IP': '172.30.72.2'},
+                       {'PAPERQUAY_APPLICATION_SUBNET': '0.0.0.0/0'},
+                       {'PAPERQUAY_APPLICATION_SUBNET': '127.0.0.0/24', 'PAPERQUAY_WEB_IP': '127.0.0.2'},
+                       {'PAPERQUAY_INGRESS_PROXY_IPS': 'private_ranges'},
+                       {'PAPERQUAY_INGRESS_PROXY_IPS': '172.30.71.0/24'},
+                       {'PAPERQUAY_INGRESS_PROXY_IPS': '0.0.0.0'}, {'PAPERQUAY_INGRESS_PROXY_IPS': ''}):
+            with self.assertRaisesRegex(ops.OpsError, 'PROXY_SCOPE_INVALID'):
+                ops.proxy_addresses({**env, **change})
 
 
 if __name__ == '__main__':

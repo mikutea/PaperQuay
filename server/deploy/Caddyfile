@@ -1,6 +1,11 @@
 {
   auto_https off
   admin off
+  servers {
+    trusted_proxies static {$PAPERQUAY_INGRESS_PROXY_IPS}
+    trusted_proxies_strict
+    client_ip_headers X-Forwarded-For
+  }
 }
 :8080 {
   header {
@@ -9,7 +14,10 @@
     -Server
   }
   handle_path /api/* {
-    reverse_proxy sync:4311
+    reverse_proxy sync:4311 {
+      # Replace the input chain with the client resolved through exact peers.
+      header_up X-Forwarded-For {client_ip}
+    }
   }
   # The management console and master realm remain internal to the deployment.
   @identity path /identity/realms/paperquay/* /identity/resources/* /identity/robots.txt

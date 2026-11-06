@@ -18,10 +18,12 @@
 
 操作目录权限为 `0700`，环境文件为当前操作用户所有、权限 `0600`。
 复制 `compose.production.yml` 和 `init-production.sql`，并在该目录准备：
+`init-production.sql` 是不含密码的通用模板，需为 `0644`，使容器切换到 PostgreSQL
+用户后仍可读取绑定挂载；不要把密码写入 SQL。父目录保持 `0700`。
 
 | 文件 | 内容 |
 | --- | --- |
-| `compose.env` | `PAPERQUAY_PROJECT`（`paperquay-` 前缀）、未占用的 `PAPERQUAY_LOCAL_PORT`、`PAPERQUAY_POSTGRES_IMAGE`、`PAPERQUAY_IDENTITY_IMAGE`、`PAPERQUAY_SYNC_IMAGE`、`PAPERQUAY_WEB_IMAGE` |
+| `compose.env` | `PAPERQUAY_PROJECT`（`paperquay-` 前缀）、未占用的 `PAPERQUAY_LOCAL_PORT`、未占用的私有 IPv4 `/24`–`/28` 网段 `PAPERQUAY_APPLICATION_SUBNET`、该网段内 Web 固定地址 `PAPERQUAY_WEB_IP`、经核实的入口代理地址 `PAPERQUAY_INGRESS_PROXY_IPS`（空格分隔，最多 8 个单独 IP），以及 `PAPERQUAY_POSTGRES_IMAGE`、`PAPERQUAY_IDENTITY_IMAGE`、`PAPERQUAY_SYNC_IMAGE`、`PAPERQUAY_WEB_IMAGE` |
 | `database.env` | 独立随机的 `POSTGRES_PASSWORD`、`PAPERQUAY_MIGRATION_DB_PASSWORD`、`PAPERQUAY_RUNTIME_DB_PASSWORD`、`PAPERQUAY_IDENTITY_DB_PASSWORD` |
 | `identity.env` | HTTPS `KC_HOSTNAME`、对应的 `KC_DB_PASSWORD`、首次引导使用的管理员设置。引导完成后按身份服务规则移除引导配置 |
 | `migration.env` | 仅迁移容器使用的 `PAPERQUAY_MIGRATION_DATABASE_URL` |
@@ -32,6 +34,15 @@
 数据库用户名固定为 `paperquay_migrate`、`paperquay_runtime`、`paperquay_identity`。
 两个数据库为 `paperquay` 和 `paperquay_identity`，内部数据库主机名为 `database`。
 Node 应用的完整变量及额度规则见 `server/src/config.ts`。
+
+Web 固定地址不能使用网关、网络或广播地址。Compose 将其明确传给 API 的
+`PAPERQUAY_TRUSTED_PROXY_IPS`，不能省略该信任链，也不信任整个容器网段。
+外层 HTTPS 入口必须覆盖客户端提供的转发头，以真实连接来源设置 `X-Forwarded-For`；
+在现场核对 Web 实际看到的入口对端 IP 后，才填写 `PAPERQUAY_INGRESS_PROXY_IPS`。
+Web 只信任这些单独地址，从右向左解析并向 API 发送单个已解析的客户端 IP。
+未受信任来源伪造转发头不能获得新限流桶；不同客户端不再共用 Caddy 的匿名限额。
+规则依据 [Caddy 可信代理](https://caddyserver.com/docs/caddyfile/options#trusted-proxies)
+与 [Fastify trustProxy](https://fastify.dev/docs/latest/Reference/Server/#trustproxy)。
 
 先启动数据库，显式执行 `migrate` profile，再启动身份服务和 Web。
 在隔离的身份管理通道建立 `paperquay` realm，默认关闭自助注册，由管理员开通；
@@ -62,6 +73,8 @@ python3 /reviewed-source/server/deploy/ops.py --directory /private/operator rest
 备份包含完整 PostgreSQL 集群逻辑转储、角色、业务历史、冲突、PDF/任务二进制、
 身份 realm/签名密钥、全部部署配置、游标密钥和四个精确运行镜像。
 明文只存在于权限受限的临时目录；最终文件使用 `age` 加密，路径必须为新文件。
+单份备份支持最多 32 GiB 未压缩载荷（包括镜像、配置及 manifest）；超限在加密发布前
+以 `BACKUP_TOO_LARGE` 停止，不生成成功收据，不能把该上限当作已实测容量。
 
 独立保存命令返回的加密文件 SHA-256 收据。恢复前先核对该收据，再解密，
 逐文件核验，拒绝额外路径、链接、损坏内容、未知或不连续的 schema。
@@ -91,4 +104,6 @@ python3 /reviewed-source/server/deploy/ops.py --directory /private/operator rest
 `operations_docker.py --allow-disposable-docker-writes` 仅用于一次性 Linux CI：
 构建三个生产镜像，启动真实 PostgreSQL/Keycloak/Web，写入合成业务、冲突和云 PDF，
 执行加密备份与全新数据库恢复，核对全部表和角色，并拒绝损坏备份。
+真实 Fastify/Caddy 路径还核对可信入口后的两客户端限流隔离、直接连接的两客户端隔离，
+以及不可信来源伪造转发头不能重置限额；认证成功流仍由独立 OIDC 套件验证。
 同步 API 的 OIDC/事务业务另由原服务集成套件验证；该演练不包含浏览器登录或实机。

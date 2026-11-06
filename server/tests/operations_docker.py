@@ -14,6 +14,8 @@ import shutil
 import subprocess
 import tempfile
 import time
+from urllib.error import HTTPError
+from urllib.request import build_opener, ProxyHandler, Request
 
 spec = importlib.util.spec_from_file_location('paperquay_ops', Path(__file__).resolve().parents[1] / 'deploy/ops.py')
 ops = importlib.util.module_from_spec(spec)
@@ -52,16 +54,29 @@ def main():
         password = secrets.token_hex(24)
         project = 'paperquay-ci-' + secrets.token_hex(6)
         config = (directory / 'compose.production.yml').read_text('utf-8')
-        # Real database, identity and web containers. The server image's modules
-        # and store are exercised below; a JWT/HTTPS browser flow belongs to its
-        # separate acceptance suite and is not claimed by this recovery test.
+        # Real Fastify/PG/Caddy anonymous paths; no successful authentication is
+        # fabricated. JWT/HTTPS browser login has its separate acceptance suite.
+        api = """
+import {buildApp} from './src/app.ts';
+import {loadConfig} from './src/config.ts';
+import {PostgresSyncStore} from './src/store.ts';
+import {ApiError} from './src/errors.ts';
+const config=loadConfig();
+const repository=new PostgresSyncStore({connectionString:config.databaseUrl,cursorSecret:config.cursorSecret});
+const app=await buildApp({config,repository,verifyToken:async()=>{throw new ApiError('AUTHENTICATION_REQUIRED',401);}});
+await app.listen({host:config.host,port:config.port});
+"""
         config = config.replace('    env_file: [sync.env]',
-            '    command: [node, -e, "setInterval(() => {}, 60000)"]\n    env_file: [sync.env]')
-        config = config.replace("      test: [CMD, node, -e, \"fetch('http://127.0.0.1:4311/health/ready',{signal:AbortSignal.timeout(3000)}).then(r=>process.exit(r.ok?0:1),()=>process.exit(1))\"]",
-                                '      disable: true')
+            '    command: ' + json.dumps(['node', '--input-type=module', '-e', api]) + '\n    env_file: [sync.env]')
         write('compose.production.yml', config)
         shutil.copyfile(directory / 'init-production.sql', target / 'init-production.sql')
-        lines = ['PAPERQUAY_PROJECT=' + project, 'PAPERQUAY_LOCAL_PORT=14317']
+        # The entrypoint switches to the postgres UID before reading this
+        # secret-free template. The enclosing operator directory stays 0700.
+        os.chmod(target / 'init-production.sql', 0o644)
+        network = '172.30.' + str(10 + secrets.randbelow(200)) + '.'
+        lines = ['PAPERQUAY_PROJECT=' + project, 'PAPERQUAY_LOCAL_PORT=14317',
+                 'PAPERQUAY_APPLICATION_SUBNET=' + network + '0/24',
+                 'PAPERQUAY_WEB_IP=' + network + '2', 'PAPERQUAY_INGRESS_PROXY_IPS=' + network + '1']
         lines.extend(ops.IMAGE_KEYS[service] + '=' + image for service, image in images.items())
         write('compose.env', '\n'.join(lines) + '\n')
         write('database.env', '\n'.join(name + '=' + password for name in ('POSTGRES_PASSWORD',
@@ -85,6 +100,42 @@ def main():
             ops.run(stack.command('run', '--rm', 'migrate'), stdout=subprocess.DEVNULL)
             phase = 'application_start'
             ops.run(stack.command('up', '-d', 'identity', 'sync', 'web'), stdout=subprocess.DEVNULL)
+            opener = build_opener(ProxyHandler({}))
+
+            def status(path, forwarded=None):
+                request = Request('http://127.0.0.1:14317/api/' + path,
+                                  headers={'X-Forwarded-For': forwarded} if forwarded else {})
+                try:
+                    with opener.open(request, timeout=5) as response:
+                        response.read()
+                        return response.status
+                except HTTPError as error:
+                    error.close()
+                    return error.code
+
+            wait_for(lambda: status('health/ready') == 200)
+            phase = 'proxy_rate_limit'
+            # The trusted fixture ingress appends the real client on the right.
+            # Changing an attacker-controlled left entry cannot reset its limit.
+            first = [status('v1/capabilities', '203.0.113.' + str(1 + index % 200) + ', 198.51.100.71')
+                     for index in range(121)]
+            ops.require(first == [200] * 120 + [429]
+                        and status('v1/capabilities', '198.51.100.72') == 200, 'PROXY_CLIENT_ISOLATION_FAILED')
+            # Two direct container peers must also have separate buckets, and
+            # neither is a trusted ingress allowed to invent forwarding chains.
+            client = """
+const count=Number(process.argv[1]);const statuses=[];
+for(let i=0;i<count;i++) {const r=await fetch('http://web:8080/api/v1/capabilities',
+ {headers:{'X-Forwarded-For':'203.0.113.'+(1+i%200)},signal:AbortSignal.timeout(5000)});
+ statuses.push(r.status);await r.arrayBuffer();}
+console.log(JSON.stringify(statuses));
+"""
+            def direct(count):
+                return json.loads(ops.capture(['docker', 'run', '--rm', '--network', project + '_application',
+                    '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges:true', '--memory', '128m',
+                    '--read-only', images['sync'], 'node', '--input-type=module', '-e', client, str(count)]))
+
+            ops.require(direct(122) == [200] * 120 + [429, 429] and direct(1) == [200], 'PROXY_SPOOF_GUARD_FAILED')
             identity, _ = stack.container('identity')
             phase = 'identity_health'
             wait_for(lambda: '"status": "UP"' in ops.capture(['docker', 'exec', identity, 'bash', '-c',
@@ -143,7 +194,8 @@ try {
                 ops.require(str(error) == 'BACKUP_CHECKSUM_MISMATCH', 'WRONG_CORRUPTION_RESULT')
             print(json.dumps({'status': 'passed', 'fullTableAndRoleHashes': True, 'cloudPdfBytes': True,
                 'realIdentityRealm': True, 'sourceContainersUnchanged': True,
-                'corruptionRejected': True, 'restoreSeconds': result['restoreSeconds']}))
+                'corruptionRejected': True, 'proxyClientIsolation': True, 'untrustedForwardingRejected': True,
+                'restoreSeconds': result['restoreSeconds']}))
         except ops.OpsError as error:
             # This harness creates all inputs itself in a disposable fixture;
             # it never accepts a production directory or connection. Diagnostic
