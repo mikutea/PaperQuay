@@ -103,3 +103,14 @@ test('an owner transition during binding lookup prevents all cleanup, and a new 
     assert.equal(f.state.acks,0);
   }finally{await f.store.close();}
 });
+
+test('explicit local cleanup without a pending device ACK does not request token renewal and can finalize offline',async()=>{
+  const f=await fixture();try{
+    let finalized=0;
+    f.dependencies.clearSession=async(afterPersisted,renew)=>{assert.equal(renew,false);await afterPersisted(null);finalized++;};
+    await eraseLocalAccount(scope.apiBaseUrl,{...closed,deviceErasure:{requested:false,thisDevicePending:false,pending:0,acknowledged:0}},
+      ()=>true,f.dependencies,{explicitLocalConsent:true});
+    assert.equal(finalized,1);assert.equal(f.state.acks,0);assert.equal(f.state.binding,null);
+    assert.equal(await f.store.read(scope),null);assert(await f.store.read(other));
+  }finally{await f.store.close();}
+});

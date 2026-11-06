@@ -19,6 +19,9 @@ export interface AuthSnapshot {
 
 export interface AuthSubject { issuer: string; subject: string; }
 export interface ClearLocalSessionOptions {
+  /** Only an original-session server ACK needs renewal. Purely local cleanup
+   * must still finish offline or after all access/refresh credentials expire. */
+  renewForErasure?:boolean;
   /** Runs after stored credentials are removed, before forgetting the original
    * in-memory session needed for its own erasure acknowledgement. */
   afterPersisted?(accessToken:string|null):Promise<void>;
@@ -217,7 +220,7 @@ export class OidcSession implements AuthSession {
     this.blockedCredentials=true;
     await this.manager.removeUser();
     if(epoch!==this.epoch)throw new ClientError('ACCOUNT_CHANGED');
-    if(options?.afterPersisted&&this.user){
+    if(options?.afterPersisted&&options.renewForErasure&&this.user){
       const {erasureSession}=await import('./erasureSession.ts');
       if(epoch!==this.epoch)throw new ClientError('ACCOUNT_CHANGED');
       const renewed=await erasureSession(this.config,this.user);

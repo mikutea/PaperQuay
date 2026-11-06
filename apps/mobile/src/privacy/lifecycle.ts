@@ -15,7 +15,7 @@ export interface ErasureDependencies {
   clearAi(scope:AccountScope):Promise<void>;
   clearExports(scope:AccountScope):Promise<void>;
   acknowledge(deviceId:string,accessToken:string|null):Promise<void>;
-  clearSession(afterPersisted:(accessToken:string|null)=>Promise<void>):Promise<void>;
+  clearSession(afterPersisted:(accessToken:string|null)=>Promise<void>,renewForErasure:boolean):Promise<void>;
 }
 /** Server status alone cannot select a local scope. Require the original
  * subject's independently stored, server-verified account and device binding. */
@@ -42,5 +42,5 @@ export async function eraseLocalAccount(apiBaseUrl:string,status:AccountPrivacyS
     check();
     if(status.deviceErasure.thisDevicePending){await dependencies.acknowledge(binding.device.id,token);check();}
     await dependencies.binding.remove();check();
-  });
+  },status.deviceErasure.thisDevicePending);
 }

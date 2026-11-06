@@ -321,7 +321,7 @@ export class NativeOidcSession implements AuthSession {
     this.blockedCredentials = true;
     try {
       await this.clearPersisted();this.assertCurrent(epoch);
-      if(options?.afterPersisted&&this.user){
+      if(options?.afterPersisted&&options.renewForErasure&&this.user){
         const {erasureSession}=await import('./erasureSession.ts');this.assertCurrent(epoch);
         const renewed=await erasureSession(this.config,this.user,this.client(epoch));this.assertCurrent(epoch);
         this.user=renewed;
