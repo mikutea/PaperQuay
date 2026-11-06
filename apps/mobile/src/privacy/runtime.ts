@@ -24,25 +24,30 @@ export function createPrivacyRuntime(config:AppConfig,auth:AuthSession,store:Acc
   secrets:SecretStore,controller:WorkspaceController,binding:ReturnType<typeof verifiedBinding>,
   options:{browserErasure?:BrowserErasureCoordinator|null;owner?:object;stop?():void;
     openExportSink?:typeof openPersonalExportSink;
+    registerFormerExportDrain?(handler:(key:string|null)=>Promise<void>):()=>void;
     registerPeerErasure?(handler:PeerErasureHandler):()=>void}={}) {
   const runtimeOwner=options.owner??{};
   const client=new AccountPrivacyClient({apiBaseUrl:config.apiBaseUrl,getAccessToken:auth.getAccessToken,
     getIdentityKey:binding.key,subscribeIdentity:auth.subscribe});
   let erasing=false;
   const exportCleanup=new PrivateExportCleanup();
-  const localExports=new Set<{abort:AbortController;done:Promise<void>}>();
+  const localExports=new Set<{abort:AbortController;done:Promise<void>;key:string|null}>();
   const beginExport=(signal:AbortSignal)=>{
     const owner=client.captureIdentity(),abort=new AbortController(),stop=()=>abort.abort();
     const current=()=>!erasing&&!abort.signal.aborted&&owner();
-    let settled!:()=>void;const entry={abort,done:new Promise<void>(resolve=>{settled=resolve;})};localExports.add(entry);
+    let settled!:()=>void;const entry={abort,done:new Promise<void>(resolve=>{settled=resolve;}),key:binding.key()};localExports.add(entry);
     signal.addEventListener('abort',stop,{once:true});if(signal.aborted)stop();
-    return {current,signal:abort.signal,release(){signal.removeEventListener('abort',stop);localExports.delete(entry);settled();}};
+    return {current,key:entry.key,signal:abort.signal,release(){signal.removeEventListener('abort',stop);localExports.delete(entry);settled();}};
   };
+  const drainLocalExports=async(key:string|null,retryFailedCleanup=false)=>{
+    const failed=retryFailedCleanup?exportCleanup.captureFailed(key):[],pending=[...localExports].filter(entry=>entry.key===key);
+    for(const entry of pending)entry.abort.abort();await Promise.all(pending.map(entry=>entry.done));
+    await exportCleanup.retry(failed);exportCleanup.assertClean(key);
+  };
+  const unregisterFormer=options.registerFormerExportDrain?.(key=>Promise.all([client.drainExports(key),drainLocalExports(key)]).then(()=>undefined));
   const sealBusiness=async(retryFailedCleanup=false)=>{
-    const failed=retryFailedCleanup?exportCleanup.captureFailed():[];
-    erasing=true;const pending=[...localExports];for(const entry of pending)entry.abort.abort();
-    await Promise.all([client.sealForErasure(retryFailedCleanup),...pending.map(entry=>entry.done)]);
-    await exportCleanup.retry(failed);exportCleanup.assertClean();
+    const key=binding.key();erasing=true;
+    await Promise.all([client.sealForErasure(retryFailedCleanup),drainLocalExports(key,retryFailedCleanup)]);
   };
   let erasureRecovery:{identity:AccountIdentity;status:AccountPrivacyStatus;current:()=>boolean}|null=null;
   let peer:PeerErasureEntry|null=null;
@@ -79,6 +84,11 @@ export function createPrivacyRuntime(config:AppConfig,auth:AuthSession,store:Acc
     return new AccountSecretStore(secrets,scope,client.captureIdentity());
   };
   const runtime={client,binding,scopedSecrets,
+    subscribeExportCleanup:(listener:()=>void)=>{const local=exportCleanup.subscribe(listener),remote=client.subscribeExportCleanup(listener);return()=>{local();remote();};},
+    hasFailedExportCleanup:()=>exportCleanup.hasFailed()||client.hasFailedExportCleanup(),
+    async retryExportCleanup():Promise<void>{
+      await Promise.all([client.retryExportCleanup(),exportCleanup.retry(exportCleanup.captureFailed())]);exportCleanup.assertClean();
+    },
     subscribePeerErasure:(listener:()=>void)=>{peerListeners.add(listener);return()=>{peerListeners.delete(listener);};},
     getPeerErasure:():PeerErasureSnapshot|null=>peer?.current()?peer.snapshot:null,
     async finishPeerErasure(signal:AbortSignal):Promise<AccountPrivacyStatus>{
@@ -115,16 +125,17 @@ export function createPrivacyRuntime(config:AppConfig,auth:AuthSession,store:Acc
       try{
         if(!operation.current())throw new PrivacyError('CHANGED');
         if(normalizeServiceUrl(scope.apiBaseUrl)!==config.apiBaseUrl)throw new PrivacyError('INVALID');
-        destination=await (options.openExportSink??openPersonalExportSink)(scope,operation.current,undefined,exportCleanup);
+        destination=await (options.openExportSink??openPersonalExportSink)(scope,operation.current,undefined,{track:sink=>exportCleanup.track(sink,operation.key)});
         return local?await runtime.localExport(scope,destination,operation.signal,progress)
           :await client.exportData(scope,destination,operation.signal,progress);
       }catch(error){await destination?.abort().catch(()=>undefined);throw error;}
       finally{operation.release();}
     },
     async localExport(scope:AccountScope,sink:PersonalExportSink,signal:AbortSignal,progress?:(bytes:number)=>void){
-      const destination=exportCleanup.track(sink);
       const operation=beginExport(signal),current=operation.current;
+      let destination:PersonalExportSink|undefined;
       try {
+        destination=exportCleanup.track(sink,operation.key);
         if(!current())throw new PrivacyError('CHANGED');
         if(normalizeServiceUrl(scope.apiBaseUrl)!==config.apiBaseUrl)throw new PrivacyError('INVALID');
         const owner=await binding.read();
@@ -133,7 +144,7 @@ export function createPrivacyRuntime(config:AppConfig,auth:AuthSession,store:Acc
           import('./localExport.ts'),import('../pdf/cache.ts'),import('../parsed/cache.ts'),import('../ai/archiveStore.ts')]);
         if(!current())throw new PrivacyError('CHANGED');
         return await exportLocalData(scope,destination,{store,pdf:getPdfCache(),parsed:getParsedCache(),ai:getAiArchiveStore()},{current,signal:operation.signal,progress});
-      } catch(error){await destination.abort().catch(()=>undefined);throw error;}
+      } catch(error){await (destination??sink).abort().catch(()=>undefined);throw error;}
       finally{operation.release();}
     },
     async erase(status:AccountPrivacyStatus,explicitLocalConsent=false) {
@@ -181,7 +192,9 @@ export function createPrivacyRuntime(config:AppConfig,auth:AuthSession,store:Acc
       },{explicitLocalConsent});
       erasureRecovery=null;
     },
-    dispose:async()=>{erasureRecovery=null;peer=null;unregisterPeer?.();peerAuth();peerListeners.clear();client.dispose();await sealBusiness();},
+    dispose:async()=>{client.dispose();const pending=[...localExports];for(const entry of pending)entry.abort.abort();
+      await Promise.all([client.drainAllExports(),...pending.map(entry=>entry.done)]);exportCleanup.assertClean();
+      erasureRecovery=null;peer=null;unregisterPeer?.();unregisterFormer?.();peerAuth();peerListeners.clear();},
   };
   return runtime;
 }

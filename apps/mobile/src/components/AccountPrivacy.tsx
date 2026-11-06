@@ -10,6 +10,7 @@ import {ClientError,describeError} from '../errors.ts';
 
 const noPeerUpdates=()=>()=>{};
 const noPeerState=()=>null;
+const noFailedExports=()=>false;
 
 function message(error:unknown,recovering=false):string {
   if(error instanceof ClientError&&['LEGACY_SECRETS_UNVERIFIED','BROWSER_ERASURE_PENDING'].includes(error.code))return describeError(error);
@@ -32,20 +33,22 @@ export function PrivacyHost({privacy,auth,controller,apiBaseUrl,open,onClose}:{p
   const state=useSyncExternalStore(controller.subscribe,controller.getSnapshot);
   const login=useSyncExternalStore(auth.subscribe,auth.getSnapshot);
   const peer=useSyncExternalStore(privacy.subscribePeerErasure??noPeerUpdates,privacy.getPeerErasure??noPeerState);
+  const failedExports=useSyncExternalStore(privacy.subscribeExportCleanup??noPeerUpdates,privacy.hasFailedExportCleanup??noFailedExports);
   const closed=state.error?.code==='ACCOUNT_CLOSED';
   const identityKey=JSON.stringify(auth.getSubject());
   const [automaticOwner,setAutomaticOwner]=useState<string|null>(()=>closed?identityKey:null);
   const [dismissed,setDismissed]=useState(false);
-  useEffect(()=>{if(!closed)setDismissed(false);},[closed]);
+  useEffect(()=>{if(!closed&&!failedExports)setDismissed(false);},[closed,failedExports]);
   useEffect(()=>{if(peer)setDismissed(false);},[peer?.requestId]);
   useEffect(()=>{if(closed&&!dismissed)setAutomaticOwner(identityKey);},[closed,dismissed,identityKey]);
-  if(login.status!=='signed-in'||!open&&automaticOwner!==identityKey&&(!closed||dismissed)&&(!peer||dismissed))return null;
+  if(login.status!=='signed-in'||!open&&automaticOwner!==identityKey&&(!closed||dismissed)&&(!peer||dismissed)&&(!failedExports||dismissed))return null;
   return <AccountPrivacy key={JSON.stringify(auth.getSubject())} privacy={privacy} auth={auth} apiBaseUrl={apiBaseUrl}
     onClose={()=>{setAutomaticOwner(null);setDismissed(true);onClose();}}/>;
 }
 
 export function AccountPrivacy({privacy,auth,apiBaseUrl,onClose}:{privacy:PrivacyRuntime;auth:AuthSession;apiBaseUrl:string;onClose():void}) {
   const peer=useSyncExternalStore(privacy.subscribePeerErasure??noPeerUpdates,privacy.getPeerErasure??noPeerState);
+  const failedExports=useSyncExternalStore(privacy.subscribeExportCleanup??noPeerUpdates,privacy.hasFailedExportCleanup??noFailedExports);
   const dialog=useRef<HTMLDialogElement>(null),heading=useRef<HTMLHeadingElement>(null),mounted=useRef(true),busyRef=useRef(false);
   const cloudCheckbox=useRef<HTMLInputElement>(null),prepareButton=useRef<HTMLButtonElement>(null),retryButton=useRef<HTMLButtonElement>(null),wasConfirming=useRef(false);
   const generation=useRef(0);
@@ -124,6 +127,10 @@ export function AccountPrivacy({privacy,auth,apiBaseUrl,onClose}:{privacy:Privac
       {!peer&&status&&<p className="privacy-state">{status.state==='closed'?'应用账号已注销':'应用账号正常'}<br/><span className="privacy-account-id">{status.accountId}</span></p>}
       <div className="privacy-actions"><button className="secondary" disabled={Boolean(busy)||Boolean(peer)} onClick={refresh}>查询账号状态</button>
         <button className="secondary" disabled={Boolean(busy)||Boolean(peer)||Boolean(privacy.recoveryStatus?.())} onClick={()=>void run('正在重新验证登录…',async()=>auth.signIn({reauthenticate:true}))}>重新验证登录</button></div>
+      {!peer&&failedExports&&<section aria-labelledby="privacy-temporary-title"><h2 id="privacy-temporary-title">未完成的临时导出清理</h2>
+        <p>本页先前导出的临时文件尚未确认删除。重试只处理本页持有的未发布临时目标，不删除已保存或已分享的完整副本，也不确认任何设备。</p>
+        <button className="secondary" disabled={Boolean(busy)} onClick={()=>void run('正在重试临时导出清理…',async()=>{await privacy.retryExportCleanup();if(current())setNotice('未发布的临时导出已清理。');})}>重试删除未发布的临时导出文件</button>
+      </section>}
       {peer&&<section aria-labelledby="privacy-peer-title"><h2 id="privacy-peer-title">完成本页清理确认</h2>
         <p>{peer.phase==='preparing'?'正在停止本页私有操作并清理凭据…':peer.failed?'上次操作尚未完成，请保留本页并明确重试。':'本页普通业务已停止，仅保留原会话供清理确认。'}</p>
         <p>将先向服务核实同一账号的注销请求，再清理残留副本并确认本页设备。完成前请保留本页原登录，不要重新登录。</p>

@@ -252,6 +252,45 @@ for(const mode of ['local','server','picker'])test(`failed temporary-export clea
   }finally{failed=false;writeRelease.resolve();await peer.close();ca.detach();cb.detach();}
 });
 
+test('a former owner cannot release its erasure lease with a failed export, and cleanup leaves the replacement account usable',{timeout:15000},async t=>{
+  const locks=new LockHub(),storage=new StorageHub(),one=storage.port(),two=storage.port(),previous=new Map<string,PropertyDescriptor|undefined>();
+  for(const [key,value] of Object.entries({indexedDB:factory,localStorage:one.storage})){
+    previous.set(key,Object.getOwnPropertyDescriptor(globalThis,key));Object.defineProperty(globalThis,key,{configurable:true,value});
+  }
+  t.after(()=>{for(const [key,descriptor] of previous){if(descriptor)Object.defineProperty(globalThis,key,descriptor);else Reflect.deleteProperty(globalThis,key);}});
+  const ca=new BrowserErasureCoordinator({...one,locks:locks.port('initiator'),timeoutMs:20}),cb=new BrowserErasureCoordinator({...two,locks:locks.port('replacement')});
+  const oldId=crypto.randomUUID(),nextId=crypto.randomUUID(),oldScope={apiBaseUrl:config.apiBaseUrl,accountId:oldId},nextScope={...oldScope,accountId:nextId};
+  const peer=context(cb,crypto.randomUUID(),crypto.randomUUID(),oldId,crypto.randomUUID(),'original-token'),entered=deferred(),release=deferred();
+  const nextStatusEntered=deferred();let releaseNextStatus!:(value:Response)=>void,nextSignal:AbortSignal|undefined;
+  const nextStatus=new Promise<Response>(resolve=>{releaseNextStatus=resolve;});
+  const active={accountId:nextId,state:'active',closedAt:null,closureRequestId:null,deviceErasure:{requested:false,pending:0,acknowledged:0,thisDevicePending:false}};
+  t.mock.method(globalThis,'fetch',async(input:RequestInfo|URL,init?:RequestInit)=>{
+    assert(String(input).endsWith('/status'));nextSignal=init?.signal??undefined;nextStatusEntered.resolve();return nextStatus;
+  });
+  let failed=true,temporary=true,acks=0;
+  try{
+    await peer.bind();const exporting=assert.rejects(peer.privacy.localExport(oldScope,{write:async()=>{entered.resolve();await release.promise;},
+      finish:async()=>{assert.fail('Old account export cannot publish after replacement');},abort:async()=>{if(failed)throw Error('Synthetic cleanup failure');temporary=false;}},new AbortController().signal));
+    await entered.promise;peer.changeOwner(nextId);release.resolve();await exporting;await peer.bind();
+    assert.equal(peer.privacy.hasFailedExportCleanup(),true);assert.equal(peer.privacy.getPeerErasure(),null);
+    const replacement=peer.auth.getSubject(),workspace=peer.controller.getSnapshot().workspace;
+    await peer.privacy.scopedSecrets(nextScope).set('replacement-provider','key','replacement preserved');
+    const querying=peer.privacy.client.status(new AbortController().signal);await nextStatusEntered.promise;
+    const requestId=crypto.randomUUID(),owner={};ca.publish(oldScope,requestId,owner);
+    await assert.rejects(ca.complete(oldScope,requestId,owner,async()=>{acks++;assert.equal(temporary,false);}),{code:'BROWSER_ERASURE_PENDING'});
+    assert.equal(acks,0);assert.equal(peer.privacy.getPeerErasure(),null);assert.deepEqual(peer.auth.getSubject(),replacement);
+    assert.equal(await peer.auth.getAccessToken(),'original-token');assert.equal(peer.controller.getSnapshot().workspace,workspace);
+    assert.equal(nextSignal?.aborted,false,'A former owner must not abort the replacement account request');
+    assert.equal(await peer.privacy.scopedSecrets(nextScope).get('replacement-provider','key'),'replacement preserved');
+    await assert.rejects(peer.privacy.retryExportCleanup(),{code:'FAILED'});assert.equal(acks,0);
+    failed=false;await peer.privacy.retryExportCleanup();assert.equal(temporary,false);assert.equal(peer.privacy.hasFailedExportCleanup(),false);
+    ca.publish(oldScope,requestId,owner);await ca.complete(oldScope,requestId,owner,async()=>{acks++;assert.equal(temporary,false);});
+    assert.equal(acks,1);assert.deepEqual(peer.auth.getSubject(),replacement);assert.equal(peer.controller.getSnapshot().workspace,workspace);
+    assert.equal(await peer.privacy.scopedSecrets(nextScope).get('replacement-provider','key'),'replacement preserved');
+    releaseNextStatus(Response.json(active));assert.equal((await querying).accountId,nextId);
+  }finally{releaseNextStatus(Response.json(active));failed=false;release.resolve();await peer.privacy.retryExportCleanup();await peer.close();ca.detach();cb.detach();}
+});
+
 test('the durable fence aborts in-flight model, Zotero and keyed radar requests after their secrets have already been read',async()=>{
   const locks=new LockHub(),storage=new StorageHub(),port=storage.port(),coordinator=new BrowserErasureCoordinator({...port,locks:locks.port('requests')});
   const scope={apiBaseUrl:config.apiBaseUrl,accountId:crypto.randomUUID()},secrets=new MemorySecretStore(),provider={...defaultAiProvider(),requiresKey:true};
