@@ -29,6 +29,25 @@ test('Web erasure waits for an existing refresh, blocks its ordinary caller and 
   assert.equal(refreshes,1);assert.equal(acknowledgements,1);assert.equal(session.getSubject(),null);
 });
 
+test('a Web peer retains only its original volatile session until its own explicit confirmation',async t=>{
+  let stored:User|null=user('peer',true);
+  t.mock.method(UserManager.prototype,'signinRedirectCallback',async()=>stored!);
+  t.mock.method(UserManager.prototype,'removeUser',async()=>{stored=null;});
+  const session=new OidcSession(config,new InMemoryWebStorage());t.after(()=>session.dispose());
+  await session.completeSignIn(config.redirectUri);const original=session.getSubject();
+  await session.clearLocalSession({retainForErasure:true});
+  assert.equal(stored,null);assert.deepEqual(session.getSubject(),original);
+  assert.equal(session.getSnapshot().status,'signed-in');assert.equal(session.getSnapshot().needsLogin,true);
+  await assert.rejects(session.getAccessToken(),{code:'AUTH_REQUIRED'});
+  let verified=0;
+  await session.clearLocalSession({retainForErasure:true,renewForErasure:true,afterPersisted:async token=>{
+    assert.equal(stored,null);assert.equal(token,'rotated-access');verified++;
+  }});
+  assert.equal(verified,1);assert.deepEqual(session.getSubject(),original);
+  await session.clearLocalSession({renewForErasure:true,afterPersisted:async token=>{assert.equal(token,'rotated-access');}});
+  assert.equal(session.getSubject(),null);assert.equal(session.getSnapshot().status,'signed-out');
+});
+
 test('a replacement Web login invalidates erasure waiting for the former rotation without clearing the replacement',async t=>{
   const release=deferred<User>(),entered=deferred<void>();let next=user(),removals=0;
   t.mock.method(UserManager.prototype,'signinRedirectCallback',async()=>next);

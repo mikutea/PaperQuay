@@ -30,6 +30,17 @@ function deferred<T = void>() {
   return { promise, resolve };
 }
 
+test('native erasure retention removes durable credentials while preserving only the original confirmation session',async t=>{
+  const f=fixture(t);await f.session.signIn();await f.session.completeSignIn(f.callback());
+  const original=f.session.getSubject(),token=await f.session.getAccessToken(),namespace=nativeAuthNamespace(config);
+  await f.session.clearLocalSession({retainForErasure:true});
+  assert.equal(await f.secrets.get(namespace,'session'),null);assert.deepEqual(f.session.getSubject(),original);
+  assert.equal(f.session.getSnapshot().status,'signed-in');assert.equal(f.session.getSnapshot().needsLogin,true);
+  await assert.rejects(f.session.getAccessToken(),{code:'AUTH_REQUIRED'});
+  await f.session.clearLocalSession({renewForErasure:true,afterPersisted:async value=>{assert.equal(value,token);}});
+  assert.equal(f.session.getSubject(),null);assert.equal(f.session.getSnapshot().status,'signed-out');
+});
+
 test('a delayed erasure ACK retry renews only the original volatile SID without restoring durable credentials',async t=>{
   const f=fixture(t);await f.session.signIn();await f.session.completeSignIn(f.callback());
   const original=await f.session.getAccessToken(),namespace=nativeAuthNamespace(config);let acknowledgements=0;

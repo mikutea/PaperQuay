@@ -20,6 +20,9 @@ export interface AuthSnapshot {
 
 export interface AuthSubject { issuer: string; subject: string; sessionKey?:string; }
 export interface ClearLocalSessionOptions {
+  /** A peer has stopped private work. Keep only its original volatile session
+   * until it can explicitly verify and acknowledge its own erasure. */
+  retainForErasure?:boolean;
   /** Only an original-session server ACK needs renewal. Purely local cleanup
    * must still finish offline or after all access/refresh credentials expire. */
   renewForErasure?:boolean;
@@ -88,7 +91,7 @@ export class OidcSession implements AuthSession {
   private refresh: Promise<User> | null = null;
   private epoch = 0;
   private readonly expired = () => {
-    if (this.user && !this.user.refresh_token)
+    if (this.user && !this.blockedCredentials && !this.user.refresh_token)
       this.setSnapshot({ status: 'error', error: new ClientError('AUTH_REQUIRED') });
   };
 
@@ -187,7 +190,7 @@ export class OidcSession implements AuthSession {
       if (epoch !== this.epoch || this.blockedCredentials) throw new ClientError('AUTH_REQUIRED');
       return next.access_token;
     } catch {
-      if (epoch === this.epoch)
+      if (epoch === this.epoch && !this.blockedCredentials)
         this.setSnapshot({ status: 'error', error: new ClientError('AUTH_REQUIRED') });
       throw new ClientError('AUTH_REQUIRED');
     }
@@ -220,27 +223,35 @@ export class OidcSession implements AuthSession {
   async clearLocalSession(options?:ClearLocalSessionOptions): Promise<void> {
     const originalEpoch=this.epoch;
     this.blockedCredentials=true;
-    if(options?.afterPersisted&&options.renewForErasure&&this.refresh){
+    if((options?.retainForErasure||options?.afterPersisted&&options.renewForErasure)&&this.refresh){
       await this.refresh.catch(()=>undefined);
       if(originalEpoch!==this.epoch)throw new ClientError('ACCOUNT_CHANGED');
     }
     const epoch=++this.epoch;
     this.refresh=null;
     this.blockedCredentials=true;
-    await this.manager.removeUser();
-    if(epoch!==this.epoch)throw new ClientError('ACCOUNT_CHANGED');
-    if(options?.afterPersisted&&options.renewForErasure&&this.user){
-      const {erasureSession}=await import('./erasureSession.ts');
+    try {
+      await this.manager.removeUser();
       if(epoch!==this.epoch)throw new ClientError('ACCOUNT_CHANGED');
-      const renewed=await erasureSession(this.config,this.user);
+      if(options?.afterPersisted&&options.renewForErasure&&this.user){
+        const {erasureSession}=await import('./erasureSession.ts');
+        if(epoch!==this.epoch)throw new ClientError('ACCOUNT_CHANGED');
+        const renewed=await erasureSession(this.config,this.user);
+        if(epoch!==this.epoch)throw new ClientError('ACCOUNT_CHANGED');
+        this.user=renewed;
+      }
+      const token=this.user?.access_token??null;
+      await options?.afterPersisted?.(token);
       if(epoch!==this.epoch)throw new ClientError('ACCOUNT_CHANGED');
-      this.user=renewed;
+      if(options?.retainForErasure){
+        this.setSnapshot({...this.snapshot,status:this.user?'signed-in':'signed-out',needsLogin:Boolean(this.user)});return;
+      }
+      this.user = null;
+      this.blockedCredentials=false;
+      this.setSnapshot({ status: 'signed-out' });
+    } catch(error) {
+      if(epoch===this.epoch&&this.user)this.setSnapshot({...this.snapshot,status:'signed-in',needsLogin:true});
+      throw error;
     }
-    const token=this.user?.access_token??null;
-    await options?.afterPersisted?.(token);
-    if(epoch!==this.epoch)throw new ClientError('ACCOUNT_CHANGED');
-    this.user = null;
-    this.blockedCredentials=false;
-    this.setSnapshot({ status: 'signed-out' });
   }
 }

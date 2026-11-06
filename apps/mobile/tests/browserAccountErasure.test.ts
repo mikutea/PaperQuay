@@ -11,7 +11,7 @@ import {AccountStore} from '../src/storage/accountStore.ts';
 import {WorkspaceController,decodeWorkspace} from '../src/sync/workspace.ts';
 import {parseAppConfig} from '../src/config.ts';
 import {ClientError} from '../src/errors.ts';
-import type {AuthSession,AuthSubject,ClearLocalSessionOptions} from '../src/auth/oidc.ts';
+import type {AuthSession,AuthSubject,AuthSnapshot,ClearLocalSessionOptions} from '../src/auth/oidc.ts';
 import type {AccountIdentity} from '../src/api.ts';
 import type {AccountPrivacyStatus} from '../src/privacy/client.ts';
 import {AiClient} from '../src/ai/client.ts';
@@ -28,10 +28,12 @@ function context(coordinator:BrowserErasureCoordinator,databaseName:string,bindi
   configStorage?:Pick<Storage,'getItem'|'setItem'|'removeItem'>){
   const who=(id:string)=>authSubject({iss:config.oidcAuthority,sub:id,sid:token},config.oidcAuthority);
   let subject:AuthSubject|null=who(accountId),account=identity(accountId,deviceId),blocked=false;
+  let snapshot:AuthSnapshot={status:'signed-in'};
   const listeners=new Set<()=>void>(),secrets=new MemorySecretStore();
-  const auth={getSubject:()=>subject,subscribe:(fn:()=>void)=>{listeners.add(fn);return()=>listeners.delete(fn);},
+  const auth={getSubject:()=>subject,getSnapshot:()=>snapshot,subscribe:(fn:()=>void)=>{listeners.add(fn);return()=>listeners.delete(fn);},
     getAccessToken:async()=>{if(blocked||!subject)throw new ClientError('AUTH_REQUIRED');return token;},
-    clearLocalSession:async(options?:ClearLocalSessionOptions)=>{blocked=true;await options?.afterPersisted?.(token);subject=null;listeners.forEach(fn=>fn());},
+    clearLocalSession:async(options?:ClearLocalSessionOptions)=>{blocked=true;await options?.afterPersisted?.(token);
+      if(!options?.retainForErasure)subject=null;snapshot={status:subject?'signed-in':'signed-out',needsLogin:Boolean(subject)};listeners.forEach(fn=>fn());},
     dispose:async()=>{subject=null;listeners.forEach(fn=>fn());}} as unknown as AuthSession;
   const binding=createVerifiedBinding(config,secrets,auth.getSubject,{indexedDB:factory,databaseName:bindingName});
   const store=new AccountStore({indexedDB:factory,databaseName,decode:decodeWorkspace});
@@ -44,10 +46,17 @@ function context(coordinator:BrowserErasureCoordinator,databaseName:string,bindi
   return {auth,secrets,binding,store,controller,privacy,lease,api,
     async bind(){controller.setOnline(true);await controller.bind('Synthetic browser');assert.equal(controller.getSnapshot().status,'ready',controller.getSnapshot().error?.code);controller.setOnline(false);},
     changeOwner(id:string){subject=who(id);account=identity(id,crypto.randomUUID());blocked=false;listeners.forEach(fn=>fn());},
-    async close(){controller.deactivate();privacy.dispose();await auth.dispose();await store.close();await binding.close();await lease.disposeAfterResources();}};
+    async close(){controller.deactivate();await privacy.dispose();await auth.dispose();await store.close();await binding.close();await lease.disposeAfterResources();}};
 }
 
-test('distinct browser SIDs keep their own verified device and wait for peer RAM erasure before ACK',async t=>{
+async function waitForPeer(runtime:ReturnType<typeof createPrivacyRuntime>){
+  const deadline=performance.now()+5000;
+  while(runtime.getPeerErasure()?.phase!=='pending'){
+    assert(performance.now()<deadline,'Peer preparation did not finish');await new Promise(done=>setTimeout(done,5));
+  }
+}
+
+test('distinct browser SIDs retain peer erasure sessions and explicitly finish each original device ACK',async t=>{
   const locks=new LockHub(),storage=new StorageHub(),one=storage.port(),two=storage.port();
   const previous=new Map<string,PropertyDescriptor|undefined>();
   for(const [key,value] of Object.entries({indexedDB:factory,localStorage:one.storage})){previous.set(key,Object.getOwnPropertyDescriptor(globalThis,key));Object.defineProperty(globalThis,key,{configurable:true,value});}
@@ -55,23 +64,35 @@ test('distinct browser SIDs keep their own verified device and wait for peer RAM
   const ca=new BrowserErasureCoordinator({...one,locks:locks.port('a'),timeoutMs:20}),cb=new BrowserErasureCoordinator({...two,locks:locks.port('b')});
   const accountId=crypto.randomUUID(),deviceId=crypto.randomUUID(),foreignId=crypto.randomUUID(),scope={apiBaseUrl:config.apiBaseUrl,accountId},foreign={...scope,accountId:foreignId};
   const database=crypto.randomUUID(),bindings=crypto.randomUUID(),main=context(ca,database,bindings,accountId,deviceId,'main-original-token'),peer=context(cb,database,bindings,foreignId,crypto.randomUUID(),'peer-original-token');
-  let requests=0,acks=0;const provider={...defaultAiProvider(),endpoint:'https://synthetic-model.example.test/v1',requiresKey:true},aiNamespace=await aiSecretNamespace(scope,provider);
+  let requests=0,acks=0,peerAcks=0,statusCalls=0;const acknowledged=new Set<string>();
+  const provider={...defaultAiProvider(),endpoint:'https://synthetic-model.example.test/v1',requiresKey:true},aiNamespace=await aiSecretNamespace(scope,provider);
   const configKey='paperquay.mobile.ai-config.v1.'+encodeURIComponent(aiAccountKey(scope)),externalKey='paperquay.mobile.ai-config.v1.external.'+encodeURIComponent(aiAccountKey(scope));
   const zoteroNamespace=zoteroSecretNamespace(scope,{kind:'user',libraryId:'1',name:'Synthetic'}),radarNamespace=radarSecretNamespace(scope),radarRef=crypto.randomUUID();
-  const closed:AccountPrivacyStatus={accountId,state:'closed',closedAt:now,closureRequestId:crypto.randomUUID(),deviceErasure:{requested:true,pending:1,acknowledged:0,thisDevicePending:true}};
+  const peerDevice=crypto.randomUUID();
+  const closed:AccountPrivacyStatus={accountId,state:'closed',closedAt:now,closureRequestId:crypto.randomUUID(),deviceErasure:{requested:true,pending:2,acknowledged:0,thisDevicePending:true}};
   t.mock.method(globalThis,'fetch',async(input:RequestInfo|URL,init?:RequestInit)=>{
-    assert.equal(String(input),config.apiBaseUrl+'/v1/privacy/erasure-ack');assert.equal((init?.headers as Record<string,string>).Authorization,'Bearer main-original-token');
-    assert.deepEqual(JSON.parse(String(init?.body)),{deviceId});
-    assert.equal(peer.controller.getSnapshot().workspace,null);assert.equal(peer.auth.getSubject(),null);
+    const token=(init?.headers as Record<string,string>).Authorization;
+    if(String(input).endsWith('/v1/privacy/status')){
+      assert.equal(token,'Bearer peer-original-token');statusCalls++;
+      return Response.json({...closed,deviceErasure:{requested:true,pending:2-acknowledged.size,acknowledged:acknowledged.size,thisDevicePending:!acknowledged.has(peerDevice)}});
+    }
+    assert.equal(String(input),config.apiBaseUrl+'/v1/privacy/erasure-ack');
+    const id=token==='Bearer main-original-token'?deviceId:peerDevice;
+    assert(['Bearer main-original-token','Bearer peer-original-token'].includes(token));
+    assert.deepEqual(JSON.parse(String(init?.body)),{deviceId:id});
+    assert.equal(peer.controller.getSnapshot().workspace,null);assert(peer.auth.getSubject());
+    await assert.rejects(peer.auth.getAccessToken(),{code:'AUTH_REQUIRED'});
     assert.equal(await peer.secrets.get(aiNamespace,AI_SECRET_KEY),null);assert.equal(await peer.secrets.get(zoteroNamespace,ZOTERO_SECRET_KEY),null);
     assert.equal(await peer.secrets.get(radarNamespace,radarRef),null);
     assert.equal(one.storage.getItem(configKey),null);assert.equal(one.storage.getItem(externalKey),null);
-    acks++;return Response.json({acknowledged:true});
+    acks++;acknowledged.add(id);
+    if(id===peerDevice&&++peerAcks===1)throw Error('Synthetic lost peer ACK response');
+    return Response.json({acknowledged:true});
   });
   try{
     await peer.bind();await peer.privacy.scopedSecrets(foreign).set('foreign-provider','api-key','foreign preserved key');
     await main.bind();
-    const peerDevice=crypto.randomUUID();peer.changeOwner(accountId);peer.api.register=async()=>identity(accountId,peerDevice);await peer.bind();
+    peer.changeOwner(accountId);peer.api.register=async()=>identity(accountId,peerDevice);await peer.bind();
     assert.equal((await main.binding.read())!.device.id,deviceId);assert.equal((await peer.binding.read())!.device.id,peerDevice);
     await peer.controller.save({entityType:'note',entityId:crypto.randomUUID(),mutation:'put',data:{title:'Private note',body:'synthetic loaded paper context',format:'markdown',paperId:null}},0);
     const scoped=peer.privacy.scopedSecrets(scope);
@@ -92,10 +113,16 @@ test('distinct browser SIDs keep their own verified device and wait for peer RAM
     // the paused peer, after the initiator's first configStore.clear().
     for(const [key,value] of pendingConfigWrites)two.storage.setItem(key,value);
     assert.equal(configs.load(scope).endpoint,provider.endpoint);assert.equal(configs.loadExternal(scope).endpoint,provider.endpoint);
-    const peerCleared=new Promise<void>(resolve=>{const unsubscribe=peer.auth.subscribe(()=>{if(!peer.auth.getSubject())resolve();});t.after(unsubscribe);});
-    two.resume();await peerCleared;
+    two.resume();await waitForPeer(peer.privacy);
     assert.equal(two.storage.getItem(configKey),null);assert.equal(two.storage.getItem(externalKey),null);
     await main.privacy.erase(closed,true);assert.equal(acks,1);assert.equal(requests,0);
+    assert(peer.auth.getSubject());assert.equal(peer.privacy.getPeerErasure()?.accountId,accountId);
+    await assert.rejects(peer.privacy.client.status(new AbortController().signal),{code:'AUTH_REQUIRED'});
+    await assert.rejects(peer.privacy.finishPeerErasure(new AbortController().signal),{code:'OUTCOME_UNKNOWN'});
+    assert.equal(statusCalls,1);assert(peer.auth.getSubject());assert.equal(peer.privacy.getPeerErasure()?.failed,true);
+    await peer.privacy.finishPeerErasure(new AbortController().signal);
+    assert.equal(statusCalls,1);assert.equal(acks,3);assert.equal(peerAcks,2);assert.equal(acknowledged.size,2);
+    assert.equal(peer.auth.getSubject(),null);assert.equal(peer.privacy.getPeerErasure(),null);
     assert.equal(two.storage.getItem(configKey),null);assert.equal(two.storage.getItem(externalKey),null);
     assert.equal(await peer.secrets.get('foreign-provider','api-key'),'foreign preserved key');assert.equal(configs.load(foreign).endpoint,provider.endpoint);
     assert.equal(await main.store.read(scope),null);assert.equal(main.auth.getSubject(),null);assert.equal(main.privacy.recoveryStatus(),null);
@@ -120,7 +147,8 @@ test('a peer config deletion failure retains its lease and blocks ACK until expl
     assert.equal(acknowledgements,0);assert(peer.auth.getSubject());assert(one.storage.getItem(configKey));assert(one.storage.getItem(externalKey));
     failed=false;ca.publish(scope,requestId,owner);
     await ca.complete(scope,requestId,owner,async()=>{
-      assert.equal(peer.auth.getSubject(),null);assert.equal(one.storage.getItem(configKey),null);assert.equal(one.storage.getItem(externalKey),null);acknowledgements++;
+      assert(peer.auth.getSubject());await assert.rejects(peer.auth.getAccessToken(),{code:'AUTH_REQUIRED'});
+      assert.equal(one.storage.getItem(configKey),null);assert.equal(one.storage.getItem(externalKey),null);acknowledgements++;
     });
     assert.equal(acknowledgements,1);
   }finally{await peer.close();ca.detach();cb.detach();}
@@ -131,6 +159,53 @@ test('Web runtime disposal destroys its own secret map and cannot invalidate a r
   await a.set('owner','key','old runtime key');await b.set('owner','key','replacement runtime key');a.disposeMemory!();
   await assert.rejects(a.get('owner','key'),{code:'STORAGE_UNAVAILABLE'});await assert.rejects(a.set('owner','key','late'),{code:'STORAGE_UNAVAILABLE'});
   assert.equal(await b.get('owner','key'),'replacement runtime key');b.disposeMemory!();
+});
+
+test('a peer retains its shared lease until an in-flight local export and its temporary destination are fully aborted',async t=>{
+  const locks=new LockHub(),storage=new StorageHub(),one=storage.port(),two=storage.port(),previous=new Map<string,PropertyDescriptor|undefined>();
+  for(const [key,value] of Object.entries({indexedDB:factory,localStorage:one.storage})){
+    previous.set(key,Object.getOwnPropertyDescriptor(globalThis,key));Object.defineProperty(globalThis,key,{configurable:true,value});
+  }
+  t.after(()=>{for(const [key,descriptor] of previous){if(descriptor)Object.defineProperty(globalThis,key,descriptor);else Reflect.deleteProperty(globalThis,key);}});
+  const ca=new BrowserErasureCoordinator({...one,locks:locks.port('initiator'),timeoutMs:20}),cb=new BrowserErasureCoordinator({...two,locks:locks.port('peer')});
+  const accountId=crypto.randomUUID(),scope={apiBaseUrl:config.apiBaseUrl,accountId},requestId=crypto.randomUUID(),owner={};
+  const peer=context(cb,crypto.randomUUID(),crypto.randomUUID(),accountId,crypto.randomUUID(),'peer-token');
+  const writeEntered=deferred(),writeRelease=deferred(),abortEntered=deferred(),abortRelease=deferred();let confirmed=0,finished=0;
+  try{
+    await peer.bind();const exporting=assert.rejects(peer.privacy.localExport(scope,{write:async()=>{writeEntered.resolve();await writeRelease.promise;},
+      finish:async()=>{finished++;return 'saved';},abort:async()=>{abortEntered.resolve();await abortRelease.promise;}},new AbortController().signal));
+    await writeEntered.promise;ca.publish(scope,requestId,owner);
+    await assert.rejects(ca.complete(scope,requestId,owner,async()=>{confirmed++;}),{code:'BROWSER_ERASURE_PENDING'});assert.equal(confirmed,0);
+    writeRelease.resolve();await abortEntered.promise;
+    await assert.rejects(ca.complete(scope,requestId,owner,async()=>{confirmed++;}),{code:'BROWSER_ERASURE_PENDING'});assert.equal(confirmed,0);
+    abortRelease.resolve();await exporting;await waitForPeer(peer.privacy);
+    await ca.complete(scope,requestId,owner,async()=>{confirmed++;});assert.equal(confirmed,1);assert.equal(finished,0);
+    await assert.rejects(peer.privacy.localExport(scope,{write:async()=>{},finish:async()=>{assert.fail('A sealed peer cannot publish an export');},abort:async()=>{}},new AbortController().signal),{code:'CHANGED'});
+  }finally{writeRelease.resolve();abortRelease.resolve();await peer.close();ca.detach();cb.detach();}
+});
+
+test('a peer accepts only the server-verified account and closure request, then drops recovery after an owner change',async t=>{
+  const locks=new LockHub(),storage=new StorageHub(),one=storage.port(),two=storage.port();
+  const previous=Object.getOwnPropertyDescriptor(globalThis,'localStorage');Object.defineProperty(globalThis,'localStorage',{configurable:true,value:one.storage});
+  t.after(()=>{if(previous)Object.defineProperty(globalThis,'localStorage',previous);else Reflect.deleteProperty(globalThis,'localStorage');});
+  const ca=new BrowserErasureCoordinator({...one,locks:locks.port('initiator')}),cb=new BrowserErasureCoordinator({...two,locks:locks.port('peer')});
+  const accountId=crypto.randomUUID(),scope={apiBaseUrl:config.apiBaseUrl,accountId},requestId=crypto.randomUUID(),owner={};
+  const peer=context(cb,crypto.randomUUID(),crypto.randomUUID(),accountId,crypto.randomUUID(),'peer-token');
+  let response:unknown,queries=0;
+  t.mock.method(globalThis,'fetch',async(input:RequestInfo|URL)=>{assert(String(input).endsWith('/status'),'Invalid peer status must never reach ACK');queries++;return Response.json(response);});
+  try{
+    await peer.bind();ca.publish(scope,requestId,owner);await waitForPeer(peer.privacy);
+    const closed:AccountPrivacyStatus={accountId,state:'closed',closedAt:now,closureRequestId:requestId,deviceErasure:{requested:true,pending:1,acknowledged:0,thisDevicePending:true}};
+    for(const wrong of[{...closed,accountId:crypto.randomUUID()},{...closed,closureRequestId:crypto.randomUUID()},
+      {accountId,state:'active',closedAt:null,closureRequestId:null,deviceErasure:{requested:false,pending:0,acknowledged:0,thisDevicePending:false}}]){
+      response=wrong;await assert.rejects(peer.privacy.finishPeerErasure(new AbortController().signal),{code:'INVALID'});
+      assert(peer.auth.getSubject());assert.equal(peer.privacy.getPeerErasure()?.failed,true);assert.equal(peer.privacy.recoveryStatus(),null);
+    }
+    assert.equal(queries,3);const replacementId=crypto.randomUUID();peer.changeOwner(replacementId);assert.equal(peer.privacy.getPeerErasure(),null);
+    await assert.rejects(peer.privacy.finishPeerErasure(new AbortController().signal),{code:'CHANGED'});assert.equal(queries,3);
+    response={accountId:replacementId,state:'active',closedAt:null,closureRequestId:null,deviceErasure:{requested:false,pending:0,acknowledged:0,thisDevicePending:false}};
+    assert.deepEqual(await peer.privacy.client.status(new AbortController().signal),response);assert.equal(queries,4);
+  }finally{await peer.close();ca.detach();cb.detach();}
 });
 
 test('the durable fence aborts in-flight model, Zotero and keyed radar requests after their secrets have already been read',async()=>{
