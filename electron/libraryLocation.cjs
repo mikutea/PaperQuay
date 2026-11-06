@@ -3,6 +3,7 @@ const path = require('node:path');
 const { randomUUID, createHash } = require('node:crypto');
 const { DatabaseSync, withTransaction } = require('./backend/nodeSqlite.cjs');
 const { canonicalPath, isWithin, resolveAuthorizedPath } = require('./backend/pathAccess.cjs');
+const nativeFs = require('./backend/nativeFs.cjs');
 
 const REGISTRY_NAME = 'paperquay-library-locations.json';
 const LIBRARY_FILE = 'paperquay-library.sqlite';
@@ -73,6 +74,7 @@ function assertApprovedFileAccess(details, approved) {
 function inspectLibraryDirectory(directory, {
   allowProfileDirectory = false, verifyIntegrity = true, inspectAttachmentRoots = verifyIntegrity,
   resolveFileAccess = false, approvedFileAccess = null, expectedFileAccessSignature = null,
+  canonicalDirectory = false,
 } = {}) {
   if (typeof directory !== 'string' || !path.isAbsolute(directory)) {
     throw new Error('请选择包含 PaperQuay 文库数据库的完整目录。 / Select an existing PaperQuay library directory.');
@@ -83,6 +85,11 @@ function inspectLibraryDirectory(directory, {
       // existsSync would follow a database symlink (possibly to an SMB host)
       // before the linked-companion check below can reject it.
       try {
+        if (canonicalDirectory) {
+          const stat = nativeFs.inspectSync(path.join(candidate, LIBRARY_FILE));
+          if (stat.linkPath) throw new Error('Linked library companion paths are not supported.');
+          return stat.exists && !stat.directory;
+        }
         if (candidate !== directory) {
           const parent = fs.lstatSync(candidate);
           if (parent.isSymbolicLink()) throw new Error('Linked library companion paths are not supported.');
@@ -101,16 +108,12 @@ function inspectLibraryDirectory(directory, {
       ? '此目录包含多个文库，请选择具体文库目录。 / Multiple libraries found; select the exact library folder.'
       : '没有找到 paperquay-library.sqlite。不会新建或覆盖文库。 / Library database not found. No library will be created or overwritten.');
   }
-  const dataDirectory = fs.realpathSync.native(candidates[0]);
+  const dataDirectory = canonicalDirectory ? path.resolve(candidates[0]) : fs.realpathSync.native(candidates[0]);
   for (const name of [LIBRARY_FILE, 'paperquay-notes.sqlite', 'paperquay-rag.sqlite', 'paperquay-knowledge-graph-relations.json', 'paperquay-library.json', '.backup-snapshots', '.mineru-cache', '.downloads', '.screenshots']) {
     for (const suffix of (name.endsWith('.sqlite') ? ['', '-wal', '-shm', '-journal'] : [''])) {
       const candidate = path.join(dataDirectory, name + suffix);
-      let link = false;
-      try {
-        const stat = fs.lstatSync(candidate);
-        link = stat.isSymbolicLink() || (stat.isFile() && stat.nlink > 1);
-      } catch (error) { if (error.code !== 'ENOENT') throw error; }
-      if (link || (fs.existsSync(candidate) && comparable(canonicalPath(candidate)) !== comparable(path.join(canonicalPath(dataDirectory), name + suffix)))) {
+      const stat = nativeFs.inspectSync(candidate);
+      if (stat.linkPath || (stat.exists && ((!stat.directory && stat.links > 1) || comparable(stat.actual) !== comparable(candidate)))) {
         throw new Error('文库附属路径包含链接，未切换文库。 / Linked library companion paths are not supported.');
       }
     }
@@ -118,7 +121,9 @@ function inspectLibraryDirectory(directory, {
   if (verifyIntegrity) {
     for (const name of ['paperquay-notes.sqlite', 'paperquay-rag.sqlite']) {
       const candidate = path.join(dataDirectory, name);
-      if (!fs.existsSync(candidate)) continue;
+      const inspected = nativeFs.inspectSync(candidate);
+      if (inspected.linkPath) throw new Error('Linked library companion paths are not supported.');
+      if (!inspected.exists) continue;
       const companion = new DatabaseSync(candidate, { readOnly: true, timeout: 1000 });
       try {
         if (Object.values(companion.prepare('PRAGMA quick_check(1)').get())[0] !== 'ok') throw new Error('Companion database integrity check failed: ' + name);
@@ -337,7 +342,7 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
       recoveryProfile = profileDirectory;
       app.setPath('userData', profileDirectory);
       const details = inspectLibraryDirectory(entry.dataDirectory, {
-        verifyIntegrity: false, approvedFileAccess: entry.approvedFileAccess,
+        verifyIntegrity: false, approvedFileAccess: entry.approvedFileAccess, canonicalDirectory: true,
       });
       assertApprovedFileAccess(details, entry.approvedFileAccess);
       active = { profileDirectory, ...details, approvedFileAccess: entry.approvedFileAccess, registered: true };
@@ -384,7 +389,7 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
     // Ordinary launches only remember a pointer. Full integrity scans belong
     // to the explicit existing-library selection/recovery flow, not startup.
     const details = inspectLibraryDirectory(active.dataDirectory, {
-      verifyIntegrity: false, approvedFileAccess: active.approvedFileAccess,
+      verifyIntegrity: false, approvedFileAccess: active.approvedFileAccess, canonicalDirectory: Boolean(active.registered),
     });
     assertApprovedFileAccess(details, active.approvedFileAccess);
     persistLocation(active.profileDirectory, details.dataDirectory, makeDefault);
@@ -418,7 +423,7 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
     if (!pending || args?.token !== pending.token) throw new Error('请重新选择文库。 / Select the library again.');
     const selected = pending;
     const current = status();
-    const details = inspectLibraryDirectory(selected.dataDirectory);
+    const details = inspectLibraryDirectory(selected.dataDirectory, { canonicalDirectory: true });
     let approved = true;
     try { assertApprovedFileAccess(details, active.approvedFileAccess); } catch { approved = false; }
     if (approved && comparable(details.dataDirectory) === comparable(fs.realpathSync(current.dataDirectory))) {
@@ -477,7 +482,7 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
 
   function validateUnchangedSettings(approved) {
     const current = inspectLibraryDirectory(approved.dataDirectory, {
-      resolveFileAccess: approved.fileAccessResolved === true, expectedFileAccessSignature: approved.fileAccessSignature,
+      resolveFileAccess: approved.fileAccessResolved === true, expectedFileAccessSignature: approved.fileAccessSignature, canonicalDirectory: true,
     });
     if (current.storageDirectory !== approved.storageDirectory || current.storageRoot !== approved.storageRoot || current.importMode !== approved.importMode ||
         JSON.stringify(current.attachmentRoots) !== JSON.stringify(approved.attachmentRoots)) {
@@ -491,7 +496,7 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
     // unreviewed network lookup even when the final canonical check rejects it.
     validateUnchangedSettings(details);
     const resolved = inspectLibraryDirectory(details.dataDirectory, {
-      resolveFileAccess: true, expectedFileAccessSignature: details.fileAccessSignature,
+      resolveFileAccess: true, expectedFileAccessSignature: details.fileAccessSignature, canonicalDirectory: true,
     });
     if (comparable(resolved.storageRoot) !== comparable(details.storageRoot) ||
         JSON.stringify(resolved.attachmentRoots) !== JSON.stringify(details.attachmentRoots)) {
@@ -544,7 +549,7 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
   function validateFileOperation(library, attachments = [], { metadataOnly = false } = {}) {
     if (!active?.approvedFileAccess) return;
     const onDisk = inspectLibraryDirectory(active.dataDirectory, {
-      verifyIntegrity: false, approvedFileAccess: active.approvedFileAccess,
+      verifyIntegrity: false, approvedFileAccess: active.approvedFileAccess, canonicalDirectory: Boolean(active.registered),
     });
     if (comparable(onDisk.dataDirectory) !== comparable(active.dataDirectory)) throw new Error('Library directory changed.');
     assertApprovedFileAccess(onDisk, active.approvedFileAccess);
@@ -640,7 +645,7 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
     const attachments = previous.papers.flatMap((paper) => paper.attachments);
     const sources = validateFileOperation(previous, attachments);
     const expected = inspectLibraryDirectory(active.dataDirectory, {
-      verifyIntegrity: false, inspectAttachmentRoots: true, resolveFileAccess: true, approvedFileAccess: active.approvedFileAccess,
+      verifyIntegrity: false, inspectAttachmentRoots: true, resolveFileAccess: true, approvedFileAccess: active.approvedFileAccess, canonicalDirectory: Boolean(active.registered),
     });
     const approved = active.approvedFileAccess;
     const policy = { ...approved, storageDirectory, storageRoot: canonicalPath(storageDirectory), importMode: next.settings.importMode };
@@ -695,7 +700,7 @@ function createLibraryLocationManager({ app, dialog, argv = process.argv, restar
     }
     if (!roots.size) return null;
     const expected = inspectLibraryDirectory(active.dataDirectory, {
-      verifyIntegrity: false, inspectAttachmentRoots: true, resolveFileAccess: true, approvedFileAccess: active.approvedFileAccess,
+      verifyIntegrity: false, inspectAttachmentRoots: true, resolveFileAccess: true, approvedFileAccess: active.approvedFileAccess, canonicalDirectory: Boolean(active.registered),
     });
     if (!await confirmAttachmentRoots([...roots].sort())) throw new Error('Keep-path import canceled.');
     validateUnchangedSettings(expected);

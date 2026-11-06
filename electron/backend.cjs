@@ -57,7 +57,8 @@ function createRagStoreSafely(appPaths) {
 }
 
 function createBackend({ app, libraryLocation }) {
-  const appPaths = createAppPaths(app, libraryLocation?.status().dataDirectory);
+  const location = libraryLocation?.status();
+  const appPaths = createAppPaths(app, location?.dataDirectory, { canonicalDataDirectory: Boolean(location?.registered) });
   const store = createLibraryStore(appPaths);
   let noteStore;
   try { noteStore = createNoteStore(appPaths); }

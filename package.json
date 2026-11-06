@@ -131,6 +131,7 @@
       "packages/graph-core/index.cjs",
       "!electron/native/build/**/*",
       "!electron/native/*.cc",
+      "!electron/native/sqlite-api/**/*",
       "!electron/native/binding.gyp",
       "package.json",
       "node_modules/adm-zip/**/*",
