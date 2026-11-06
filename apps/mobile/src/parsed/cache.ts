@@ -7,10 +7,11 @@ import { AccountSqliteDatabase, type AccountSqliteDriver } from '../storage/sqli
 import { PdfError, throwIfAborted } from '../pdf/errors.ts';
 import type { PdfVersion } from '../pdf/types.ts';
 
-export interface ParsedCacheOptions { signal?: AbortSignal; guard?: () => boolean }
+export interface ParsedCacheOptions { signal?: AbortSignal; guard?: () => boolean; accountErasure?:boolean }
 export interface VerifiedParsedDocument { document: ParsedDocumentPackage; digest: string }
 export interface ParsedCacheEntry { versionId: string; sha256: string; sizeBytes: number; storedAt: number }
 export interface ParsedCache {
+  exportEntry?(scope:AccountScope,entry:ParsedCacheEntry,options?:ParsedCacheOptions):Promise<VerifiedParsedDocument>;
   read(scope: AccountScope, version: PdfVersion, pageCount: number, options?: ParsedCacheOptions): Promise<VerifiedParsedDocument | null>;
   put(scope: AccountScope, validated: VerifiedParsedDocument, options: ParsedCacheOptions): Promise<void>;
   remove(scope: AccountScope, versionId: string, options?: ParsedCacheOptions): Promise<void>;
@@ -112,7 +113,7 @@ function expectedVersion(version: PdfVersion, pageCount: number): PdfVersion {
       || (captured.data.pageCount !== null && captured.data.pageCount !== pageCount)) throw new PdfError('VERSION_MISMATCH');
   return captured;
 }
-async function verifyRow(value: unknown, account: string, version: PdfVersion, pageCount: number,
+async function verifyRow(value: unknown, account: string, version: PdfVersion | null, pageCount: number,
   options: ParsedCacheOptions): Promise<VerifiedParsedDocument> {
   check(options);
   let verified: VerifiedParsedDocument;
@@ -124,6 +125,7 @@ async function verifyRow(value: unknown, account: string, version: PdfVersion, p
   } catch { check(options); throw new PdfError('CACHE_CORRUPT'); }
   check(options);
   const document = verified.document;
+  if (!version) return verified;
   if (document.paperId !== version.data.paperId || document.attachmentVersionId !== version.entityId
       || document.pdf.sha256 !== version.data.sha256 || document.pdf.sizeBytes !== version.data.sizeBytes
       || document.pdf.pageCount !== pageCount) throw new PdfError('VERSION_MISMATCH');
@@ -213,6 +215,13 @@ export class WebParsedCache implements ParsedCache {
     check(options);
     return rows.length ? verifyRow(rows[0], account, expected, pageCount, options) : null;
   }
+  async exportEntry(scope:AccountScope,entry:ParsedCacheEntry,options:ParsedCacheOptions={}) {
+    const account=scopeKey(scope),rows=await this.query(account,keyFor(account,entry.versionId,entry.sha256),options);check(options);
+    if(rows.length!==1)throw new PdfError('CACHE_CORRUPT');
+    const row=record(rows[0],account);
+    if(row.storedAt!==entry.storedAt||row.sizeBytes!==entry.sizeBytes)throw new PdfError('CACHE_CORRUPT');
+    return verifyRow(row,account,null,0,options);
+  }
   private async mutate(account: string, options: ParsedCacheOptions,
     action: (rows: Metadata[], packages: IDBObjectStore, index: IDBObjectStore) => IDBRequest[]): Promise<void> {
     check(options);
@@ -231,10 +240,12 @@ export class WebParsedCache implements ParsedCache {
       const index = tx.objectStore('metadata');
       const request = index.index('account').getAll(account, this.limits.maxCacheEntries + 1);
       const contentKeys = store.index('account').getAllKeys(account, this.limits.maxCacheEntries + 1);
-      let reads = 2;
+      const fence=index.get('erased:'+account);
+      let reads = 3;
       const receive = () => {
         try {
           check(options); if (--reads) return;
+          if(fence.result!==undefined)throw new PdfError('ACCOUNT_CHANGED');
           const rows = checkedRows(request.result as unknown[], account, this.limits);
           matchingKeys(rows, contentKeys.result);
           const writes = action(rows, store, index);
@@ -245,7 +256,7 @@ export class WebParsedCache implements ParsedCache {
           };
         } catch (error) { fail(error); }
       };
-      request.onsuccess = contentKeys.onsuccess = receive;
+      request.onsuccess = contentKeys.onsuccess = fence.onsuccess = receive;
       const cleanup = () => options.signal?.removeEventListener('abort', abort);
       tx.oncomplete = () => { cleanup(); resolve(); };
       tx.onabort = tx.onerror = () => { cleanup(); reject(cacheFailure(failure)); };
@@ -271,6 +282,7 @@ export class WebParsedCache implements ParsedCache {
       options.signal?.addEventListener('abort', abort, { once: true });
       const store = tx.objectStore('packages');
       const index = tx.objectStore('metadata');
+      if(options.accountErasure)index.put({key:'erased:'+account,erased:true});
       // Cleanup must also work when a package's payload is corrupt. Read keys only.
       const request = store.index('account').getAllKeys(account);
       const metadataKeys = index.index('account').getAllKeys(account);
@@ -353,6 +365,16 @@ export class SqliteParsedCache implements ParsedCache {
     sqlMetadata(rows[0], account);
     return verifyRow(rows[0], account, expected, pageCount, options);
   }
+  async exportEntry(scope:AccountScope,entry:ParsedCacheEntry,options:ParsedCacheOptions={}) {
+    const account=scopeKey(scope),key=keyFor(account,entry.versionId,entry.sha256);check(options);
+    const rows=await this.run<Record<string,unknown>[]>(async driver=>{
+      check(options);const result=await driver.query(`SELECT ${selectMetadata}, CASE WHEN length(CAST(payload AS BLOB)) <= ${maxPackageBytes} THEN payload ELSE NULL END AS payload FROM parsed_packages WHERE scope_key = ? AND cache_key = ?`,[account,key]);
+      check(options);return result;
+    });check(options);
+    if(rows.length!==1)throw new PdfError('CACHE_CORRUPT');sqlMetadata(rows[0],account);const row=record(rows[0],account);
+    if(row.storedAt!==entry.storedAt||row.sizeBytes!==entry.sizeBytes)throw new PdfError('CACHE_CORRUPT');
+    return verifyRow(row,account,null,0,options);
+  }
   private async mutate(account: string, options: ParsedCacheOptions,
     action: (driver: AccountSqliteDriver, rows: Metadata[]) => Promise<void>, inspectRows = true): Promise<void> {
     check(options);
@@ -360,6 +382,7 @@ export class SqliteParsedCache implements ParsedCache {
       let transaction = false;
       try {
         check(options); await driver.begin(); transaction = true;
+        if(inspectRows&&(await driver.query('SELECT payload FROM account_snapshots WHERE scope_key = ?',['erased:'+account])).length)throw new PdfError('ACCOUNT_CHANGED');
         const values = inspectRows ? await driver.query(`SELECT ${selectMetadata} FROM parsed_packages WHERE scope_key = ? LIMIT ${this.limits.maxCacheEntries + 1}`, [account]) : [];
         check(options);
         const rows = checkedRows(values.map((value) => sqlMetadata(value, account)), account, this.limits);
@@ -389,7 +412,10 @@ export class SqliteParsedCache implements ParsedCache {
   }
   clear(scope: AccountScope, options: ParsedCacheOptions = {}): Promise<void> {
     const account = scopeKey(scope);
-    return this.mutate(account, options, async (driver) => { await driver.run('DELETE FROM parsed_packages WHERE scope_key = ?', [account]); }, false);
+    return this.mutate(account, options, async (driver) => {
+      if(options.accountErasure)await driver.run('INSERT INTO account_snapshots (scope_key, payload) VALUES (?, ?) ON CONFLICT(scope_key) DO UPDATE SET payload = excluded.payload',['erased:'+account,'{"erased":true}']);
+      await driver.run('DELETE FROM parsed_packages WHERE scope_key = ?', [account]);
+    }, false);
   }
   async list(scope: AccountScope): Promise<ParsedCacheEntry[]> {
     const account = scopeKey(scope);
@@ -447,6 +473,10 @@ class NativeParsedCache implements ParsedCache {
   }
   async clear(scope: AccountScope, options: ParsedCacheOptions = {}) {
     const capturedScope = { ...scope }; check(options); return (await this.get()).clear(capturedScope, options);
+  }
+  async exportEntry(scope:AccountScope,entry:ParsedCacheEntry,options:ParsedCacheOptions={}) {
+    const capturedScope={...scope},capturedEntry={...entry};check(options);
+    return (await this.get()).exportEntry(capturedScope,capturedEntry,options);
   }
   async list(scope: AccountScope) { const capturedScope = { ...scope }; return (await this.get()).list(capturedScope); }
 }

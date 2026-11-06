@@ -196,6 +196,16 @@ test('web v2 metadata upgrade preserves existing v1 packages and includes them i
 });
 
 for (const backend of ['web', 'sqlite'] as const) {
+  test(`${backend} account erasure permanently fences late parsed writes from another handle and preserves foreign content`,async t=>{
+    const f=await fixture(t,backend),second=f.open(),own=await sample('own'),foreign=await sample('foreign'),late=await sample('late');
+    await f.cache.put(a,own.verified,{});await second.put(b,foreign.verified,{});
+    const gate=deferred(),pending=gate.promise.then(()=>second.put(a,late.verified,{}));
+    const blocked=assert.rejects(pending,{code:'ACCOUNT_CHANGED'});
+    await f.cache.clear(a,{accountErasure:true});gate.resolve();await blocked;
+    assert.deepEqual(await second.list(a),[]);await expectDocument(second,foreign.version,foreign.verified,b);
+    await second.clear(a);await assert.rejects(f.open().put(a,own.verified,{}),{code:'ACCOUNT_CHANGED'});
+    await second.clear(a,{accountErasure:true});await second.put(c,own.verified,{});
+  });
   test(`${backend}: durable package replacement isolates service/account and PDF hash; version removal stays in account`, async (t) => {
     const { cache, open } = await fixture(t, backend);
     const original = await sample(); const replacement = await sample('Updated text', { version: original.version });
@@ -382,3 +392,14 @@ test('the default hard limits remain 64 MiB per account and 32 packages', () => 
   assert.equal(PARSED_CACHE_LIMITS.maxCacheBytes, 64 * 1024 * 1024);
   assert.equal(PARSED_CACHE_LIMITS.maxCacheEntries, 32);
 });
+
+for(const backend of ['web','sqlite'] as const) {
+  test(`${backend}: private export verifies orphan packages without a live library entity and rejects corrupt or foreign cache entries`,async t=>{
+    const f=await fixture(t,backend),source=await sample('Orphan export sentinel');
+    await f.cache.put(a,source.verified,{});const entry=(await f.cache.list(a))[0];
+    assert.deepEqual(await f.cache.exportEntry(a,entry),source.verified);
+    await assert.rejects(f.cache.exportEntry(b,entry),{code:'CACHE_CORRUPT'});
+    await f.raw(row=>({...row,payload:row.payload.replace('Orphan export sentinel','Altered export sentinel')}));
+    await assert.rejects(f.cache.exportEntry(a,entry),{code:'CACHE_CORRUPT'});
+  });
+}

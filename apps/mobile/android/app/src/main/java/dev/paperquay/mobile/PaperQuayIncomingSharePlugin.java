@@ -86,6 +86,7 @@ public final class PaperQuayIncomingSharePlugin extends Plugin {
                 atomic.delete();
                 write(empty);
             }
+            @Override public boolean hasQuarantine() { return quarantine.exists(); }
     }
 
     @PluginMethod public void list(PluginCall call) {
@@ -112,6 +113,11 @@ public final class PaperQuayIncomingSharePlugin extends Plugin {
         // Cancel in-flight intake first so a late content provider cannot refill an explicitly cleared queue.
         for (IncomingRead read : reads) read.cancel(false);
         dispatch(call, () -> { try { boolean recovered = store.clear(owner); notice.set(recovered ? IncomingSharePolicy.Code.INVALID : null); call.resolve(); changed(); } catch (IncomingSharePolicy.Failure error) { reject(call, error.code); } });
+    }
+    @PluginMethod public void purgeOwned(PluginCall call) {
+        String owner = owner(call, false); if (owner == null) return;
+        // Intake belongs to nobody until explicitly read; leave it untouched.
+        dispatch(call, () -> { try { store.purgeOwned(owner); call.resolve(); changed(); } catch (IncomingSharePolicy.Failure error) { reject(call, error.code); } });
     }
     private String owner(PluginCall call, boolean withId) {
         Object value = call.getData().opt("owner");

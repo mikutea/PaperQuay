@@ -46,7 +46,7 @@ export class AccountSqliteDatabase {
 export class SqliteAccountStore<T> implements AccountStorage<T> {
   private closed = false;
   constructor(private readonly options: { database: AccountSqliteDatabase; decode: (value: unknown) => T }) {}
-  private async readIn(driver: AccountSqliteDriver, scope: AccountScope): Promise<T | null> {
+  private async readIn(driver: AccountSqliteDriver, scope: AccountScope, writing=false): Promise<T | null> {
     const rows = await driver.query('SELECT payload FROM account_snapshots WHERE scope_key = ?', [accountScopeKey(scope)]);
     if (rows.length === 0) return null;
     try {
@@ -56,8 +56,9 @@ export class SqliteAccountStore<T> implements AccountStorage<T> {
       const entry = row as Record<string, unknown>;
       if (entry.version !== 1 || entry.scopeKey !== accountScopeKey(scope) ||
           entry.accountId !== scope.accountId.toLowerCase() || entry.apiBaseUrl !== normalizeServiceUrl(scope.apiBaseUrl)) throw new Error();
+      if(entry.erased===true&&entry.state===null){if(writing)throw new ClientError('ACCOUNT_CLOSED');return null;}
       return this.options.decode(entry.state);
-    } catch { throw new ClientError('STORAGE_CORRUPT'); }
+    } catch(error) { if(error instanceof ClientError)throw error;throw new ClientError('STORAGE_CORRUPT'); }
   }
   private enqueue<R>(action: (driver: AccountSqliteDriver) => Promise<R>): Promise<R> {
     if (this.closed) return Promise.reject(new ClientError('STORAGE_UNAVAILABLE'));
@@ -77,7 +78,7 @@ export class SqliteAccountStore<T> implements AccountStorage<T> {
         if (!guard()) throw new ClientError('ACCOUNT_CHANGED');
         await driver.begin();
         transaction = true;
-        const current = await this.readIn(driver, scope);
+        const current = await this.readIn(driver, scope,true);
         if (!guard()) throw new ClientError('ACCOUNT_CHANGED');
         const proposed = reducer(current);
         if (proposed instanceof Promise) throw new ClientError('STORAGE_FAILED');
@@ -97,13 +98,18 @@ export class SqliteAccountStore<T> implements AccountStorage<T> {
       }
     });
   }
-  remove(scope: AccountScope): Promise<void> {
+  remove(scope: AccountScope, options:{accountErasure?:boolean}={}): Promise<void> {
     const scopeKey = accountScopeKey(scope);
     return this.enqueue(async (driver) => {
       let transaction = false;
       try {
         await driver.begin(); transaction = true;
-        await driver.run('DELETE FROM account_snapshots WHERE scope_key = ?', [scopeKey]);
+        const rows=await driver.query('SELECT payload FROM account_snapshots WHERE scope_key = ?', [scopeKey]);
+        let erased=false;try{erased=JSON.parse(String(rows[0]?.payload)).erased===true;}catch{ /* Ordinary explicit corrupt-data cleanup remains available. */ }
+        if(options.accountErasure||erased){
+          const payload=JSON.stringify({version:1,scopeKey,accountId:scope.accountId.toLowerCase(),apiBaseUrl:normalizeServiceUrl(scope.apiBaseUrl),state:null,erased:true});
+          await driver.run('INSERT INTO account_snapshots (scope_key, payload) VALUES (?, ?) ON CONFLICT(scope_key) DO UPDATE SET payload = excluded.payload',[scopeKey,payload]);
+        }else await driver.run('DELETE FROM account_snapshots WHERE scope_key = ?', [scopeKey]);
         await driver.commit(); transaction = false;
       } catch (error) {
         if (transaction) await driver.rollback();

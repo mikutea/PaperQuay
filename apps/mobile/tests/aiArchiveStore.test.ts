@@ -134,6 +134,15 @@ async function fixture(t: TestContext, backend: 'web' | 'sqlite', limits?: Parti
 }
 
 for (const backend of ['web', 'sqlite'] as const) {
+  test(`${backend} permanent erasure fences retained archive writers, survives ordinary clear and retains other scopes`,async t=>{
+    const f=await fixture(t,backend),second=f.open();await f.store.put(a,record(),{});await second.put(b,record(),{});
+    const gate=deferred(),pending=gate.promise.then(()=>second.put(a,record(11),{}));
+    const blocked=assert.rejects(pending,{code:'ACCOUNT_CHANGED'});
+    await f.store.clear(a,{accountErasure:true});gate.resolve();await blocked;
+    assert.equal((await second.list(b)).length,1);
+    await second.clear(a);await assert.rejects(f.open().put(a,record(),{}),{code:'ACCOUNT_CHANGED'});
+    await second.clear(a,{accountErasure:true});await second.put(c,record(),{});
+  });
   test(`${backend}: independent durable archive scope and immutable history idempotence`, async (t) => {
     const f = await fixture(t, backend), item = record();
     const saved = await f.store.put(a, item, {});

@@ -10,7 +10,8 @@ public class PaperQuayIncomingSharePlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "list", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "read", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "remove", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "clear", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "clear", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "purgeOwned", returnType: CAPPluginReturnPromise)
     ]
     private let operations = DispatchQueue(label: "dev.paperquay.incoming.bridge")
     private var observer: NSObjectProtocol?
@@ -68,6 +69,10 @@ public class PaperQuayIncomingSharePlugin: CAPPlugin, CAPBridgedPlugin {
     @objc func clear(_ call: CAPPluginCall) {
         guard let owner = owner(call, fields: ["owner"]) else { return }
         perform(call) { try IncomingShareStore.clear(owner: owner); return [:] }
+    }
+    @objc func purgeOwned(_ call: CAPPluginCall) {
+        guard let owner = owner(call, fields: ["owner"]) else { return }
+        perform(call) { try IncomingShareStore.purgeOwned(owner: owner); return [:] }
     }
 }
 

@@ -1,3 +1,7 @@
+import {createPrivacyRuntime,type PrivacyRuntime} from './privacy/runtime.ts';
+import {accountScopeAvailable,getBrowserErasureCoordinator} from './privacy/browserErasure.ts';
+import {browserAccountContext} from './privacy/browserAccount.ts';
+import {flushSync} from 'react-dom';
 import {MobileModelRouter} from './modelRouting/router.ts';
 import type {ModelInvocationApi} from './modelRouting/api.ts';
 import {fetchAiTransport} from './ai/transport.ts';
@@ -32,7 +36,7 @@ import { ClientError, describeError } from './errors.ts';
 import { assertPlatformReady, getPlatformCapabilities } from './platform.ts';
 import { accountScopeKey, createAccountStorage } from './storage/accountStore.ts';
 import { createSecretStore, type SecretStore } from './platform/secretStore.ts';
-import { verifiedBinding } from './storage/verifiedBinding.ts';
+import { createVerifiedBinding } from './storage/verifiedBinding.ts';
 import { filterPapers, organizationOf, readingStatusLabels } from './library/organization.ts';
 import type { PdfAiContext, PdfCitationTarget } from './pdf/types.ts';
 import type { CloudPdfContext } from './pdf/cloudCopies.ts';
@@ -101,11 +105,15 @@ function subscribeCompactReader(listener: () => void) {
   query.addEventListener('change', listener);
   return () => query.removeEventListener('change', listener);
 }
+const PrivacyHost=lazy(()=>import('./components/AccountPrivacy.tsx').then(module=>({default:module.PrivacyHost})));
+const noPeerErasureUpdates=()=>()=>{};
+const noPeerErasureState=()=>null;
 interface Runtime {
   config: AppConfig;
   auth: AuthSession;
   controller: WorkspaceController;
   secretStore?: SecretStore;
+  privacy?:PrivacyRuntime;
   cloudPdf?: CloudPdfContext;
   desktopPdf?: DesktopPdfContext;
   remoteTasks?: RemoteTaskContext;
@@ -134,6 +142,7 @@ function initialConfig(defaults: PublicConfigInput = {}): PublicConfigInput {
 async function makeRuntime(input: PublicConfigInput): Promise<Runtime> {
   assertPlatformReady();
   const config = parseAppConfig(input, location.origin, getPlatformCapabilities().native);
+  const browserErasure=getPlatformCapabilities().native?null:getBrowserErasureCoordinator();
   const results = await Promise.allSettled([
     createAuthSession(config), createAccountStorage<StoredWorkspace>({ decode: decodeWorkspace }), createSecretStore(),
   ]);
@@ -146,7 +155,9 @@ async function makeRuntime(input: PublicConfigInput): Promise<Runtime> {
   const auth = authResult.value;
   const store = storeResult.value;
   const secretStore = secretResult.value;
-  const binding = verifiedBinding(config, secretStore, auth.getSubject);
+  const binding = createVerifiedBinding(config, secretStore, auth.getSubject);
+  const browserContext=browserAccountContext({apiBaseUrl:config.apiBaseUrl,auth,secrets:secretStore,binding,coordinator:browserErasure,
+    stop:()=>{if(browserErasure)flushSync(()=>controller.deactivate());else controller.deactivate();}});
   const api = new SyncApi(config.apiBaseUrl, auth.getAccessToken, undefined, binding.key);
   const controller = new WorkspaceController({
     apiBaseUrl: config.apiBaseUrl,
@@ -157,9 +168,12 @@ async function makeRuntime(input: PublicConfigInput): Promise<Runtime> {
     supportsRichNotes:()=>api.supportsRichNotes,
     supportsAiConversations:()=>api.supportsAiConversations,
     supportsGraphRelations:()=>api.supportsGraphRelations,
-    binding: { ...binding, prepare: (signal) => api.capabilities(signal) },
+    binding: { ...binding, prepare: (signal) => api.capabilities(signal),
+      guard:browserContext.guard,activate:browserContext.activate,
+    },
   });
-  return { config, auth, controller, secretStore, modelInvocations:api.modelInvocations, inspectCapabilities:signal=>api.inspectCapabilities(signal),
+  const privacy=createPrivacyRuntime(config,auth,store,secretStore,controller,binding,browserContext.privacyOptions);
+  return { config, auth, controller, secretStore, privacy, modelInvocations:api.modelInvocations, inspectCapabilities:signal=>api.inspectCapabilities(signal),
     cloudPdf: { apiBaseUrl: config.apiBaseUrl, getAccessToken: auth.getAccessToken, getCloudPdfCapability: () => api.cloudPdfCapability },
     desktopPdf: { apiBaseUrl: config.apiBaseUrl, getAccessToken: auth.getAccessToken, getDesktopPdfCapability: () => api.desktopPdfCapability },
     remoteTasks: { apiBaseUrl: config.apiBaseUrl, getAccessToken: auth.getAccessToken, getCapability: () => api.remoteTaskCapability,
@@ -168,8 +182,11 @@ async function makeRuntime(input: PublicConfigInput): Promise<Runtime> {
       identityKey: () => JSON.stringify(auth.getSubject?.() ?? null) },
     dispose: async () => {
     controller.deactivate();
+    await privacy.dispose();
     await auth.dispose();
     await store.close();
+    await binding.close();
+    await browserContext.disposeAfterResources();
   } };
 }
 
@@ -262,12 +279,22 @@ function ErrorMessage({ message }: { message: string }) {
   );
 }
 
-export function ConnectedApp({
+interface ConnectedProps {runtime:Runtime;configInput:PublicConfigInput;onConfigure:(input:PublicConfigInput)=>Promise<void>;configError:string|null}
+export function ConnectedApp(props:ConnectedProps) {
+  const [privacyOpen,setPrivacyOpen]=useState(false);
+  return <><ConnectedWorkspace {...props} onPrivacy={props.runtime.privacy?()=>setPrivacyOpen(true):undefined}/>
+    {props.runtime.privacy&&<Suspense fallback={null}><PrivacyHost privacy={props.runtime.privacy} auth={props.runtime.auth}
+      controller={props.runtime.controller} apiBaseUrl={props.runtime.config.apiBaseUrl} open={privacyOpen} onClose={()=>setPrivacyOpen(false)}/></Suspense>}
+  </>;
+}
+function ConnectedWorkspace({
   runtime,
   configInput,
   onConfigure,
   configError,
+  onPrivacy,
 }: {
+  onPrivacy?:()=>void;
   runtime: Runtime;
   configInput: PublicConfigInput;
   onConfigure: (input: PublicConfigInput) => Promise<void>;
@@ -275,8 +302,14 @@ export function ConnectedApp({
 }) {
   const { auth, controller } = runtime;
   const authState = useSyncExternalStore(auth.subscribe, auth.getSnapshot);
+  const peerErasure=useSyncExternalStore(runtime.privacy?.subscribePeerErasure??noPeerErasureUpdates,runtime.privacy?.getPeerErasure??noPeerErasureState);
   const authSubjectKey = JSON.stringify(auth.getSubject?.() ?? null);
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
+  const accountOwnerCurrent=()=>{
+    const subject=auth.getSubject?.();
+    return JSON.stringify(subject??null)===authSubjectKey&&(!state.workspace||accountScopeAvailable({
+      apiBaseUrl:runtime.config.apiBaseUrl,accountId:state.workspace.sync.accountId}));
+  };
   const listScope = listViewScope(runtime.config.apiBaseUrl, authState.status, authSubjectKey, state);
   // A fresh owner also retires callbacks when a session leaves and returns to the same account.
   const listOwner = useMemo(() => ({}), [auth, controller, listScope]);
@@ -460,6 +493,7 @@ export function ConnectedApp({
     setUiError(null);
   }
   async function login() {
+    if(runtime.privacy?.getPeerErasure?.()||runtime.privacy?.recoveryStatus?.()){onPrivacy?.();return;}
     if (!canLeave()) return;
     const revoked = state.error?.code === 'SESSION_REVOKED';
     controller.deactivate();
@@ -492,6 +526,9 @@ export function ConnectedApp({
   const notes = entities.filter((entity) => entity.entityType === 'note');
   const readingPaper = papers.find((paper) => paper.entityId === readingId && !paper.deleted);
   const scope = state.identity ? { apiBaseUrl: runtime.config.apiBaseUrl, accountId: state.identity.accountId } : null;
+  const accountSecrets=useMemo(()=>scope&&runtime.secretStore
+    ?runtime.privacy?.scopedSecrets(scope)??runtime.secretStore:undefined,
+    [runtime.secretStore,runtime.privacy,scope?.accountId,authSubjectKey,authState.status]);
   const modelRouter=useMemo(()=>scope&&state.status==='ready'&&runtime.modelInvocations?new MobileModelRouter({api:runtime.modelInvocations,scope,owner:controller.captureModelOwner(scope)}):undefined,[runtime.modelInvocations,controller,state.identity,state.status,transferScope,authSubjectKey]);
   const aiTransport=useMemo(()=>modelRouter?{...fetchAiTransport,modelRouting:modelRouter}:fetchAiTransport,[modelRouter]);
   const incomingOwner = scope ? accountScopeKey(scope) : null;
@@ -590,7 +627,7 @@ export function ConnectedApp({
               </label>
               <button
                 className="primary full-width"
-                disabled={authState.status === 'signing-in'}
+                disabled={authState.status === 'signing-in'||Boolean(peerErasure)||Boolean(runtime.privacy?.recoveryStatus?.())}
                 onClick={() => void login()}
               >
                 {authState.status === 'signing-in'
@@ -602,6 +639,8 @@ export function ConnectedApp({
             </>
           )}
           {error && <ErrorMessage message={error} />}
+          {peerErasure&&<p role="status">本页清理确认尚未完成。请打开“数据与隐私”继续，并保留当前登录。</p>}
+          {authState.status==='signed-in'&&onPrivacy&&<button className="secondary" onClick={onPrivacy}>数据与隐私</button>}
           <details className="service-settings">
             <summary>服务设置</summary>
             <ConfigForm input={configInput} onSave={onConfigure} />
@@ -657,7 +696,7 @@ export function ConnectedApp({
               conflicts={conflictCount}
               onSelect={select}
               onCreate={(type) => select(type, crypto.randomUUID())}
-              onResearch={scope && runtime.secretStore ? () => { if (canLeave()) setResearchOpen(true); } : undefined}
+              onResearch={scope && accountSecrets ? () => { if (canLeave()) setResearchOpen(true); } : undefined}
               onTransfer={() => { setIncomingSelection(null); setTransferOpen(true); }}
               onSync={() => void controller.syncNow()}
               onConflicts={() => navigate('conflicts')}
@@ -722,7 +761,7 @@ export function ConnectedApp({
                 cloudPdf={runtime.cloudPdf}
                 desktopPdf={runtime.desktopPdf}
                 parsedCacheEpoch={parsedRemoteEpoch}
-                accountCurrent={() => JSON.stringify(auth.getSubject?.() ?? null) === authSubjectKey}
+                accountCurrent={() => accountOwnerCurrent()}
                 compact={compactReader}
                 onOpenNotes={() => showReadingPanel('notes')}
                 onOpenAi={() => showReadingPanel('ai')}
@@ -759,9 +798,9 @@ export function ConnectedApp({
           </ReaderSheet>
           <ReaderSheet open={readingPanel === 'ai'} title="AI 助手" onClose={closeReadingPanel}
             keepMounted modal={compactReader} portalTarget={readingPanelHost} className="reading-ai-sheet">
-          {openedReadingPanels.ai && runtime.secretStore && <aside className="reading-side" aria-label="阅读 AI 助手内容">
+          {openedReadingPanels.ai && accountSecrets && <aside className="reading-side" aria-label="阅读 AI 助手内容">
             <Suspense fallback={<p role="status">正在打开 AI 助手…</p>}><AiWorkspace accountScope={scope} context={aiContext} archiveEpoch={archiveEpochs[accountScopeKey(scope)] ?? 0}
-              secretStore={runtime.secretStore} transport={aiTransport} modelRouter={modelRouter} modelLedgerRevision={state.workspace?.modelInvocations?.revision} sync={aiSync} onRestoreContext={context => {
+              secretStore={accountSecrets} transport={aiTransport} modelRouter={modelRouter} modelLedgerRevision={state.workspace?.modelInvocations?.revision} sync={aiSync} onRestoreContext={context => {
                 const current = controller.getSnapshot();
                 const version = current.workspace ? listVisibleEntities(current.workspace.sync).find(entity => entity.entityType === 'attachmentVersion' && entity.entityId === context.attachmentVersionId && !entity.deleted) : null;
                 if (current.status !== 'ready' || current.identity?.accountId !== scope.accountId || context.paperId !== readingId || !version?.data || !('sha256' in version.data)
@@ -834,21 +873,22 @@ export function ConnectedApp({
               }
             }}
           />}
-            renderAi={scope && runtime.secretStore ? onBack => <Suspense fallback={<p role="status">正在打开 AI 设置…</p>}><AiWorkspace mode="settings" accountScope={scope} context={null}
+            renderAi={scope && accountSecrets ? onBack => <Suspense fallback={<p role="status">正在打开 AI 设置…</p>}><AiWorkspace mode="settings" accountScope={scope} context={null}
               onSettingsBack={onBack} onSettingsDirty={dirtyChanged} archiveEpoch={archiveEpochs[accountScopeKey(scope)] ?? 0}
-              secretStore={runtime.secretStore!} transport={aiTransport} modelRouter={modelRouter} modelLedgerRevision={state.workspace?.modelInvocations?.revision} sync={aiSync}
+              secretStore={accountSecrets!} transport={aiTransport} modelRouter={modelRouter} modelLedgerRevision={state.workspace?.modelInvocations?.revision} sync={aiSync}
               onSaveNote={async () => { throw new ClientError('ACCOUNT_CHANGED'); }} onNavigateCitation={() => {}} /></Suspense> : undefined}
             actions={{
+              privacy: onPrivacy,
               capabilities: () => setCapabilityOpen(incomingKey),
               cloud: scope && runtime.cloudPdf ? () => setCloudOpen(true) : undefined,
               remote: scope && runtime.remoteTasks ? () => setRemoteOpen(true) : undefined,
               agent: scope ? () => { if (canLeave()) setAgentOpen(incomingKey); } : undefined,
               graph: scope ? () => { if (canLeave()) setGraphOpen(true); } : undefined,
-              zotero: scope && runtime.secretStore ? () => setZoteroOpen(true) : undefined,
+              zotero: scope && accountSecrets ? () => setZoteroOpen(true) : undefined,
               incoming: scope && incomingClient?.available ? () => { if (canLeave()) setIncomingOpen(incomingKey); } : undefined,
               export: scope ? () => setNoteExportOpen(true) : undefined,
-              research: scope && runtime.secretStore ? () => { if (canLeave()) setResearchOpen(true); } : undefined,
-              review: scope && runtime.secretStore ? () => { if (canLeave()) setReviewOpen(true); } : undefined,
+              research: scope && accountSecrets ? () => { if (canLeave()) setResearchOpen(true); } : undefined,
+              review: scope && accountSecrets ? () => { if (canLeave()) setReviewOpen(true); } : undefined,
             }}
           />
         )}
@@ -867,26 +907,26 @@ export function ConnectedApp({
           />
         )}
       </main>
-      {agentOpen===incomingKey&&transferScope&&scope&&<Suspense fallback={<p role="status">正在打开文库 Agent…</p>}><AgentWorkspace retrieval={runtime.retrieval} key={incomingKey} ai={runtime.secretStore?{scope,secretStore:runtime.secretStore,transport:aiTransport,modelRouter}:undefined} controller={controller} scopeKey={transferScope} accountCurrent={()=>JSON.stringify(auth.getSubject?.()??null)===authSubjectKey} onClose={()=>setAgentOpen(null)} onResearch={runtime.secretStore?()=>{if(JSON.stringify(auth.getSubject?.()??null)!==authSubjectKey||!canLeave())return;setAgentOpen(null);setResearchOpen(true);}:undefined} onOpen={paperId=>{const now=controller.getSnapshot(),sync=now.workspace?.sync;if(now.status!=='ready'||!sync||JSON.stringify([sync.accountId,sync.deviceId,sync.generation])!==transferScope||JSON.stringify(auth.getSubject?.()??null)!==authSubjectKey||!canLeave()||!listVisibleEntities(sync).some(e=>e.entityType==='paper'&&e.entityId===paperId&&!e.deleted&&e.data))return;setAgentOpen(null);openReader(paperId);}}/></Suspense>}
-      {radarOpen&&transferScope&&scope&&<Suspense fallback={<p role="status">正在打开文献雷达…</p>}><RadarWorkspace key={transferScope+':'+authSubjectKey} controller={controller} scope={scope} scopeKey={transferScope} secretStore={runtime.secretStore} accountCurrent={()=>JSON.stringify(auth.getSubject?.()??null)===authSubjectKey} onClose={()=>setRadarOpen(false)} onOpen={paperId=>{const s=controller.getSnapshot(),sync=s.workspace?.sync;if(s.status!=='ready'||!sync||JSON.stringify([sync.accountId,sync.deviceId,sync.generation])!==transferScope||JSON.stringify(auth.getSubject?.()??null)!==authSubjectKey||!canLeave()||!listVisibleEntities(sync).some(e=>e.entityType==='paper'&&e.entityId===paperId&&!e.deleted&&e.data))return;setRadarOpen(false);openReader(paperId);}}/></Suspense>}
-      {graphOpen&&transferScope&&<Suspense fallback={<p role="status">正在打开知识图谱…</p>}><KnowledgeGraphSheet key={transferScope+':'+authSubjectKey} controller={controller} scopeKey={transferScope} accountCurrent={()=>JSON.stringify(auth.getSubject?.()??null)===authSubjectKey} onClose={()=>setGraphOpen(false)} onOpen={node=>{const s=controller.getSnapshot(),sync=s.workspace?.sync;if(s.status!=='ready'||!sync||JSON.stringify([sync.accountId,sync.deviceId,sync.generation])!==transferScope||JSON.stringify(auth.getSubject?.()??null)!==authSubjectKey||!canLeave())return;const type=node.type==='paper'?'paper':node.type==='note'?'note':null,id=type==='paper'?node.paperId:node.noteId;if(!type||!id||!listVisibleEntities(sync).some(e=>!e.deleted&&e.data&&e.entityType===type&&e.entityId===id))return;setGraphOpen(false);if(type==='paper')openReader(id);else{setSection('notes');setSelection({type:'note',id});}}}/></Suspense>}
-      {reviewOpen&&transferScope&&scope&&runtime.secretStore&&<Suspense fallback={<p className="loading-message" role="status">正在打开综述工作区…</p>}><ReviewWorkspace key={transferScope+':'+authSubjectKey} scope={scope} scopeKey={transferScope} controller={controller} secretStore={runtime.secretStore} transport={aiTransport} modelRouter={modelRouter} accountCurrent={()=>JSON.stringify(auth.getSubject?.()??null)===authSubjectKey} onClose={()=>setReviewOpen(false)}/></Suspense>}
-      {researchOpen && transferScope && scope && runtime.secretStore && <Suspense fallback={<p className="loading-message" role="status">正在打开多篇问答…</p>}>
-        <ResearchWorkspace retrieval={runtime.retrieval} key={transferScope+':'+authSubjectKey} scope={scope} scopeKey={transferScope} controller={controller} secretStore={runtime.secretStore} transport={aiTransport} modelRouter={modelRouter}
-          accountCurrent={() => JSON.stringify(auth.getSubject?.() ?? null) === authSubjectKey} onClose={() => setResearchOpen(false)} />
+      {agentOpen===incomingKey&&transferScope&&scope&&<Suspense fallback={<p role="status">正在打开文库 Agent…</p>}><AgentWorkspace retrieval={runtime.retrieval} key={incomingKey} ai={accountSecrets?{scope,secretStore:accountSecrets,transport:aiTransport,modelRouter}:undefined} controller={controller} scopeKey={transferScope} accountCurrent={()=>accountOwnerCurrent()} onClose={()=>setAgentOpen(null)} onResearch={accountSecrets?()=>{if(!accountOwnerCurrent()||!canLeave())return;setAgentOpen(null);setResearchOpen(true);}:undefined} onOpen={paperId=>{const now=controller.getSnapshot(),sync=now.workspace?.sync;if(now.status!=='ready'||!sync||JSON.stringify([sync.accountId,sync.deviceId,sync.generation])!==transferScope||!accountOwnerCurrent()||!canLeave()||!listVisibleEntities(sync).some(e=>e.entityType==='paper'&&e.entityId===paperId&&!e.deleted&&e.data))return;setAgentOpen(null);openReader(paperId);}}/></Suspense>}
+      {radarOpen&&transferScope&&scope&&<Suspense fallback={<p role="status">正在打开文献雷达…</p>}><RadarWorkspace key={transferScope+':'+authSubjectKey} controller={controller} scope={scope} scopeKey={transferScope} secretStore={accountSecrets} accountCurrent={()=>accountOwnerCurrent()} onClose={()=>setRadarOpen(false)} onOpen={paperId=>{const s=controller.getSnapshot(),sync=s.workspace?.sync;if(s.status!=='ready'||!sync||JSON.stringify([sync.accountId,sync.deviceId,sync.generation])!==transferScope||!accountOwnerCurrent()||!canLeave()||!listVisibleEntities(sync).some(e=>e.entityType==='paper'&&e.entityId===paperId&&!e.deleted&&e.data))return;setRadarOpen(false);openReader(paperId);}}/></Suspense>}
+      {graphOpen&&transferScope&&<Suspense fallback={<p role="status">正在打开知识图谱…</p>}><KnowledgeGraphSheet key={transferScope+':'+authSubjectKey} controller={controller} scopeKey={transferScope} accountCurrent={()=>accountOwnerCurrent()} onClose={()=>setGraphOpen(false)} onOpen={node=>{const s=controller.getSnapshot(),sync=s.workspace?.sync;if(s.status!=='ready'||!sync||JSON.stringify([sync.accountId,sync.deviceId,sync.generation])!==transferScope||!accountOwnerCurrent()||!canLeave())return;const type=node.type==='paper'?'paper':node.type==='note'?'note':null,id=type==='paper'?node.paperId:node.noteId;if(!type||!id||!listVisibleEntities(sync).some(e=>!e.deleted&&e.data&&e.entityType===type&&e.entityId===id))return;setGraphOpen(false);if(type==='paper')openReader(id);else{setSection('notes');setSelection({type:'note',id});}}}/></Suspense>}
+      {reviewOpen&&transferScope&&scope&&accountSecrets&&<Suspense fallback={<p className="loading-message" role="status">正在打开综述工作区…</p>}><ReviewWorkspace key={transferScope+':'+authSubjectKey} scope={scope} scopeKey={transferScope} controller={controller} secretStore={accountSecrets} transport={aiTransport} modelRouter={modelRouter} accountCurrent={()=>accountOwnerCurrent()} onClose={()=>setReviewOpen(false)}/></Suspense>}
+      {researchOpen && transferScope && scope && accountSecrets && <Suspense fallback={<p className="loading-message" role="status">正在打开多篇问答…</p>}>
+        <ResearchWorkspace retrieval={runtime.retrieval} key={transferScope+':'+authSubjectKey} scope={scope} scopeKey={transferScope} controller={controller} secretStore={accountSecrets} transport={aiTransport} modelRouter={modelRouter}
+          accountCurrent={() => accountOwnerCurrent()} onClose={() => setResearchOpen(false)} />
       </Suspense>}
       {cloudOpen && transferScope && scope && runtime.cloudPdf && <Suspense fallback={<p className="loading-message" role="status">正在打开云副本…</p>}>
         <CloudPdfLibrary key={`${transferScope}:${authSubjectKey}`} context={runtime.cloudPdf} scope={scope} controller={controller}
-          accountCurrent={() => JSON.stringify(auth.getSubject?.() ?? null) === authSubjectKey}
+          accountCurrent={() => accountOwnerCurrent()}
           onClose={() => setCloudOpen(false)} />
       </Suspense>}
       {incomingOpen === incomingKey && transferScope && incomingOwner && incomingClient?.available && <Suspense fallback={<p role="status">正在打开待处理分享…</p>}>
         <IncomingSharePanel key={incomingKey} scopeKey={transferScope} ownerKey={incomingOwner} inbox={incomingClient}
-          accountCurrent={() => JSON.stringify(auth.getSubject?.() ?? null) === authSubjectKey}
+          accountCurrent={() => accountOwnerCurrent()}
           onClose={() => setIncomingOpen(null)} onReview={(source) => {
             const sync = controller.getSnapshot().workspace?.sync;
             if (!sync || JSON.stringify([sync.accountId,sync.deviceId,sync.generation]) !== transferScope
-              || JSON.stringify(auth.getSubject?.() ?? null) !== authSubjectKey) return;
+              || !accountOwnerCurrent()) return;
             assertPreparedIncomingShareSource(source);
             setIncomingSelection({ source, scope: transferScope, subject: authSubjectKey });
             setIncomingOpen(null); setTransferOpen(true);
@@ -894,12 +934,12 @@ export function ConnectedApp({
       </Suspense>}
       {transferOpen && transferScope && (!incomingSelection || incomingSource) && <Suspense fallback={<p className="loading-message" role="status">正在打开导入与导出…</p>}>
         <LibraryTransferPanel key={`${transferScope}:${authSubjectKey}:${incomingSource?.digest ?? 'file'}`} incomingSource={incomingSource} entities={entities} controller={controller} scopeKey={transferScope}
-          accountCurrent={() => JSON.stringify(auth.getSubject?.() ?? null) === authSubjectKey}
+          accountCurrent={() => accountOwnerCurrent()}
           onClose={() => { setTransferOpen(false); setIncomingSelection(null); }} />
       </Suspense>}
-      {capabilityOpen===incomingKey&&transferScope&&scope&&<Suspense fallback={<p role="status">正在打开功能清单…</p>}><CapabilitySheet key={incomingKey} runtime={runtime} controller={controller} scope={scope} scopeKey={transferScope} incomingShare={Boolean(incomingClient?.available)} current={()=>JSON.stringify(auth.getSubject?.()??null)===authSubjectKey} onClose={()=>setCapabilityOpen(null)} onNavigate={(action:FeatureAction)=>{
+      {capabilityOpen===incomingKey&&transferScope&&scope&&<Suspense fallback={<p role="status">正在打开功能清单…</p>}><CapabilitySheet key={incomingKey} runtime={runtime} controller={controller} scope={scope} scopeKey={transferScope} incomingShare={Boolean(incomingClient?.available)} current={()=>accountOwnerCurrent()} onClose={()=>setCapabilityOpen(null)} onNavigate={(action:FeatureAction)=>{
         const snapshot=controller.getSnapshot(),sync=snapshot.workspace?.sync;
-        if(snapshot.status!=='ready'||!sync||JSON.stringify([sync.accountId,sync.deviceId,sync.generation])!==transferScope||JSON.stringify(auth.getSubject?.()??null)!==authSubjectKey||!canLeave())return;
+        if(snapshot.status!=='ready'||!sync||JSON.stringify([sync.accountId,sync.deviceId,sync.generation])!==transferScope||!accountOwnerCurrent()||!canLeave())return;
         setCapabilityOpen(null);
         if(['library','notes','sync','conflicts'].includes(action)){navigate(action==='sync'?'account':action as Section);return;}
         if(action==='transfer')setTransferOpen(true);else if(action==='incoming')setIncomingOpen(incomingKey);else if(action==='cloud')setCloudOpen(true);else if(action==='remote')setRemoteOpen(true);else if(action==='zotero')setZoteroOpen(true);else if(action==='agent'){setAgentOpen(incomingKey);return;}else if(action==='radar'){setRadarOpen(true);return;}else if(action==='graph'){setGraphOpen(true);return;}else if(action==='review'){setReviewOpen(true);return;}
@@ -907,21 +947,21 @@ export function ConnectedApp({
       }}/></Suspense>}
       {remoteOpen && transferScope && scope && runtime.remoteTasks && <Suspense fallback={<p role="status">正在打开远程任务…</p>}>
         <RemoteTaskPanel key={`${transferScope}:${authSubjectKey}`} context={runtime.remoteTasks} scope={scope} scopeKey={transferScope}
-          controller={controller} entities={entities} accountCurrent={() => JSON.stringify(auth.getSubject?.() ?? null) === authSubjectKey}
+          controller={controller} entities={entities} accountCurrent={() => accountOwnerCurrent()}
           onClose={() => setRemoteOpen(false)} onParsed={(versionId,digest) => {
             const now = controller.getSnapshot().workspace?.sync;
             if (!now || JSON.stringify([now.accountId,now.deviceId,now.generation]) !== transferScope) return;
             invalidateAiContext({ attachmentVersionId: versionId, retainedDigest: digest }); setParsedRemoteEpoch(value => value + 1);
           }} />
       </Suspense>}
-      {zoteroOpen && transferScope && scope && runtime.secretStore && <Suspense fallback={<p role="status">正在打开 Zotero 来源…</p>}>
+      {zoteroOpen && transferScope && scope && accountSecrets && <Suspense fallback={<p role="status">正在打开 Zotero 来源…</p>}>
         <ZoteroLibrarySheet key={`${transferScope}:${authSubjectKey}`} scope={scope} scopeKey={transferScope} controller={controller}
-          secretStore={runtime.secretStore} accountCurrent={() => JSON.stringify(auth.getSubject?.() ?? null) === authSubjectKey} onClose={() => setZoteroOpen(false)} />
+          secretStore={accountSecrets} accountCurrent={() => accountOwnerCurrent()} onClose={() => setZoteroOpen(false)} />
       </Suspense>}
       {noteExportOpen && transferScope && <Suspense fallback={<p role="status">正在打开笔记导出…</p>}>
         <ReaderSheet open title="导出笔记、批注与引用" onClose={() => setNoteExportOpen(false)}>
-          <NoteExportPanel entities={entities} initialPaperId={readingId} scopeKey={transferScope}
-            accountCurrent={() => JSON.stringify(auth.getSubject?.() ?? null) === authSubjectKey} />
+          <NoteExportPanel entities={entities} initialPaperId={readingId} scopeKey={transferScope} scope={scope??undefined}
+            accountCurrent={() => accountOwnerCurrent()} />
         </ReaderSheet>
       </Suspense>}
       <nav className="bottom-nav app-glass" data-section={section} aria-label="主导航">

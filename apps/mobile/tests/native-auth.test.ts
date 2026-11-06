@@ -5,13 +5,105 @@ import { parseAppConfig, NATIVE_REDIRECT_URI } from '../src/config.ts';
 import { NativeOidcSession, nativeAuthNamespace, nativeCallback, type NativeAuthBridge } from '../src/auth/nativeOidc.ts';
 import { SecureOidcStateStore } from '../src/auth/secureStateStore.ts';
 import { MemorySecretStore } from '../src/platform/secretStore.ts';
+import {ClientError} from '../src/errors.ts';
+import {authSubject} from '../src/auth/subject.ts';
 
 const config = parseAppConfig({ apiBaseUrl: 'https://sync.example.test', oidcAuthority: 'https://id.example.test/realms/paperquay', oidcClientId: 'paperquay-mobile' }, 'capacitor://localhost', true);
+
+test('failed secure session deletion preserves a retryable identity and cannot acknowledge before credentials are removed',async t=>{
+  class FaultStore extends MemorySecretStore {
+    fail=false;
+    override async remove(namespace:string,key:string){if(this.fail&&key==='session')throw new ClientError('STORAGE_FAILED');await super.remove(namespace,key);}
+  }
+  const secrets=new FaultStore(),f=fixture(t,secrets);await f.session.initialize();await f.session.signIn();await f.session.completeSignIn(f.callback());
+  const who=f.session.getSubject(),token=await f.session.getAccessToken(),namespace=nativeAuthNamespace(config);let confirmations=0;
+  const afterPersisted=async(value:string|null)=>{assert.equal(await secrets.get(namespace,'session'),null);assert.equal(value,token);confirmations++;};
+  secrets.fail=true;await assert.rejects(f.session.clearLocalSession({afterPersisted}),{code:'STORAGE_FAILED'});
+  assert.equal(confirmations,0);assert.deepEqual(f.session.getSubject(),who);assert.equal(f.session.getSnapshot().status,'signed-in');
+  assert(await secrets.get(namespace,'session'));await assert.rejects(f.session.getAccessToken(),{code:'AUTH_REQUIRED'});
+  secrets.fail=false;await f.session.clearLocalSession({afterPersisted});assert.equal(confirmations,1);
+  assert.equal(f.session.getSubject(),null);assert.equal(f.session.getSnapshot().status,'signed-out');
+});
 function deferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
   const promise = new Promise<T>((done) => { resolve = done; });
   return { promise, resolve };
 }
+
+test('native erasure retention removes durable credentials while preserving only the original confirmation session',async t=>{
+  const f=fixture(t);await f.session.signIn();await f.session.completeSignIn(f.callback());
+  const original=f.session.getSubject(),token=await f.session.getAccessToken(),namespace=nativeAuthNamespace(config);
+  await f.session.clearLocalSession({retainForErasure:true});
+  assert.equal(await f.secrets.get(namespace,'session'),null);assert.deepEqual(f.session.getSubject(),original);
+  assert.equal(f.session.getSnapshot().status,'signed-in');assert.equal(f.session.getSnapshot().needsLogin,true);
+  await assert.rejects(f.session.getAccessToken(),{code:'AUTH_REQUIRED'});
+  await f.session.clearLocalSession({renewForErasure:true,afterPersisted:async value=>{assert.equal(value,token);}});
+  assert.equal(f.session.getSubject(),null);assert.equal(f.session.getSnapshot().status,'signed-out');
+});
+
+test('a delayed erasure ACK retry renews only the original volatile SID without restoring durable credentials',async t=>{
+  const f=fixture(t);await f.session.signIn();await f.session.completeSignIn(f.callback());
+  const original=await f.session.getAccessToken(),namespace=nativeAuthNamespace(config);let acknowledgements=0;
+  await assert.rejects(f.session.clearLocalSession({renewForErasure:true,afterPersisted:async token=>{
+    assert.equal(token,original);assert.equal(await f.secrets.get(namespace,'session'),null);throw Error('synthetic lost ACK');
+  }}));
+  await assert.rejects(f.session.getAccessToken(),{code:'AUTH_REQUIRED'});
+  const later=Date.now()+3601_000;t.mock.method(Date,'now',()=>later);
+  await f.session.clearLocalSession({renewForErasure:true,afterPersisted:async token=>{
+    assert.notEqual(token,original);assert.equal(await f.secrets.get(namespace,'session'),null);acknowledgements++;
+  }});
+  assert.equal(f.refreshes,1);assert.equal(acknowledgements,1);assert.equal(f.session.getSubject(),null);
+  assert.equal(await f.secrets.get(namespace,'session'),null);
+});
+
+test('erasure joins an in-flight single-use refresh and retains its rotated credential only for ACK retry',async t=>{
+  const f=fixture(t),release=deferred();f.lifetime=10;f.enforceRotation=true;f.refreshRelease=release.promise;
+  await f.session.signIn();await f.session.completeSignIn(f.callback());
+  const ordinary=assert.rejects(f.session.getAccessToken(),{code:'AUTH_REQUIRED'});await f.refreshEntered.promise;
+  let acknowledgements=0;
+  const clearing=assert.rejects(f.session.clearLocalSession({renewForErasure:true,afterPersisted:async token=>{
+    assert.equal(token,'access-1-1');assert.equal(await f.secrets.get(nativeAuthNamespace(config),'session'),null);
+    acknowledgements++;throw Error('Synthetic lost ACK');
+  }}));
+  await assert.rejects(f.session.getAccessToken(),{code:'AUTH_REQUIRED'});assert.equal(acknowledgements,0);
+  release.resolve();await ordinary;await clearing;assert.equal(f.refreshes,1);
+  const later=Date.now()+3601_000;t.mock.method(Date,'now',()=>later);
+  await f.session.clearLocalSession({renewForErasure:true,afterPersisted:async token=>{
+    assert.equal(token,'access-1-2');assert.equal(await f.secrets.get(nativeAuthNamespace(config),'session'),null);acknowledgements++;
+  }});
+  assert.equal(f.refreshes,2);assert.equal(f.bodies.at(-1)!.get('refresh_token'),'refresh-1');assert.equal(acknowledgements,2);
+  assert.equal(f.session.getSubject(),null);
+});
+
+test('erasure-only renewal rejects a replacement SID and keeps the confirmation pending with no durable credentials',async t=>{
+  const f=fixture(t);f.lifetime=10;await f.session.signIn();await f.session.completeSignIn(f.callback());
+  f.alteredClaims={sid:'replacement-session'};let acknowledgements=0;
+  await assert.rejects(f.session.clearLocalSession({renewForErasure:true,afterPersisted:async()=>{acknowledgements++;}}),{code:'AUTH_REQUIRED'});
+  assert.equal(acknowledgements,0);assert.equal(f.session.getSubject()?.subject,'subject-one');
+  assert.equal(await f.secrets.get(nativeAuthNamespace(config),'session'),null);
+});
+
+test('a 512-character server-supported SID retains its binding key and can renew the original erasure session',async t=>{
+  const f=fixture(t);f.lifetime=10;f.alteredClaims={sid:'s'.repeat(512)};
+  await f.session.signIn();await f.session.completeSignIn(f.callback());
+  const key=f.session.getSubject()!.sessionKey;assert.match(key!,/^[a-f0-9]{64}$/);let acknowledged=0;
+  await f.session.clearLocalSession({renewForErasure:true,afterPersisted:async token=>{
+    assert.equal(token,'access-1-1');assert.equal(f.session.getSubject()!.sessionKey,key);
+    assert.equal(await f.secrets.get(nativeAuthNamespace(config),'session'),null);acknowledged++;
+  }});
+  assert.equal(f.refreshes,1);assert.equal(acknowledged,1);assert.equal(f.session.getSubject(),null);
+  for(const length of[255,256,511,512])assert.match(authSubject({iss:config.oidcAuthority,sub:'subject-one',sid:'s'.repeat(length)},config.oidcAuthority)!.sessionKey!,/^[a-f0-9]{64}$/);
+  for(const sid of['','s'.repeat(513),null])assert.equal(authSubject({iss:config.oidcAuthority,sub:'subject-one',sid},config.oidcAuthority)!.sessionKey,undefined);
+});
+
+test('purely local erasure finishes with expired access and no refresh credential without contacting the provider',async t=>{
+  const f=fixture(t);f.lifetime=10;f.includeRefresh=false;await f.session.signIn();await f.session.completeSignIn(f.callback());
+  const later=Date.now()+20_000;t.mock.method(Date,'now',()=>later);let finalized=0;
+  await f.session.clearLocalSession({renewForErasure:false,afterPersisted:async()=>{finalized++;}});
+  assert.equal(finalized,1);assert.equal(f.refreshes,0);assert.equal(f.exchanges,1);
+  assert.equal(f.session.getSnapshot().status,'signed-out');assert.equal(f.session.getSubject(),null);
+  assert.equal(await f.secrets.get(nativeAuthNamespace(config),'session'),null);
+});
 class Bridge implements NativeAuthBridge {
   urls: string[] = [];
   closes = 0;
@@ -35,6 +127,7 @@ function fixture(t: TestContext, secrets = new MemorySecretStore()) {
   let refreshes = 0;
   let lifetime = 3600;
   let includeRefresh = true;
+  let enforceRotation=false,validRefresh='refresh-0';
   let refreshError: string | undefined;
   let alteredClaims: Record<string, unknown> = {};
   let nonceOverride: string | undefined;
@@ -51,6 +144,8 @@ function fixture(t: TestContext, secrets = new MemorySecretStore()) {
     const refresh = body.get('grant_type') === 'refresh_token';
     if (refresh) {
       refreshes += 1;
+      if(enforceRotation&&body.get('refresh_token')!==validRefresh)return Response.json({error:'invalid_grant'},{status:400});
+      validRefresh=`refresh-${refreshes}`;
       refreshEntered.resolve(); await refreshRelease;
       if (refreshError) return Response.json({ error: refreshError, error_description: 'private-server-token' }, { status: 400 });
     } else {
@@ -72,6 +167,7 @@ function fixture(t: TestContext, secrets = new MemorySecretStore()) {
   return { secrets, bridge, session, callback, bodies, exchangeEntered, refreshEntered,
     get exchanges() { return exchanges; }, get refreshes() { return refreshes; },
     set lifetime(value: number) { lifetime = value; }, set includeRefresh(value: boolean) { includeRefresh = value; },
+    set enforceRotation(value:boolean){enforceRotation=value;},
     set refreshError(value: string | undefined) { refreshError = value; },
     set alteredClaims(value: Record<string, unknown>) { alteredClaims = value; },
     set nonceOverride(value: string | undefined) { nonceOverride = value; },
@@ -106,7 +202,7 @@ test('real OIDC client creates S256 PKCE plus nonce, consumes state once, and st
   assert.ok(verifier.length >= 43);
   assert.equal(createHash('sha256').update(verifier).digest('base64url'), request.searchParams.get('code_challenge'));
   assert.equal(await f.session.getAccessToken(), 'access-1-0');
-  assert.deepEqual(f.session.getSubject(), { issuer: config.oidcAuthority, subject: 'subject-one' });
+  assert.deepEqual(f.session.getSubject(), authSubject({iss:config.oidcAuthority,sub:'subject-one',sid:'session-one'},config.oidcAuthority));
   assert.ok(!JSON.stringify(f.session.getSnapshot()).includes('access-1-0'));
   assert.ok(await f.secrets.get(nativeAuthNamespace(config), 'session'));
   await f.session.completeSignIn(f.callback());
@@ -154,7 +250,7 @@ test('expired secure session restores its verified subject for offline data but 
   const restored = new NativeOidcSession(config, { secrets: f.secrets, bridge: new Bridge() });
   t.after(() => restored.dispose());
   await restored.initialize();
-  assert.deepEqual(restored.getSubject(), { issuer: config.oidcAuthority, subject: 'subject-one' });
+  assert.deepEqual(restored.getSubject(), authSubject({iss:config.oidcAuthority,sub:'subject-one',sid:'session-one'},config.oidcAuthority));
   assert.equal(restored.getSnapshot().status, 'signed-in'); assert.equal(restored.getSnapshot().needsLogin, true);
   await assert.rejects(restored.getAccessToken(), { code: 'AUTH_REQUIRED' });
   assert.equal(f.exchanges, 1);
@@ -270,4 +366,13 @@ test('late refresh cannot restore credentials or change signed-out state after l
   assert.equal(f.session.getSnapshot().status, 'signed-out');
   assert.equal(f.session.getSubject(), null);
   assert.equal(await f.secrets.get(nativeAuthNamespace(config), 'session'), null);
+});
+
+test('explicit native reauthentication uses real Code PKCE state nonce and max_age zero',async t=>{
+  const f=fixture(t);await f.session.initialize();await f.session.signIn({reauthenticate:true});
+  const request=new URL(f.bridge.urls[0]);
+  assert.equal(request.searchParams.get('prompt'),'login');assert.equal(request.searchParams.get('max_age'),'0');
+  assert.equal(request.searchParams.get('response_type'),'code');assert.equal(request.searchParams.get('code_challenge_method'),'S256');
+  assert(request.searchParams.get('code_challenge'));assert(request.searchParams.get('state'));assert(request.searchParams.get('nonce'));
+  await f.session.completeSignIn(f.callback());assert.equal(f.session.getSnapshot().status,'signed-in');assert.equal(f.exchanges,1);
 });

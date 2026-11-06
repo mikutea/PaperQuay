@@ -5,8 +5,9 @@ import { Log, OidcClient, User, type OidcClientSettings } from 'oidc-client-ts';
 import { NATIVE_LOGOUT_URI, NATIVE_REDIRECT_URI, type AppConfig } from '../config.ts';
 import { ClientError } from '../errors.ts';
 import { createSecretStore, type SecretStore } from '../platform/secretStore.ts';
-import type { AuthSession, AuthSnapshot, AuthSubject } from './oidc.ts';
+import type { AuthSession, AuthSnapshot, AuthSubject, ClearLocalSessionOptions } from './oidc.ts';
 import { SecureOidcStateStore, serializeSecret } from './secureStateStore.ts';
+import {authSubject} from './subject.ts';
 
 export interface NativeAuthBridge {
   open(url: string): Promise<void>;
@@ -82,7 +83,7 @@ export class NativeOidcSession implements AuthSession {
   }
   subscribe = (listener: () => void): (() => void) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
   getSnapshot = (): AuthSnapshot => this.snapshot;
-  getSubject = (): AuthSubject | null => this.user ? { issuer: this.user.profile.iss, subject: this.user.profile.sub } : null;
+  getSubject = (): AuthSubject | null => this.user ? authSubject(this.user.profile,this.config.oidcAuthority) : null;
   private publish(snapshot: AuthSnapshot): void {
     if (this.disposed) return;
     this.snapshot = snapshot;
@@ -204,7 +205,7 @@ export class NativeOidcSession implements AuthSession {
     this.callbackTail = result.catch(() => undefined);
     return result;
   }
-  async signIn(): Promise<void> {
+  async signIn(options?:{reauthenticate?:boolean}): Promise<void> {
     await this.initialize();
     const epoch = ++this.epoch;
     this.assertCurrent(epoch);
@@ -215,7 +216,8 @@ export class NativeOidcSession implements AuthSession {
     try {
       await this.clearPersisted();
       this.assertCurrent(epoch);
-      const request = await this.client(epoch).createSigninRequest({ request_type: 'si:r', nonce: crypto.randomUUID() });
+      const request = await this.client(epoch).createSigninRequest({ request_type: 'si:r', nonce: crypto.randomUUID(),
+        ...(options?.reauthenticate?{prompt:'login',max_age:0}:{}) });
       this.assertCurrent(epoch);
       this.awaitingBrowser = true;
       await this.options.bridge.open(browserUrl(request.url));
@@ -285,7 +287,10 @@ export class NativeOidcSession implements AuthSession {
       this.refresh = attempt;
       void attempt.finally(() => { if (this.refresh === attempt) this.refresh = null; }).catch(() => undefined);
     }
-    return this.refresh;
+    const token = await this.refresh;
+    this.assertCurrent(epoch);
+    if (this.blockedCredentials) throw new ClientError('AUTH_REQUIRED');
+    return token;
   };
   private async refreshUser(user: User, epoch: number): Promise<string> {
     try {
@@ -296,7 +301,9 @@ export class NativeOidcSession implements AuthSession {
       const next = new User({ ...response, refresh_token: response.refresh_token ?? user.refresh_token, id_token: response.id_token ?? user.id_token });
       this.validate(next, response.id_token !== undefined);
       if (next.expired !== false || next.profile.sub !== user.profile.sub || next.profile.iss !== user.profile.iss || next.profile.sid !== user.profile.sid) throw new ClientError('AUTH_REQUIRED');
-      await this.persist(next, epoch);
+      // Erasure may already be waiting for this rotation. Keep its replacement
+      // in RAM, without giving ordinary requests or storage a new credential.
+      if (!this.blockedCredentials) await this.persist(next, epoch);
       this.assertCurrent(epoch);
       this.user = next;
       this.signedIn();
@@ -313,14 +320,36 @@ export class NativeOidcSession implements AuthSession {
       throw new ClientError('AUTH_REQUIRED');
     }
   }
-  async clearLocalSession(): Promise<void> {
+  async clearLocalSession(options?:ClearLocalSessionOptions): Promise<void> {
+    const originalEpoch = this.epoch;
+    this.blockedCredentials = true;
+    if ((options?.retainForErasure || options?.afterPersisted && options.renewForErasure) && this.refresh) {
+      // Invalidating the epoch first would discard a consumed refresh token's
+      // replacement. Ordinary logout still invalidates immediately.
+      await this.refresh.catch(() => undefined);
+      this.assertCurrent(originalEpoch);
+    }
     const epoch = ++this.epoch;
     this.awaitingBrowser = false;
-    this.user = null;
     this.refresh = null;
-    this.blockedCredentials = false;
-    this.publish({ status: 'signed-out' });
-    await this.clearPersisted();
+    this.blockedCredentials = true;
+    try {
+      await this.clearPersisted();this.assertCurrent(epoch);
+      if(options?.afterPersisted&&options.renewForErasure&&this.user){
+        const {erasureSession}=await import('./erasureSession.ts');this.assertCurrent(epoch);
+        const renewed=await erasureSession(this.config,this.user,this.client(epoch));this.assertCurrent(epoch);
+        this.user=renewed;
+      }
+      const token=this.user?.access_token??null;
+      await options?.afterPersisted?.(token);this.assertCurrent(epoch);
+      if(options?.retainForErasure){this.signedIn();return;}
+      this.user=null;this.blockedCredentials=false;
+      this.publish({status:'signed-out'});
+    } catch(error) {
+      if(this.current(epoch))this.publish({...this.snapshot,status:this.user?'signed-in':'error',needsLogin:true,
+        error:new ClientError('STORAGE_FAILED')});
+      throw error;
+    }
     if (this.current(epoch)) await this.options.bridge.close().catch(() => undefined);
   }
   async signOut(): Promise<void> {

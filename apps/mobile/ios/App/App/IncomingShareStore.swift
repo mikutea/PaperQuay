@@ -235,4 +235,20 @@ final class IncomingShareStore {
         }
         DispatchQueue.main.async { NotificationCenter.default.post(name: changed, object: nil) }
     }
+    static func purgeOwned(owner: String) throws {
+        guard validOwner(owner) else { throw IncomingShareFailure.invalid }
+        try locked { folder in
+            guard !FileManager.default.fileExists(atPath: folder.appendingPathComponent("inbox.corrupt.json").path) else {
+                throw IncomingShareFailure.invalid
+            }
+            var snapshot = try read(folder)
+            // Preserve unassigned and foreign entries; never use the ordinary
+            // user-requested clear/rebuild operation for account erasure.
+            snapshot.items.removeAll { snapshot.owners[$0["id"] as! String] == owner }
+            let retained = Set(snapshot.items.map { $0["id"] as! String })
+            snapshot.owners = snapshot.owners.filter { retained.contains($0.key) }
+            try write(snapshot, to: folder)
+        }
+        DispatchQueue.main.async { NotificationCenter.default.post(name: changed, object: nil) }
+    }
 }

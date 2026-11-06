@@ -71,7 +71,7 @@ export function GraphEvidencePanel(props: Props) {
     if (!current() || !adopted || flight.current !== null) return;
     const captured = adopted, key = graphEvidenceAdoptionKey(captured), id = begin();
     const guard = () => current() && flight.current === id && graphEvidenceAdoptionKey(latest.current.controller.getSnapshot().workspace?.graphEvidence) === key;
-    try { const mode = await exportTextFile({ name: exportFilename('PaperQuay-图谱来源包', 'json'), text: graphEvidenceJson(captured), mime: 'application/json' }, guard, props.exportRuntime);
+    try { const mode = await exportTextFile({ name: exportFilename('PaperQuay-图谱来源包', 'json'), text: graphEvidenceJson(captured), mime: 'application/json' }, guard, props.exportRuntime,props.controller.getAccountScope()??undefined);
       if (guard()) setNotice(mode === 'share' ? '已打开来源包的系统分享。' : '来源包已交给浏览器下载。');
     } catch (failure) { if (guard()) setError(describe(failure)); } finally { finish(id); }
   }

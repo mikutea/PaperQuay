@@ -5,6 +5,7 @@ export type AccountSettingsPage = 'account' | 'sync' | 'storage';
 type Page = 'home' | AccountSettingsPage | 'ai' | 'transfer' | 'tools';
 type Action = () => void;
 export interface SettingsActions {
+  privacy?:Action;
   cloud?: Action;
   remote?: Action;
   capabilities: Action;
@@ -90,7 +91,7 @@ export function MobileSettings(props: Props) {
         </section>
         <p className="settings-footer">PaperQuay</p>
       </>}
-      {page === 'account' && props.renderAccount('account')}
+      {page === 'account' && <>{props.renderAccount('account')}{a.privacy&&<div className="settings-list"><SettingsRow icon="account" label="数据与隐私" detail="导出个人数据、注销应用账号" onClick={a.privacy}/></div>}</>}
       {page === 'sync' && <>
         {props.renderAccount('sync')}
         <div className="settings-list">

@@ -79,7 +79,7 @@ let sharedCache: PdfCache | undefined;
 export function getPdfCache(): PdfCache {
   return sharedCache ??= Capacitor.isNativePlatform() ? new NativePdfCache(capacitorPdfFiles()) : new WebPdfCache();
 }
-export async function clearPdfCache(scope: AccountScope, options: { includePinned?: boolean } = {}): Promise<void> {
+export async function clearPdfCache(scope: AccountScope, options: { includePinned?: boolean; accountErasure?: boolean } = {}): Promise<void> {
   cancelPdfTasks(scope);
   await getPdfCache().clear(scope, options);
 }

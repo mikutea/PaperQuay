@@ -19,7 +19,7 @@ export interface NativePdfFiles {
   remove(area: CacheArea, name: string): Promise<void>;
 }
 interface NativeRecord extends CacheRecord { area: CacheArea; name: string }
-interface Manifest { formatVersion: 1; generation: number; records: NativeRecord[] }
+interface Manifest { formatVersion: 1; generation: number; records: NativeRecord[]; erasedScopes?:string[] }
 interface Loaded { current: Manifest; slots: { a: Manifest | null; b: Manifest | null } }
 const ownedName = /^[0-9a-f]{64}\.[0-9a-f-]{36}\.[0-9a-f-]{36}\.pdf$/;
 const encoder = new TextEncoder();
@@ -34,6 +34,8 @@ async function unpack(value: string | null, signal?: AbortSignal): Promise<Manif
     const data = wrapper.payload;
     if (!data || data.formatVersion !== 1 || !Number.isSafeInteger(data.generation) || data.generation < 0
       || !Array.isArray(data.records) || data.records.length > defaultCacheLimits.maxCacheEntries
+      || data.erasedScopes!==undefined&&(!Array.isArray(data.erasedScopes)||data.erasedScopes.length>128
+        ||data.erasedScopes.some(value=>typeof value!=='string'||!/^[a-f0-9]{64}$/.test(value)))
       || await sha256(encoder.encode(JSON.stringify(data))) !== wrapper.sha256) return null;
     throwIfAborted(signal);
     const keys = new Set<string>();
@@ -105,7 +107,8 @@ export class NativePdfCache implements PdfCache {
   }
 
   private async commit(loaded: Loaded, records: NativeRecord[]): Promise<boolean> {
-    const next: Manifest = { formatVersion: 1, generation: loaded.current.generation + 1, records };
+    const next: Manifest = { formatVersion: 1, generation: loaded.current.generation + 1, records,
+      ...(loaded.current.erasedScopes?{erasedScopes:[...loaded.current.erasedScopes]}:{}) };
     if (!Number.isSafeInteger(next.generation)) throw new PdfError('CACHE_UNAVAILABLE');
     const first = (loaded.slots.a?.generation ?? -1) <= (loaded.slots.b?.generation ?? -1) ? 'a' : 'b';
     const second = first === 'a' ? 'b' : 'a';
@@ -198,6 +201,7 @@ export class NativePdfCache implements PdfCache {
       throwIfAborted(options.signal);
       const loaded = await this.load();
       const old = loaded.current.records.find((item) => item.key === cacheKey(scope, version.entityId));
+      if(loaded.current.erasedScopes?.includes(await sha256(encoder.encode(accountScopeKey(scope)))))throw new PdfError('ACCOUNT_CHANGED');
       const metadata = newCacheRecord(scope, version, this.now(), old, options);
       const area = metadata.entry.pinned ? 'data' : 'cache';
       const name = `${await sha256(encoder.encode(metadata.scopeKey))}.${version.entityId}.${this.makeId()}.pdf`;
@@ -257,11 +261,16 @@ export class NativePdfCache implements PdfCache {
     });
   }
 
-  async clear(scope: AccountScope, options: { includePinned?: boolean } = {}): Promise<void> {
+  async clear(scope: AccountScope, options: { includePinned?: boolean; accountErasure?:boolean } = {}): Promise<void> {
     return this.serialized(async () => {
       const loaded = await this.load();
+      if(options.accountErasure){
+        const erased=new Set(loaded.current.erasedScopes??[]);erased.add(await sha256(encoder.encode(accountScopeKey(scope))));
+        if(erased.size>128)throw new PdfError('CACHE_UNAVAILABLE');
+        loaded.current={...loaded.current,erasedScopes:[...erased]};
+      }
       const mirrored = await this.commit(loaded, loaded.current.records.filter((item) =>
-        item.scopeKey !== accountScopeKey(scope) || (!options.includePinned && item.entry.pinned)));
+        item.scopeKey !== accountScopeKey(scope) || (!options.accountErasure&&!options.includePinned && item.entry.pinned)));
       if (!mirrored) throw new PdfError('CACHE_UNAVAILABLE');
     });
   }

@@ -71,6 +71,16 @@ test('real SQLite reopens one atomic account snapshot and isolates API/account n
   assert.deepEqual(await reopened.store.read(b), state(2));
 });
 
+test('SQLite erasure tombstone blocks another handle and survives restart and ordinary local removal',async t=>{
+  const setup=await fixture(t),one=setup.open(),two=setup.open();
+  await one.store.update(a,()=>state(1));await two.store.update(b,()=>state(2));
+  await one.store.remove(a,{accountErasure:true});assert.equal(await two.store.read(a),null);
+  await assert.rejects(two.store.update(a,()=>state(3)),{code:'ACCOUNT_CLOSED'});
+  await two.store.remove(a);await one.database.close();await two.database.close();
+  const restarted=setup.open();await assert.rejects(restarted.store.update(a,()=>state(4)),{code:'ACCOUNT_CLOSED'});
+  assert.deepEqual(await restarted.store.read(b),state(2));
+});
+
 test('write failure rolls back content, outbox, cursor and conflicts and survives reopening', async (t) => {
   const setup = await fixture(t);
   const first = setup.open();
@@ -126,8 +136,9 @@ test('native secrets hash namespaces, disable cloud sync and device migration, s
   await Promise.all([store.set('account-a/provider-a', 'api-key', 'private-token'), store.remove('account-a/provider-a', 'api-key')]);
   assert.equal(await store.get('account-a/provider-a', 'api-key'), null);
   assert.equal(store.persistence, 'system');
-  assert.match(String(calls[0][1]), /^[0-9a-f]{64}$/);
-  assert.deepEqual(calls[0].slice(3), [false, false, KeychainAccess.whenUnlockedThisDeviceOnly]);
+  const credentialWrite=calls.find(row=>row[0]==='set'&&row[2]==='private-token')!;
+  assert.match(String(credentialWrite[1]), /^[0-9a-f]{64}$/);
+  assert.deepEqual(credentialWrite.slice(3), [false, false, KeychainAccess.whenUnlockedThisDeviceOnly]);
   await store.set('account-b/provider-a', 'api-key', 'other-token');
   assert.equal(await store.get('account-a/provider-a', 'api-key'), null);
   const failed = new NativeSecretStore({ get: async () => { throw new Error('secret-path-token'); }, set: async () => undefined, remove: async () => false });

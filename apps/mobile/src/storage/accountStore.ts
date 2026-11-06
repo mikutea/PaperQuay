@@ -12,13 +12,14 @@ interface AccountRow {
   apiBaseUrl: string;
   version: 1;
   state: unknown;
+  erased?:true;
 }
 type Decode<T> = (value: unknown) => T;
 
 export interface AccountStorage<T> {
   read(scope: AccountScope): Promise<T | null>;
   update(scope: AccountScope, reducer: (current: T | null) => T, guard?: () => boolean): Promise<T>;
-  remove(scope: AccountScope): Promise<void>;
+  remove(scope: AccountScope, options?:{accountErasure?:boolean}): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -83,6 +84,7 @@ export class AccountStore<T> implements AccountStorage<T> {
       row.apiBaseUrl !== normalizeServiceUrl(scope.apiBaseUrl)
     )
       throw new ClientError('STORAGE_CORRUPT');
+    if(row.erased===true&&row.state===null)return null;
     try {
       return this.decode(row.state);
     } catch {
@@ -126,6 +128,7 @@ export class AccountStore<T> implements AccountStorage<T> {
         try {
           if (!guard()) throw new ClientError('ACCOUNT_CHANGED');
           const current = this.readRow(request.result, scope);
+          if(request.result?.erased===true)throw new ClientError('ACCOUNT_CLOSED');
           result = this.decode(reducer(current));
           objectStore.put({
             scopeKey: accountScopeKey(scope),
@@ -146,11 +149,16 @@ export class AccountStore<T> implements AccountStorage<T> {
     });
   }
 
-  async remove(scope: AccountScope): Promise<void> {
+  async remove(scope: AccountScope, options:{accountErasure?:boolean}={}): Promise<void> {
     const db = await this.database;
     return new Promise((resolve, reject) => {
       const tx = db.transaction('accounts', 'readwrite', { durability: 'strict' });
-      tx.objectStore('accounts').delete(accountScopeKey(scope));
+      const store=tx.objectStore('accounts'),key=accountScopeKey(scope),request=store.get(key);
+      request.onsuccess=()=>{
+        if(options.accountErasure||request.result?.erased===true)store.put({scopeKey:key,accountId:scope.accountId,
+          apiBaseUrl:normalizeServiceUrl(scope.apiBaseUrl),version:1,state:null,erased:true} satisfies AccountRow);
+        else store.delete(key);
+      };
       tx.oncomplete = () => resolve();
       tx.onerror = tx.onabort = () => reject(new ClientError('STORAGE_FAILED'));
     });

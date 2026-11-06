@@ -9,6 +9,7 @@ import {
 
 // Serialize full-file materialization across cache instances; cancelled queued reads allocate nothing.
 let peekQueue: Promise<unknown> = Promise.resolve();
+const erasureKey=(scope:AccountScope)=>'erased:'+accountScopeKey(scope);
 
 /** Metadata, content and eviction commit together; failed writes never evict an older copy. */
 export class WebPdfCache implements PdfCache {
@@ -149,6 +150,11 @@ export class WebPdfCache implements PdfCache {
     throwIfAborted(options.signal);
     const blob = new Blob([bytes as BlobPart], { type: 'application/pdf' });
     return this.transaction(true, (metadata, content, done, fail) => {
+      // Same transaction/store as payload publication: another tab's late
+      // download either commits before the erase or sees this durable fence.
+      const fence=content.get(erasureKey(scope));
+      fence.onsuccess=()=>{
+      if(fence.result!==undefined){fail(new PdfError('ACCOUNT_CHANGED'));return;}
       const request = metadata.getAll();
       request.onsuccess = () => {
         try {
@@ -159,6 +165,7 @@ export class WebPdfCache implements PdfCache {
           for (const removed of plan.removed) { metadata.delete(removed.key); content.delete(removed.key); }
           metadata.put(record); content.put(blob, record.key); done(undefined);
         } catch (error) { fail(error); }
+      };
       };
     });
   }
@@ -186,14 +193,15 @@ export class WebPdfCache implements PdfCache {
     });
   }
 
-  async clear(scope: AccountScope, options: { includePinned?: boolean } = {}): Promise<void> {
+  async clear(scope: AccountScope, options: { includePinned?: boolean; accountErasure?:boolean } = {}): Promise<void> {
     return this.transaction(true, (metadata, content, done, fail) => {
+      if(options.accountErasure)content.put(true,erasureKey(scope));
       const request = metadata.index('scope').getAll(accountScopeKey(scope));
       request.onsuccess = () => {
         try {
           for (const value of request.result) {
             const record = decodeCacheRecord(value);
-            if (options.includePinned || !record.entry.pinned) { metadata.delete(record.key); content.delete(record.key); }
+            if (options.accountErasure || options.includePinned || !record.entry.pinned) { metadata.delete(record.key); content.delete(record.key); }
           }
           done(undefined);
         } catch (error) { fail(error); }

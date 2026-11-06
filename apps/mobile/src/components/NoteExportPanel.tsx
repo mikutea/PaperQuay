@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { VisibleEntity } from '../../../../packages/sync-core/src/index.ts';
+import type {AccountScope} from '../storage/accountStore.ts';
 import { CitationTransferError, exportPaperQuayCitations } from '../library/citationTransfer.ts';
 import {
   buildReadingExport, readingExportCatalog, ReadingExportError, READING_EXPORT_LIMITS,
@@ -8,6 +9,7 @@ import {
 import { exportFilename, exportTextFile, FileExportError, type ExportRuntime, type TextFileExport } from '../platform/exportFile.ts';
 
 export interface NoteExportPanelProps {
+  scope?:AccountScope;
   entities: readonly VisibleEntity[];
   initialPaperId?: string | null;
   initialAttachmentVersionId?: string | null;
@@ -118,7 +120,7 @@ export function NoteExportPanel(props: NoteExportPanelProps) {
         ? { name: exportFilename('PaperQuay-编号引用', 'md'), text: reference!.markdown, mime: 'text/markdown' }
         : { name: exportFilename('PaperQuay-阅读汇总', 'md'), text: value!.markdown, mime: 'text/markdown' };
     try {
-      const outcome = await exportTextFile(file, current, props.exportRuntime);
+      const outcome = await exportTextFile(file, current, props.exportRuntime,props.scope);
       if (current()) setFeedback(outcome === 'download' ? '已开始下载，请在浏览器下载列表中查看文件。'
         : '系统分享面板已关闭；保存结果请在所选应用中确认。');
     } catch (cause) {
