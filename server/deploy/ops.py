@@ -59,7 +59,12 @@ def run(args, **kwargs):
         result = subprocess.run(args, stderr=subprocess.PIPE, timeout=1800, **kwargs)
     except (OSError, subprocess.TimeoutExpired):
         raise OpsError('OPERATION_FAILED') from None
-    require(result.returncode == 0, 'OPERATION_FAILED')
+    if result.returncode != 0:
+        error = OpsError('OPERATION_FAILED')
+        # Retained only for the calling operator/test harness. The production
+        # CLI prints the code, never this possibly sensitive process output.
+        error._stderr = (result.stderr or b'')[-8192:]
+        raise error
     return result
 
 

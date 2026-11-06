@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import re
 import shutil
 import subprocess
 import tempfile
@@ -74,15 +75,22 @@ def main():
             + 'PAPERQUAY_CURSOR_SECRET=' + __import__('base64').b64encode(secrets.token_bytes(48)).decode() + '\n')
         write('runtime-config.json', json.dumps({'apiBaseUrl': 'https://reader.example.test/api',
             'oidcAuthority': 'https://reader.example.test/identity/realms/paperquay', 'oidcClientId': 'paperquay-mobile'}), 0o644)
-        stack = ops.Stack(target)
+        stack = None
+        phase = 'configuration'
         try:
+            stack = ops.Stack(target)
+            phase = 'database_start'
             ops.run(stack.command('up', '-d', '--wait', '--wait-timeout', '120', 'database'), stdout=subprocess.DEVNULL)
+            phase = 'schema_migration'
             ops.run(stack.command('run', '--rm', 'migrate'), stdout=subprocess.DEVNULL)
+            phase = 'application_start'
             ops.run(stack.command('up', '-d', 'identity', 'sync', 'web'), stdout=subprocess.DEVNULL)
             identity, _ = stack.container('identity')
+            phase = 'identity_health'
             wait_for(lambda: '"status": "UP"' in ops.capture(['docker', 'exec', identity, 'bash', '-c',
                 "exec 3<>/dev/tcp/127.0.0.1/9000; printf 'GET /health/ready HTTP/1.0\r\n\r\n' >&3; cat <&3"]))
             # A real realm and signing keys become part of the PostgreSQL dump.
+            phase = 'identity_realm'
             ops.run(['docker', 'exec', identity, 'bash', '-c',
                 '/opt/keycloak/bin/kcadm.sh config credentials --config /tmp/disposable-admin.json '
                 '--server http://127.0.0.1:8080/identity --realm master --user "$KC_BOOTSTRAP_ADMIN_USERNAME" '
@@ -109,13 +117,16 @@ try {
  if(!(await store.ready()))throw Error('RUNTIME_NOT_READY');
 } finally {await store.close();}
 """
+            phase = 'business_seed'
             ops.run(['docker', 'exec', sync, 'node', '--input-type=module', '-e', seed], stdout=subprocess.DEVNULL)
             baseline = {service: stack.container(service)[0] for service in ops.SERVICES}
             key = target / 'age-identity'
             ops.run(['age-keygen', '-o', str(key)], stdout=subprocess.DEVNULL)
             recipient = ops.capture(['age-keygen', '-y', str(key)]).strip()
+            phase = 'encrypted_backup'
             receipt = ops.backup(stack, target / 'recovery.tar.age', recipient)
             ops.require(receipt['status'] == 'backed_up', 'BACKUP_FAILED')
+            phase = 'restore_drill'
             result = ops.restore_drill(stack, target / 'recovery.tar.age', receipt['sha256'], key)
             ops.require(result['status'] == 'restored_and_verified', 'RESTORE_FAILED')
             ops.require(all(stack.container(service)[0] == baseline[service]
@@ -133,10 +144,31 @@ try {
             print(json.dumps({'status': 'passed', 'fullTableAndRoleHashes': True, 'cloudPdfBytes': True,
                 'realIdentityRealm': True, 'sourceContainersUnchanged': True,
                 'corruptionRejected': True, 'restoreSeconds': result['restoreSeconds']}))
+        except ops.OpsError as error:
+            # This harness creates all inputs itself in a disposable fixture;
+            # it never accepts a production directory or connection. Diagnostic
+            # output is also stripped of its generated credentials and tokens.
+            detail = getattr(error, '_stderr', b'').decode('utf-8', errors='replace')
+            if phase in ('database_start', 'schema_migration') and stack:
+                try:
+                    database = stack.container('database')[0]
+                    logs = subprocess.run(['docker', 'logs', '--tail', '60', database], stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT, timeout=15).stdout.decode('utf-8', errors='replace')
+                    detail += '\n' + '\n'.join(line for line in logs.splitlines() if 'ERROR:' in line or 'FATAL:' in line)
+                except Exception:
+                    pass
+            for value in [password, *ops.read_env(target / 'sync.env').values()]:
+                detail = detail.replace(value, '[redacted]')
+            detail = re.sub(r'(?<=://)[^\s/@:]+:[^\s/@]+@', '[redacted]@', detail)
+            detail = re.sub(r'\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b', '[redacted]', detail)
+            detail = re.sub(r'AGE-SECRET-KEY-[A-Z0-9]+|SCRAM-SHA-256\$[^\s\x27\x22]+', '[redacted]', detail)
+            print(json.dumps({'status': 'fixture_diagnostic', 'phase': phase, 'detail': detail[-4096:]}))
+            raise
         finally:
             # This project name and its volumes were created by this invocation.
-            ops.require(stack.project == project and project.startswith('paperquay-ci-'), 'TEARDOWN_SCOPE_INVALID')
-            ops.run(stack.command('down', '--volumes'), stdout=subprocess.DEVNULL)
+            if stack:
+                ops.require(stack.project == project and project.startswith('paperquay-ci-'), 'TEARDOWN_SCOPE_INVALID')
+                ops.run(stack.command('down', '--volumes'), stdout=subprocess.DEVNULL)
 
 
 if __name__ == '__main__':
