@@ -57,7 +57,7 @@ export class AccountPrivacyClient {
   private key:string|null;
   private epoch=0;
   private disposed=false;
-  private readonly active=new Map<AbortController,{done:Promise<void>;erasure:boolean}>();
+  private readonly active=new Map<AbortController,{done:Promise<void>;erasure:boolean;key:string}>();
   private erasureOnly=false;
   private readonly exportCleanup=new PrivateExportCleanup();
   private readonly unsubscribe?:()=>void;
@@ -71,21 +71,29 @@ export class AccountPrivacyClient {
     return ()=>!this.disposed&&key!==null&&epoch===this.epoch&&key===this.options.getIdentityKey();
   }
   dispose(){this.disposed=true;this.epoch++;for(const controller of this.active.keys())controller.abort();this.unsubscribe?.();}
+  subscribeExportCleanup=this.exportCleanup.subscribe;
+  hasFailedExportCleanup=this.exportCleanup.hasFailed;
+  async retryExportCleanup():Promise<void>{await this.exportCleanup.retry(this.exportCleanup.captureFailed());this.exportCleanup.assertClean();}
+  async drainExports(key:string|null,retryFailedCleanup=false):Promise<void>{
+    const failed=retryFailedCleanup?this.exportCleanup.captureFailed(key):[],pending:Promise<void>[]=[];
+    for(const [controller,entry] of this.active)if(!entry.erasure&&entry.key===key){controller.abort();pending.push(entry.done);}
+    await Promise.all(pending);await this.exportCleanup.retry(failed);this.exportCleanup.assertClean(key);
+  }
+  async drainAllExports():Promise<void>{
+    const pending:Promise<void>[]=[];for(const [controller,entry] of this.active)if(!entry.erasure){controller.abort();pending.push(entry.done);}
+    await Promise.all(pending);this.exportCleanup.assertClean();
+  }
   /** No ordinary export/status/mutation may outlive the private RAM lease.
    * Original-session status and ACK remain available through explicit tokens. */
   async sealForErasure(retryFailedCleanup=false):Promise<void>{
-    const failed=retryFailedCleanup?this.exportCleanup.captureFailed():[];
-    this.erasureOnly=true;const pending:Promise<void>[]=[];
-    for(const [controller,entry] of this.active)if(!entry.erasure){controller.abort();pending.push(entry.done);}
-    await Promise.all(pending);
-    await this.exportCleanup.retry(failed);this.exportCleanup.assertClean();
+    this.erasureOnly=true;await this.drainExports(this.options.getIdentityKey(),retryFailedCleanup);
   }
   private operation(signal:AbortSignal,duration=30000,erasure=false) {
     if(this.disposed||signal.aborted)throw new PrivacyError('CHANGED');
     if(this.erasureOnly&&!erasure)throw new PrivacyError('AUTH_REQUIRED');
     const key=this.options.getIdentityKey(),epoch=this.epoch;if(!key)throw new PrivacyError('AUTH_REQUIRED');
     const controller=new AbortController(),stop=()=>controller.abort();let settled!:()=>void;
-    const done=new Promise<void>(resolve=>{settled=resolve;});this.active.set(controller,{done,erasure});
+    const done=new Promise<void>(resolve=>{settled=resolve;});this.active.set(controller,{done,erasure,key});
     signal.addEventListener('abort',stop,{once:true});
     const timer=setTimeout(stop,duration);
     const checkOwner=()=>{if(this.disposed||this.epoch!==epoch||key!==this.options.getIdentityKey())throw new PrivacyError('CHANGED');};
@@ -140,7 +148,7 @@ export class AccountPrivacyClient {
     if(!object(value)||value.acknowledged!==true)invalid();
   }
   async exportData(scope:AccountScope,sink:PersonalExportSink,signal:AbortSignal,progress?:(bytes:number)=>void) {
-    const destination=this.exportCleanup.track(sink);
+    const destination=this.exportCleanup.track(sink,this.options.getIdentityKey());
     let activeOperation:ReturnType<AccountPrivacyClient['operation']>|undefined;
     let reader:ReadableStreamDefaultReader<Uint8Array>|undefined;
     try {

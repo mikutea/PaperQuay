@@ -17,6 +17,7 @@ export function browserAccountContext(options:{apiBaseUrl:string;auth:AuthSessio
   configStorage?:Pick<Storage,'getItem'|'setItem'|'removeItem'>}) {
   const {auth,secrets,binding,coordinator,stop}=options,owner={};
   let peerErasure:PeerErasureHandler|undefined;
+  let drainFormerExports:((key:string|null)=>Promise<void>)|undefined;
   if(coordinator&&(secrets.persistence!=='memory'||!secrets.disposeMemory))throw new ClientError('STORAGE_UNAVAILABLE');
   let activeScope:AccountScope|null=null,activeSubjectKey:string|null=null;
   return {owner,
@@ -38,6 +39,10 @@ export function browserAccountContext(options:{apiBaseUrl:string;auth:AuthSessio
           });
           return;
         }
+        if(binding.key()!==subjectKey){
+          if(!drainFormerExports)throw new ClientError('STORAGE_UNAVAILABLE');
+          await drainFormerExports(subjectKey);
+        }
         await new AccountSecretStore(secrets,scope,()=>true).erase();
         // A synchronous save that passed its fence check in this context has
         // finished before this storage-event callback can run. Clear both
@@ -49,6 +54,7 @@ export function browserAccountContext(options:{apiBaseUrl:string;auth:AuthSessio
       activeScope=scope;activeSubjectKey=subjectKey;
     },
     privacyOptions:{browserErasure:coordinator,owner,stop,
+      registerFormerExportDrain(handler:(key:string|null)=>Promise<void>){drainFormerExports=handler;return()=>{if(drainFormerExports===handler)drainFormerExports=undefined;};},
       registerPeerErasure(handler:PeerErasureHandler){peerErasure=handler;return()=>{if(peerErasure===handler)peerErasure=undefined;};}},
     /** Call only after closing this runtime's auth, account store and binding. */
     async disposeAfterResources() {

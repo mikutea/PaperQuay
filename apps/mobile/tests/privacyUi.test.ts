@@ -104,3 +104,24 @@ test('peer erasure UI makes no ordinary status call, requires consent and can re
     await act(async()=>button(renderer.root,'核实并完成本页清理').props.onClick());assert.equal(attempts,2);
   }finally{await act(async()=>renderer.unmount());}
 });
+
+test('failed temporary export recovery is explicit and does not close an account or acknowledge a device',async t=>{
+  const old=Object.getOwnPropertyDescriptor(globalThis,'localStorage'),memory=new InMemoryWebStorage();
+  Object.defineProperty(globalThis,'localStorage',{configurable:true,value:memory});
+  t.after(()=>{if(old)Object.defineProperty(globalThis,'localStorage',old);else Reflect.deleteProperty(globalThis,'localStorage');});
+  const listeners=new Set<()=>void>(),workspace={error:null},login={status:'signed-in'};
+  let failed=true,attempts=0;
+  const privacy={subscribeExportCleanup:(fn:()=>void)=>{listeners.add(fn);return()=>listeners.delete(fn);},hasFailedExportCleanup:()=>failed,
+    client:{captureIdentity:()=>()=>true,status:async()=>active},retryExportCleanup:async()=>{attempts++;if(attempts===1)throw new PrivacyError('FAILED');failed=false;listeners.forEach(fn=>fn());},
+    erase:async()=>{assert.fail('Temporary destination cleanup cannot ACK any device');}} as unknown as PrivacyRuntime;
+  const auth={subscribe:()=>()=>{},getSnapshot:()=>login,getSubject:()=>({issuer:'https://id.example.test',subject:accountId})} as unknown as AuthSession;
+  const controller={subscribe:()=>()=>{},getSnapshot:()=>workspace} as unknown as WorkspaceController;
+  let renderer!:ReactTestRenderer;await act(async()=>{renderer=create(createElement(PrivacyHost,{privacy,auth,controller,apiBaseUrl:'https://sync.example.test',open:false,onClose:()=>undefined}));});
+  try{
+    assert.equal(renderer.root.findAllByType('dialog').length,1);assert.equal(attempts,0);
+    await act(async()=>button(renderer.root,'重试删除未发布的临时导出文件').props.onClick());assert.equal(attempts,1);
+    assert.equal(renderer.root.findAllByType('dialog').length,1);assert(renderer.root.findAllByProps({role:'alert'}).some(node=>text(node).includes('操作未完成')));
+    await act(async()=>button(renderer.root,'重试删除未发布的临时导出文件').props.onClick());assert.equal(attempts,2);
+    assert.equal(renderer.root.findAllByType('dialog').length,0);assert.equal(login.status,'signed-in');
+  }finally{await act(async()=>renderer.unmount());}
+});
