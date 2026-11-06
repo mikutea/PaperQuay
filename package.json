@@ -1,7 +1,7 @@
 {
   "name": "paperquay",
   "private": true,
-  "version": "0.1.26-mikutea.16",
+  "version": "0.1.26-mikutea.17",
   "description": "AI-assisted desktop literature reader and library manager.",
   "homepage": "https://github.com/mikutea/PaperQuay",
   "author": {
@@ -71,10 +71,11 @@
     "@vitejs/plugin-react": "^6.0.2",
     "autoprefixer": "^10.4.20",
     "clsx": "^2.1.1",
-    "electron": "^42.9.2",
+    "electron": "^43.8.7",
     "electron-builder": "^26.15.3",
     "esbuild": "^0.27.0",
-    "katex": "^0.16.11",
+    "js-yaml": "4.3.2",
+    "katex": "^0.18.2",
     "lucide-react": "^1.8.0",
     "node-gyp": "12.4.0",
     "parse5": "^7.3.0",
@@ -89,8 +90,12 @@
     "tailwind-merge": "^3.5.0",
     "tailwindcss": "^3.4.15",
     "typescript": "^5.6.3",
-    "vite": "^8.0.16",
+    "vite": "^8.3.5",
     "zustand": "^5.0.12"
+  },
+  "overrides": {
+    "katex": "$katex",
+    "minimatch@>=9 <11.0.1": "11.0.1"
   },
   "build": {
     "msiProjectCreated": "packaging/windows/msiProjectCreated.cjs",
@@ -172,7 +177,7 @@
       "packages/model-inference/index.mjs"
     ],
     "mac": {
-      "target": "dmg",
+      "target": ["dmg", "zip"],
       "icon": "icon.png",
       "identity": null,
       "hardenedRuntime": false,
