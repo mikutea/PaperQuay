@@ -81,6 +81,7 @@ test('personal export is a consistent own-account stream with complete history, 
   assert(rows.some(row=>row.table==='model_inference_jobs'&&row.kind==='record'));
   assert(rows.some(row=>row.table==='remote_retrieval_requests'&&row.kind==='record'));
   assert(!Buffer.concat(output).toString().includes('Foreign sentinel'));
+  assert(!rows.some(row=>row.kind==='record'&&['session_id','fence','completion_fence','provider_journal_key','recovery_journal_key','journal_key'].some(key=>key in row.data)));
   const binary=rows.filter(row=>row.kind==='file-chunk');assert(binary.every(row=>row.bytes<=65536));
   assert.deepEqual(Buffer.concat(binary.filter(row=>row.id===data.attachment.entityId).map(row=>Buffer.from(row.base64,'base64'))),data.content);
   assert.deepEqual(Buffer.concat(binary.filter(row=>row.id===data.taskId).map(row=>Buffer.from(row.base64,'base64'))),data.index.bytes);
@@ -116,6 +117,8 @@ test('atomic closure purges every application payload and blocks rebind, sync, p
     assert(retained.closed_at);assert.equal(retained.entity_count,0);assert.equal(retained.receipt_count,0);
     assert.equal(Number(retained.retained_bytes),0);assert.equal(Number(retained.cloud_pdf_bytes),0);
   });
+  await assert.rejects(inAccount(a.who,a.view.accountId,client=>client.query(
+    "UPDATE paperquay.accounts SET subject=set_config('paperquay.subject',$2,true) WHERE id=$1",[a.view.accountId,randomUUID()])),/ACCOUNT_CLOSURE_IMMUTABLE/);
 });
 
 test('offline erasure remains pending until that exact verified session acknowledges its own device',async()=>{
@@ -164,6 +167,20 @@ test('a concurrent writer waits for closure and cannot recreate purged payloads 
   const rejected=assert.rejects(writing,{code:'ACCOUNT_CLOSED'});
   release();await closing;await rejected;
   assert.equal((await privacy.status(a.who)).state,'closed');
+});
+
+test('a TEMP catalog shadow cannot impersonate the erasure definer owner',async()=>{
+  const a=await account();
+  await inAccount(a.who,a.view.accountId,async client=>{
+    // The disposable CI runtime has TEMP, unlike the production initializer.
+    // This must still fail closed independently of that defense in depth.
+    await client.query('CREATE TEMP TABLE pg_proc(oid oid,proowner oid)');
+    await client.query(`INSERT INTO pg_temp.pg_proc VALUES('paperquay.erase_account(uuid,uuid,text,boolean)'::regprocedure::oid,
+      (SELECT oid FROM pg_catalog.pg_roles WHERE rolname=current_user))`);
+    await client.query("SELECT set_config('paperquay.erasure_account',$1,true)",[a.view.accountId]);
+    assert.equal((await client.query('SELECT paperquay.erasure_context_matches($1) AS allowed',[a.view.accountId])).rows[0].allowed,false);
+    await client.query('DROP TABLE pg_temp.pg_proc');
+  });
 });
 
 test('an export cannot complete after abort, expiry, session revocation or concurrent account closure',async()=>{

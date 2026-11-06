@@ -28,7 +28,7 @@ REVOKE ALL ON paperquay.account_erasure_devices FROM PUBLIC;
 CREATE FUNCTION paperquay.erasure_context_matches(owner_id uuid) RETURNS boolean
 LANGUAGE sql STABLE SECURITY INVOKER SET search_path=pg_catalog AS $function$
   SELECT current_setting('paperquay.erasure_account',true)=owner_id::text
-    AND current_user=(SELECT pg_get_userbyid(proowner) FROM pg_proc
+    AND current_user=(SELECT pg_get_userbyid(proowner) FROM pg_catalog.pg_proc
       WHERE oid=to_regprocedure('paperquay.erase_account(uuid,uuid,text,boolean)'))
 $function$;
 REVOKE ALL ON FUNCTION paperquay.erasure_context_matches(uuid) FROM PUBLIC;
@@ -39,7 +39,10 @@ BEGIN
   IF NOT coalesce(paperquay.erasure_context_matches(OLD.id),false)
     AND (NEW.closed_at IS DISTINCT FROM OLD.closed_at
       OR NEW.closure_request_id IS DISTINCT FROM OLD.closure_request_id
-      OR NEW.erase_devices_requested IS DISTINCT FROM OLD.erase_devices_requested)
+      OR NEW.erase_devices_requested IS DISTINCT FROM OLD.erase_devices_requested
+      OR OLD.closed_at IS NOT NULL AND (NEW.id IS DISTINCT FROM OLD.id
+        OR NEW.issuer IS DISTINCT FROM OLD.issuer OR NEW.subject IS DISTINCT FROM OLD.subject
+        OR NEW.epoch IS DISTINCT FROM OLD.epoch OR NEW.created_at IS DISTINCT FROM OLD.created_at))
   THEN RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='ACCOUNT_CLOSURE_IMMUTABLE'; END IF;
   RETURN NEW;
 END

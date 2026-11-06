@@ -42,7 +42,11 @@ interface Options {
 
 const tables = ['accounts', 'devices', 'entities', 'changes', 'operation_receipts', 'conflicts',
   'cloud_pdfs', 'remote_task_providers', 'remote_tasks', 'remote_task_requests', 'remote_task_artifacts',
-  'model_inference_providers', 'model_inference_jobs', 'remote_retrieval_requests', 'account_erasure_devices'] as const;
+  'model_inference_providers', 'model_inference_jobs', 'remote_retrieval_requests'] as const;
+// Erasure acknowledgements exist only after closure, when payload export is no
+// longer available. Execution fences and OIDC session identifiers are authority,
+// not portable document content, and must not appear in a personal-data file.
+const authorizationColumns=new Set(['session_id','fence','completion_fence','provider_journal_key','recovery_journal_key','journal_key']);
 const files = [
   { table: 'cloud_pdfs', id: 'attachment_version_id', digest: 'sha256' },
   { table: 'remote_task_artifacts', id: 'job_id', digest: 'digest' },
@@ -102,6 +106,7 @@ export function createAccountPrivacyRepository(options: Options): AccountPrivacy
     }),
     async *exportData(identity, signal) {
       let client: PoolClient | undefined;
+      let committed=false;
       const hash = createHash('sha256');
       const started = Date.now();
       let nextCheck = 0, records = 0, fileCount = 0, totalBytes = 0;
@@ -138,7 +143,7 @@ export function createAccountPrivacyRepository(options: Options): AccountPrivacy
           if (!columns.rows.length || binary.some(column => column.name !== 'content' || !files.some(file => file.table === table))) {
             throw new ApiError('EXPORT_SCHEMA_UNSUPPORTED', 409);
           }
-          const names = columns.rows.filter(column => !column.binary).map(column => identifier(column.name)).join(',');
+          const names = columns.rows.filter(column => !column.binary&&!authorizationColumns.has(column.name)).map(column => identifier(column.name)).join(',');
           const query = `SELECT to_jsonb(exported) AS data FROM (SELECT ${names} FROM paperquay.${identifier(table)}
             WHERE ${table === 'accounts' ? 'id' : 'account_id'}=$1) AS exported`;
           await client.query('DECLARE privacy_rows NO SCROLL CURSOR FOR ' + query, [account.id]);
@@ -147,6 +152,7 @@ export function createAccountPrivacyRepository(options: Options): AccountPrivacy
               await guard();
               const row = await client.query<{ data: unknown }>('FETCH FORWARD 1 FROM privacy_rows');
               if (!row.rows.length) break;
+              await guard();
               const bytes = line({ kind: 'record', table, data: row.rows[0].data });
               if (bytes.byteLength > 8 * 1024 * 1024) throw new ApiError('EXPORT_ROW_LIMIT', 409);
               records++; yield bytes;
@@ -169,6 +175,7 @@ export function createAccountPrivacyRepository(options: Options): AccountPrivacy
                 [account.id, item.id, offset + 1, 65536]);
                 const bytes = part.rows[0]?.content;
                 if (!bytes?.length || bytes.length > 65536 || offset + bytes.length > item.size_bytes) throw new ApiError('EXPORT_FILE_CHANGED', 409);
+                await guard();
                 contentHash.update(bytes); totalBytes += bytes.length;
                 yield line({ kind: 'file-chunk', table: file.table, id: item.id, offset, bytes: bytes.length, base64: bytes.toString('base64') });
                 offset += bytes.length;
@@ -181,12 +188,16 @@ export function createAccountPrivacyRepository(options: Options): AccountPrivacy
         }
         await guard();
         await client.query('COMMIT');
+        committed=true;
         // The completion record is outside its own digest. A missing final
         // record or an interrupted transport is always an incomplete export.
         yield Buffer.from(JSON.stringify({ kind: 'complete', records, files: fileCount, fileBytes: totalBytes,
           sha256: hash.digest('hex') }) + '\n');
+      } catch(error) {
+        if(error instanceof ApiError)throw error;
+        throw new ApiError('EXPORT_FAILED',500);
       } finally {
-        if (client) { await client.query('ROLLBACK').catch(() => undefined); client.release(); }
+        if (client) {if(!committed)await client.query('ROLLBACK').catch(() => undefined);client.release();}
       }
     },
   };
@@ -194,6 +205,7 @@ export function createAccountPrivacyRepository(options: Options): AccountPrivacy
 
 export function registerAccountPrivacyRoutes(app: FastifyInstance, repository: AccountPrivacyRepository,
   authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>) {
+  const exports=new Set<string>();
   const uuid = { type: 'string', pattern: UUID_PATTERN };
   app.get('/v1/privacy/status', { onRequest: authenticate }, request => repository.status(request.identity!));
   app.post<{ Body: AccountClosureRequest }>('/v1/privacy/close', { onRequest: authenticate,
@@ -208,12 +220,19 @@ export function registerAccountPrivacyRoutes(app: FastifyInstance, repository: A
   app.get('/v1/privacy/export', { onRequest: authenticate }, async (request, reply) => {
     const status = await repository.status(request.identity!);
     if (status.state !== 'active') throw new ApiError('ACCOUNT_CLOSED', 410);
+    if(exports.has(status.accountId)||exports.size>=2)throw new ApiError('EXPORT_BUSY',409);
+    exports.add(status.accountId);
     const cancellation = new AbortController();
     const abort = () => cancellation.abort();
     request.raw.once('aborted', abort); reply.raw.once('close', abort);
-    const stream = Readable.from(repository.exportData(request.identity!, cancellation.signal), { objectMode: false, highWaterMark: 128 * 1024 });
-    stream.once('close', () => { request.raw.off('aborted', abort); reply.raw.off('close', abort); });
-    return reply.header('Content-Disposition', 'attachment; filename="PaperQuay-personal-data.jsonl"')
-      .type('application/x-ndjson; charset=utf-8').send(stream);
+    try {
+      const stream = Readable.from(repository.exportData(request.identity!, cancellation.signal), { objectMode: false, highWaterMark: 128 * 1024 });
+      const deadline=setTimeout(()=>{abort();stream.destroy(new ApiError('EXPORT_TIME_LIMIT',409));},15*60_000);
+      deadline.unref();
+      stream.once('close', () => {clearTimeout(deadline);exports.delete(status.accountId);
+        request.raw.off('aborted', abort); reply.raw.off('close', abort);});
+      return reply.header('Content-Disposition', 'attachment; filename="PaperQuay-personal-data.jsonl"')
+        .type('application/x-ndjson; charset=utf-8').send(stream);
+    } catch(error) {exports.delete(status.accountId);request.raw.off('aborted',abort);reply.raw.off('close',abort);throw error;}
   });
 }
