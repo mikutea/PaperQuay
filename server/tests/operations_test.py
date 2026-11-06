@@ -3,6 +3,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import re
 from pathlib import Path
 import tarfile
 import tempfile
@@ -47,6 +48,21 @@ class OperationsTests(unittest.TestCase):
         target = self.directory / 'restored'
         target.mkdir()
         return output, target
+
+    def test_production_build_inputs_are_literal_digest_pins(self):
+        root = Path(__file__).resolve().parents[2]
+        inputs = []
+        for name in ('Server', 'Web', 'Identity'):
+            source = (root / 'server/deploy' / (name + '.Dockerfile')).read_text('utf-8')
+            self.assertNotRegex(source, r'(?m)^ARG (?:NODE|CADDY|KEYCLOAK)_IMAGE')
+            for base in re.findall(r'(?m)^FROM (\S+)', source):
+                self.assertRegex(base.strip(), r'^[a-z0-9./:_-]+@sha256:[a-f0-9]{64}$')
+                inputs.append(base.strip())
+        self.assertEqual(len(inputs), 6)
+        workflow = (root / '.github/workflows/production-operations.yml').read_text('utf-8')
+        database = re.search(r'docker pull (\S+)', workflow).group(1)
+        self.assertRegex(database, r'^postgres:18\.6@sha256:[a-f0-9]{64}$')
+        self.assertIn('docker image inspect ' + database, workflow)
 
     def test_schema_requires_an_exact_known_prefix(self):
         known = ops.known_schema()
