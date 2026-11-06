@@ -1,5 +1,6 @@
 import { isPlainObject, SYNC_LIMITS, UUID_PATTERN } from '../../../../packages/sync-core/src/index.ts';
 import type { SecretStore } from '../platform/secretStore.ts';
+import {accountScopeAvailable,subscribeAccountFence} from '../privacy/browserErasure.ts';
 
 /** Zotero Web API v3 read semantics: https://www.zotero.org/support/dev/web_api/v3/syncing */
 export const ZOTERO_LIMITS = Object.freeze({ maxItems: 500, maxBytes: 4 * 1024 * 1024, pageSize: 100,
@@ -159,7 +160,9 @@ export class ZoteroClient {
   }
   async download(input: ZoteroLibraryConfig, options: ZoteroDownloadOptions): Promise<ZoteroDownload> {
     const config = validateZoteroConfig(input), expectedCursor = validateZoteroCursor(options.expectedCursor);
-    const operation = new Operation(options, this.milliseconds, this.now);
+    let storedScope:ZoteroAccountScope|null=null,unwatch:(()=>void)|undefined;
+    const operation = new Operation({...options,current:()=>
+      (options.current?.()??true)&&(!storedScope||accountScopeAvailable(storedScope))},this.milliseconds,this.now);
     const stats: ZoteroDownloadStats = { requests: 0, bytes: 0, itemPages: 0, downloadedItems: 0 };
     const retry: ZoteroRetryInfo = { attempts: 0, versionRestarts: 0, rateLimitRetries: 0, notBefore: null };
     let apiKey: string | null = null;
@@ -170,6 +173,7 @@ export class ZoteroClient {
       if (credential.mode === 'memory' && closed(credential, ['mode', 'apiKey'])) apiKey = validateZoteroApiKey(credential.apiKey);
       else if (credential.mode === 'stored' && closed(credential, ['mode', 'store', 'accountScope'])) {
         const namespace = zoteroSecretNamespace(credential.accountScope, config);
+        storedScope=credential.accountScope;unwatch=subscribeAccountFence(storedScope,()=>operation.abort('CHANGED'));
         try { apiKey = validateZoteroApiKey(await operation.wait(() => credential.store.get(namespace, ZOTERO_SECRET_KEY))); }
         catch (error) { if (error instanceof ZoteroClientError) throw error; fail('SECRET_UNAVAILABLE'); }
       } else if (!(credential.mode === 'public' && closed(credential, ['mode']))) fail('INVALID_KEY');
@@ -314,6 +318,6 @@ export class ZoteroClient {
     } catch (error) {
       if (error instanceof ZoteroClientError) throw error;
       operation.guard(); throw new ZoteroClientError('NETWORK');
-    } finally { apiKey = null; operation.close(); }
+    } finally { apiKey = null; unwatch?.(); operation.close(); }
   }
 }

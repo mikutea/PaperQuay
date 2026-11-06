@@ -9,12 +9,12 @@ import {PrivacyExportError} from '../privacy/exportStream.ts';
 import {ScopedExportError} from '../platform/exportScope.ts';
 import {ClientError,describeError} from '../errors.ts';
 
-function message(error:unknown):string {
-  if(error instanceof ClientError&&error.code==='LEGACY_SECRETS_UNVERIFIED')return describeError(error);
+function message(error:unknown,recovering=false):string {
+  if(error instanceof ClientError&&['LEGACY_SECRETS_UNVERIFIED','BROWSER_ERASURE_PENDING'].includes(error.code))return describeError(error);
   if(error instanceof ScopedExportError&&error.code==='LEGACY_UNOWNED')return '发现旧版无账号标记的导出副本，尚未确认清理。请联系维护者备份并逐份核对；不会猜测归属、删除其他账号文件或确认成功。';
   const code=error instanceof PrivacyError||error instanceof PrivacyExportError?error.code:'';
   if(code==='RECENT_AUTH_REQUIRED')return '请先重新验证登录，再显式重试同一注销请求。刷新令牌不会替代身份验证。';
-  if(code==='AUTH_REQUIRED')return '登录已失效。请重新登录后查询账号状态。';
+  if(code==='AUTH_REQUIRED')return recovering?'本机清理尚未完成，请保留当前登录并使用下方清理按钮重试。':'登录已失效。请重新登录后查询账号状态。';
   if(code==='CHANGED')return '账号或登录会话已变化，本次操作已停止。';
   if(code==='OUTCOME_UNKNOWN')return '尚未确认注销结果。请查询状态，或显式重试同一请求；不会自动再次提交。';
   if(code==='TOO_LARGE')return '此保存方式的大小限制不足。请使用支持文件保存的浏览器或原生应用重试。';
@@ -62,7 +62,7 @@ export function AccountPrivacy({privacy,auth,apiBaseUrl,onClose}:{privacy:Privac
     if(busyRef.current||!current())return;busyRef.current=true;setBusy(label);setNotice('');setError('');
     const epoch=generation.current,stop=new AbortController();active.current=stop;
     const live=()=>current()&&generation.current===epoch;
-    try{await work(stop.signal);}catch(problem){if(live())setError(message(problem));}
+    try{await work(stop.signal);}catch(problem){if(live())setError(message(problem,Boolean(privacy.recoveryStatus?.())));}
     finally{if(active.current===stop){active.current=null;busyRef.current=false;}if(live())setBusy('');}
   }
   const consume=async(value:AccountPrivacyStatus,allowLocal=false)=>{
@@ -79,7 +79,9 @@ export function AccountPrivacy({privacy,auth,apiBaseUrl,onClose}:{privacy:Privac
     mounted.current=true;generation.current++;const node=dialog.current;
     if(node&&!node.open){if(node.showModal)node.showModal();else node.setAttribute('open','');}
     heading.current?.focus();
-    void run('正在查询账号状态…',async signal=>{await consume(await privacy.client.status(signal));});
+    const recovery=privacy.recoveryStatus?.();
+    if(recovery){setStatus(recovery);setNotice('上次已验证账号注销，本机清理尚未完成。请保留当前登录并明确重试清理；设备数量是上次查询结果。');}
+    else void run('正在查询账号状态…',async signal=>{await consume(await privacy.client.status(signal));});
     return ()=>{mounted.current=false;generation.current++;active.current?.abort();active.current=null;busyRef.current=false;node?.close?.();};
   },[]);
   function dismiss(){active.current?.abort();dialog.current?.close();onClose();}
@@ -113,7 +115,7 @@ export function AccountPrivacy({privacy,auth,apiBaseUrl,onClose}:{privacy:Privac
       <p>导出包含私人材料，请选择可信的保存位置。导出与注销均不会调用第三方模型。</p>
       {status&&<p className="privacy-state">{status.state==='closed'?'应用账号已注销':'应用账号正常'}<br/><span className="privacy-account-id">{status.accountId}</span></p>}
       <div className="privacy-actions"><button className="secondary" disabled={Boolean(busy)} onClick={refresh}>查询账号状态</button>
-        <button className="secondary" disabled={Boolean(busy)} onClick={()=>void run('正在重新验证登录…',async()=>auth.signIn({reauthenticate:true}))}>重新验证登录</button></div>
+        <button className="secondary" disabled={Boolean(busy)||Boolean(privacy.recoveryStatus?.())} onClick={()=>void run('正在重新验证登录…',async()=>auth.signIn({reauthenticate:true}))}>重新验证登录</button></div>
       {status?.state==='active'&&<section aria-labelledby="privacy-export-title"><h2 id="privacy-export-title">导出我的数据</h2>
         <p>服务器导出包含云文库、历史、冲突和云文件。本机导出另含待同步改动、问答、综述、雷达、解析包和缓存 PDF。凭据、私有下载地址和其他设备未同步内容不进入导出。</p>
         <div className="privacy-actions"><button className="primary" disabled={Boolean(busy)} onClick={()=>exportData(false)}>导出服务器数据</button><button className="secondary" disabled={Boolean(busy)} onClick={()=>exportData(true)}>导出本机数据</button></div>

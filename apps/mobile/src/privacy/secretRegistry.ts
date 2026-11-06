@@ -2,6 +2,7 @@ import type {SecretStore} from '../platform/secretStore.ts';
 import {secretAddress} from '../platform/secretStore.ts';
 import {accountScopeKey,type AccountScope} from '../storage/accountStore.ts';
 import {PrivacyError} from './client.ts';
+import {accountScopeAvailable} from './browserErasure.ts';
 
 type Address=[string,string];
 interface Queue {tail:Promise<unknown>;sealed:boolean}
@@ -12,12 +13,12 @@ export class AccountSecretStore implements SecretStore {
   readonly persistence:SecretStore['persistence'];
   private readonly namespace:string;
   private readonly queue:Queue;
-  constructor(private readonly base:SecretStore,scope:AccountScope,private readonly current:()=>boolean) {
+  constructor(private readonly base:SecretStore,private readonly scope:AccountScope,private readonly current:()=>boolean) {
     this.persistence=base.persistence;this.namespace=JSON.stringify(['paperquay-private-secret-index-v1',accountScopeKey(scope)]);
     let map=queues.get(base);if(!map){map=new Map();queues.set(base,map);}
     let queue=map.get(this.namespace);if(!queue){queue={tail:Promise.resolve(),sealed:false};map.set(this.namespace,queue);}this.queue=queue;
   }
-  private check(allowSealed=false){if(!this.current()||this.queue.sealed&&!allowSealed)throw new PrivacyError('CHANGED');}
+  private check(allowSealed=false){if(!this.current()||!allowSealed&&(this.queue.sealed||!accountScopeAvailable(this.scope)))throw new PrivacyError('CHANGED');}
   private serialize<T>(work:()=>Promise<T>):Promise<T>{const result=this.queue.tail.catch(()=>undefined).then(work);this.queue.tail=result.catch(()=>undefined);return result;}
   private async addresses():Promise<Address[]> {
     const raw=await this.base.get(this.namespace,'addresses');this.check(true);if(raw===null)return [];

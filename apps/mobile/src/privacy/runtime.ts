@@ -12,17 +12,24 @@ import {eraseLocalAccount} from './lifecycle.ts';
 import {clearPrivateExportCache} from './saveExport.ts';
 import type {PersonalExportSink} from './exportStream.ts';
 import {clearScopedNativeExports} from '../platform/exportScope.ts';
+import type {BrowserErasureCoordinator} from './browserErasure.ts';
 
 export function createPrivacyRuntime(config:AppConfig,auth:AuthSession,store:AccountStorage<StoredWorkspace>,
-  secrets:SecretStore,controller:WorkspaceController,binding:ReturnType<typeof verifiedBinding>) {
+  secrets:SecretStore,controller:WorkspaceController,binding:ReturnType<typeof verifiedBinding>,
+  options:{browserErasure?:BrowserErasureCoordinator|null;owner?:object;stop?():void}={}) {
+  const runtimeOwner=options.owner??{};
   const client=new AccountPrivacyClient({apiBaseUrl:config.apiBaseUrl,getAccessToken:auth.getAccessToken,
     getIdentityKey:binding.key,subscribeIdentity:auth.subscribe});
-  let erasureRecovery:{identity:AccountIdentity;requestId:string;current:()=>boolean}|null=null;
+  let erasureRecovery:{identity:AccountIdentity;status:AccountPrivacyStatus;current:()=>boolean}|null=null;
   const scopedSecrets=(scope:AccountScope)=>{
     if(normalizeServiceUrl(scope.apiBaseUrl)!==config.apiBaseUrl)throw new PrivacyError('INVALID');
     return new AccountSecretStore(secrets,scope,client.captureIdentity());
   };
   return {client,binding,scopedSecrets,
+    recoveryStatus():AccountPrivacyStatus|null {
+      if(!erasureRecovery?.current()){erasureRecovery=null;return null;}
+      return structuredClone(erasureRecovery.status);
+    },
     async localExport(scope:AccountScope,sink:PersonalExportSink,signal:AbortSignal,progress?:(bytes:number)=>void){
       const current=client.captureIdentity();
       try {
@@ -40,14 +47,18 @@ export function createPrivacyRuntime(config:AppConfig,auth:AuthSession,store:Acc
       const recoverableBinding={remove:binding.remove,async read(){
         const verified=await binding.read();check();
         if(verified){
-          if(verified.accountId===status.accountId&&status.closureRequestId)erasureRecovery={identity:structuredClone(verified),requestId:status.closureRequestId,current};
+          if(verified.accountId===status.accountId&&status.closureRequestId)erasureRecovery={identity:structuredClone(verified),status:structuredClone(status),current};
           return verified;
         }
         const saved=erasureRecovery;
-        return saved&&saved.current()&&saved.requestId===status.closureRequestId&&saved.identity.accountId===status.accountId
+        return saved&&saved.current()&&saved.status.closureRequestId===status.closureRequestId&&saved.identity.accountId===status.accountId
           ?structuredClone(saved.identity):null;
       }};
-      await eraseLocalAccount(config.apiBaseUrl,status,current,{binding:recoverableBinding,store,stop:()=>controller.deactivate(),
+      await eraseLocalAccount(config.apiBaseUrl,status,current,{binding:recoverableBinding,store,stop:options.stop??(()=>controller.deactivate()),
+        fence:async(scope,requestId)=>{options.browserErasure?.publish(scope,requestId,runtimeOwner);},
+        complete:async(scope,requestId,finish)=>{
+          if(options.browserErasure)await options.browserErasure.complete(scope,requestId,runtimeOwner,finish);else await finish();
+        },
         clearIncoming:async scope=>{const {purgeIncomingShareOwner}=await import('../platform/incomingShare.ts');check();await purgeIncomingShareOwner(accountScopeKey(scope),{current});},
         async clearSecrets(scope,workspace) {
           check();const [{LocalAiConfigStore,aiSecretNamespace,AI_SECRET_KEY},{zoteroSecretNamespace,ZOTERO_SECRET_KEY},{radarSecretNamespace}]=await Promise.all([
@@ -69,7 +80,7 @@ export function createPrivacyRuntime(config:AppConfig,auth:AuthSession,store:Acc
       },{explicitLocalConsent});
       erasureRecovery=null;
     },
-    dispose:()=>client.dispose(),
+    dispose:()=>{erasureRecovery=null;client.dispose();},
   };
 }
 export type PrivacyRuntime=ReturnType<typeof createPrivacyRuntime>;

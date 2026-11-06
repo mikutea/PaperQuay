@@ -7,6 +7,7 @@ import { AI_SECRET_KEY, aiAccountKey, aiSecretNamespace, checkedApiKey, parseAiP
 import { AiSseParser, ChatOutput, type ChatCompletionResult } from './stream.ts';
 import { AiRequestGuard, boundedAiLimits, cancelResponseBody, ensureDirectResponse, fetchAiTransport, readAiBody } from './transport.ts';
 import type { AiAccountScope, AiAction, AiLimits, AiProviderConfig, AiTransport, AiUsage, PreparedAiContext, SecretStore } from './types.ts';
+import {accountScopeAvailable,subscribeAccountFence} from '../privacy/browserErasure.ts';
 
 interface RequestOptions { requestId?:string;accountScope: AiAccountScope; config: AiProviderConfig; signal?: AbortSignal; current?():boolean }
 export interface AgentGenerateOptions extends RequestOptions {request:AgentModelRequest;onText(text:string):void;onUsage?(usage:AiUsage):void}
@@ -33,6 +34,11 @@ export class AiClient {
   constructor(secrets: SecretStore, transport: AiTransport = fetchAiTransport, limits: Partial<AiLimits> = {}) {
     if (transport.redirectPolicy !== 'error') throw new AiError('CONFIG_INVALID');
     this.#secrets = secrets; this.#transport = transport; this.#limits = boundedAiLimits(limits);
+  }
+  #guard(options:RequestOptions,timeoutMs:number){
+    aiAccountKey(options.accountScope);
+    const guard=new AiRequestGuard(options.signal,timeoutMs,()=>accountScopeAvailable(options.accountScope)&&(options.current?.()??true));
+    guard.onClose(subscribeAccountFence(options.accountScope,()=>guard.stop(new AiError('CANCELLED'))));return guard;
   }
   async #key(scope: AiAccountScope, config: AiProviderConfig, guard: AiRequestGuard, checkCurrent:()=>void=()=>{}): Promise<string | null> {
     aiAccountKey(scope);
@@ -93,7 +99,7 @@ export class AiClient {
   async listModels(options: RequestOptions): Promise<string[]> {
     const config = parseAiProvider(options.config);
     if(config.execution)return this.#inspectRoute(options,config);
-    const guard = new AiRequestGuard(options.signal, this.#limits.probeTimeoutMs);
+    const guard = this.#guard(options,this.#limits.probeTimeoutMs);
     try {
       const key = await this.#key(options.accountScope, config, guard);
       const response = await this.#request(config, '/models', key, guard);
@@ -141,8 +147,9 @@ export class AiClient {
   }
   async #inspectRoute(options:RequestOptions,config:AiProviderConfig):Promise<string[]>{
     if(!this.#transport.modelRouting)throw new AiError('REMOTE_UNAVAILABLE');
-    const guard=new AiRequestGuard(options.signal,this.#limits.probeTimeoutMs),check=()=>{guard.check();if(options.current&&!options.current())throw new AiError('CANCELLED');};
-    try{check();const result=await guard.wait(this.#transport.modelRouting.inspect({accountScope:{...options.accountScope},config,signal:guard.signal,current:options.current}));check();return result;}
+    const guard=this.#guard(options,this.#limits.probeTimeoutMs),check=()=>{guard.check();};
+    try{check();const result=await guard.wait(this.#transport.modelRouting.inspect({accountScope:{...options.accountScope},config,signal:guard.signal,
+      current:()=>{try{guard.check();return true;}catch{return false;}}}));check();return result;}
     catch(e){check();if(e instanceof AiError)throw e;throw new AiError('REMOTE_UNAVAILABLE');}
     finally{guard.close();}
   }
@@ -150,9 +157,10 @@ export class AiClient {
     if(!this.#transport.modelRouting)throw new AiError('REMOTE_UNAVAILABLE');
     if(!options.requestId)throw new AiError('CONFIG_INVALID');
     if(new TextEncoder().encode(JSON.stringify({model:config.model,messages,n:1,stream:false,[config.tokenParameter]:config.maxOutputTokens})).length>this.#limits.requestBytes)throw new AiError('INPUT_TOO_LARGE');
-    const guard=new AiRequestGuard(options.signal,this.#limits.totalTimeoutMs),check=()=>{guard.check();if(options.current&&!options.current())throw new AiError('CANCELLED');};
+    const guard=this.#guard(options,this.#limits.totalTimeoutMs),check=()=>{guard.check();};
     try{
-      check();const result=await guard.wait(this.#transport.modelRouting.invoke({accountScope:{...options.accountScope},config,requestId:options.requestId,purpose,messages,signal:guard.signal,current:options.current}));check();
+      check();const result=await guard.wait(this.#transport.modelRouting.invoke({accountScope:{...options.accountScope},config,requestId:options.requestId,purpose,messages,signal:guard.signal,
+        current:()=>{try{guard.check();return true;}catch{return false;}}}));check();
       // Apply the same output/usage limits and finish semantics to a saved one-shot result.
       let actualUsage:AiUsage|null=null;
       const output=new ChatOutput(null,this.#limits,text=>{check();options.onText(text);},usage=>{check();actualUsage=usage;options.onUsage?.(usage);});
@@ -171,7 +179,7 @@ export class AiClient {
       ...(streaming && config.includeUsage ? { stream_options: { include_usage: true } } : {}),
     });
     if (new TextEncoder().encode(body).byteLength > this.#limits.requestBytes) throw new AiError('INPUT_TOO_LARGE');
-    const guard = new AiRequestGuard(options.signal, this.#limits.totalTimeoutMs);
+    const guard = this.#guard(options,this.#limits.totalTimeoutMs);
     const check=()=>{guard.check();if(options.current&&!options.current())throw new AiError('CANCELLED');};
     try {
       check();const key = await this.#key(options.accountScope, config, guard,check);check();
