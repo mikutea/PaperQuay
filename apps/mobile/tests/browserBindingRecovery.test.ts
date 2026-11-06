@@ -24,11 +24,11 @@ test('session bindings survive independent reloads while subject recovery and co
   const indexedDB=new IDBFactory(),databaseName=crypto.randomUUID();
   const subject=(sid:string)=>()=>authSubject({iss:config.oidcAuthority,sub:'same-owner',sid},config.oidcAuthority);
   const open=(sid:string)=>createVerifiedBinding(config,new MemorySecretStore(),subject(sid),{indexedDB,databaseName});
-  const a=open('session-a'),b=open('session-b'),deviceB=crypto.randomUUID(),other={...identity,device:{...identity.device,id:deviceB}};
+  const sidA='a'.repeat(512),a=open(sidA),b=open('session-b'),deviceB=crypto.randomUUID(),other={...identity,device:{...identity.device,id:deviceB}};
   try{
     await a.write(identity);await b.write(other);
     assert.deepEqual(await a.readSession(),identity);assert.deepEqual(await b.readSession(),other);assert.notEqual(a.key(),b.key());
-    const restoredA=open('session-a'),replacement=open('replacement-session');
+    const restoredA=open(sidA),replacement=open('replacement-session');
     try{
       assert.deepEqual(await restoredA.readSession(),identity);assert.equal(await replacement.readSession(),null);
       assert.deepEqual(await replacement.read(),other);

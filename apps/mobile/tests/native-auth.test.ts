@@ -72,6 +72,19 @@ test('erasure-only renewal rejects a replacement SID and keeps the confirmation 
   assert.equal(await f.secrets.get(nativeAuthNamespace(config),'session'),null);
 });
 
+test('a 512-character server-supported SID retains its binding key and can renew the original erasure session',async t=>{
+  const f=fixture(t);f.lifetime=10;f.alteredClaims={sid:'s'.repeat(512)};
+  await f.session.signIn();await f.session.completeSignIn(f.callback());
+  const key=f.session.getSubject()!.sessionKey;assert.match(key!,/^[a-f0-9]{64}$/);let acknowledged=0;
+  await f.session.clearLocalSession({renewForErasure:true,afterPersisted:async token=>{
+    assert.equal(token,'access-1-1');assert.equal(f.session.getSubject()!.sessionKey,key);
+    assert.equal(await f.secrets.get(nativeAuthNamespace(config),'session'),null);acknowledged++;
+  }});
+  assert.equal(f.refreshes,1);assert.equal(acknowledged,1);assert.equal(f.session.getSubject(),null);
+  for(const length of[255,256,511,512])assert.match(authSubject({iss:config.oidcAuthority,sub:'subject-one',sid:'s'.repeat(length)},config.oidcAuthority)!.sessionKey!,/^[a-f0-9]{64}$/);
+  for(const sid of['','s'.repeat(513),null])assert.equal(authSubject({iss:config.oidcAuthority,sub:'subject-one',sid},config.oidcAuthority)!.sessionKey,undefined);
+});
+
 test('purely local erasure finishes with expired access and no refresh credential without contacting the provider',async t=>{
   const f=fixture(t);f.lifetime=10;f.includeRefresh=false;await f.session.signIn();await f.session.completeSignIn(f.callback());
   const later=Date.now()+20_000;t.mock.method(Date,'now',()=>later);let finalized=0;

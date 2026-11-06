@@ -1,12 +1,13 @@
 import {OidcClient,User,InMemoryWebStorage,WebStorageStateStore} from 'oidc-client-ts';
 import type {AppConfig} from '../config.ts';
 import {ClientError} from '../errors.ts';
+import {MAX_SESSION_ID_LENGTH} from './subject.ts';
 
 /** Refresh only the retained volatile session. Never call UserManager storage,
  * persist credentials, perform a new login, or accept a different OIDC SID. */
 export async function erasureSession(config:AppConfig,user:User,protocol?:Pick<OidcClient,'useRefreshToken'>):Promise<User> {
   if((user.expires_in??0)>30||!user.refresh_token&&user.expired===false)return user;
-  if(!user.refresh_token||typeof user.profile.sid!=='string'||!user.profile.sid||user.profile.sid.length>255)throw new ClientError('AUTH_REQUIRED');
+  if(!user.refresh_token||typeof user.profile.sid!=='string'||!user.profile.sid||user.profile.sid.length>MAX_SESSION_ID_LENGTH)throw new ClientError('AUTH_REQUIRED');
   try {
     const client=protocol??new OidcClient({authority:config.oidcAuthority,client_id:config.oidcClientId,
       redirect_uri:config.redirectUri,response_type:'code',scope:user.scope,disablePKCE:false,
