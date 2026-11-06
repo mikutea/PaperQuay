@@ -26,6 +26,7 @@ import {registerRemoteTaskRoutes,REMOTE_TASK_CAPABILITY,REMOTE_TASK_UPLOAD_HEADE
 import type {RemoteTaskRepository} from './remote-task-store.ts';
 import { registerRemoteRetrievalRoutes, REMOTE_RETRIEVAL_CAPABILITY } from './remote-retrieval.ts';
 import type { RemoteRetrievalRepository } from './remote-retrieval-store.ts';
+import {registerAccountPrivacyRoutes,type AccountPrivacyRepository} from './account-privacy.ts';
 
 declare module 'fastify' {
   interface FastifyRequest { identity: VerifiedIdentity | null }
@@ -40,6 +41,7 @@ interface AppOptions {
   remoteRetrievalRepository?:RemoteRetrievalRepository;
   modelInferenceRepository?:ModelInferenceRepository;
   modelGatewayDriver?:ModelGatewayControl;
+  accountPrivacyRepository?:AccountPrivacyRepository;
   verifyToken: TokenVerifier;
   logger?: FastifyServerOptions['logger'];
   /** Used only by isolated tests, never set by process environment. */
@@ -213,7 +215,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   app.get('/v1/capabilities', { onRequest: enforceRateLimit }, async () => ({
     protocolVersion: 1,
     entitySchemas: Object.fromEntries(ENTITY_TYPES.map((type) => [type, [1]])),
-    features: { ...(config.remoteRetrievalEnabled?{remoteRetrieval:1}:{}),...(config.modelInferenceEnabled?{modelInference:1}:{}),paperOrganization: 1,richNotes:1,aiConversations:1,graphRelations:1,...(config.remoteTasksEnabled?{remoteTasks:1}:{}), ...(config.cloudPdfEnabled ? { privatePdfStorage: 1 } : {}),
+    features: { ...(options.accountPrivacyRepository?{accountPrivacy:1}:{}), ...(config.remoteRetrievalEnabled?{remoteRetrieval:1}:{}),...(config.modelInferenceEnabled?{modelInference:1}:{}),paperOrganization: 1,richNotes:1,aiConversations:1,graphRelations:1,...(config.remoteTasksEnabled?{remoteTasks:1}:{}), ...(config.cloudPdfEnabled ? { privatePdfStorage: 1 } : {}),
       ...(config.desktopPdfEnabled ? { desktopPdfTransfer: 1 } : {}) },
     deviceBinding: 'oidc-session',
     limits: {
@@ -308,5 +310,6 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   await registerRemoteTaskRoutes(app,{enabled:config.remoteTasksEnabled,repository:options.remoteTaskRepository,authenticate});
   await registerRemoteRetrievalRoutes(app,{enabled:config.remoteRetrievalEnabled,repository:options.remoteRetrievalRepository,authenticate});
   await registerModelInferenceRoutes(app,{enabled:config.modelInferenceEnabled,gatewayEnabled:Boolean(config.modelGateway),repository:options.modelInferenceRepository,gateway:options.modelGatewayDriver,authenticate});
+  if(options.accountPrivacyRepository)registerAccountPrivacyRoutes(app,options.accountPrivacyRepository,authenticate);
   return app;
 }

@@ -45,6 +45,15 @@ test('untrusted signatures are rejected without exposing JWT material', async ()
     && error.message === 'AUTHENTICATION_REQUIRED' && !JSON.stringify(error).includes('sensitive'));
 });
 
+test('recent-authentication evidence comes only from a valid signed auth_time, independently of token issuance', async () => {
+  assert.equal((await verify(await token({auth_time:now-120}))).authenticatedAtMs,(now-120)*1000);
+  assert.equal((await verify(await token({auth_time:now-3600}))).authenticatedAtMs,(now-3600)*1000);
+  assert.equal((await verify(await token())).authenticatedAtMs,undefined);
+  for(const auth_time of ['recent',0,-1,now+60,1.5]) {
+    await assert.rejects(verify(await token({auth_time})),{code:'AUTHENTICATION_REQUIRED'});
+  }
+});
+
 test('identity-provider connection failure is retryable without exposing network details', async () => {
   const unavailable = await createOidcVerifier({ issuer: fixtureIssuer, audience: 'paperquay-sync',
     clientIds: ['paperquay-test'], keyResolver: async () => {
