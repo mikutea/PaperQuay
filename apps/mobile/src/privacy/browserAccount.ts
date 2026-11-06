@@ -6,11 +6,13 @@ import type {AccountScope} from '../storage/accountStore.ts';
 import type {verifiedBinding} from '../storage/verifiedBinding.ts';
 import {accountScopeAvailable,type BrowserErasureCoordinator} from './browserErasure.ts';
 import {AccountSecretStore} from './secretRegistry.ts';
+import {LocalAiConfigStore} from '../ai/provider.ts';
 
 /** One owner token belongs to one runtime's views, auth, stores and volatile
  * secret map. Old accounts retain leases until that RAM is purged or disposed. */
 export function browserAccountContext(options:{apiBaseUrl:string;auth:AuthSession;secrets:SecretStore;
-  binding:Pick<ReturnType<typeof verifiedBinding>,'key'>;coordinator:BrowserErasureCoordinator|null;stop():void}) {
+  binding:Pick<ReturnType<typeof verifiedBinding>,'key'>;coordinator:BrowserErasureCoordinator|null;stop():void;
+  configStorage?:Pick<Storage,'getItem'|'setItem'|'removeItem'>}) {
   const {auth,secrets,binding,coordinator,stop}=options,owner={};
   if(coordinator&&(secrets.persistence!=='memory'||!secrets.disposeMemory))throw new ClientError('STORAGE_UNAVAILABLE');
   let activeScope:AccountScope|null=null,activeSubjectKey:string|null=null;
@@ -21,6 +23,10 @@ export function browserAccountContext(options:{apiBaseUrl:string;auth:AuthSessio
       if(coordinator)await coordinator.retain(scope,owner,async()=>{
         if(binding.key()===subjectKey)stop();
         await new AccountSecretStore(secrets,scope,()=>true).erase();
+        // A synchronous save that passed its fence check in this context has
+        // finished before this storage-event callback can run. Clear both
+        // config rows before releasing the context's shared lease.
+        new LocalAiConfigStore(options.configStorage??globalThis.localStorage).clear(scope);
         // Clearing a former owner's keys must never sign out a replacement.
         if(binding.key()===subjectKey){await auth.clearLocalSession();stop();}
       });

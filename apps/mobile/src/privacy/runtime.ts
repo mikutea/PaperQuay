@@ -57,7 +57,13 @@ export function createPrivacyRuntime(config:AppConfig,auth:AuthSession,store:Acc
       await eraseLocalAccount(config.apiBaseUrl,status,current,{binding:recoverableBinding,store,stop:options.stop??(()=>controller.deactivate()),
         fence:async(scope,requestId)=>{options.browserErasure?.publish(scope,requestId,runtimeOwner);},
         complete:async(scope,requestId,finish)=>{
-          if(options.browserErasure)await options.browserErasure.complete(scope,requestId,runtimeOwner,finish);else await finish();
+          if(options.browserErasure)await options.browserErasure.complete(scope,requestId,runtimeOwner,async()=>{
+            // Every peer has finished its current task and cleared its config
+            // before releasing the shared lock. Remove any late shared writes
+            // once more while holding the exclusive lock, before server ACK.
+            const {LocalAiConfigStore}=await import('../ai/provider.ts');check();
+            new LocalAiConfigStore(localStorage).clear(scope);check();await finish();
+          });else await finish();
         },
         clearIncoming:async scope=>{const {purgeIncomingShareOwner}=await import('../platform/incomingShare.ts');check();await purgeIncomingShareOwner(accountScopeKey(scope),{current});},
         async clearSecrets(scope,workspace) {
