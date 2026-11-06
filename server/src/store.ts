@@ -201,7 +201,7 @@ export class PostgresSyncStore implements SyncRepository, CloudPdfRepository, De
   privacy(): AccountPrivacyRepository {
     return createAccountPrivacyRepository({pool:this.pool,
       withAccount:(identity,work)=>this.withAccount(identity,false,work,true,true),
-      withClosureAccount:(identity,work)=>{
+      withClosureAccount:async(identity,work)=>{
         if (!this.erasurePool) throw new ApiError('ACCOUNT_CLOSURE_UNAVAILABLE',503);
         return this.withAccount(identity,false,work,true,true,this.erasurePool);
       },
