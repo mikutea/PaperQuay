@@ -11,7 +11,7 @@
 生产模板只把 Web 入口绑定到操作系统回环地址；数据库、身份管理端口和同步端口不对宿主机发布。
 现有入口代理负责受信任的 HTTPS。不得通过关闭证书验证完成部署。
 
-从已审查提交构建 `Server.Dockerfile`、`Web.Dockerfile`、`Identity.Dockerfile`。
+从已审查提交构建 `Server.Dockerfile`、`Web.Dockerfile`、`Identity.Dockerfile`。所有外部 `FROM` 和演练 PostgreSQL 输入均固定为官方注册表 manifest 的 SHA-256 摘要；不提供基础镜像 build-arg 覆盖。升级摘要必须经过 PR 审查和完整恢复演练。
 构建上下文采用白名单，不接收部署环境文件；Web 构建也不传入实际服务地址。
 为构建指定 `PAPERQUAY_REVISION`，正式部署记录基础镜像摘要及最终镜像 ID。
 `compose.env` 的四个镜像必须使用 `sha256:…` 或 `repository@sha256:…`。

@@ -1,6 +1,6 @@
-ARG NODE_IMAGE=node:24-bookworm-slim
-ARG CADDY_IMAGE=caddy:2-alpine
-FROM ${NODE_IMAGE} AS web
+# Base manifests verified against the official registries; update through review.
+# Base image build-argument overrides are deliberately not exposed.
+FROM node:24-bookworm-slim@sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9 AS web
 WORKDIR /app/apps/mobile
 COPY apps/mobile/package.json apps/mobile/package-lock.json ./
 RUN npm ci --ignore-scripts
@@ -11,7 +11,7 @@ COPY apps/mobile/tsconfig.json apps/mobile/tsconfig.production.json apps/mobile/
 # Public service defaults are mounted at runtime, never supplied as build args.
 RUN node node_modules/typescript/bin/tsc --project tsconfig.production.json && node node_modules/vite/bin/vite.js build
 
-FROM ${CADDY_IMAGE}
+FROM caddy:2-alpine@sha256:ae5e525ca6773b0a4ce579c774cb39b3147e1576084139229517bdbcfe3ed812
 ARG PAPERQUAY_REVISION
 LABEL org.opencontainers.image.source="https://github.com/mikutea/PaperQuay" \
       org.opencontainers.image.revision="${PAPERQUAY_REVISION}"
