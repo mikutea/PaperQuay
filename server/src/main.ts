@@ -9,7 +9,7 @@ import { ApiError } from './errors.ts';
 let store: PostgresSyncStore | undefined;
 try {
   const config = loadConfig();
-  store = new PostgresSyncStore({ connectionString: config.databaseUrl, cursorSecret: config.cursorSecret,
+  store = new PostgresSyncStore({ connectionString: config.databaseUrl, erasureConnectionString: config.erasureDatabaseUrl, cursorSecret: config.cursorSecret,
     maxAccountRetainedBytes: config.maxAccountRetainedBytes, cloudPdfEnabled: config.cloudPdfEnabled,
     cloudPdfAccountBytes: config.cloudPdfAccountBytes });
   const verifyToken = await createOidcVerifier({ issuer: config.oidcIssuer, audience: config.oidcAudience, clientIds: config.oidcClientIds });

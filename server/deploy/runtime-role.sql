@@ -37,5 +37,5 @@ GRANT UPDATE (state,request_payload,result_payload) ON paperquay.remote_retrieva
 -- Runtime retains no DELETE privilege over sync or billing/request history.
 GRANT SELECT ON paperquay.account_erasure_devices TO paperquay_runtime;
 GRANT EXECUTE ON FUNCTION paperquay.erasure_context_matches(uuid) TO paperquay_runtime;
-GRANT EXECUTE ON FUNCTION paperquay.erase_account(uuid,uuid,text,boolean) TO paperquay_runtime;
+REVOKE ALL ON FUNCTION paperquay.erase_account(uuid,uuid,text,boolean) FROM paperquay_runtime;
 GRANT EXECUTE ON FUNCTION paperquay.acknowledge_account_erasure(uuid,uuid,text) TO paperquay_runtime;

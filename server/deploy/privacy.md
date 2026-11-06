@@ -58,3 +58,7 @@ OIDC session ID、执行 fence/journal 授权字段不进入导出；注销后�
 单纯恢复旧快照通过 hash 比较，不能证明隐私删除状态已追平。
 
 此文档和自动化测试不代替部署现场的账号恢复、备份保留政策、外部身份管理和实机验收。
+
+## 注销的数据库权限边界
+
+`paperquay_runtime` 不拥有、也不能执行 `erase_account`。注销路由在 JWT、最近的 `auth_time`、确认和会话绑定校验后，通过独立 `paperquay_erasure` 登录池执行整个事务；两角色没有成员关系且密码必须不同。该窄角色仅能读取账号、设备和清理回执、锁定账号行和触碰设备时间，并执行固定注销函数，无历史 DELETE、schema CREATE/ownership 或 RLS bypass。运行角色能读取的 SID 与能设置的 GUC 不再足以获得注销授权。缺少独立配置时返回 `ACCOUNT_CLOSURE_UNAVAILABLE`，活动数据不变。此边界防止普通 SQL 角色越权；拥有 API 进程及注销池凭据的全面服务入侵仍属于更高权限事件。

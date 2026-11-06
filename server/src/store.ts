@@ -60,6 +60,8 @@ interface StoreHooks {
 interface StoreOptions {
   connectionString?: string;
   pool?: pg.Pool;
+  erasureConnectionString?: string;
+  erasurePool?: pg.Pool;
   cursorSecret: Uint8Array;
   hooks?: StoreHooks;
   responseLimitBytes?: number;
@@ -147,6 +149,8 @@ export class PostgresSyncStore implements SyncRepository, CloudPdfRepository, De
   readonly cloudPdfEnabled: boolean;
   readonly cloudPdfAccountBytes: number;
   private readonly ownsPool: boolean;
+  private readonly erasurePool?: pg.Pool;
+  private readonly ownsErasurePool: boolean;
 
   constructor(options: StoreOptions) {
     this.maxAccountRetainedBytes = checkedRetainedByteLimit(options.maxAccountRetainedBytes ?? SERVER_LIMITS.maxAccountRetainedBytes);
@@ -160,12 +164,20 @@ export class PostgresSyncStore implements SyncRepository, CloudPdfRepository, De
     this.pool = options.pool ?? new pg.Pool(poolOptions);
     // A disconnected idle client must not crash the server or print driver errors/credentials.
     this.pool.on('error', () => undefined);
+    this.ownsErasurePool = Boolean(options.erasureConnectionString && !options.erasurePool);
+    this.erasurePool = options.erasurePool ?? (options.erasureConnectionString ? new pg.Pool({
+      ...poolOptions, connectionString: options.erasureConnectionString, max: 2, application_name: 'paperquay-erasure',
+    }) : undefined);
+    this.erasurePool?.on('error', () => undefined);
     this.cursors = new CursorCodec(options.cursorSecret);
     this.hooks = options.hooks ?? {};
     this.responseLimitBytes = options.responseLimitBytes ?? SERVER_LIMITS.responseLimitBytes;
   }
 
-  async close(): Promise<void> { if (this.ownsPool) await this.pool.end(); }
+  async close(): Promise<void> {
+    await Promise.all([this.ownsPool ? this.pool.end() : undefined,
+      this.ownsErasurePool ? this.erasurePool?.end() : undefined]);
+  }
 
   async ready(): Promise<boolean> {
     try {
@@ -189,14 +201,18 @@ export class PostgresSyncStore implements SyncRepository, CloudPdfRepository, De
   privacy(): AccountPrivacyRepository {
     return createAccountPrivacyRepository({pool:this.pool,
       withAccount:(identity,work)=>this.withAccount(identity,false,work,true,true),
+      withClosureAccount:(identity,work)=>{
+        if (!this.erasurePool) throw new ApiError('ACCOUNT_CLOSURE_UNAVAILABLE',503);
+        return this.withAccount(identity,false,work,true,true,this.erasurePool);
+      },
       checkAccess:identity=>this.me(identity),
       beforeCloseCommit:context=>this.hooks.beforeCommit?.({kind:'account-close',accountId:context.account.id,deviceId:context.device.id})
         ?? Promise.resolve()});
   }
 
   private async withAccount<T>(identity: VerifiedIdentity, create: boolean,
-    action: (context: TransactionContext) => Promise<T>, requireDevice = true, allowClosed = false): Promise<T> {
-    const client = await this.pool.connect();
+    action: (context: TransactionContext) => Promise<T>, requireDevice = true, allowClosed = false, pool = this.pool): Promise<T> {
+    const client = await pool.connect();
     try {
       await client.query('BEGIN');
       await client.query("SET LOCAL statement_timeout = '15s'");

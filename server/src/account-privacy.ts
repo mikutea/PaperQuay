@@ -36,6 +36,7 @@ export interface AccountPrivacyRepository {
 interface Options {
   pool: Pool;
   withAccount<T>(identity: VerifiedIdentity, action: (context: PrivacyContext) => Promise<T>): Promise<T>;
+  withClosureAccount<T>(identity: VerifiedIdentity, action: (context: PrivacyContext) => Promise<T>): Promise<T>;
   checkAccess(identity: VerifiedIdentity): Promise<unknown>;
   beforeCloseCommit?(context: PrivacyContext): Promise<void>;
 }
@@ -82,7 +83,7 @@ export function createAccountPrivacyRepository(options: Options): AccountPrivacy
   }
   return {
     status: identity => options.withAccount(identity, context => status(context, identity)),
-    close: (identity, request) => options.withAccount(identity, async context => {
+    close: (identity, request) => options.withClosureAccount(identity, async context => {
       if (request.accountId !== context.account.id || request.confirmation !== '注销 ' + context.account.id
         || request.deleteCloudCopies !== true || typeof request.eraseDevices !== 'boolean'
         || !new RegExp('^' + UUID_PATTERN + '$').test(request.requestId)) throw new ApiError('VALIDATION_FAILED', 400);

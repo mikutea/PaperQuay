@@ -76,3 +76,14 @@ test('pool exhaustion/disconnection is retryable without classifying schema faul
   assert.equal(isTransientDatabaseError({ code: '40001' }), true);
   assert.equal(isTransientDatabaseError({ code: '42P01' }), false);
 });
+
+test('closure configuration requires an independent narrow role and cannot reuse runtime credentials',()=>{
+  const runtime='postgresql://paperquay_runtime:runtime-password@127.0.0.1:5432/isolated_test';
+  const erasure='postgresql://paperquay_erasure:independent-password@127.0.0.1:5432/isolated_test';
+  assert.equal(testConfig({PAPERQUAY_DATABASE_URL:runtime,PAPERQUAY_ERASURE_DATABASE_URL:erasure}).erasureDatabaseUrl,erasure);
+  assert.equal(testConfig().erasureDatabaseUrl,undefined);
+  for(const url of[erasure.replace('independent-password','runtime-password'),erasure.replace('paperquay_erasure','paperquay_runtime'),
+    erasure.replace('isolated_test','other_database'),erasure+'?application_name=unreviewed',erasure.replace('127.0.0.1','other.example.test')]) {
+    assert.throws(()=>testConfig({PAPERQUAY_DATABASE_URL:runtime,PAPERQUAY_ERASURE_DATABASE_URL:url}),{code:'CONFIGURATION_INVALID'});
+  }
+});

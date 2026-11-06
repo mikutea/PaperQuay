@@ -9,6 +9,7 @@ services:
       POSTGRES_PASSWORD: ${PAPERQUAY_TEST_POSTGRES_ADMIN_PASSWORD:?set an independent local admin password}
       POSTGRES_DB: paperquay_sync_test
       PAPERQUAY_MIGRATION_DB_PASSWORD: ${PAPERQUAY_MIGRATION_DB_PASSWORD:?set a migration password}
+      PAPERQUAY_ERASURE_DB_PASSWORD: ${PAPERQUAY_ERASURE_DB_PASSWORD:?set an independent erasure password}
       PAPERQUAY_RUNTIME_DB_PASSWORD: ${PAPERQUAY_RUNTIME_DB_PASSWORD:?set a runtime password}
     ports:
       - "127.0.0.1:55439:5432"

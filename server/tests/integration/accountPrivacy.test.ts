@@ -12,10 +12,13 @@ import { retrievalFixture } from '../../../tests/remoteRetrievalFixtures.ts';
 const databaseUrl=process.env.PAPERQUAY_DATABASE_URL;
 if(!databaseUrl||process.env.PAPERQUAY_TEST_ALLOW_DATABASE_WRITES!=='1')throw new Error('Use the explicitly owned isolated migrated test database.');
 const pool=new pg.Pool({connectionString:databaseUrl,max:8});
-const store=new PostgresSyncStore({pool,cursorSecret:Buffer.alloc(32,63),cloudPdfEnabled:true});
+const erasureUrl=process.env.PAPERQUAY_ERASURE_DATABASE_URL;
+if(!erasureUrl)throw new Error('Independent isolated erasure role required.');
+const erasurePool=new pg.Pool({connectionString:erasureUrl,max:2});
+const store=new PostgresSyncStore({pool,erasurePool,cursorSecret:Buffer.alloc(32,63),cloudPdfEnabled:true});
 const privacy=store.privacy();
 before(async()=>assert.equal(await store.ready(),true,'Apply migration 013 and scoped grants.'));
-after(async()=>{await pool.end();});
+after(async()=>{await Promise.all([pool.end(),erasurePool.end()]);});
 const businessTables=['devices','entities','changes','operation_receipts','conflicts','cloud_pdfs','remote_task_providers',
   'remote_tasks','remote_task_requests','remote_task_artifacts','model_inference_providers','model_inference_jobs','remote_retrieval_requests'];
 
@@ -135,7 +138,7 @@ test('offline erasure remains pending until that exact verified session acknowle
 
 test('closure commit failure rolls back all payloads and receipts before an exact explicit retry',async()=>{
   const a=await account(),data=await seed(a),request=closure(a);
-  const broken=new PostgresSyncStore({pool,cursorSecret:Buffer.alloc(32,63),hooks:{beforeCommit:async event=>{
+  const broken=new PostgresSyncStore({pool,erasurePool,cursorSecret:Buffer.alloc(32,63),hooks:{beforeCommit:async event=>{
     if(event.kind==='account-close')throw new Error('synthetic failure before commit');
   }}});
   await assert.rejects(broken.privacy().close(a.who,request),/synthetic failure/);
@@ -156,10 +159,29 @@ test('forged runtime erasure context cannot alter closure or delete immutable hi
   assert.equal((await privacy.status(a.who)).state,'active');
 });
 
+test('runtime SQL cannot erase a known account with forged GUCs and a readable session ID',async()=>{
+  const a=await account(),request=closure(a);
+  await inAccount(a.who,a.view.accountId,async client=>{
+    const row=(await client.query('SELECT session_id FROM paperquay.devices WHERE account_id=$1 AND id=$2',[a.view.accountId,a.view.device.id])).rows[0];
+    assert.equal(row.session_id,a.who.sessionId);
+    assert.equal((await client.query("SELECT has_function_privilege(current_user,'paperquay.erase_account(uuid,uuid,text,boolean)','EXECUTE') AS allowed")).rows[0].allowed,false);
+  });
+  await assert.rejects(inAccount(a.who,a.view.accountId,client=>client.query(
+    'SELECT paperquay.erase_account($1,$2,$3,$4)',[a.view.accountId,request.requestId,a.who.sessionId,true])),{code:'42501'});
+  await assert.rejects(pool.query('SET ROLE paperquay_erasure'),{code:'42501'});
+  assert.equal((await privacy.status(a.who)).state,'active');
+  const role=(await erasurePool.query('SELECT rolsuper,rolbypassrls,rolcreaterole FROM pg_roles WHERE rolname=current_user')).rows[0];
+  assert.deepEqual(role,{rolsuper:false,rolbypassrls:false,rolcreaterole:false});
+  await assert.rejects(erasurePool.query('DELETE FROM paperquay.model_inference_jobs'),{code:'42501'});
+  const ordinaryOnly=new PostgresSyncStore({pool,cursorSecret:Buffer.alloc(32,63)});
+  await assert.rejects(ordinaryOnly.privacy().close(a.who,request),{code:'ACCOUNT_CLOSURE_UNAVAILABLE'});
+  assert.equal((await privacy.close(a.who,request)).state,'closed');
+});
+
 test('a concurrent writer waits for closure and cannot recreate purged payloads after commit',async()=>{
   const a=await account();let entered!:()=>void,release!:()=>void;
   const waiting=new Promise<void>(done=>{entered=done;}),barrier=new Promise<void>(done=>{release=done;});
-  const closer=new PostgresSyncStore({pool,cursorSecret:Buffer.alloc(32,63),hooks:{beforeCommit:async event=>{
+  const closer=new PostgresSyncStore({pool,erasurePool,cursorSecret:Buffer.alloc(32,63),hooks:{beforeCommit:async event=>{
     if(event.kind==='account-close'){entered();await barrier;}
   }}});
   const closing=closer.privacy().close(a.who,closure(a));await waiting;

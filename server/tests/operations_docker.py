@@ -62,6 +62,7 @@ def main():
             os.chmod(target / name, mode)
 
         password = secrets.token_hex(24)
+        erasure_password = secrets.token_hex(24)
         project = 'paperquay-ci-' + secrets.token_hex(6)
         config = (directory / 'compose.production.yml').read_text('utf-8')
         # Real Fastify/PG/Caddy anonymous paths; no successful authentication is
@@ -90,11 +91,13 @@ await app.listen({host:config.host,port:config.port});
         lines.extend(ops.IMAGE_KEYS[service] + '=' + image for service, image in images.items())
         write('compose.env', '\n'.join(lines) + '\n')
         write('database.env', '\n'.join(name + '=' + password for name in ('POSTGRES_PASSWORD',
-            'PAPERQUAY_MIGRATION_DB_PASSWORD', 'PAPERQUAY_RUNTIME_DB_PASSWORD', 'PAPERQUAY_IDENTITY_DB_PASSWORD')) + '\n')
+            'PAPERQUAY_MIGRATION_DB_PASSWORD', 'PAPERQUAY_RUNTIME_DB_PASSWORD', 'PAPERQUAY_IDENTITY_DB_PASSWORD'))
+            + '\nPAPERQUAY_ERASURE_DB_PASSWORD=' + erasure_password + '\n')
         write('identity.env', 'KC_HOSTNAME=https://reader.example.test/identity\nKC_DB_PASSWORD=' + password
             + '\nKC_BOOTSTRAP_ADMIN_USERNAME=disposable-operator\nKC_BOOTSTRAP_ADMIN_PASSWORD=' + password + '\n')
         write('migration.env', 'PAPERQUAY_MIGRATION_DATABASE_URL=postgresql://paperquay_migrate:' + password + '@database:5432/paperquay\n')
         write('sync.env', 'PAPERQUAY_DATABASE_URL=postgresql://paperquay_runtime:' + password + '@database:5432/paperquay\n'
+            + 'PAPERQUAY_ERASURE_DATABASE_URL=postgresql://paperquay_erasure:' + erasure_password + '@database:5432/paperquay\n'
             + 'PAPERQUAY_OIDC_ISSUER=https://reader.example.test/identity/realms/paperquay\n'
             + 'PAPERQUAY_OIDC_AUDIENCE=paperquay-sync\nPAPERQUAY_OIDC_CLIENT_IDS=paperquay-mobile\n'
             + 'PAPERQUAY_CURSOR_SECRET=' + __import__('base64').b64encode(secrets.token_bytes(48)).decode() + '\n')

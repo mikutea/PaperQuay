@@ -114,11 +114,14 @@ jobs:
           import { randomBytes } from 'node:crypto';
           import { appendFileSync } from 'node:fs';
           const password = randomBytes(24).toString('hex');
+          const erasurePassword = randomBytes(24).toString('hex');
           const cursorSecret = randomBytes(48).toString('base64');
           console.log(`::add-mask::${password}`);
           console.log(`::add-mask::${cursorSecret}`);
+          console.log(`::add-mask::${erasurePassword}`);
           const settings = {
             PAPERQUAY_TEST_PASSWORD: password,
+            PAPERQUAY_ERASURE_DATABASE_URL: `postgresql://paperquay_erasure:${erasurePassword}@127.0.0.1:5432/paperquay_sync_test`,
             PAPERQUAY_CURSOR_SECRET: cursorSecret,
             PAPERQUAY_MIGRATION_DATABASE_URL: `postgresql://paperquay_migrate:${password}@127.0.0.1:5432/paperquay_sync_test`,
             PAPERQUAY_DATABASE_URL: `postgresql://paperquay_runtime:${password}@127.0.0.1:5432/paperquay_sync_test`,

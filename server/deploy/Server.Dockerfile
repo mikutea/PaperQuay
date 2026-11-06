@@ -15,7 +15,7 @@ COPY --chown=node:node server/package.json ./
 COPY --chown=node:node server/src ./src
 COPY --chown=node:node server/scripts ./scripts
 COPY --chown=node:node server/migrations ./migrations
-COPY --chown=node:node server/deploy/runtime-role.sql ./deploy/runtime-role.sql
+COPY --chown=node:node server/deploy/runtime-role.sql server/deploy/erasure-role.sql ./deploy/
 COPY --chown=node:node packages /app/packages
 COPY LICENSE /app/LICENSE
 USER node
