@@ -319,7 +319,7 @@ test('settings has one explicit save for key and model, gives a next step, and n
     if (initialKeyRead) {
       initialKeyRead = false;
       await new Promise<void>((resolve) => setTimeout(resolve, 150));
-    }
+    } else await new Promise<void>((resolve) => setTimeout(resolve, 25));
     return readKey.call(this, namespace, key);
   });
   const config = { ...CONFIG, model: '' };
@@ -341,7 +341,7 @@ test('settings has one explicit save for key and model, gives a next step, and n
     assert.equal(ui.renderer.root.findAllByType('button').filter(node => text(node) === '保存设置').length, 1);
     assert.equal(await ui.secrets.get(await aiSecretNamespace(SCOPE, config), AI_SECRET_KEY), null);
     await act(async () => { ui.button('保存设置').props.onClick(); await tick(); await tick(); });
-    await until(() => text(ui.renderer.root).includes('设置已保存'), 'settings save completion');
+    await until(() => text(ui.renderer.root).includes('设置已保存') && text(ui.renderer.root).includes('saved-settings-model'), 'settings save and key availability completion');
     assert.equal(ui.renderer.root.findAllByType('input').length, 0);
     assert.match(text(ui.renderer.root), /saved-settings-model/);
     ui.openSettings();
