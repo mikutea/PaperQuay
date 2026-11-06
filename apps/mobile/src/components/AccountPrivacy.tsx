@@ -4,7 +4,6 @@ import type {WorkspaceController} from '../sync/workspace.ts';
 import type {PrivacyRuntime} from '../privacy/runtime.ts';
 import {ClosureIntentStore,PrivacyError,type AccountPrivacyStatus,type ClosureRequest} from '../privacy/client.ts';
 import type {AccountScope} from '../storage/accountStore.ts';
-import {openPersonalExportSink} from '../privacy/saveExport.ts';
 import {PrivacyExportError} from '../privacy/exportStream.ts';
 import {ScopedExportError} from '../platform/exportScope.ts';
 import {ClientError,describeError} from '../errors.ts';
@@ -102,12 +101,9 @@ export function AccountPrivacy({privacy,auth,apiBaseUrl,onClose}:{privacy:Privac
     if(!scope||busyRef.current||!current())return;
     void run('正在准备导出…',async signal=>{
       // The async work starts synchronously in the button gesture.
-      const sink=await openPersonalExportSink(scope,current);
-      try {
-        const progress=(bytes:number)=>{if(current())setBusy(`正在导出 ${(bytes/1048576).toFixed(1)} MiB…`);};
-        const result=local?await privacy.localExport(scope,sink,signal,progress):await privacy.client.exportData(scope,sink,signal,progress);
-        if(current())setNotice(result.destination==='share'?'完整性校验已通过，已打开系统分享。':'完整性校验已通过，导出已保存。');
-      } catch(problem){await sink.abort().catch(()=>undefined);throw problem;}
+      const progress=(bytes:number)=>{if(current())setBusy(`正在导出 ${(bytes/1048576).toFixed(1)} MiB…`);};
+      const result=await privacy.exportData(scope,local,signal,progress);
+      if(current())setNotice(result.destination==='share'?'完整性校验已通过，已打开系统分享。':'完整性校验已通过，导出已保存。');
     });
   };
   const closeAccount=()=>{

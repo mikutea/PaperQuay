@@ -1,6 +1,7 @@
 import {normalizeServiceUrl} from '../config.ts';
 import {accountScopeKey,type AccountScope} from '../storage/accountStore.ts';
 import {consumePersonalExport,type PersonalExportSink} from './exportStream.ts';
+import {PrivateExportCleanup} from './exportCleanup.ts';
 
 export class PrivacyError extends Error {
   constructor(readonly code:'AUTH_REQUIRED'|'RECENT_AUTH_REQUIRED'|'UNAVAILABLE'|'CHANGED'|'INVALID'|'FAILED'|'BUSY'|'OUTCOME_UNKNOWN') {
@@ -58,6 +59,7 @@ export class AccountPrivacyClient {
   private disposed=false;
   private readonly active=new Map<AbortController,{done:Promise<void>;erasure:boolean}>();
   private erasureOnly=false;
+  private readonly exportCleanup=new PrivateExportCleanup();
   private readonly unsubscribe?:()=>void;
   constructor(private readonly options:Options) {
     this.base=normalizeServiceUrl(options.apiBaseUrl);this.key=options.getIdentityKey();
@@ -71,10 +73,12 @@ export class AccountPrivacyClient {
   dispose(){this.disposed=true;this.epoch++;for(const controller of this.active.keys())controller.abort();this.unsubscribe?.();}
   /** No ordinary export/status/mutation may outlive the private RAM lease.
    * Original-session status and ACK remain available through explicit tokens. */
-  async sealForErasure():Promise<void>{
+  async sealForErasure(retryFailedCleanup=false):Promise<void>{
+    const failed=retryFailedCleanup?this.exportCleanup.captureFailed():[];
     this.erasureOnly=true;const pending:Promise<void>[]=[];
     for(const [controller,entry] of this.active)if(!entry.erasure){controller.abort();pending.push(entry.done);}
     await Promise.all(pending);
+    await this.exportCleanup.retry(failed);this.exportCleanup.assertClean();
   }
   private operation(signal:AbortSignal,duration=30000,erasure=false) {
     if(this.disposed||signal.aborted)throw new PrivacyError('CHANGED');
@@ -136,6 +140,7 @@ export class AccountPrivacyClient {
     if(!object(value)||value.acknowledged!==true)invalid();
   }
   async exportData(scope:AccountScope,sink:PersonalExportSink,signal:AbortSignal,progress?:(bytes:number)=>void) {
+    const destination=this.exportCleanup.track(sink);
     let activeOperation:ReturnType<AccountPrivacyClient['operation']>|undefined;
     let reader:ReadableStreamDefaultReader<Uint8Array>|undefined;
     try {
@@ -147,9 +152,9 @@ export class AccountPrivacyClient {
       if(!response.body||!response.headers.get('content-type')?.startsWith('application/x-ndjson'))invalid();
       reader=response.body.getReader();
       const source=async function*(){for(;;){const next=await operation.wait(reader!.read());operation.check();if(next.done)break;yield next.value;}};
-      return await consumePersonalExport(source(),scope.accountId,sink,{signal:operation.signal,current:()=>{
+      return await consumePersonalExport(source(),scope.accountId,destination,{signal:operation.signal,current:()=>{
         try{operation.check();return true;}catch{return false;}},progress});
-    } catch(error) {await sink.abort().catch(()=>undefined);throw error;}
+    } catch(error) {await destination.abort().catch(()=>undefined);throw error;}
     finally {activeOperation?.release();if(reader){void reader.cancel().catch(()=>undefined);reader.releaseLock();}}
   }
 }
