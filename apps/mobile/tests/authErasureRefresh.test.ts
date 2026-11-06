@@ -11,8 +11,8 @@ function user(sid='original',rotated=false){return new User({access_token:rotate
   profile:{iss:config.oidcAuthority,sub:'owner',aud:config.oidcClientId,sid,iat:Math.floor(Date.now()/1000),exp:Math.floor(Date.now()/1000)+3600}});}
 
 test('Web erasure waits for an existing refresh, blocks its ordinary caller and clears storage before ACK',async t=>{
-  const release=deferred<User>(),entered=deferred<void>();let stored:User|null=null,refreshes=0;
-  t.mock.method(UserManager.prototype,'signinRedirectCallback',async()=>stored=user());
+  const sid='s'.repeat(512),release=deferred<User>(),entered=deferred<void>();let stored:User|null=null,refreshes=0;
+  t.mock.method(UserManager.prototype,'signinRedirectCallback',async()=>stored=user(sid));
   t.mock.method(UserManager.prototype,'signinSilent',async()=>{refreshes++;entered.resolve();stored=await release.promise;return stored;});
   t.mock.method(UserManager.prototype,'removeUser',async()=>{stored=null;});
   t.mock.method(globalThis,'fetch',async()=>{throw Error('Erasure must use the completed rotation');});
@@ -25,7 +25,7 @@ test('Web erasure waits for an existing refresh, blocks its ordinary caller and 
     await assert.rejects(session.getAccessToken(),{code:'AUTH_REQUIRED'});acknowledgements++;
   }});
   await assert.rejects(session.getAccessToken(),{code:'AUTH_REQUIRED'});assert.equal(acknowledgements,0);
-  release.resolve(user('original',true));await ordinary;await clearing;
+  release.resolve(user(sid,true));await ordinary;await clearing;
   assert.equal(refreshes,1);assert.equal(acknowledgements,1);assert.equal(session.getSubject(),null);
 });
 
