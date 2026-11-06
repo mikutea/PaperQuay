@@ -30,3 +30,10 @@ postcss-selector-parser and mobile rimraf/glob dependencies. Recheck all three
 lockfiles with an online `npm audit`; an offline install is not fresh advisory
 evidence. Audit results are dated observations, not a guarantee against future
 advisories.
+
+Electron is installed explicitly before parallel tests, so tests do not race
+lazy runtime downloads. Release matrix jobs verify update manifests against
+the built package sizes and SHA-512 hashes. Only the final publish job uploads
+the three merged manifests; macOS metadata includes both architectures and
+the ZIP payloads required by Electron Updater. Actual client installation and
+update behavior remain separate acceptance checks.

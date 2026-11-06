@@ -30,6 +30,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install Electron before parallel tests
+        run: node node_modules/electron/install.js
+
       - name: Typecheck and build frontend
         run: npm run build
 
@@ -53,6 +56,7 @@ jobs:
           node-version: 24.22.1
           cache: npm
       - run: npm ci
+      - run: node node_modules/electron/install.js
       - run: npm run native:build
       - run: node --test tests/nativeFs.test.mjs tests/sourceAccess.test.mjs tests/databaseRestoreBoundary.test.mjs tests/migrationReadBoundary.test.mjs tests/directoryListingBoundary.test.mjs tests/sqliteOpenBoundary.test.mjs
       - run: node electron/native/smoke.cjs
