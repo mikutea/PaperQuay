@@ -109,3 +109,24 @@ python3 /reviewed-source/server/deploy/ops.py --directory /private/operator rest
 同步 API 的 OIDC/事务业务另由原服务集成套件验证；该演练不包含浏览器登录或实机。
 
 账号注销额外使用 `paperquay_erasure` 独立 LOGIN 角色与独立密码。`database.env` 的 `PAPERQUAY_ERASURE_DB_PASSWORD` 只用于新集群初始化，`sync.env` 的 `PAPERQUAY_ERASURE_DATABASE_URL` 指向同一应用数据库。`grant-runtime.ts` 同时应用 `erasure-role.sql` 的窄授权。普通运行角色无此角色成员资格，也没有 `erase_account` EXECUTE；普通 SQL 凭据泄露不能调用注销 definer。API 只在确认、最近的签名认证和当前会话校验后使用最多两连接的注销池。没有该配置时注销返回不可用，绝不回退到运行角色或迁移角色。生产初始化仅适用于新专用集群；旧环境先由受控管理员创建独立角色，应用迁移及授权，再切换配置。
+
+## 私有监测
+
+在 `sync.env` 显式设置 `PAPERQUAY_PRIVATE_METRICS_INTERVAL_SECONDS=60` 开启汇总；默认关闭，可选 15–3600 秒。固定大小的计数、状态类别、延迟直方图和进程资源写入容器的有界日志，不建立可从客户端访问的指标接口，不记录 URL、账号、设备、请求 ID、正文、凭据或异常文本。
+
+```sh
+python3 /reviewed-source/server/deploy/monitor.py --directory /private/operator \
+  --output-directory /private/monitor --samples 1
+```
+
+输出目录须在 Git 外且为 `0700`。采集仅检查本项目的四个容器，记录 CPU/RSS、重启、网络及块读写累计值、磁盘剩余空间、就绪结果、任务队列数量和两库大小。SQL 使用只读事务及五秒期限；日志仅允许经过重新构造的数字字段。缺失或超过汇总周期上限的指标明确报错。收据为两个各至多 4 MiB 的 `0600` JSONL 文件；不上传遥测。需要连续观察时显式提供样本数和间隔，或由既有受控调度每分钟调用。累计计数只可在相同进程启动周期内相减，容器重启必须另记，不能将重置误报为零错误。
+
+`benchmark.py --profile /private/load.json --receipt /private/capacity.json` 使用 Git 外 `0600` profile 中的 `apiBaseUrl`、短期 `accessToken` 和精确 `revision`。仅访问固定的同步拉取 GET；不重定向、不重试、不执行模型、上传或写入。使用专门的合成验收账号，测试数据至少每页 100 条且响应达到 128 KiB；空库不能得到容量通过收据。先预热 10 次，再按每秒 1 次测量 120 次，最多 4 个并行请求；P95 ≤ 500 ms、P99 ≤ 1500 ms、零失败及零限流才通过。所有请求连同失败都计入统计，收据不含地址、token、游标或正文。账号和入口仍遵守实际限流，不能为跑分关闭保护。测试期间连续采集 monitor，另外保存容器峰值内存、数据库/磁盘及网络增量；探针本身不冒充全机资源测量。这个初始邀请服务预算只描述该只读负载，不能推及并发写入、大 PDF、弱网设备或 AI 的容量。
+
+## 私有账号开通与恢复
+
+`realm.py --web-origin HTTPS_ORIGIN --output /private/operator/production-realm.json` 只生成不含用户及凭据的正式 `paperquay` realm。输出位置和实际 origin 都留在仓库外。通过已有内部管理员通道导入新 realm；已有 realm 先备份并核对差异，不覆盖导入。它只开启管理员邀请和 Code+S256 PKCE，禁用密码 grant、implicit、自助注册、离线授权和服务账号；Web/原生回调均精确匹配。桌面回环只允许既定 IPv4 回调路径，由 Keycloak 的原生回环规则接受临时端口。
+
+使用固定版本 Keycloak 的 `basic` 默认 scope 提供真实 `sub` 和会话 `auth_time`，不以常量、用户可编辑属性或刷新时间替代。上线时验证实际签名 token，而不是只检查 JSON 配置。协议配置依据 [Keycloak 管理指南](https://www.keycloak.org/docs/latest/server_admin/)，`auth_time` 的具体实现见[固定版本源码](https://github.com/keycloak/keycloak/blob/26.8.1/services/src/main/java/org/keycloak/protocol/oidc/OIDCLoginProtocolFactory.java)。
+
+首次引导只建立管理员通道，不生成公开测试用户。管理员按身份核验结果单独开通，用户在受信任的系统浏览器设置密码并选择 MFA；不得通过聊天、仓库、普通日志传递初始密码或恢复链接。未配置并实际验证 SMTP 时关闭邮件找回，使用既有管理通道协助恢复，并在部署方的服务说明中公开该流程。恢复前核实主体及请求、备份身份状态，恢复后撤销旧会话并验证重新登录；应用账号注销和身份服务账号删除分别处理。身份管理控制台与 master realm 始终不从应用 Web 入口公开。

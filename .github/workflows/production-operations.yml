@@ -17,7 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Check recovery input boundaries
-        run: python3 -m unittest server/tests/operations_test.py -v
+        run: python3 -m unittest server/tests/operations_test.py server/tests/monitor_test.py server/tests/realm_test.py server/tests/benchmark_test.py -v
       - name: Install the distribution age utility
         run: |
           sudo apt-get update -qq

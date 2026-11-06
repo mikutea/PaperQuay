@@ -27,6 +27,7 @@ import type {RemoteTaskRepository} from './remote-task-store.ts';
 import { registerRemoteRetrievalRoutes, REMOTE_RETRIEVAL_CAPABILITY } from './remote-retrieval.ts';
 import type { RemoteRetrievalRepository } from './remote-retrieval-store.ts';
 import {registerAccountPrivacyRoutes,type AccountPrivacyRepository} from './account-privacy.ts';
+import {installPrivateMetrics} from './metrics.ts';
 
 declare module 'fastify' {
   interface FastifyRequest { identity: VerifiedIdentity | null }
@@ -156,6 +157,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     trustProxy: config.trustedProxyIps.length ? config.trustedProxyIps : false,
     ajv: { customOptions: { removeAdditional: false, coerceTypes: false, allErrors: false } },
   });
+  if(config.privateMetricsIntervalSeconds)installPrivateMetrics(app,config.privateMetricsIntervalSeconds);
   app.decorateRequest('identity', null);
   await app.register(cors, {
     origin: config.allowedOrigins.length ? config.allowedOrigins : false,

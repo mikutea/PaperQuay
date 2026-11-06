@@ -7,6 +7,7 @@ export interface ServerConfig {
   port: number;
   databaseUrl: string;
   erasureDatabaseUrl?: string;
+  privateMetricsIntervalSeconds?:number;
   oidcIssuer: string;
   oidcAudience: string;
   oidcClientIds: string[];
@@ -182,6 +183,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   if (!Number.isInteger(requestsPerMinute) || requestsPerMinute < 1 || requestsPerMinute > 10000) {
     throw new ApiError('CONFIGURATION_INVALID', 500);
   }
+  const privateMetricsIntervalSeconds=Number(env.PAPERQUAY_PRIVATE_METRICS_INTERVAL_SECONDS??0);
+  if(!Number.isInteger(privateMetricsIntervalSeconds)||privateMetricsIntervalSeconds!==0
+    &&(privateMetricsIntervalSeconds<15||privateMetricsIntervalSeconds>3600))throw new ApiError('CONFIGURATION_INVALID',500);
   const cloudPdfEnabled = env.PAPERQUAY_CLOUD_PDF_ENABLED ?? '0';
   if (!['0', '1'].includes(cloudPdfEnabled)) throw new ApiError('CONFIGURATION_INVALID', 500);
   const desktopPdfEnabled = env.PAPERQUAY_DESKTOP_PDF_ENABLED ?? '0';
@@ -193,7 +197,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const modelInferenceEnabled=env.PAPERQUAY_MODEL_INFERENCE_ENABLED??'0';
   if(!['0','1'].includes(modelInferenceEnabled))throw new ApiError('CONFIGURATION_INVALID',500);
   return {
-    host, port, databaseUrl, erasureDatabaseUrl, oidcIssuer, oidcAudience, oidcClientIds, allowedOrigins, cursorSecret,
+    host, port, databaseUrl, erasureDatabaseUrl, privateMetricsIntervalSeconds, oidcIssuer, oidcAudience, oidcClientIds, allowedOrigins, cursorSecret,
     bodyLimitBytes: SERVER_LIMITS.bodyLimitBytes,
     responseLimitBytes: SERVER_LIMITS.responseLimitBytes,
     entityLimitBytes: SERVER_LIMITS.entityLimitBytes,

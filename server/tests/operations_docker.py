@@ -12,6 +12,7 @@ import secrets
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from urllib.error import HTTPError
@@ -20,6 +21,8 @@ from urllib.request import build_opener, ProxyHandler, Request
 spec = importlib.util.spec_from_file_location('paperquay_ops', Path(__file__).resolve().parents[1] / 'deploy/ops.py')
 ops = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ops)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'deploy'))
+sys.modules['ops'] = ops
 
 
 def wait_for(action):
@@ -100,6 +103,7 @@ await app.listen({host:config.host,port:config.port});
             + 'PAPERQUAY_ERASURE_DATABASE_URL=postgresql://paperquay_erasure:' + erasure_password + '@database:5432/paperquay\n'
             + 'PAPERQUAY_OIDC_ISSUER=https://reader.example.test/identity/realms/paperquay\n'
             + 'PAPERQUAY_OIDC_AUDIENCE=paperquay-sync\nPAPERQUAY_OIDC_CLIENT_IDS=paperquay-mobile\n'
+            + 'PAPERQUAY_PRIVATE_METRICS_INTERVAL_SECONDS=15\n'
             + 'PAPERQUAY_CURSOR_SECRET=' + __import__('base64').b64encode(secrets.token_bytes(48)).decode() + '\n')
         write('runtime-config.json', json.dumps({'apiBaseUrl': 'https://reader.example.test/api',
             'oidcAuthority': 'https://reader.example.test/identity/realms/paperquay', 'oidcClientId': 'paperquay-mobile'}), 0o644)
@@ -164,12 +168,21 @@ console.log(JSON.stringify(statuses));
             wait_for(check_identity)
             # A real realm and signing keys become part of the PostgreSQL dump.
             phase = 'identity_realm'
+            import realm
+            write('production-realm.json', json.dumps(realm.production_realm('https://reader.example.test')), 0o644)
+            ops.run(['docker', 'cp', str(target / 'production-realm.json'), identity + ':/tmp/production-realm.json'], stdout=subprocess.DEVNULL)
             ops.run(['docker', 'exec', identity, 'bash', '-c',
                 '/opt/keycloak/bin/kcadm.sh config credentials --config /tmp/disposable-admin.json '
                 '--server http://127.0.0.1:8080/identity --realm master --user "$KC_BOOTSTRAP_ADMIN_USERNAME" '
                 '--password "$KC_BOOTSTRAP_ADMIN_PASSWORD" && '
-                '/opt/keycloak/bin/kcadm.sh create realms --config /tmp/disposable-admin.json -s realm=paperquay -s enabled=true'],
+                '/opt/keycloak/bin/kcadm.sh create realms --config /tmp/disposable-admin.json -f /tmp/production-realm.json'],
                 stdout=subprocess.DEVNULL)
+            mobile = json.loads(ops.capture(['docker', 'exec', identity, '/opt/keycloak/bin/kcadm.sh', 'get', 'clients',
+                '--config', '/tmp/disposable-admin.json', '-r', 'paperquay', '-q', 'clientId=paperquay-mobile']))
+            ops.require(len(mobile) == 1 and mobile[0]['publicClient']
+                        and not mobile[0]['directAccessGrantsEnabled'] and not mobile[0]['implicitFlowEnabled']
+                        and mobile[0]['attributes']['pkce.code.challenge.method'] == 'S256'
+                        and 'basic' in mobile[0]['defaultClientScopes'], 'PRODUCTION_REALM_INVALID')
             sync, _ = stack.container('sync')
             seed = """
 import {randomUUID,createHash} from 'node:crypto';
@@ -192,6 +205,14 @@ try {
 """
             phase = 'business_seed'
             ops.run(['docker', 'exec', sync, 'node', '--input-type=module', '-e', seed], stdout=subprocess.DEVNULL)
+            # Real Docker/SQL/log collection, not a fabricated monitoring receipt.
+            import monitor
+            phase = 'private_monitor'
+            observed = monitor.sample(stack)
+            ops.require(not observed['errors'] and observed['queues']['applicationDatabaseBytes'] > 0
+                        and observed['http']['requests']['completed'] > 0
+                        and all(value['running'] for value in observed['containers'].values()), 'MONITOR_FAILED')
+            monitor.append_private(target, observed)
             baseline = {service: stack.container(service)[0] for service in ops.SERVICES}
             key = target / 'age-identity'
             ops.run(['age-keygen', '-o', str(key)], stdout=subprocess.DEVNULL)
