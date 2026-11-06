@@ -3,8 +3,9 @@ import test from 'node:test';
 import {createElement} from 'react';
 import {act,create,type ReactTestRenderer,type ReactTestInstance} from 'react-test-renderer';
 import {IDBFactory} from 'fake-indexeddb';
-import {InMemoryWebStorage} from 'oidc-client-ts';
-import {AccountPrivacy} from '../src/components/AccountPrivacy.tsx';
+import {InMemoryWebStorage,User,UserManager} from 'oidc-client-ts';
+import {AccountPrivacy,PrivacyHost} from '../src/components/AccountPrivacy.tsx';
+import {OidcSession} from '../src/auth/oidc.ts';
 import {createPrivacyRuntime} from '../src/privacy/runtime.ts';
 import {verifiedBinding} from '../src/storage/verifiedBinding.ts';
 import {MemorySecretStore} from '../src/platform/secretStore.ts';
@@ -19,6 +20,63 @@ const config=parseAppConfig({apiBaseUrl:'https://sync.example.test',oidcAuthorit
 const now='2026-11-06T00:00:00.000Z';
 const text=(node:ReactTestInstance):string=>node.children.map(child=>typeof child==='string'?child:text(child)).join('');
 const button=(root:ReactTestInstance,label:string)=>root.findAllByType('button').find(node=>text(node)===label)!;
+function deferred<T>(){let resolve!:(value:T)=>void;const promise=new Promise<T>(done=>{resolve=done;});return{promise,resolve};}
+
+test('joined Web refresh and a lost ACK keep PrivacyHost mounted and allow closing, reopening and explicitly retrying',{timeout:15000},async t=>{
+  const memory=new InMemoryWebStorage(),previous=new Map<string,PropertyDescriptor|undefined>();
+  const localStorage={getItem:(key:string)=>memory.getItem(key)??null,setItem:(key:string,value:string)=>memory.setItem(key,value),removeItem:(key:string)=>memory.removeItem(key)};
+  for(const [key,value] of Object.entries({indexedDB:new IDBFactory(),localStorage})){
+    previous.set(key,Object.getOwnPropertyDescriptor(globalThis,key));Object.defineProperty(globalThis,key,{configurable:true,value});
+  }
+  t.after(()=>{for(const [key,descriptor] of previous){if(descriptor)Object.defineProperty(globalThis,key,descriptor);else Reflect.deleteProperty(globalThis,key);}});
+  const accountId=crypto.randomUUID(),deviceId=crypto.randomUUID(),scope={apiBaseUrl:config.apiBaseUrl,accountId};
+  const closed:AccountPrivacyStatus={accountId,state:'closed',closedAt:now,closureRequestId:crypto.randomUUID(),
+    deviceErasure:{requested:true,pending:1,acknowledged:0,thisDevicePending:true}};
+  const makeUser=(rotated=false)=>new User({access_token:rotated?'rotated-access':'initial-access',token_type:'Bearer',refresh_token:rotated?'rotated-refresh':'initial-refresh',
+    expires_at:Math.floor(Date.now()/1000)+3600,profile:{iss:config.oidcAuthority,sub:accountId,sid:'original-session',aud:config.oidcClientId,
+      iat:Math.floor(Date.now()/1000),exp:Math.floor(Date.now()/1000)+3600}});
+  const originalUser=makeUser(),refreshEntered=deferred<void>(),refreshRelease=deferred<User>(),statusEntered=deferred<void>(),statusRelease=deferred<Response>(),clearing=deferred<void>();
+  let stored:User|null=originalUser,statusCalls=0,acks=0;
+  t.mock.method(UserManager.prototype,'signinRedirectCallback',async()=>originalUser);
+  t.mock.method(UserManager.prototype,'signinSilent',async()=>{refreshEntered.resolve();stored=await refreshRelease.promise;return stored;});
+  t.mock.method(UserManager.prototype,'removeUser',async()=>{stored=null;});
+  t.mock.method(globalThis,'fetch',async(input:RequestInfo|URL,init?:RequestInit)=>{
+    if(String(input).endsWith('/status')){statusCalls++;statusEntered.resolve();return statusRelease.promise;}
+    assert(String(input).endsWith('/erasure-ack'));assert.equal(stored,null);
+    assert.equal((init?.headers as Record<string,string>).Authorization,'Bearer rotated-access');acks++;
+    if(acks===1)throw Error('Synthetic lost ACK');return Response.json({acknowledged:true});
+  });
+  const auth=new OidcSession(config,new InMemoryWebStorage());await auth.completeSignIn(config.redirectUri);
+  const states:string[]=[],unsubscribe=auth.subscribe(()=>states.push(auth.getSnapshot().status));
+  const secrets=new MemorySecretStore(),binding=verifiedBinding(config,secrets,auth.getSubject);
+  await binding.write({accountId,device:{id:deviceId,name:'Synthetic browser',platform:'web',createdAt:now,lastSeenAt:now,revokedAt:null}});
+  const store=new AccountStore<StoredWorkspace>({indexedDB:globalThis.indexedDB,databaseName:crypto.randomUUID(),decode:value=>value as StoredWorkspace});
+  await store.update(scope,()=>({sync:{accountId}} as StoredWorkspace));
+  const controller={subscribe:()=>()=>{},getSnapshot:()=>workspace,deactivate:()=>undefined} as unknown as WorkspaceController;
+  const workspace={error:null};
+  const runtime=createPrivacyRuntime(config,auth,store,secrets,controller,binding),clear=auth.clearLocalSession.bind(auth),erase=runtime.erase.bind(runtime);
+  t.mock.method(auth,'clearLocalSession',async(options?:ClearLocalSessionOptions)=>{clearing.resolve();return clear(options);});
+  let finished=deferred<void>();runtime.erase=async(...args)=>{try{return await erase(...args);}finally{finished.resolve();}};
+  let renderer!:ReactTestRenderer,open=true;
+  const view=()=>createElement(PrivacyHost,{privacy:runtime,auth,controller,apiBaseUrl:config.apiBaseUrl,open,onClose:()=>{open=false;renderer.update(view());}});
+  try {
+    await act(async()=>{renderer=create(view(),{createNodeMock:element=>element.type==='dialog'?{open:false,showModal(){this.open=true;},close(){this.open=false;}}:{focus:()=>undefined}});});
+    await statusEntered.promise;originalUser.expires_at=Math.floor(Date.now()/1000)+10;
+    const ordinary=assert.rejects(auth.getAccessToken(),{code:'AUTH_REQUIRED'});await refreshEntered.promise;
+    await act(async()=>{statusRelease.resolve(Response.json(closed));await clearing.promise;});
+    await act(async()=>{refreshRelease.resolve(makeUser(true));await ordinary;await finished.promise;});
+    assert(!states.includes('error'),states.join(','));assert.equal(auth.getSnapshot().status,'signed-in');assert.equal(auth.getSnapshot().needsLogin,true);
+    assert.equal(acks,1);assert.equal(renderer.root.findAllByType('dialog').length,1);
+    assert(renderer.root.findAllByProps({role:'alert'}).some(node=>text(node).includes('尚未确认设备清理结果')));
+    await act(async()=>button(renderer.root,'关闭').props.onClick());assert.equal(renderer.root.findAllByType('dialog').length,0);
+    await act(async()=>{open=true;renderer.update(view());});assert.equal(statusCalls,1);
+    assert.equal(button(renderer.root,'重新验证登录').props.disabled,true);
+    const consent=renderer.root.findAllByType('label').find(node=>text(node).includes('清理本机此账号的副本与凭据'))!.findByType('input');
+    await act(async()=>consent.props.onChange({target:{checked:true}}));finished=deferred<void>();
+    await act(async()=>{button(renderer.root,'清理本机并完成确认').props.onClick();await finished.promise;});
+    assert.equal(acks,2);assert.equal(auth.getSnapshot().status,'signed-out');assert.equal(renderer.root.findAllByType('dialog').length,0);
+  }finally{await act(async()=>renderer?.unmount());unsubscribe();await runtime.dispose();await auth.dispose();await store.close();}
+});
 
 test('reopening real privacy runtime preserves explicit erasure retry while ordinary credentials remain blocked',{timeout:15000},async t=>{
   const indexedDB=new IDBFactory(),memory=new InMemoryWebStorage(),previous=new Map<string,PropertyDescriptor|undefined>();
@@ -29,7 +87,7 @@ test('reopening real privacy runtime preserves explicit erasure retry while ordi
     const accountId=crypto.randomUUID(),deviceId=crypto.randomUUID(),scope={apiBaseUrl:config.apiBaseUrl,accountId};
     const closed:AccountPrivacyStatus={accountId,state:'closed',closedAt:now,closureRequestId:crypto.randomUUID(),
       deviceErasure:{requested:true,pending:1,acknowledged:0,thisDevicePending:true}};
-    let subject:AuthSubject|null={issuer:config.oidcAuthority,subject:accountId},blocked=false,attempts=0,statusCalls=0,acks=0,signIns=0;
+    let subject:AuthSubject|null={issuer:config.oidcAuthority,subject:accountId,sessionKey:'a'.repeat(64)},blocked=false,attempts=0,statusCalls=0,acks=0,signIns=0;
     const listeners=new Set<()=>void>(),secrets=new MemorySecretStore();
     const auth={getSubject:()=>subject,subscribe:(fn:()=>void)=>{listeners.add(fn);return ()=>listeners.delete(fn);},
       getAccessToken:async()=>{if(blocked)throw new ClientError('AUTH_REQUIRED');return 'synthetic original token';},

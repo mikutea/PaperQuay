@@ -5,7 +5,7 @@ import {act,create,type ReactTestRenderer,type ReactTestInstance} from 'react-te
 import {InMemoryWebStorage} from 'oidc-client-ts';
 import {AccountPrivacy,PrivacyHost} from '../src/components/AccountPrivacy.tsx';
 import {PrivacyError,type AccountPrivacyStatus,type ClosureRequest} from '../src/privacy/client.ts';
-import type {PrivacyRuntime} from '../src/privacy/runtime.ts';
+import type {PrivacyRuntime,PeerErasureSnapshot} from '../src/privacy/runtime.ts';
 import type {AuthSession} from '../src/auth/oidc.ts';
 import type {WorkspaceController,WorkspaceSnapshot} from '../src/sync/workspace.ts';
 import {ClientError} from '../src/errors.ts';
@@ -72,5 +72,56 @@ test('an automatically opened privacy dialog survives controller deactivation an
     await act(async()=>checkbox(renderer.root,'清理本机此账号的副本与凭据').props.onChange({target:{checked:true}}));
     await act(async()=>button(renderer.root,'清理本机并完成确认').props.onClick());assert.equal(attempts,2);
     assert.equal(renderer.root.findAllByType('dialog').length,0);
+  }finally{await act(async()=>renderer.unmount());}
+});
+
+test('peer erasure UI makes no ordinary status call, requires consent and can reopen after a failed explicit confirmation',async t=>{
+  const old=Object.getOwnPropertyDescriptor(globalThis,'localStorage'),memory=new InMemoryWebStorage();
+  Object.defineProperty(globalThis,'localStorage',{configurable:true,value:memory});
+  t.after(()=>{if(old)Object.defineProperty(globalThis,'localStorage',old);else Reflect.deleteProperty(globalThis,'localStorage');});
+  let peer:PeerErasureSnapshot|null={accountId,requestId:crypto.randomUUID(),phase:'pending',failed:false},attempts=0,open=false;
+  const listeners=new Set<()=>void>(),workspace={error:null};
+  const controller={subscribe:()=>()=>{},getSnapshot:()=>workspace} as unknown as WorkspaceController;
+  const login={status:'signed-in'},auth={subscribe:()=>()=>{},getSnapshot:()=>login,getSubject:()=>({issuer:'https://id.example.test',subject:accountId}),
+    signIn:async()=>{assert.fail('Erasure must not replace its original session');}} as unknown as AuthSession;
+  const privacy={subscribePeerErasure:(fn:()=>void)=>{listeners.add(fn);return()=>listeners.delete(fn);},getPeerErasure:()=>peer,
+    client:{captureIdentity:()=>()=>true,status:async()=>{assert.fail('Peer recovery must not use ordinary status credentials');}},
+    finishPeerErasure:async()=>{attempts++;peer={...peer!,phase:'pending',failed:true};listeners.forEach(fn=>fn());throw new PrivacyError('OUTCOME_UNKNOWN');}} as unknown as PrivacyRuntime;
+  let renderer!:ReactTestRenderer;
+  const view=()=>createElement(PrivacyHost,{privacy,auth,controller,apiBaseUrl:'https://sync.example.test',open,onClose:()=>{open=false;renderer.update(view());}});
+  await act(async()=>{renderer=create(view());});
+  try{
+    assert.equal(renderer.root.findAllByType('dialog').length,1);assert.equal(attempts,0);
+    for(const label of['查询账号状态','重新验证登录','核实并完成本页清理'])assert.equal(button(renderer.root,label).props.disabled,true);
+    await act(async()=>checkbox(renderer.root,'继续清理本机残留').props.onChange({target:{checked:true}}));
+    await act(async()=>button(renderer.root,'核实并完成本页清理').props.onClick());assert.equal(attempts,1);
+    assert(renderer.root.findAllByProps({role:'alert'}).some(node=>text(node).includes('尚未确认设备清理结果')));
+    await act(async()=>button(renderer.root,'关闭').props.onClick());assert.equal(renderer.root.findAllByType('dialog').length,0);
+    await act(async()=>{open=true;renderer.update(view());});
+    assert.equal(button(renderer.root,'核实并完成本页清理').props.disabled,true);
+    assert(renderer.root.findAllByType('p').some(node=>text(node).includes('上次操作尚未完成')));
+    await act(async()=>checkbox(renderer.root,'继续清理本机残留').props.onChange({target:{checked:true}}));
+    await act(async()=>button(renderer.root,'核实并完成本页清理').props.onClick());assert.equal(attempts,2);
+  }finally{await act(async()=>renderer.unmount());}
+});
+
+test('failed temporary export recovery is explicit and does not close an account or acknowledge a device',async t=>{
+  const old=Object.getOwnPropertyDescriptor(globalThis,'localStorage'),memory=new InMemoryWebStorage();
+  Object.defineProperty(globalThis,'localStorage',{configurable:true,value:memory});
+  t.after(()=>{if(old)Object.defineProperty(globalThis,'localStorage',old);else Reflect.deleteProperty(globalThis,'localStorage');});
+  const listeners=new Set<()=>void>(),workspace={error:null},login={status:'signed-in'};
+  let failed=true,attempts=0;
+  const privacy={subscribeExportCleanup:(fn:()=>void)=>{listeners.add(fn);return()=>listeners.delete(fn);},hasFailedExportCleanup:()=>failed,
+    client:{captureIdentity:()=>()=>true,status:async()=>active},retryExportCleanup:async()=>{attempts++;if(attempts===1)throw new PrivacyError('FAILED');failed=false;listeners.forEach(fn=>fn());},
+    erase:async()=>{assert.fail('Temporary destination cleanup cannot ACK any device');}} as unknown as PrivacyRuntime;
+  const auth={subscribe:()=>()=>{},getSnapshot:()=>login,getSubject:()=>({issuer:'https://id.example.test',subject:accountId})} as unknown as AuthSession;
+  const controller={subscribe:()=>()=>{},getSnapshot:()=>workspace} as unknown as WorkspaceController;
+  let renderer!:ReactTestRenderer;await act(async()=>{renderer=create(createElement(PrivacyHost,{privacy,auth,controller,apiBaseUrl:'https://sync.example.test',open:false,onClose:()=>undefined}));});
+  try{
+    assert.equal(renderer.root.findAllByType('dialog').length,1);assert.equal(attempts,0);
+    await act(async()=>button(renderer.root,'重试删除未发布的临时导出文件').props.onClick());assert.equal(attempts,1);
+    assert.equal(renderer.root.findAllByType('dialog').length,1);assert(renderer.root.findAllByProps({role:'alert'}).some(node=>text(node).includes('操作未完成')));
+    await act(async()=>button(renderer.root,'重试删除未发布的临时导出文件').props.onClick());assert.equal(attempts,2);
+    assert.equal(renderer.root.findAllByType('dialog').length,0);assert.equal(login.status,'signed-in');
   }finally{await act(async()=>renderer.unmount());}
 });

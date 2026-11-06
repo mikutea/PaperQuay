@@ -8,6 +8,7 @@ import { ClientError } from '../errors.ts';
 import { createSecretStore, type SecretStore } from '../platform/secretStore.ts';
 import type { AuthSession, AuthSnapshot, AuthSubject, ClearLocalSessionOptions } from './oidc.ts';
 import { SecureOidcStateStore, serializeSecret } from './secureStateStore.ts';
+import {authSubject} from './subject.ts';
 
 export interface NativeAuthBridge {
   open(url: string): Promise<void>;
@@ -86,7 +87,7 @@ export class NativeOidcSession implements AuthSession {
   }
   subscribe = (listener: () => void): (() => void) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
   getSnapshot = (): AuthSnapshot => this.snapshot;
-  getSubject = (): AuthSubject | null => this.user ? { issuer: this.user.profile.iss, subject: this.user.profile.sub } : null;
+  getSubject = (): AuthSubject | null => this.user ? authSubject(this.user.profile,this.config.oidcAuthority) : null;
   private publish(snapshot: AuthSnapshot): void {
     if (this.disposed) return;
     this.snapshot = snapshot;
@@ -290,7 +291,10 @@ export class NativeOidcSession implements AuthSession {
       this.refresh = attempt;
       void attempt.finally(() => { if (this.refresh === attempt) this.refresh = null; }).catch(() => undefined);
     }
-    return this.refresh;
+    const token = await this.refresh;
+    this.assertCurrent(epoch);
+    if (this.blockedCredentials) throw new ClientError('AUTH_REQUIRED');
+    return token;
   };
   private async refreshUser(user: User, epoch: number): Promise<string> {
     try {
@@ -301,7 +305,9 @@ export class NativeOidcSession implements AuthSession {
       const next = new User({ ...response, refresh_token: response.refresh_token ?? user.refresh_token, id_token: response.id_token ?? user.id_token });
       this.validate(next, response.id_token !== undefined);
       if (next.expired !== false || next.profile.sub !== user.profile.sub || next.profile.iss !== user.profile.iss || next.profile.sid !== user.profile.sid) throw new ClientError('AUTH_REQUIRED');
-      await this.persist(next, epoch);
+      // Erasure may already be waiting for this rotation. Keep its replacement
+      // in RAM, without giving ordinary requests or storage a new credential.
+      if (!this.blockedCredentials) await this.persist(next, epoch);
       this.assertCurrent(epoch);
       this.user = next;
       this.signedIn();
@@ -319,6 +325,14 @@ export class NativeOidcSession implements AuthSession {
     }
   }
   async clearLocalSession(options?:ClearLocalSessionOptions): Promise<void> {
+    const originalEpoch = this.epoch;
+    this.blockedCredentials = true;
+    if ((options?.retainForErasure || options?.afterPersisted && options.renewForErasure) && this.refresh) {
+      // Invalidating the epoch first would discard a consumed refresh token's
+      // replacement. Ordinary logout still invalidates immediately.
+      await this.refresh.catch(() => undefined);
+      this.assertCurrent(originalEpoch);
+    }
     const epoch = ++this.epoch;
     this.awaitingBrowser = false;
     this.refresh = null;
@@ -332,6 +346,7 @@ export class NativeOidcSession implements AuthSession {
       }
       const token=this.user?.access_token??null;
       await options?.afterPersisted?.(token);this.assertCurrent(epoch);
+      if(options?.retainForErasure){this.signedIn();return;}
       this.user=null;this.blockedCredentials=false;
       this.publish({status:'signed-out'});
     } catch(error) {

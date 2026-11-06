@@ -5,6 +5,7 @@ export interface BindingStorage {
   get(namespace: string, key: string): Promise<string | null>;
   set(namespace: string, key: string, value: string): Promise<void>;
   remove(namespace: string, key: string): Promise<void>;
+  removeIf?(namespace:string,key:string,expected:string):Promise<void>;
 }
 
 export class WebBindingStorage implements BindingStorage {
@@ -60,5 +61,13 @@ export class WebBindingStorage implements BindingStorage {
   }
   set(namespace: string, key: string, value: string) { return this.mutate(namespace, key, value); }
   remove(namespace: string, key: string) { return this.mutate(namespace, key); }
+  async removeIf(namespace:string,key:string,expected:string):Promise<void> {
+    const address=this.address(namespace,key),db=await this.database;
+    return new Promise((resolve,reject)=>{
+      const tx=db.transaction('bindings','readwrite',{durability:'strict'}),store=tx.objectStore('bindings'),request=store.get(address);
+      request.onsuccess=()=>{if(request.result===expected)store.delete(address);};
+      tx.oncomplete=()=>resolve();tx.onerror=tx.onabort=()=>reject(new ClientError('STORAGE_FAILED'));
+    });
+  }
   async close() { (await this.database).close(); }
 }
