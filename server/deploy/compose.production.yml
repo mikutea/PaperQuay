@@ -1,0 +1,93 @@
+# Run from a restricted operator directory outside every Git checkout.
+# It contains compose.env, database.env, identity.env, sync.env, migration.env,
+# runtime-config.json and a copy of this file and its two generic configurations.
+name: ${PAPERQUAY_PROJECT:?set an isolated project name}
+x-security: &security
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: [ALL]
+  logging:
+    driver: local
+    options: {max-size: "10m", max-file: "3"}
+services:
+  database:
+    image: ${PAPERQUAY_POSTGRES_IMAGE:?pin the PostgreSQL image digest}
+    env_file: [database.env]
+    volumes:
+      - database:/var/lib/postgresql
+      - ./init-production.sql:/docker-entrypoint-initdb.d/010-paperquay.sql:ro
+    networks: [database]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+    mem_limit: 512m
+    security_opt: ["no-new-privileges:true"]
+    logging:
+      driver: local
+      options: {max-size: "10m", max-file: "3"}
+  identity:
+    <<: *security
+    image: ${PAPERQUAY_IDENTITY_IMAGE:?pin the optimized Keycloak image}
+    command: [start, --optimized, --http-enabled=true, --http-port=8080, --http-relative-path=/identity, --http-management-relative-path=/, --proxy-headers=xforwarded]
+    env_file: [identity.env]
+    environment:
+      KC_DB_URL: jdbc:postgresql://database:5432/paperquay_identity
+      KC_DB_USERNAME: paperquay_identity
+      JAVA_OPTS_KC_HEAP: -XX:MaxRAMPercentage=60
+    networks: [application, database]
+    depends_on:
+      database: {condition: service_healthy}
+    restart: unless-stopped
+    mem_limit: 768m
+    read_only: true
+    tmpfs: ["/tmp:uid=1000,gid=1000,mode=1770,size=128m", "/opt/keycloak/data:uid=1000,gid=1000,mode=0700,size=128m"]
+  sync:
+    <<: *security
+    image: ${PAPERQUAY_SYNC_IMAGE:?pin the reviewed server image}
+    env_file: [sync.env]
+    environment:
+      PAPERQUAY_HOST: 0.0.0.0
+      PAPERQUAY_ALLOW_NON_LOOPBACK: "1"
+      PAPERQUAY_PORT: "4311"
+    networks: [application, database]
+    depends_on:
+      database: {condition: service_healthy}
+    restart: unless-stopped
+    mem_limit: 512m
+    init: true
+    read_only: true
+    tmpfs: ["/tmp:size=64m,uid=1000,gid=1000"]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:4311/health/ready',{signal:AbortSignal.timeout(3000)}).then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+  web:
+    <<: *security
+    image: ${PAPERQUAY_WEB_IMAGE:?pin the reviewed web image}
+    volumes: [./runtime-config.json:/srv/runtime-config.json:ro]
+    ports: ["127.0.0.1:${PAPERQUAY_LOCAL_PORT:?set an unused loopback port}:8080"]
+    networks: [application]
+    restart: unless-stopped
+    mem_limit: 128m
+    read_only: true
+    tmpfs: ["/tmp:uid=1000,gid=1000,size=16m", "/config:uid=1000,gid=1000,size=16m", "/data:uid=1000,gid=1000,size=16m"]
+  migrate:
+    <<: *security
+    profiles: [maintenance]
+    image: ${PAPERQUAY_SYNC_IMAGE:?pin the reviewed server image}
+    env_file: [migration.env]
+    command: [sh, -c, "node scripts/migrate.ts && exec node scripts/grant-runtime.ts"]
+    networks: [database]
+    depends_on:
+      database: {condition: service_healthy}
+    mem_limit: 256m
+    read_only: true
+    tmpfs: ["/tmp:size=16m,uid=1000,gid=1000"]
+networks:
+  application: {}
+  database: {internal: true}
+volumes:
+  database: {}

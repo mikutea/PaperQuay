@@ -1,5 +1,7 @@
 import { ClientError } from './errors.ts';
 
+export const PUBLIC_CONFIG_STORAGE_KEY = 'paperquay.mobile.public-config.v1';
+
 export interface PublicConfigInput {
   apiBaseUrl?: string;
   oidcAuthority?: string;
