@@ -6,6 +6,7 @@ import { NativeOidcSession, nativeAuthNamespace, nativeCallback, type NativeAuth
 import { SecureOidcStateStore } from '../src/auth/secureStateStore.ts';
 import { MemorySecretStore } from '../src/platform/secretStore.ts';
 import {ClientError} from '../src/errors.ts';
+import {authSubject} from '../src/auth/subject.ts';
 
 const config = parseAppConfig({ apiBaseUrl: 'https://sync.example.test', oidcAuthority: 'https://id.example.test/realms/paperquay', oidcClientId: 'paperquay-mobile' }, 'capacitor://localhost', true);
 
@@ -42,6 +43,25 @@ test('a delayed erasure ACK retry renews only the original volatile SID without 
   }});
   assert.equal(f.refreshes,1);assert.equal(acknowledgements,1);assert.equal(f.session.getSubject(),null);
   assert.equal(await f.secrets.get(namespace,'session'),null);
+});
+
+test('erasure joins an in-flight single-use refresh and retains its rotated credential only for ACK retry',async t=>{
+  const f=fixture(t),release=deferred();f.lifetime=10;f.enforceRotation=true;f.refreshRelease=release.promise;
+  await f.session.signIn();await f.session.completeSignIn(f.callback());
+  const ordinary=assert.rejects(f.session.getAccessToken(),{code:'AUTH_REQUIRED'});await f.refreshEntered.promise;
+  let acknowledgements=0;
+  const clearing=assert.rejects(f.session.clearLocalSession({renewForErasure:true,afterPersisted:async token=>{
+    assert.equal(token,'access-1-1');assert.equal(await f.secrets.get(nativeAuthNamespace(config),'session'),null);
+    acknowledgements++;throw Error('Synthetic lost ACK');
+  }}));
+  await assert.rejects(f.session.getAccessToken(),{code:'AUTH_REQUIRED'});assert.equal(acknowledgements,0);
+  release.resolve();await ordinary;await clearing;assert.equal(f.refreshes,1);
+  const later=Date.now()+3601_000;t.mock.method(Date,'now',()=>later);
+  await f.session.clearLocalSession({renewForErasure:true,afterPersisted:async token=>{
+    assert.equal(token,'access-1-2');assert.equal(await f.secrets.get(nativeAuthNamespace(config),'session'),null);acknowledgements++;
+  }});
+  assert.equal(f.refreshes,2);assert.equal(f.bodies.at(-1)!.get('refresh_token'),'refresh-1');assert.equal(acknowledgements,2);
+  assert.equal(f.session.getSubject(),null);
 });
 
 test('erasure-only renewal rejects a replacement SID and keeps the confirmation pending with no durable credentials',async t=>{
@@ -83,6 +103,7 @@ function fixture(t: TestContext, secrets = new MemorySecretStore()) {
   let refreshes = 0;
   let lifetime = 3600;
   let includeRefresh = true;
+  let enforceRotation=false,validRefresh='refresh-0';
   let refreshError: string | undefined;
   let alteredClaims: Record<string, unknown> = {};
   let nonceOverride: string | undefined;
@@ -99,6 +120,8 @@ function fixture(t: TestContext, secrets = new MemorySecretStore()) {
     const refresh = body.get('grant_type') === 'refresh_token';
     if (refresh) {
       refreshes += 1;
+      if(enforceRotation&&body.get('refresh_token')!==validRefresh)return Response.json({error:'invalid_grant'},{status:400});
+      validRefresh=`refresh-${refreshes}`;
       refreshEntered.resolve(); await refreshRelease;
       if (refreshError) return Response.json({ error: refreshError, error_description: 'private-server-token' }, { status: 400 });
     } else {
@@ -120,6 +143,7 @@ function fixture(t: TestContext, secrets = new MemorySecretStore()) {
   return { secrets, bridge, session, callback, bodies, exchangeEntered, refreshEntered,
     get exchanges() { return exchanges; }, get refreshes() { return refreshes; },
     set lifetime(value: number) { lifetime = value; }, set includeRefresh(value: boolean) { includeRefresh = value; },
+    set enforceRotation(value:boolean){enforceRotation=value;},
     set refreshError(value: string | undefined) { refreshError = value; },
     set alteredClaims(value: Record<string, unknown>) { alteredClaims = value; },
     set nonceOverride(value: string | undefined) { nonceOverride = value; },
@@ -154,7 +178,7 @@ test('real OIDC client creates S256 PKCE plus nonce, consumes state once, and st
   assert.ok(verifier.length >= 43);
   assert.equal(createHash('sha256').update(verifier).digest('base64url'), request.searchParams.get('code_challenge'));
   assert.equal(await f.session.getAccessToken(), 'access-1-0');
-  assert.deepEqual(f.session.getSubject(), { issuer: config.oidcAuthority, subject: 'subject-one' });
+  assert.deepEqual(f.session.getSubject(), authSubject({iss:config.oidcAuthority,sub:'subject-one',sid:'session-one'},config.oidcAuthority));
   assert.ok(!JSON.stringify(f.session.getSnapshot()).includes('access-1-0'));
   assert.ok(await f.secrets.get(nativeAuthNamespace(config), 'session'));
   await f.session.completeSignIn(f.callback());
@@ -202,7 +226,7 @@ test('expired secure session restores its verified subject for offline data but 
   const restored = new NativeOidcSession(config, { secrets: f.secrets, bridge: new Bridge() });
   t.after(() => restored.dispose());
   await restored.initialize();
-  assert.deepEqual(restored.getSubject(), { issuer: config.oidcAuthority, subject: 'subject-one' });
+  assert.deepEqual(restored.getSubject(), authSubject({iss:config.oidcAuthority,sub:'subject-one',sid:'session-one'},config.oidcAuthority));
   assert.equal(restored.getSnapshot().status, 'signed-in'); assert.equal(restored.getSnapshot().needsLogin, true);
   await assert.rejects(restored.getAccessToken(), { code: 'AUTH_REQUIRED' });
   assert.equal(f.exchanges, 1);

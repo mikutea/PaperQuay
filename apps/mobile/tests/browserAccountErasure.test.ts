@@ -19,12 +19,14 @@ import {LocalAiConfigStore,defaultAiProvider,aiSecretNamespace,AI_SECRET_KEY} fr
 import {ZoteroClient,zoteroSecretNamespace,ZOTERO_SECRET_KEY} from '../src/library/zoteroClient.ts';
 import {RadarClient,radarSecretNamespace} from '../src/radar/client.ts';
 import {config as radarTopic,at as radarTime} from './radarFixtures.ts';
+import {authSubject} from '../src/auth/subject.ts';
 
 const config=parseAppConfig({apiBaseUrl:'https://sync.example.test',oidcAuthority:'https://id.example.test/realms/paperquay',oidcClientId:'mobile'},'https://app.example.test');
 const now='2026-11-06T00:00:00.000Z',factory=new IDBFactory();
 const identity=(accountId:string,deviceId:string):AccountIdentity=>({accountId,device:{id:deviceId,name:'Synthetic browser',platform:'web',createdAt:now,lastSeenAt:now,revokedAt:null}});
 function context(coordinator:BrowserErasureCoordinator,databaseName:string,bindingName:string,accountId:string,deviceId:string,token:string){
-  let subject:AuthSubject|null={issuer:config.oidcAuthority,subject:accountId},account=identity(accountId,deviceId),blocked=false;
+  const who=(id:string)=>authSubject({iss:config.oidcAuthority,sub:id,sid:token},config.oidcAuthority);
+  let subject:AuthSubject|null=who(accountId),account=identity(accountId,deviceId),blocked=false;
   const listeners=new Set<()=>void>(),secrets=new MemorySecretStore();
   const auth={getSubject:()=>subject,subscribe:(fn:()=>void)=>{listeners.add(fn);return()=>listeners.delete(fn);},
     getAccessToken:async()=>{if(blocked||!subject)throw new ClientError('AUTH_REQUIRED');return token;},
@@ -40,11 +42,11 @@ function context(coordinator:BrowserErasureCoordinator,databaseName:string,bindi
   const privacy=createPrivacyRuntime(config,auth,store,secrets,controller,binding,lease.privacyOptions);
   return {auth,secrets,binding,store,controller,privacy,lease,api,
     async bind(){controller.setOnline(true);await controller.bind('Synthetic browser');assert.equal(controller.getSnapshot().status,'ready',controller.getSnapshot().error?.code);controller.setOnline(false);},
-    changeOwner(id:string){subject={issuer:config.oidcAuthority,subject:id};account=identity(id,crypto.randomUUID());blocked=false;listeners.forEach(fn=>fn());},
+    changeOwner(id:string){subject=who(id);account=identity(id,crypto.randomUUID());blocked=false;listeners.forEach(fn=>fn());},
     async close(){controller.deactivate();privacy.dispose();await auth.dispose();await store.close();await binding.close();await lease.disposeAfterResources();}};
 }
 
-test('production browser runtimes keep a shared-device ACK pending until loaded content and all peer credentials are cleared',async t=>{
+test('distinct browser SIDs keep their own verified device and wait for peer RAM erasure before ACK',async t=>{
   const locks=new LockHub(),storage=new StorageHub(),one=storage.port(),two=storage.port();
   const previous=new Map<string,PropertyDescriptor|undefined>();
   for(const [key,value] of Object.entries({indexedDB:factory,localStorage:one.storage})){previous.set(key,Object.getOwnPropertyDescriptor(globalThis,key));Object.defineProperty(globalThis,key,{configurable:true,value});}
@@ -57,18 +59,21 @@ test('production browser runtimes keep a shared-device ACK pending until loaded 
   const closed:AccountPrivacyStatus={accountId,state:'closed',closedAt:now,closureRequestId:crypto.randomUUID(),deviceErasure:{requested:true,pending:1,acknowledged:0,thisDevicePending:true}};
   t.mock.method(globalThis,'fetch',async(input:RequestInfo|URL,init?:RequestInit)=>{
     assert.equal(String(input),config.apiBaseUrl+'/v1/privacy/erasure-ack');assert.equal((init?.headers as Record<string,string>).Authorization,'Bearer main-original-token');
+    assert.deepEqual(JSON.parse(String(init?.body)),{deviceId});
     assert.equal(peer.controller.getSnapshot().workspace,null);assert.equal(peer.auth.getSubject(),null);
     assert.equal(await peer.secrets.get(aiNamespace,AI_SECRET_KEY),null);assert.equal(await peer.secrets.get(zoteroNamespace,ZOTERO_SECRET_KEY),null);
     assert.equal(await peer.secrets.get(radarNamespace,radarRef),null);acks++;return Response.json({acknowledged:true});
   });
   try{
     await peer.bind();await peer.privacy.scopedSecrets(foreign).set('foreign-provider','api-key','foreign preserved key');
-    peer.changeOwner(accountId);peer.api.register=async()=>identity(accountId,deviceId);await peer.bind();
+    await main.bind();
+    const peerDevice=crypto.randomUUID();peer.changeOwner(accountId);peer.api.register=async()=>identity(accountId,peerDevice);await peer.bind();
+    assert.equal((await main.binding.read())!.device.id,deviceId);assert.equal((await peer.binding.read())!.device.id,peerDevice);
     await peer.controller.save({entityType:'note',entityId:crypto.randomUUID(),mutation:'put',data:{title:'Private note',body:'synthetic loaded paper context',format:'markdown',paperId:null}},0);
     const scoped=peer.privacy.scopedSecrets(scope);
     await scoped.set(aiNamespace,AI_SECRET_KEY,'synthetic-model-key');await scoped.set(zoteroNamespace,ZOTERO_SECRET_KEY,'a'.repeat(32));await scoped.set(radarNamespace,radarRef,'b'.repeat(32));
     const configs=new LocalAiConfigStore(two.storage);configs.save(scope,provider);configs.save(foreign,provider);
-    assert(peer.controller.getSnapshot().workspace);await main.bind();two.pause();
+    assert(peer.controller.getSnapshot().workspace);two.pause();
     await assert.rejects(main.privacy.erase(closed),{code:'BROWSER_ERASURE_PENDING'});assert.equal(acks,0);
     assert(peer.controller.getSnapshot().workspace);assert.equal(await peer.secrets.get(aiNamespace,AI_SECRET_KEY),'synthetic-model-key');
     await assert.rejects(scoped.get(aiNamespace,AI_SECRET_KEY),{code:'CHANGED'});

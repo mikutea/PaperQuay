@@ -45,7 +45,7 @@ export function createPrivacyRuntime(config:AppConfig,auth:AuthSession,store:Acc
     async erase(status:AccountPrivacyStatus,explicitLocalConsent=false) {
       const current=client.captureIdentity(),check=()=>{if(!current())throw new PrivacyError('CHANGED');};
       const recoverableBinding={remove:binding.remove,async read(){
-        const verified=await binding.read();check();
+        const verified=await (status.deviceErasure.thisDevicePending?binding.readSession():binding.read());check();
         if(verified){
           if(verified.accountId===status.accountId&&status.closureRequestId)erasureRecovery={identity:structuredClone(verified),status:structuredClone(status),current};
           return verified;

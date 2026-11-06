@@ -11,6 +11,7 @@ import {AccountStore} from '../src/storage/accountStore.ts';
 import {WorkspaceController,decodeWorkspace} from '../src/sync/workspace.ts';
 import {eraseLocalAccount} from '../src/privacy/lifecycle.ts';
 import type {AccountPrivacyStatus} from '../src/privacy/client.ts';
+import {authSubject} from '../src/auth/subject.ts';
 
 const config=parseAppConfig({apiBaseUrl:'https://sync.example.test',oidcAuthority:'https://id.example.test/realms/paperquay',oidcClientId:'mobile'},'https://app.example.test');
 const accountId='11111111-1111-4111-8111-111111111111',deviceId='22222222-2222-4222-8222-222222222222',now='2026-11-06T00:00:00.000Z';
@@ -18,6 +19,26 @@ const identity:AccountIdentity={accountId,device:{id:deviceId,name:'Synthetic br
 const closed:AccountPrivacyStatus={accountId,state:'closed',closedAt:now,closureRequestId:'33333333-3333-4333-8333-333333333333',
   deviceErasure:{requested:true,pending:1,acknowledged:0,thisDevicePending:false}};
 const scope={apiBaseUrl:config.apiBaseUrl,accountId};
+
+test('session bindings survive independent reloads while subject recovery and conditional cleanup preserve another SID',async()=>{
+  const indexedDB=new IDBFactory(),databaseName=crypto.randomUUID();
+  const subject=(sid:string)=>()=>authSubject({iss:config.oidcAuthority,sub:'same-owner',sid},config.oidcAuthority);
+  const open=(sid:string)=>createVerifiedBinding(config,new MemorySecretStore(),subject(sid),{indexedDB,databaseName});
+  const a=open('session-a'),b=open('session-b'),deviceB=crypto.randomUUID(),other={...identity,device:{...identity.device,id:deviceB}};
+  try{
+    await a.write(identity);await b.write(other);
+    assert.deepEqual(await a.readSession(),identity);assert.deepEqual(await b.readSession(),other);assert.notEqual(a.key(),b.key());
+    const restoredA=open('session-a'),replacement=open('replacement-session');
+    try{
+      assert.deepEqual(await restoredA.readSession(),identity);assert.equal(await replacement.readSession(),null);
+      assert.deepEqual(await replacement.read(),other);
+      await a.remove();assert.equal(await restoredA.readSession(),null);assert.deepEqual(await b.readSession(),other);
+      // Removing A must not erase B's latest subject-level recovery mapping.
+      assert.deepEqual(await replacement.read(),other);
+      await b.remove();assert.equal(await replacement.read(),null);
+    }finally{await restoredA.close();await replacement.close();}
+  }finally{await a.close();await b.close();}
+});
 
 test('browser closure then reload retains the verified owner without credentials and permits explicit erasure after registration rejects',async()=>{
   const indexedDB=new IDBFactory(),databaseName=crypto.randomUUID(),workspaceName=crypto.randomUUID();
