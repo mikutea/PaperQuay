@@ -5,7 +5,7 @@ import { AccountSqliteDatabase, type AccountSqliteDriver } from '../storage/sqli
 import { AI_ARCHIVE_LIMITS, AiArchiveError, validateAiArchiveItem, validateAiArchiveSummary, summarizeAiArchiveItem,
   type AiArchiveItem, type AiArchiveSummary } from './archiveTypes.ts';
 
-export interface AiArchiveOptions { signal?: AbortSignal; guard?: () => boolean }
+export interface AiArchiveOptions { signal?: AbortSignal; guard?: () => boolean; accountErasure?:boolean }
 export interface AiArchiveStore {
   list(scope: AccountScope): Promise<AiArchiveSummary[]>;
   read(scope: AccountScope, kind: 'record' | 'template', id: string, options?: AiArchiveOptions): Promise<AiArchiveItem | null>;
@@ -34,7 +34,7 @@ function check(options: AiArchiveOptions): void {
   try { if (options.guard && !options.guard()) fail('ACCOUNT_CHANGED'); }
   catch { fail('ACCOUNT_CHANGED'); }
 }
-function policy(options: AiArchiveOptions): AiArchiveOptions { return { signal: options.signal, guard: options.guard }; }
+function policy(options: AiArchiveOptions): AiArchiveOptions { return { signal: options.signal, guard: options.guard,accountErasure:options.accountErasure }; }
 function limitsFor(value?: Partial<Limits>): Limits {
   const limits: Limits = { ...AI_ARCHIVE_LIMITS, ...value };
   if (value && Object.keys(value).some((key) => !Object.hasOwn(AI_ARCHIVE_LIMITS, key))) fail('ARCHIVE_UNAVAILABLE');
@@ -63,12 +63,14 @@ function exact(value: unknown, keys: string[]): value is Record<string, unknown>
 function generation(value: unknown, scope: string): Generation {
   if (value === undefined || value === null) return 0;
   if (!exact(value, ['scopeKey', 'generation']) || value.scopeKey !== scope) return fail('ARCHIVE_CORRUPT');
+  if(value.generation==='erased')return fail('ACCOUNT_CHANGED');
   const token = value.generation;
   if (typeof token === 'number' && Number.isSafeInteger(token) && token >= 0) return token;
   if (typeof token === 'string' && token.startsWith('reset-') && uuid.test(token.slice(6))) return token;
   return fail('ARCHIVE_CORRUPT');
 }
 function nextGeneration(value: unknown, scope: string): Generation {
+  if(exact(value,['scopeKey','generation'])&&value.scopeKey===scope&&value.generation==='erased')return 'erased';
   try {
     const previous = generation(value, scope);
     if (typeof previous === 'number' && previous < Number.MAX_SAFE_INTEGER) return previous + 1;
@@ -288,7 +290,7 @@ export class WebAiArchiveStore implements AiArchiveStore {
       const control = tx.objectStore('controls').get(account); let pending = 3;
       const receive = () => { try {
         check(settings); if (--pending) return;
-        const next = nextGeneration(control.result, account);
+        const next = options.accountErasure?'erased':nextGeneration(control.result, account);
         const keys = [...new Set([...metadataKeys.result, ...payloadKeys.result])];
         if (keys.some((key) => !ownsKey(key, account))) fail('ARCHIVE_CORRUPT');
         const writes: IDBRequest[] = [tx.objectStore('controls').put({ scopeKey: account, generation: next })];
@@ -427,7 +429,7 @@ export class SqliteAiArchiveStore implements AiArchiveStore {
   async clear(scope: AccountScope, options: AiArchiveOptions = {}): Promise<void> {
     const account = scopeOf(scope), settings = policy(options);
     await this.transaction(account, settings, async (driver, control) => {
-      const next = nextGeneration(control, account);
+      const next = options.accountErasure?'erased':nextGeneration(control, account);
       // No payload or metadata parser runs on this recovery path.
       check(settings); await driver.run('INSERT INTO ai_archive_controls(scope_key, generation) VALUES (?, ?) ON CONFLICT(scope_key) DO UPDATE SET generation = excluded.generation', [account, String(next)]);
       check(settings); await driver.run('DELETE FROM ai_archive_metadata WHERE scope_key = ?', [account]);

@@ -23,6 +23,20 @@ const accountA: AccountScope = {
 const accountB: AccountScope = { ...accountA, accountId: '22222222-2222-4222-8222-222222222222' };
 const empty = (): State => ({ revision: 0, edits: [], cursor: '' });
 
+test('erasure commits an owner-only tombstone that other tabs and reopened handles cannot overwrite or remove',async()=>{
+  const factory=new IDBFactory(),databaseName=crypto.randomUUID(),open=()=>new AccountStore({indexedDB:factory,databaseName,decode});
+  const one=open(),two=open();try{
+    await one.update(accountA,empty);await two.update(accountB,empty);
+    await one.remove(accountA,{accountErasure:true});assert.equal(await two.read(accountA),null);
+    await assert.rejects(two.update(accountA,empty),{code:'ACCOUNT_CLOSED'});await two.remove(accountA);
+    const reopened=open();try{
+      await assert.rejects(reopened.update(accountA,empty),{code:'ACCOUNT_CLOSED'});
+      assert.deepEqual(await reopened.read(accountB),empty());
+      await reopened.update({...accountA,apiBaseUrl:'https://another.example.test'},empty);
+    }finally{await reopened.close();}
+  }finally{await one.close();await two.close();}
+});
+
 test('committed edits and cursor survive closing and reopening the database', async () => {
   const factory = new IDBFactory();
   const first = new AccountStore({ indexedDB: factory, decode });

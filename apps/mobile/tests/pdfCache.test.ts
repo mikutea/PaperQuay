@@ -52,6 +52,25 @@ class MemoryFiles implements NativePdfFiles {
 }
 
 for (const backend of ['web', 'native'] as const) {
+  test(`${backend} permanent erasure fences a second cache handle and later downloads across reopen without touching foreign scopes`,async()=>{
+    const files=new MemoryFiles(),factory=new IDBFactory(),databaseName=crypto.randomUUID();
+    const open=()=>backend==='web'?new WebPdfCache({indexedDB:factory,databaseName}):new NativePdfCache(files);
+    const first=open(),second=open(),own=await fixture(4),foreign=await fixture(5),late=await fixture(6);
+    try {
+      await first.put(a,own.version,own.bytes,{pinned:true});await second.put(b,foreign.version,foreign.bytes,{pinned:true});
+      let release!:()=>void;const incoming=new Promise<void>(resolve=>{release=resolve;});
+      const download=incoming.then(()=>second.put(a,late.version,late.bytes));
+      const blocked=assert.rejects(download,code('ACCOUNT_CHANGED'));
+      await first.clear(a,{accountErasure:true});release();await blocked;
+      assert.deepEqual(await second.list(a),[]);assert.deepEqual(await second.read(b,foreign.version),foreign.bytes);
+      await second.clear(a,{includePinned:true});
+      const reopened=open();try{
+        await assert.rejects(reopened.put(a,own.version,own.bytes),code('ACCOUNT_CHANGED'));
+        await reopened.clear(a,{accountErasure:true});
+        await reopened.put({...a,apiBaseUrl:'https://another.example.org'},own.version,own.bytes);
+      }finally{await reopened.close();}
+    }finally{await first.close();await second.close();}
+  });
   test(`${backend} cache uses bounded own-account LRU, preserves pins and never exposes or evicts another account`, async () => {
     let clock = 0;
     const cache: PdfCache = backend === 'web'

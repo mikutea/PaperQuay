@@ -78,6 +78,7 @@ export class OidcSession implements AuthSession {
   private readonly manager: UserManager;
   private readonly config: AppConfig;
   private user: User | null = null;
+  private blockedCredentials=false;
   private snapshot: AuthSnapshot = { status: 'signed-out' };
   private listeners = new Set<() => void>();
   private refresh: Promise<User | null> | null = null;
@@ -118,6 +119,7 @@ export class OidcSession implements AuthSession {
   async signIn(options?:{reauthenticate?:boolean}): Promise<void> {
     this.epoch += 1;
     this.user = null;
+    this.blockedCredentials=false;
     this.setSnapshot({ status: 'signing-in' });
     try {
       await this.manager.removeUser();
@@ -146,6 +148,7 @@ export class OidcSession implements AuthSession {
           (user.profile.azp !== undefined && user.profile.azp !== this.config.oidcClientId))
         throw new ClientError('AUTH_FAILED');
       this.user = user;
+      this.blockedCredentials=false;
       this.setSnapshot({
         status: 'signed-in',
         displayName:
@@ -164,7 +167,7 @@ export class OidcSession implements AuthSession {
   getAccessToken = async (): Promise<string> => {
     const user = this.user;
     const epoch = this.epoch;
-    if (!user) throw new ClientError('AUTH_REQUIRED');
+    if (!user||this.blockedCredentials) throw new ClientError('AUTH_REQUIRED');
     if ((user.expires_in ?? 0) > 30) return user.access_token;
     if (!user.refresh_token) {
       if (!user.expired) return user.access_token;
@@ -210,12 +213,22 @@ export class OidcSession implements AuthSession {
   }
 
   async clearLocalSession(options?:ClearLocalSessionOptions): Promise<void> {
-    const epoch=++this.epoch,token=this.user?.access_token??null;
+    const epoch=++this.epoch;
+    this.blockedCredentials=true;
     await this.manager.removeUser();
     if(epoch!==this.epoch)throw new ClientError('ACCOUNT_CHANGED');
+    if(options?.afterPersisted&&this.user){
+      const {erasureSession}=await import('./erasureSession.ts');
+      if(epoch!==this.epoch)throw new ClientError('ACCOUNT_CHANGED');
+      const renewed=await erasureSession(this.config,this.user);
+      if(epoch!==this.epoch)throw new ClientError('ACCOUNT_CHANGED');
+      this.user=renewed;
+    }
+    const token=this.user?.access_token??null;
     await options?.afterPersisted?.(token);
     if(epoch!==this.epoch)throw new ClientError('ACCOUNT_CHANGED');
     this.user = null;
+    this.blockedCredentials=false;
     this.setSnapshot({ status: 'signed-out' });
   }
 }

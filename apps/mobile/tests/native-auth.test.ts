@@ -28,6 +28,29 @@ function deferred<T = void>() {
   const promise = new Promise<T>((done) => { resolve = done; });
   return { promise, resolve };
 }
+
+test('a delayed erasure ACK retry renews only the original volatile SID without restoring durable credentials',async t=>{
+  const f=fixture(t);await f.session.signIn();await f.session.completeSignIn(f.callback());
+  const original=await f.session.getAccessToken(),namespace=nativeAuthNamespace(config);let acknowledgements=0;
+  await assert.rejects(f.session.clearLocalSession({afterPersisted:async token=>{
+    assert.equal(token,original);assert.equal(await f.secrets.get(namespace,'session'),null);throw Error('synthetic lost ACK');
+  }}));
+  await assert.rejects(f.session.getAccessToken(),{code:'AUTH_REQUIRED'});
+  const later=Date.now()+3601_000;t.mock.method(Date,'now',()=>later);
+  await f.session.clearLocalSession({afterPersisted:async token=>{
+    assert.notEqual(token,original);assert.equal(await f.secrets.get(namespace,'session'),null);acknowledgements++;
+  }});
+  assert.equal(f.refreshes,1);assert.equal(acknowledgements,1);assert.equal(f.session.getSubject(),null);
+  assert.equal(await f.secrets.get(namespace,'session'),null);
+});
+
+test('erasure-only renewal rejects a replacement SID and keeps the confirmation pending with no durable credentials',async t=>{
+  const f=fixture(t);f.lifetime=10;await f.session.signIn();await f.session.completeSignIn(f.callback());
+  f.alteredClaims={sid:'replacement-session'};let acknowledgements=0;
+  await assert.rejects(f.session.clearLocalSession({afterPersisted:async()=>{acknowledgements++;}}),{code:'AUTH_REQUIRED'});
+  assert.equal(acknowledgements,0);assert.equal(f.session.getSubject()?.subject,'subject-one');
+  assert.equal(await f.secrets.get(nativeAuthNamespace(config),'session'),null);
+});
 class Bridge implements NativeAuthBridge {
   urls: string[] = [];
   closes = 0;

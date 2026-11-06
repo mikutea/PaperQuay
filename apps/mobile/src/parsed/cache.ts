@@ -7,7 +7,7 @@ import { AccountSqliteDatabase, type AccountSqliteDriver } from '../storage/sqli
 import { PdfError, throwIfAborted } from '../pdf/errors.ts';
 import type { PdfVersion } from '../pdf/types.ts';
 
-export interface ParsedCacheOptions { signal?: AbortSignal; guard?: () => boolean }
+export interface ParsedCacheOptions { signal?: AbortSignal; guard?: () => boolean; accountErasure?:boolean }
 export interface VerifiedParsedDocument { document: ParsedDocumentPackage; digest: string }
 export interface ParsedCacheEntry { versionId: string; sha256: string; sizeBytes: number; storedAt: number }
 export interface ParsedCache {
@@ -240,10 +240,12 @@ export class WebParsedCache implements ParsedCache {
       const index = tx.objectStore('metadata');
       const request = index.index('account').getAll(account, this.limits.maxCacheEntries + 1);
       const contentKeys = store.index('account').getAllKeys(account, this.limits.maxCacheEntries + 1);
-      let reads = 2;
+      const fence=index.get('erased:'+account);
+      let reads = 3;
       const receive = () => {
         try {
           check(options); if (--reads) return;
+          if(fence.result!==undefined)throw new PdfError('ACCOUNT_CHANGED');
           const rows = checkedRows(request.result as unknown[], account, this.limits);
           matchingKeys(rows, contentKeys.result);
           const writes = action(rows, store, index);
@@ -254,7 +256,7 @@ export class WebParsedCache implements ParsedCache {
           };
         } catch (error) { fail(error); }
       };
-      request.onsuccess = contentKeys.onsuccess = receive;
+      request.onsuccess = contentKeys.onsuccess = fence.onsuccess = receive;
       const cleanup = () => options.signal?.removeEventListener('abort', abort);
       tx.oncomplete = () => { cleanup(); resolve(); };
       tx.onabort = tx.onerror = () => { cleanup(); reject(cacheFailure(failure)); };
@@ -280,6 +282,7 @@ export class WebParsedCache implements ParsedCache {
       options.signal?.addEventListener('abort', abort, { once: true });
       const store = tx.objectStore('packages');
       const index = tx.objectStore('metadata');
+      if(options.accountErasure)index.put({key:'erased:'+account,erased:true});
       // Cleanup must also work when a package's payload is corrupt. Read keys only.
       const request = store.index('account').getAllKeys(account);
       const metadataKeys = index.index('account').getAllKeys(account);
@@ -379,6 +382,7 @@ export class SqliteParsedCache implements ParsedCache {
       let transaction = false;
       try {
         check(options); await driver.begin(); transaction = true;
+        if(inspectRows&&(await driver.query('SELECT payload FROM account_snapshots WHERE scope_key = ?',['erased:'+account])).length)throw new PdfError('ACCOUNT_CHANGED');
         const values = inspectRows ? await driver.query(`SELECT ${selectMetadata} FROM parsed_packages WHERE scope_key = ? LIMIT ${this.limits.maxCacheEntries + 1}`, [account]) : [];
         check(options);
         const rows = checkedRows(values.map((value) => sqlMetadata(value, account)), account, this.limits);
@@ -408,7 +412,10 @@ export class SqliteParsedCache implements ParsedCache {
   }
   clear(scope: AccountScope, options: ParsedCacheOptions = {}): Promise<void> {
     const account = scopeKey(scope);
-    return this.mutate(account, options, async (driver) => { await driver.run('DELETE FROM parsed_packages WHERE scope_key = ?', [account]); }, false);
+    return this.mutate(account, options, async (driver) => {
+      if(options.accountErasure)await driver.run('INSERT INTO account_snapshots (scope_key, payload) VALUES (?, ?) ON CONFLICT(scope_key) DO UPDATE SET payload = excluded.payload',['erased:'+account,'{"erased":true}']);
+      await driver.run('DELETE FROM parsed_packages WHERE scope_key = ?', [account]);
+    }, false);
   }
   async list(scope: AccountScope): Promise<ParsedCacheEntry[]> {
     const account = scopeKey(scope);

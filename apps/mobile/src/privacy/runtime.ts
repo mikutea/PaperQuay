@@ -61,9 +61,9 @@ export function createPrivacyRuntime(config:AppConfig,auth:AuthSession,store:Acc
           if(workspace?.radarState?.credentialRef)addresses.push([radarSecretNamespace(scope),workspace.radarState.credentialRef]);
           check();await registry.register(addresses);check();await registry.erase();check();configStore.clear(scope);
         },
-        clearPdf:async scope=>{const {clearPdfCache}=await import('../pdf/cache.ts');check();await clearPdfCache(scope,{includePinned:true});},
-        clearParsed:async scope=>{const {getParsedCache}=await import('../parsed/cache.ts');check();await getParsedCache().clear(scope,{guard:current});},
-        clearAi:async scope=>{const {getAiArchiveStore}=await import('../ai/archiveStore.ts');check();await getAiArchiveStore().clear(scope,{guard:current});},
+        clearPdf:async scope=>{const {clearPdfCache}=await import('../pdf/cache.ts');check();await clearPdfCache(scope,{includePinned:true,accountErasure:true});},
+        clearParsed:async scope=>{const {getParsedCache}=await import('../parsed/cache.ts');check();await getParsedCache().clear(scope,{guard:current,accountErasure:true});},
+        clearAi:async scope=>{const {getAiArchiveStore}=await import('../ai/archiveStore.ts');check();await getAiArchiveStore().clear(scope,{guard:current,accountErasure:true});},
         clearExports:async scope=>{await clearScopedNativeExports(scope);check();await clearPrivateExportCache(scope);},
         acknowledge:(id,token)=>{if(!token)throw new PrivacyError('AUTH_REQUIRED');return client.acknowledge(id,new AbortController().signal,token);},
         clearSession:afterPersisted=>auth.clearLocalSession({afterPersisted}),

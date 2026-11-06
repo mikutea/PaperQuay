@@ -35,7 +35,7 @@ export async function eraseLocalAccount(apiBaseUrl:string,status:AccountPrivacyS
   await dependencies.clearParsed(scope);check();
   await dependencies.clearAi(scope);check();
   await dependencies.clearExports(scope);check();
-  await dependencies.store.remove(scope);check();
+  await dependencies.store.remove(scope,{accountErasure:true});check();
   // Durable credentials are removed before acknowledging. Preserve the original
   // volatile session and verified mapping while a failed deletion/ACK is pending.
   await dependencies.clearSession(async token=>{
