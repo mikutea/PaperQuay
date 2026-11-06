@@ -24,7 +24,7 @@ import {
 import { SyncApi, type ServerConflict, type ServiceCapabilitySnapshot } from './api.ts';
 import type { FeatureAction } from './capabilities/catalog.ts';
 import { createAuthSession, type AuthSession } from './auth/oidc.ts';
-import { parseAppConfig, type AppConfig, type PublicConfigInput } from './config.ts';
+import { parseAppConfig, PUBLIC_CONFIG_STORAGE_KEY as CONFIG_KEY, type AppConfig, type PublicConfigInput } from './config.ts';
 import { ContentPreview, EntityEditor } from './components/EntityEditor.tsx';
 import { Icon } from './components/Icon.tsx';
 import { MobileSettings, type AccountSettingsPage } from './components/MobileSettings.tsx';
@@ -50,7 +50,6 @@ import { getIncomingShareClient } from './platform/incomingShare.ts';
 import { assertPreparedIncomingShareSource, type PreparedSource } from './library/incomingShare.ts';
 import { entityStatus, hasEntityConflict } from './viewState.ts';
 
-const CONFIG_KEY = 'paperquay.mobile.public-config.v1';
 const DEVICE_NAME_KEY = 'paperquay.mobile.device-name.v1';
 type Section = 'library' | 'notes' | 'account' | 'conflicts';
 
@@ -115,7 +114,7 @@ interface Runtime {
   inspectCapabilities?(signal:AbortSignal):Promise<ServiceCapabilitySnapshot>;
   dispose?: () => Promise<void>;
 }
-function initialConfig(): PublicConfigInput {
+function initialConfig(defaults: PublicConfigInput = {}): PublicConfigInput {
   try {
     const local = localStorage.getItem(CONFIG_KEY);
     if (local) {
@@ -127,9 +126,9 @@ function initialConfig(): PublicConfigInput {
     /* Invalid public settings are replaced by the configured defaults. */
   }
   return {
-    apiBaseUrl: import.meta.env.VITE_API_BASE_URL ?? '',
-    oidcAuthority: import.meta.env.VITE_OIDC_AUTHORITY ?? '',
-    oidcClientId: import.meta.env.VITE_OIDC_CLIENT_ID ?? '',
+    apiBaseUrl: defaults.apiBaseUrl ?? import.meta.env.VITE_API_BASE_URL ?? '',
+    oidcAuthority: defaults.oidcAuthority ?? import.meta.env.VITE_OIDC_AUTHORITY ?? '',
+    oidcClientId: defaults.oidcClientId ?? import.meta.env.VITE_OIDC_CLIENT_ID ?? '',
   };
 }
 async function makeRuntime(input: PublicConfigInput): Promise<Runtime> {
@@ -174,8 +173,8 @@ async function makeRuntime(input: PublicConfigInput): Promise<Runtime> {
   } };
 }
 
-export function App() {
-  const [input, setInput] = useState(initialConfig);
+export function App({ defaults = {} }: { defaults?: PublicConfigInput } = {}) {
+  const [input, setInput] = useState(() => initialConfig(defaults));
   const [runtime, setRuntime] = useState<Runtime | null>(null);
   const [loading, setLoading] = useState(true);
   const [configError, setConfigError] = useState<string | null>(null);

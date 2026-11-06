@@ -1,0 +1,43 @@
+{
+  auto_https off
+  admin off
+  servers {
+    trusted_proxies static {$PAPERQUAY_INGRESS_PROXY_IPS}
+    trusted_proxies_strict
+    client_ip_headers X-Forwarded-For
+  }
+}
+:8080 {
+  header {
+    X-Content-Type-Options nosniff
+    Referrer-Policy no-referrer
+    -Server
+  }
+  handle_path /api/* {
+    reverse_proxy sync:4311 {
+      # Replace the input chain with the client resolved through exact peers.
+      header_up X-Forwarded-For {client_ip}
+    }
+  }
+  # The management console and master realm remain internal to the deployment.
+  @identity path /identity/realms/paperquay/* /identity/resources/* /identity/robots.txt
+  handle @identity {
+    reverse_proxy identity:8080 {
+      header_up X-Forwarded-Proto https
+    }
+  }
+  handle /identity/* {
+    respond 404
+  }
+  handle /runtime-config.json {
+    root * /srv
+    header Cache-Control "no-store"
+    file_server
+  }
+  handle {
+    root * /srv
+    try_files {path} /index.html
+    header Cache-Control "no-cache"
+    file_server
+  }
+}
