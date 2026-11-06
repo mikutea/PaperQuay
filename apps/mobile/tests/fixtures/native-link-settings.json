@@ -1,0 +1,10 @@
+{
+  "formatVersion": 1,
+  "origin": "https://links.example.test",
+  "apiBaseUrl": "https://sync.example.test/api",
+  "oidcAuthority": "https://id.example.test/realms/paperquay",
+  "ios": {"applicationIdentifierPrefix": "QATEST1234"},
+  "android": {
+    "sha256CertificateFingerprints": ["12:34:12:34:12:34:12:34:12:34:12:34:12:34:12:34:12:34:12:34:12:34:12:34:12:34:12:34:12:34:12:34"]
+  }
+}

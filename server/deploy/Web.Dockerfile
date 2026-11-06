@@ -7,6 +7,7 @@ RUN npm ci --ignore-scripts
 COPY packages /app/packages
 COPY apps/mobile/src ./src
 COPY apps/mobile/public ./public
+COPY apps/mobile/scripts/native-link-build.ts ./scripts/native-link-build.ts
 COPY apps/mobile/tsconfig.json apps/mobile/tsconfig.production.json apps/mobile/vite.config.ts apps/mobile/index.html ./
 # Public service defaults are mounted at runtime, never supplied as build args.
 RUN node node_modules/typescript/bin/tsc --project tsconfig.production.json && node node_modules/vite/bin/vite.js build

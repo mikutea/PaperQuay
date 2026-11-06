@@ -19,6 +19,12 @@
       header_up X-Forwarded-For {client_ip}
     }
   }
+  @nativeAssociation path /.well-known/apple-app-site-association /.well-known/assetlinks.json
+  handle @nativeAssociation {
+    reverse_proxy sync:4311 {
+      header_up X-Forwarded-For {client_ip}
+    }
+  }
   # The management console and master realm remain internal to the deployment.
   @identity path /identity/realms/paperquay/* /identity/resources/* /identity/robots.txt
   handle @identity {

@@ -25,6 +25,8 @@
 !apps/mobile/tsconfig.json
 !apps/mobile/tsconfig.production.json
 !apps/mobile/vite.config.ts
+!apps/mobile/scripts/
+!apps/mobile/scripts/native-link-build.ts
 !apps/mobile/capacitor.config.ts
 !apps/mobile/index.html
 !apps/mobile/src/

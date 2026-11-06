@@ -40,7 +40,10 @@ export const NATIVE_REDIRECT_URI = 'dev.paperquay.mobile://auth/callback';
 export const NATIVE_LOGOUT_URI = 'dev.paperquay.mobile://auth/logout';
 
 export function configuredNativeLinks():NativeLinkBinding|null {
-  return nativeLinksFromEnvironment(Capacitor.getPlatform(),import.meta.env??{});
+  return nativeLinksFromEnvironment(Capacitor.getPlatform(),{
+    VITE_NATIVE_LINK_ORIGIN:import.meta.env?.VITE_NATIVE_LINK_ORIGIN,
+    VITE_NATIVE_LINK_PLATFORM:import.meta.env?.VITE_NATIVE_LINK_PLATFORM,
+  });
 }
 
 export function nativeRedirects(config:Pick<AppConfig,'apiBaseUrl'|'oidcAuthority'|'oidcClientId'>,

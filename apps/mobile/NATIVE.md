@@ -4,7 +4,9 @@
 
 ## 服务配置
 
-在 IdP 中注册 **public client**，启用 Authorization Code、PKCE S256 与刷新令牌。客户端不包含 client secret。注册精确回调：
+正式构建使用独立的 `paperquay-ios` / `paperquay-android` public client、HTTPS 回调和系统域名关联，配置与验收见 [原生 HTTPS 回调](../../docs/mobile-sync/native-links.md)。签名及系统关联验证完成后，由部署方明确开通客户端。缺少绑定的正式安装包不能登录，也不会回退到私有 scheme。
+
+以下私有 scheme 仅供非生产开发。开发 IdP 使用 public client、Authorization Code、PKCE S256 与刷新令牌，不包含 client secret。开发回调为：
 
 - 登录：`dev.paperquay.mobile://auth/callback`
 - 退出：`dev.paperquay.mobile://auth/logout`

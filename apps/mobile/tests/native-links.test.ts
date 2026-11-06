@@ -34,7 +34,8 @@ test('build metadata requires matching platform and canonical credential-free HT
     assert.throws(()=>nativeLinksFromEnvironment('android',value),{code:'CONFIG_INVALID'});
   for(const value of ['http://mobile.example.test','https://mobile.example.test/','https://mobile.example.test/path',
     'https://user:secret@mobile.example.test','https://mobile.example.test?token=x','https://mobile.example.test#x',
-    'https://*.example.test','https://127.0.0.1','https://localhost','https://mobile.example.test:444','https://MOBILE.example.test'])
+    'https://*.example.test','https://127.0.0.1','https://localhost','https://mobile.example.test:444','https://MOBILE.example.test',
+    'https://example.test-','https://unconfigured.invalid','https://'+('a'.repeat(63)+'.').repeat(4)+'test'])
     assert.throws(()=>nativeLinkBinding('ios',value),{code:'CONFIG_INVALID'});
 });
 test('claimed callbacks reject the other platform, Web endpoint, redirects, duplicate parameters and returned tokens',()=>{

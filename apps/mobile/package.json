@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1 --port 4319 --strictPort",
-    "test": "node --import tsx --test tests/*.test.ts"
+    "test": "node --import tsx --test tests/*.test.ts",
+    "configure:native-links": "node --import tsx scripts/configure-native-links.ts"
   },
   "dependencies": {
     "@aparajita/capacitor-secure-storage": "8.0.1",

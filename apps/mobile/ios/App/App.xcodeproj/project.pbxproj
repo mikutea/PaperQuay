@@ -123,6 +123,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 504EC3161FED79650016851F /* Build configuration list for PBXNativeTarget "App" */;
 			buildPhases = (
+				6D2CF69CB4214EE1B3D3A410 /* Validate native link binding */,
 				504EC3001FED79650016851F /* Sources */,
 				504EC3011FED79650016851F /* Frameworks */,
 				504EC3021FED79650016851F /* Resources */,
@@ -207,6 +208,24 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		6D2CF69CB4214EE1B3D3A410 /* Validate native link binding */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = ();
+			inputPaths = (
+				"$(SRCROOT)/../..",
+				"$(SRCROOT)/../../../../packages",
+			);
+			name = "Validate native link binding";
+			outputPaths = ();
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -eu\ncd \"$SRCROOT/../..\"\nexport TSX_DISABLE_CACHE=1\nnode --import tsx scripts/validate-native-links.ts --platform ios --host \"$PAPERQUAY_NATIVE_LINK_HOST\" --bundle \"$SRCROOT/App/public\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXResourcesBuildPhase section */
 		504EC3021FED79650016851F /* Resources */ = {

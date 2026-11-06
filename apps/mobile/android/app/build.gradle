@@ -1,9 +1,29 @@
 apply plugin: 'com.android.application'
 
-// Supplied together with the Web bundle's native-link build metadata outside
-// Git. The default is intentionally unassociated and cannot enable login.
-def nativeLinkHost = System.getenv('PAPERQUAY_NATIVE_LINK_HOST') ?: 'unconfigured.invalid'
-if (nativeLinkHost.length() > 253 || !(nativeLinkHost ==~ /(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{1,62}/)) {
+// Derive the OS binding from the copied bundle, then verify its bytes before
+// building. Operator settings and association documents remain outside Git.
+def nativeWebRoot = file('src/main/assets/public')
+def nativeLinkDocument = new File(nativeWebRoot, 'native-link-binding.json')
+def nativeLinkHost = 'unconfigured.invalid'
+if (nativeLinkDocument.exists()) {
+    if (nativeLinkDocument.length() > 1024 * 1024) {
+        throw new GradleException('PAPERQUAY_NATIVE_LINK_BINDING_INVALID')
+    }
+    def binding = new groovy.json.JsonSlurper().parse(nativeLinkDocument)
+    if (binding.formatVersion != 1 || binding.platform != 'android' || !(binding.origin instanceof String)) {
+        throw new GradleException('PAPERQUAY_NATIVE_LINK_BINDING_INVALID')
+    }
+    try {
+        nativeLinkHost = new URI(binding.origin).host
+    } catch (Exception ignored) {
+        throw new GradleException('PAPERQUAY_NATIVE_LINK_BINDING_INVALID')
+    }
+}
+def requestedNativeLinkHost = System.getenv('PAPERQUAY_NATIVE_LINK_HOST')
+if (requestedNativeLinkHost != null && requestedNativeLinkHost != nativeLinkHost) {
+    throw new GradleException('PAPERQUAY_NATIVE_LINK_HOST_MISMATCH')
+}
+if (!(nativeLinkHost instanceof String) || nativeLinkHost.length() > 253 || !(nativeLinkHost ==~ /(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{1,62}/)) {
     throw new GradleException('PAPERQUAY_NATIVE_LINK_HOST_INVALID')
 }
 
@@ -51,6 +71,16 @@ dependencies {
 }
 
 apply from: 'capacitor.build.gradle'
+
+tasks.register('validateNativeLinkBinding', Exec) {
+    workingDir rootProject.projectDir.parentFile
+    environment 'TSX_DISABLE_CACHE', '1'
+    commandLine 'node', '--import', 'tsx', 'scripts/validate-native-links.ts',
+        '--platform', 'android', '--host', nativeLinkHost, '--bundle', nativeWebRoot.absolutePath
+}
+tasks.named('preBuild').configure {
+    dependsOn tasks.named('validateNativeLinkBinding')
+}
 
 try {
     def servicesJSON = file('google-services.json')
