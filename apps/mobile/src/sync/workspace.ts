@@ -1314,6 +1314,7 @@ export class WorkspaceController {
         return;
       }
       const safe = safeError(error);
+      if(safe.code==='ACCOUNT_CLOSED'){this.deactivate();this.publish({status:'error',error:safe});return;}
       if (
         safe.code === 'AUTH_REQUIRED' ||
         safe.code === 'SESSION_REVOKED' ||

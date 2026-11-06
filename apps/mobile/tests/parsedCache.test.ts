@@ -382,3 +382,14 @@ test('the default hard limits remain 64 MiB per account and 32 packages', () => 
   assert.equal(PARSED_CACHE_LIMITS.maxCacheBytes, 64 * 1024 * 1024);
   assert.equal(PARSED_CACHE_LIMITS.maxCacheEntries, 32);
 });
+
+for(const backend of ['web','sqlite'] as const) {
+  test(`${backend}: private export verifies orphan packages without a live library entity and rejects corrupt or foreign cache entries`,async t=>{
+    const f=await fixture(t,backend),source=await sample('Orphan export sentinel');
+    await f.cache.put(a,source.verified,{});const entry=(await f.cache.list(a))[0];
+    assert.deepEqual(await f.cache.exportEntry(a,entry),source.verified);
+    await assert.rejects(f.cache.exportEntry(b,entry),{code:'CACHE_CORRUPT'});
+    await f.raw(row=>({...row,payload:row.payload.replace('Orphan export sentinel','Altered export sentinel')}));
+    await assert.rejects(f.cache.exportEntry(a,entry),{code:'CACHE_CORRUPT'});
+  });
+}

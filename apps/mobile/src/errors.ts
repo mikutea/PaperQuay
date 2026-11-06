@@ -10,6 +10,7 @@ export type ClientErrorCode =
   | 'STORAGE_UNAVAILABLE'
   | 'STORAGE_FAILED'
   | 'STORAGE_CORRUPT'
+  | 'ACCOUNT_CLOSED'
   | 'ACCOUNT_CHANGED'
   | 'ACCOUNT_STORAGE_LIMIT'
   | 'GRAPH_COLLECTION_LIMIT'
@@ -39,6 +40,7 @@ const messages: Record<ClientErrorCode, string> = {
   STORAGE_UNAVAILABLE: '此设备暂时无法打开本地安全存储或数据库，请检查设备状态后重试。',
   STORAGE_FAILED: '未能保存到此设备，请检查存储空间后重试。',
   STORAGE_CORRUPT: '此设备的缓存格式无法读取。请保留本地数据并联系维护者。',
+  ACCOUNT_CLOSED: '应用账号已注销。同步已停止，请在数据与隐私中查询设备清理状态。',
   ACCOUNT_CHANGED: '账号已切换，本次同步已停止。',
   ACCOUNT_STORAGE_LIMIT: '账号同步存储额度已满。改动仍保存在此设备，请联系服务管理员处理额度后重试。',
   GRAPH_COLLECTION_LIMIT:'当前账号的关系数量或内容已达到上限（最多512条、2MiB）。请先删除不再使用的关系；原有材料与关系仍保留。',
@@ -73,6 +75,7 @@ export function describeError(error: unknown): string {
 }
 
 export function errorFromResponse(status: number, serverCode?: string): ClientError {
+  if(serverCode==='ACCOUNT_CLOSED')return new ClientError('ACCOUNT_CLOSED');
   if(serverCode==='FEATURE_NOT_NEGOTIATED')return new ClientError('SYNC_FEATURE_UNAVAILABLE');
   if (serverCode === 'DEVICE_REVOKED' || serverCode === 'SESSION_REVOKED')
     return new ClientError('SESSION_REVOKED');

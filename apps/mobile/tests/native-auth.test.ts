@@ -271,3 +271,12 @@ test('late refresh cannot restore credentials or change signed-out state after l
   assert.equal(f.session.getSubject(), null);
   assert.equal(await f.secrets.get(nativeAuthNamespace(config), 'session'), null);
 });
+
+test('explicit native reauthentication uses real Code PKCE state nonce and max_age zero',async t=>{
+  const f=fixture(t);await f.session.initialize();await f.session.signIn({reauthenticate:true});
+  const request=new URL(f.bridge.urls[0]);
+  assert.equal(request.searchParams.get('prompt'),'login');assert.equal(request.searchParams.get('max_age'),'0');
+  assert.equal(request.searchParams.get('response_type'),'code');assert.equal(request.searchParams.get('code_challenge_method'),'S256');
+  assert(request.searchParams.get('code_challenge'));assert(request.searchParams.get('state'));assert(request.searchParams.get('nonce'));
+  await f.session.completeSignIn(f.callback());assert.equal(f.session.getSnapshot().status,'signed-in');assert.equal(f.exchanges,1);
+});

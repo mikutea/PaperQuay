@@ -204,7 +204,7 @@ export class NativeOidcSession implements AuthSession {
     this.callbackTail = result.catch(() => undefined);
     return result;
   }
-  async signIn(): Promise<void> {
+  async signIn(options?:{reauthenticate?:boolean}): Promise<void> {
     await this.initialize();
     const epoch = ++this.epoch;
     this.assertCurrent(epoch);
@@ -215,7 +215,8 @@ export class NativeOidcSession implements AuthSession {
     try {
       await this.clearPersisted();
       this.assertCurrent(epoch);
-      const request = await this.client(epoch).createSigninRequest({ request_type: 'si:r', nonce: crypto.randomUUID() });
+      const request = await this.client(epoch).createSigninRequest({ request_type: 'si:r', nonce: crypto.randomUUID(),
+        ...(options?.reauthenticate?{prompt:'login',max_age:0}:{}) });
       this.assertCurrent(epoch);
       this.awaitingBrowser = true;
       await this.options.bridge.open(browserUrl(request.url));
