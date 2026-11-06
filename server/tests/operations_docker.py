@@ -77,7 +77,7 @@ import {PostgresSyncStore} from './src/store.ts';
 import {ApiError} from './src/errors.ts';
 const config=loadConfig();
 const repository=new PostgresSyncStore({connectionString:config.databaseUrl,cursorSecret:config.cursorSecret});
-const app=await buildApp({config,repository,verifyToken:async()=>{throw new ApiError('AUTHENTICATION_REQUIRED',401);}});
+const app=await buildApp({config,repository,logger:true,verifyToken:async()=>{throw new ApiError('AUTHENTICATION_REQUIRED',401);}});
 await app.listen({host:config.host,port:config.port});
 """
         config = config.replace('    env_file: [sync.env]',
@@ -169,8 +169,8 @@ console.log(JSON.stringify(statuses));
             # A real realm and signing keys become part of the PostgreSQL dump.
             phase = 'identity_realm'
             import realm
-            write('production-realm.json', json.dumps(realm.production_realm('https://reader.example.test')), 0o644)
-            ops.run(['docker', 'cp', str(target / 'production-realm.json'), identity + ':/tmp/production-realm.json'], stdout=subprocess.DEVNULL)
+            ops.run(['docker', 'exec', '-i', identity, 'sh', '-c', 'cat > /tmp/production-realm.json'],
+                input=json.dumps(realm.production_realm('https://reader.example.test')).encode('utf-8'), stdout=subprocess.DEVNULL)
             ops.run(['docker', 'exec', identity, 'bash', '-c',
                 '/opt/keycloak/bin/kcadm.sh config credentials --config /tmp/disposable-admin.json '
                 '--server http://127.0.0.1:8080/identity --realm master --user "$KC_BOOTSTRAP_ADMIN_USERNAME" '

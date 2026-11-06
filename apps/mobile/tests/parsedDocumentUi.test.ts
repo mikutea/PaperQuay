@@ -181,13 +181,15 @@ test('storage failure leaves the previous package visible and account cleanup re
   assert.doesNotMatch(text(model.renderer.root), /Original parsed/);
 });
 
-test('a successful cache commit acknowledged after cancellation retires the old AI source and permits explicit reload', async (t) => {
-  const model = await mount(t, false, true), gate = deferred<void>(); let committed = false;
+test('a successful cache commit acknowledged after cancellation retires the old AI source and permits explicit reload', {timeout:5000}, async (t) => {
+  const model = await mount(t, false, true), gate = deferred<void>(), entered=deferred<void>();
   t.mock.method(model.cache, 'put', async (_scope: AccountScope, value: VerifiedParsedDocument) => {
-    model.stored.current = value; model.stored.writes++; committed = true; await gate.promise;
+    model.stored.current = value; model.stored.writes++; entered.resolve(); await gate.promise;
   });
   const replacement = fixture(); replacement.blocks[0].text = 'Committed replacement'; replacement.blocks[0].markdown = 'Committed replacement';
-  await model.upload(replacement); await until(() => committed);
+  // Real crypto/asset preparation runs before this hook. Wait for the actual
+  // commit entry, rather than 100 event-loop turns (only ~12 ms on loaded CI).
+  await model.upload(replacement); await act(async()=>entered.promise);
   await act(async () => { button(model.renderer, '取消解析操作').props.onClick(); });
   await until(() => text(model.renderer.root).includes('已取消'));
   gate.resolve();

@@ -29,6 +29,10 @@ class RealmTests(unittest.TestCase):
             self.assertNotIn('*', json.dumps(client['redirectUris']))
             self.assertNotIn('secret', client)
         self.assertEqual(value['clients'][1]['redirectUris'], ['http://127.0.0.1/paperquay-oidc/callback'])
+        self.assertEqual(value['clients'][0]['redirectUris'], ['https://reader.example.test/auth/callback'])
+        self.assertEqual(value['clients'][0]['webOrigins'], ['https://reader.example.test'])
+        self.assertEqual(value['clients'][0]['attributes']['post.logout.redirect.uris'], 'https://reader.example.test/')
+        self.assertNotIn('dev.paperquay.mobile:',json.dumps(value))
 
     def test_production_origin_refuses_userinfo_non_https_paths_and_wildcards(self):
         for invalid in ('http://reader.example.test', 'https://reader.example.test/path',

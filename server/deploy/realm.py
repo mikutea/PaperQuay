@@ -33,9 +33,11 @@ def production_realm(web_origin):
                                'client.use.lightweight.access.token.enabled': 'false'},
                 'protocolMappers': [audience]}
 
-    mobile = client('paperquay-mobile', [origin + '/auth/callback', 'dev.paperquay.mobile://auth/callback'],
-                    [origin, 'capacitor://localhost', 'http://localhost', 'https://localhost'])
-    mobile['attributes']['post.logout.redirect.uris'] = origin + '/##dev.paperquay.mobile://auth/callback'
+    # This existing client ID is the mobile Web application, not a native app.
+    # A private-use scheme is not a platform-claimed callback: do not authorize
+    # production native login until signed App/Universal Link binding is proven.
+    mobile = client('paperquay-mobile', [origin + '/auth/callback'], [origin])
+    mobile['attributes']['post.logout.redirect.uris'] = origin + '/'
     desktop = client('paperquay-desktop', ['http://127.0.0.1/paperquay-oidc/callback'], [])
     return {'realm': 'paperquay', 'enabled': True, 'displayName': 'PaperQuay',
             'sslRequired': 'all', 'registrationAllowed': False, 'registrationEmailAsUsername': False,

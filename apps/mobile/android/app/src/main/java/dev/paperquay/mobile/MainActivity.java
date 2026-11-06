@@ -18,7 +18,7 @@ public class MainActivity extends BridgeActivity {
         }
     }
 
-    @Override protected void onPause() {
+    @Override public void onPause() {
         // Native cover also supports API 24-32, before JS suspension. This does
         // not prohibit the user's explicit screenshots of the active reader.
         ViewGroup decor = (ViewGroup) getWindow().getDecorView();
@@ -35,7 +35,7 @@ public class MainActivity extends BridgeActivity {
         super.onPause();
     }
 
-    @Override protected void onResume() {
+    @Override public void onResume() {
         super.onResume();
         if (privacyCover != null) {
             ViewGroup parent = (ViewGroup) privacyCover.getParent();

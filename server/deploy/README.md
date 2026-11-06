@@ -125,7 +125,9 @@ python3 /reviewed-source/server/deploy/monitor.py --directory /private/operator 
 
 ## 私有账号开通与恢复
 
-`realm.py --web-origin HTTPS_ORIGIN --output /private/operator/production-realm.json` 只生成不含用户及凭据的正式 `paperquay` realm。输出位置和实际 origin 都留在仓库外。通过已有内部管理员通道导入新 realm；已有 realm 先备份并核对差异，不覆盖导入。它只开启管理员邀请和 Code+S256 PKCE，禁用密码 grant、implicit、自助注册、离线授权和服务账号；Web/原生回调均精确匹配。桌面回环只允许既定 IPv4 回调路径，由 Keycloak 的原生回环规则接受临时端口。
+`realm.py --web-origin HTTPS_ORIGIN --output /private/operator/production-realm.json` 只生成不含用户及凭据的正式 `paperquay` realm。输出位置和实际 origin 都留在仓库外。通过已有内部管理员通道导入新 realm；已有 realm 先备份并核对差异，不覆盖导入。它只开启管理员邀请和 Code+S256 PKCE，禁用密码 grant、implicit、自助注册、离线授权和服务账号；移动 Web 的回调及退出地址精确匹配 HTTPS origin。桌面回环只允许既定 IPv4 回调路径，由 Keycloak 的原生回环规则接受临时端口。
+
+本模板不授权原生移动端的自定义 scheme；原生开发工程只可接隔离开发 realm。正式原生客户端必须使用独立 client ID 及受平台认领的 HTTPS App/Universal Links，并核对实际发布签名、域名关联文件及系统回跳后才开通。PKCE 防止截获者兑换别人的 code，但不能让恶意应用无法以自己的 verifier 发起同一个 public client 请求。缺少签名/关联证据时保留关闭状态，不能把可用 Web 服务标作已完成原生签名发布。
 
 使用固定版本 Keycloak 的 `basic` 默认 scope 提供真实 `sub` 和会话 `auth_time`，不以常量、用户可编辑属性或刷新时间替代。上线时验证实际签名 token，而不是只检查 JSON 配置。协议配置依据 [Keycloak 管理指南](https://www.keycloak.org/docs/latest/server_admin/)，`auth_time` 的具体实现见[固定版本源码](https://github.com/keycloak/keycloak/blob/26.8.1/services/src/main/java/org/keycloak/protocol/oidc/OIDCLoginProtocolFactory.java)。
 
