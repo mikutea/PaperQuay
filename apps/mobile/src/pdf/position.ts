@@ -8,18 +8,18 @@ import { PdfError } from './errors.ts';
 import type { PdfVersion } from './types.ts';
 import { assertPdfTarget, capturePdfVersion } from './versionGuard.ts';
 
-export type ReaderController = Pick<WorkspaceController, 'save' | 'getSnapshot'>;
+export type ReaderController = Pick<WorkspaceController, 'save' | 'getSnapshot' | 'syncNow'>;
 export interface ReaderIdentity { accountId: string; deviceId: string; generation: number }
 export interface ReadingPoint { pageIndex: number; offsetRatio: number }
 export type PositionStatus = 'idle' | 'saving' | 'saved' | 'error';
 
-export function readerIdentity(controller: ReaderController, scope: AccountScope): ReaderIdentity {
+export function readerIdentity(controller: Pick<ReaderController, 'getSnapshot'>, scope: AccountScope): ReaderIdentity {
   const state = controller.getSnapshot().workspace?.sync;
   if (!state || state.accountId !== scope.accountId) throw new PdfError('ACCOUNT_CHANGED');
   return { accountId: state.accountId, deviceId: state.deviceId, generation: state.generation };
 }
 
-export function sameReaderIdentity(controller: ReaderController, identity: ReaderIdentity): boolean {
+export function sameReaderIdentity(controller: Pick<ReaderController, 'getSnapshot'>, identity: ReaderIdentity): boolean {
   const state = controller.getSnapshot().workspace?.sync;
   return Boolean(state && state.accountId === identity.accountId && state.deviceId === identity.deviceId && state.generation === identity.generation);
 }
@@ -161,6 +161,9 @@ export class ReadingCheckpointWriter {
       await work;
     }
     if (!this.stopped && this.failure) throw this.failure;
+    // Closing/background flushes persist the final point and request its sync
+    // immediately. Network latency never delays the durable local-save result.
+    if (!this.stopped && sameReaderIdentity(this.controller, this.identity)) void this.controller.syncNow();
   }
 
   stop(): void { this.stopped = true; this.pending = null; if (this.timer) clearTimeout(this.timer); this.timer = null; }

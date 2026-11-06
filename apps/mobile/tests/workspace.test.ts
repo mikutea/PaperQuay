@@ -8,7 +8,10 @@ import {
   type PushRequest,
   type PushResult,
   type SyncRecord,
+  type ReadingPositionData,
 } from '../../../packages/sync-core/src/index.ts';
+import { ownReadingPosition, ReadingCheckpointWriter } from '../src/pdf/position.ts';
+import type { PdfVersion } from '../src/pdf/types.ts';
 import {
   SyncApi,
   type AccountIdentity,
@@ -278,6 +281,88 @@ function setup(
   });
   return { api, factory, databaseName, store, controller };
 }
+
+test('continuous online scrolling persists locally every quarter second while checkpoint sync stays within its request budget', async t => {
+  const env = setup(), scope = { apiBaseUrl: 'https://sync.example.test', accountId: A };
+  t.after(async () => { env.controller.deactivate(); await env.store.close(); });
+  await env.controller.bind('Reader');
+  await env.controller.save(paperEdit());
+  const version: PdfVersion = { entityId: crypto.randomUUID(), data: { paperId: PAPER, attachmentId: crypto.randomUUID(),
+    sha256: 'a'.repeat(64), sizeBytes: 1024, mediaType: 'application/pdf', fileName: 'scroll.pdf', pageCount: 20 } };
+  await env.controller.save({ entityType: 'attachmentVersion', entityId: version.entityId, mutation: 'put', data: version.data });
+  env.controller.setOnline(true); await env.controller.syncNow();
+  let auxiliaryRequests = 0;
+  const conflicts = env.api.conflicts.bind(env.api), devices = env.api.devices.bind(env.api);
+  t.mock.method(env.api, 'conflicts', async () => { auxiliaryRequests++; return conflicts(); });
+  t.mock.method(env.api, 'devices', async () => { auxiliaryRequests++; return devices(); });
+  const requestsBefore = env.api.requests.length + env.api.pullRequests.length;
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let status = 'idle';
+  const writer = new ReadingCheckpointWriter(env.controller, scope, version, { onStatus: value => { status = value; } });
+  t.after(() => writer.stop());
+  async function settle() {
+    const deadline = performance.now() + 5000;
+    while (status === 'saving' || env.controller.getSnapshot().syncing) {
+      assert(performance.now() < deadline, 'checkpoint did not finish its local save or current sync');
+      await new Promise<void>(resolve => setImmediate(resolve));
+    }
+  }
+  for (let index = 0; index < 240; index++) {
+    writer.record({ pageIndex: index % 20, offsetRatio: 0.2 });
+    t.mock.timers.tick(250); await settle();
+    const saved = ownReadingPosition((await env.store.read(scope))!.sync, version)!.data as ReadingPositionData;
+    assert.equal(saved.pageIndex, index % 20, 'the latest point is durably saved without waiting for the network interval');
+  }
+  const automaticRequests = env.api.requests.length + env.api.pullRequests.length + auxiliaryRequests - requestsBefore;
+  assert(automaticRequests <= 16, `one minute of scrolling sent ${automaticRequests} requests instead of at most four sync runs`);
+  writer.record({ pageIndex: 2, offsetRatio: 0.1 }); t.mock.timers.tick(250); await settle();
+  const pushes = env.api.requests.length;
+  await writer.flush(); await settle();
+  assert.equal(env.api.requests.length, pushes + 1, 'the explicit final flush sends the latest local checkpoint immediately');
+  assert.equal(env.controller.getSnapshot().workspace!.sync.outbox.length, 0);
+  const last = env.api.records.get(A)!.filter(row => row.entityType === 'readingPosition').at(-1)!.data as ReadingPositionData;
+  assert.equal(last.pageIndex, 2); assert.equal(last.furthestPageIndex, 19);
+  t.mock.timers.tick(15000); await settle();
+  assert.equal(env.api.requests.length, pushes + 1, 'the final flush cancels its deferred duplicate');
+});
+
+test('an existing sync cannot drain newly deferred positions; manual flush and account retirement preserve their boundaries', async t => {
+  const env = setup(), scope = { apiBaseUrl: 'https://sync.example.test', accountId: A };
+  t.after(async () => { env.controller.deactivate(); await env.store.close(); });
+  await env.controller.bind('Reader'); await env.controller.save(paperEdit());
+  const versionId = crypto.randomUUID(), positionId = crypto.randomUUID(), sessionId = crypto.randomUUID();
+  await env.controller.save({ entityType: 'attachmentVersion', entityId: versionId, mutation: 'put', data: {
+    paperId: PAPER, attachmentId: crypto.randomUUID(), sha256: 'a'.repeat(64), sizeBytes: 1024,
+    mediaType: 'application/pdf', fileName: 'scroll.pdf', pageCount: 20 } });
+  env.controller.setOnline(true); await env.controller.syncNow();
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const point = (sequence: number) => ({ entityType: 'readingPosition' as const, entityId: positionId, mutation: 'put' as const,
+    data: { paperId: PAPER, attachmentVersionId: versionId, pageIndex: sequence, offsetRatio: 0.2,
+      furthestPageIndex: sequence, furthestOffsetRatio: 0.2, sessionId, deviceSequence: sequence, observedAt: NOW } });
+  const pause = { entered: deferred<void>(), release: deferred<void>() }; env.api.pausePush = pause;
+  await env.controller.save(edit('A note being synchronized'));
+  await pause.entered.promise;
+  const running = env.controller.syncNow(), pushes = env.api.requests.length;
+  await env.controller.save(point(1));
+  pause.release.resolve(); await running;
+  assert.equal(env.api.requests.length, pushes, 'the note sync must leave the scrolling position for its interval');
+  assert.equal(env.controller.getSnapshot().workspace!.sync.outbox.length, 1);
+  await env.controller.syncNow();
+  assert.equal(env.api.requests.length, pushes + 1, 'an explicit sync bypasses the interval');
+  assert.equal(env.controller.getSnapshot().workspace!.sync.outbox.length, 0);
+  const reads = env.api.pullRequests.length;
+  t.mock.timers.tick(15000); await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(env.api.pullRequests.length, reads, 'the explicit sync removed its old automatic timer');
+  await env.controller.save(point(2));
+  env.controller.deactivate(); env.api.account = B;
+  await env.controller.bind('Replacement'); await env.controller.syncNow();
+  const replacementPushes = env.api.requests.length, replacementPulls = env.api.pullRequests.length;
+  t.mock.timers.tick(30000); await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(env.api.requests.length, replacementPushes); assert.equal(env.api.pullRequests.length, replacementPulls);
+  const retained = (await env.store.read(scope))!.sync.outbox;
+  assert.equal(retained.length, 1); assert.equal((retained[0].operation.data as ReadingPositionData).pageIndex, 2);
+  assert.equal(env.controller.getSnapshot().workspace!.sync.outbox.length, 0, 'the replacement account has no old reading position');
+});
 
 test('opting into organization restarts the feed once without dropping cached records or pending work', async () => {
   const env = setup();

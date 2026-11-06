@@ -9,7 +9,7 @@ import { WorkspaceController, decodeWorkspace, type StoredWorkspace } from '../s
 import { ClientError } from '../src/errors.ts';
 import { createRetrievalSession } from '../src/retrieval/session.ts';
 import { remoteRetrievalDigest, runRemoteLexicalRetrieval, type RemoteRetrievalReceipt, type RemoteRetrievalRequest } from '../../../packages/sync-core/src/remoteRetrieval.ts';
-import type { SyncOperation } from '../../../packages/sync-core/src/index.ts';
+import type { SyncOperation, AttachmentVersionData } from '../../../packages/sync-core/src/index.ts';
 import { LocalAiConfigStore, defaultAiProvider } from '../src/ai/provider.ts';
 import { MemorySecretStore } from '../src/platform/secretStore.ts';
 import type { AiTransport } from '../src/ai/types.ts';
@@ -37,6 +37,28 @@ async function field(r: ReactTestRenderer, label: string, value: string) {
   const row = r.root.findAllByType('label').find(n => text(n).startsWith(label)); assert(row, 'Missing field: ' + label);
   const input = row.findAll(n => ['textarea', 'select', 'input'].includes(String(n.type)))[0]; await act(async () => input.props.onChange({ target: { value } }));
 }
+
+test('a desktop source with unknown local page count stays selectable through retrieval and evidence adoption', async t => {
+  const a = await setup(t);
+  await act(async () => {
+    await a.store.update(scope, value => {
+      const key = 'attachmentVersion:' + a.f.source.target.attachmentVersionId, record = value!.sync.serverRecords[key];
+      assert(record.entityType === 'attachmentVersion');
+      return { ...value!, sync: { ...value!.sync, serverRecords: { ...value!.sync.serverRecords,
+        [key]: { ...record, data: { ...(record.data as AttachmentVersionData), pageCount: null } } } } };
+    });
+    await a.controller.refreshRetrievalSession();
+  });
+  await click(a.r, '查看可用来源'); await until(() => checks(a.r).length === 1);
+  assert.equal(checks(a.r)[0].props.disabled, false);
+  await check(a.r); await field(a.r, '检索词', 'urban'); await click(a.r, '预览检索范围');
+  await until(() => !!a.controller.getSnapshot().workspace!.retrievalSession);
+  await click(a.r, '确认检索这些来源');
+  await until(() => a.controller.getSnapshot().workspace!.retrievalSession!.status === 'complete');
+  await check(a.r); await click(a.r, '采用所选片段');
+  assert.equal(a.adopted.length, 1);
+  assert.equal(a.adopted[0].receipt.request.sources[0].target.pageCount, a.f.source.target.pageCount);
+});
 
 async function setup(t: TestContext, kind: 'sheet' | 'research' | 'agent' = 'sheet', options: { seeded?: 'prepared' | 'uncertain' | 'complete'; extraPaper?: boolean; allReceiptSources?: boolean; paperIds?: string[] } = {}) {
   const f = retrievalFixture(), extra = options.extraPaper ? retrievalFixture() : null, store = new AccountStore<StoredWorkspace>({ decode: decodeWorkspace, indexedDB: new IDBFactory(), databaseName: crypto.randomUUID() });

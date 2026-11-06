@@ -34,6 +34,7 @@ async function fixture(overrides: Partial<PaperReaderProps> = {}) {
       },
       attachmentVersions: [], annotations: [], positions: [],
       controller: {
+        syncNow: async () => {},
         getSnapshot: () => ({
           status: 'ready', identity: null, workspace: { sync, pendingResolutions: {} }, syncing: false,
           online: true, needsLogin: false, devices: [], conflicts: [], lastSyncedAt: null, error: null,

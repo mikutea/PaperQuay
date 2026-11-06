@@ -72,6 +72,7 @@ function model() {
     online: true, needsLogin: false, syncing: false, devices: [], conflicts: [], lastSyncedAt: null, error: null };
   const saved: unknown[] = [];
   const controller: PaperReaderProps['controller'] = {
+    syncNow: async () => {},
     getSnapshot: () => snapshot,
     save: async (...args) => { saved.push(args); return undefined; },
   };

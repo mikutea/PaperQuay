@@ -38,6 +38,7 @@ function harness(initial = createAccountState(account, device)) {
   state.serverRecords[entityKey('attachmentVersion', version.entityId)] = { ...metadata,
     entityType: 'attachmentVersion', entityId: version.entityId, data: structuredClone(version.data) };
   const controller: ReaderController = {
+    async syncNow() {},
     getSnapshot() { return { workspace: { sync: state, pendingResolutions: {} }, devices: [] } as unknown as WorkspaceSnapshot; },
     async save(edit: LocalEdit, expectedRevision?: number, beforeCommit?: (current: Readonly<AccountSyncState>) => void) {
       calls++; const origin = { account: state.accountId, generation: state.generation, device: state.deviceId };

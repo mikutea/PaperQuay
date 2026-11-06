@@ -282,6 +282,8 @@ export class WorkspaceController {
   private epoch = 0;
   private abort = new AbortController();
   private running: Promise<void> | null = null;
+  private readingSyncTimer: ReturnType<typeof setTimeout> | null = null;
+  private flushReadingAfterRun = false;
   private listeners = new Set<() => void>();
   private snapshot: WorkspaceSnapshot;
 
@@ -392,6 +394,8 @@ export class WorkspaceController {
     return result;
   }
   private stop(): void {
+    this.clearReadingSyncTimer();
+    this.flushReadingAfterRun = false;
     this.epoch += 1;
     this.abort.abort();
     this.abort = new AbortController();
@@ -418,6 +422,8 @@ export class WorkspaceController {
   }
 
   requireLogin(error = new ClientError('AUTH_REQUIRED')): void {
+    this.clearReadingSyncTimer();
+    this.flushReadingAfterRun = false;
     this.abort.abort();
     this.running = null;
     this.publish({
@@ -566,6 +572,10 @@ export class WorkspaceController {
   ): Promise<void> {
     const epoch = this.epoch;
     try {
+      // Local position persistence stays fast. Reserve its network interval
+      // before the transaction, so an already running sync cannot pick up a
+      // newly committed scrolling checkpoint and bypass this coalescing.
+      if (edit.entityType === 'readingPosition') this.deferReadingSync();
       await this.update(epoch, (value) => {
         if(!this.supportedContent(edit,value,true))throw new ClientError('SYNC_FEATURE_UNAVAILABLE');
         if (
@@ -584,7 +594,10 @@ export class WorkspaceController {
         };
       });
       // Saving is complete only after the IndexedDB transaction commits.
-      if (!this.snapshot.needsLogin) void this.syncNow();
+      if (!this.snapshot.needsLogin) {
+        if (edit.entityType === 'readingPosition') this.deferReadingSync();
+        else void this.syncNow();
+      }
     } catch (error) {
       this.assertBinding(epoch);
       const safe = safeError(error);
@@ -1041,12 +1054,37 @@ export class WorkspaceController {
   }
 
   setOnline(online: boolean): void {
+    if (!online) this.clearReadingSyncTimer();
     this.publish({ online });
     if (online) void this.syncNow();
   }
 
+  private clearReadingSyncTimer(): void {
+    if (this.readingSyncTimer !== null) clearTimeout(this.readingSyncTimer);
+    this.readingSyncTimer = null;
+  }
+
+  private deferReadingSync(): void {
+    if (this.readingSyncTimer !== null || this.snapshot.status !== 'ready' || !this.snapshot.online
+      || this.snapshot.needsLogin || this.abort.signal.aborted) return;
+    const epoch = this.epoch;
+    // At most four automatic checkpoint sync runs/minute (normally 16
+    // requests), leaving the shared account budget for other operations.
+    this.readingSyncTimer = setTimeout(() => {
+      this.readingSyncTimer = null;
+      if (!this.current(epoch)) return;
+      if (this.running) this.flushReadingAfterRun = true;
+      void this.syncNow();
+    }, 15000);
+  }
+
   syncNow = (): Promise<void> => {
-    if (this.running) return this.running;
+    const pendingReading = this.readingSyncTimer !== null;
+    this.clearReadingSyncTimer();
+    if (this.running) {
+      if (pendingReading) this.flushReadingAfterRun = true;
+      return this.running;
+    }
     if (
       this.snapshot.status !== 'ready' ||
       !this.snapshot.online ||
@@ -1060,13 +1098,12 @@ export class WorkspaceController {
       if (this.epoch === epoch) {
         this.running = null;
         this.publish({ syncing: false });
-        if (
-          !this.snapshot.error &&
-          this.snapshot.workspace?.sync.outbox.some((entry) => entry.status === 'queued'&&this.supportedContent(entry.operation))
-        )
-          queueMicrotask(() => {
-            if (this.epoch === epoch) void this.syncNow();
-          });
+        const queued = this.snapshot.workspace?.sync.outbox.filter(entry => entry.status === 'queued' && this.supportedContent(entry.operation)) ?? [];
+        if (!this.snapshot.error && queued.length) {
+          if (!this.flushReadingAfterRun && queued.every(entry => entry.operation.entityType === 'readingPosition')) this.deferReadingSync();
+          else queueMicrotask(() => { if (this.epoch === epoch) void this.syncNow(); });
+        }
+        this.flushReadingAfterRun = false;
       }
     });
     this.running = task;
@@ -1144,6 +1181,7 @@ export class WorkspaceController {
         await this.update(epoch, (value) => {
           const index = value.sync.outbox.findIndex((entry) => {
             if (entry.status !== 'queued' && entry.status !== 'uncertain') return false;
+            if (entry.operation.entityType === 'readingPosition' && this.readingSyncTimer !== null) return false;
             return canAttempt(entry.operation.opId)&&this.supportedContent(entry.operation,value);
           });
           if (index < 0) return value;

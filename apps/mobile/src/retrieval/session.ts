@@ -64,6 +64,6 @@ export function assertRetrievalSourcesCurrent(request: RemoteRetrievalRequest, s
     const paper = getVisibleEntity(sync as AccountSyncState, 'paper', target.paperId), version = getVisibleEntity(sync as AccountSyncState, 'attachmentVersion', target.attachmentVersionId);
     const data = version?.data as AttachmentVersionData | null;
     if (!paper?.data || paper.deleted || paper.pending || paper.revision !== target.paperRevision || !data || version!.deleted || version!.pending || version!.revision !== target.versionRevision
-      || data.paperId !== target.paperId || data.sha256 !== target.sha256 || data.sizeBytes !== target.sizeBytes || data.pageCount !== target.pageCount || data.fileName !== target.fileName) throw new RetrievalError('SOURCE_CHANGED');
+      || data.paperId !== target.paperId || data.sha256 !== target.sha256 || data.sizeBytes !== target.sizeBytes || (data.pageCount !== null && data.pageCount !== target.pageCount) || data.fileName !== target.fileName) throw new RetrievalError('SOURCE_CHANGED');
   }
 }

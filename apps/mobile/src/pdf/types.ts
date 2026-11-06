@@ -45,7 +45,7 @@ export interface PaperReaderProps {
   attachmentVersions: VisibleEntity[];
   annotations: VisibleEntity[];
   positions: VisibleEntity[];
-  controller: Pick<WorkspaceController, 'save' | 'getSnapshot'>;
+  controller: Pick<WorkspaceController, 'save' | 'getSnapshot' | 'syncNow'>;
   onBack: () => void;
   onAskAi?: (context: PdfAiContext) => void;
   jumpTo?: PdfCitationTarget;

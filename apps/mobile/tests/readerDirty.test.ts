@@ -32,6 +32,7 @@ function fixture() {
   const events: string[] = [];
   const dirty = new ReaderDirtyState((value) => { parentUnsaved = value; events.push(`dirty:${value}`); });
   const controller: ReaderController = {
+    async syncNow() {},
     getSnapshot: () => ({ workspace: { sync: state, pendingResolutions: {} } } as WorkspaceSnapshot),
     async save(edit: LocalEdit, _expectedRevision?: number, beforeCommit?: (current: Readonly<AccountSyncState>) => void) {
       await gate.promise;

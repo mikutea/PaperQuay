@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createAccountState } from '../../../packages/sync-core/src/state.ts';
-import { listVisibleEntities } from '../../../packages/sync-core/src/index.ts';
+import { listVisibleEntities, type AttachmentVersionData } from '../../../packages/sync-core/src/index.ts';
 import { researchContextFromRetrieval } from '../src/research/fromRetrieval.ts';
 import { validateResearchContext, buildResearchMessages } from '../src/research/context.ts';
 import { researchResultMarkdown } from '../src/research/session.ts';
@@ -19,6 +19,20 @@ function synced(f: ReturnType<typeof retrievalFixture>) {
   const state = createAccountState(retrievalScope.accountId, retrievalDevice);
   state.serverRecords = Object.fromEntries(retrievalRecords(f).map(row => [row.entityType + ':' + row.entityId, row])); return state;
 }
+
+test('verified index pages are usable before desktop attachment metadata has a known page count', async () => {
+  const f = retrievalFixture(), receipt = await retrievalReceipt(f), sync = synced(f);
+  const version = sync.serverRecords['attachmentVersion:' + f.source.target.attachmentVersionId];
+  (version.data as AttachmentVersionData).pageCount = null;
+  const input = { receipt, evidenceIds: receipt.result.evidence.map(row => row.id), sync };
+  const research = await researchContextFromRetrieval({ ...input, question: 'Use this verified source' });
+  assert.equal(research.sources[0].remoteRetrieval!.source.target.pageCount, f.source.target.pageCount);
+  const targets = captureAgentTargets(listVisibleEntities(sync), [f.source.target.paperId]);
+  assert.equal(agentContextsFromRetrieval({ ...input, targets })[0].remoteRetrieval!.source.target.pageCount, f.source.target.pageCount);
+  (version.data as AttachmentVersionData).pageCount = f.source.target.pageCount! + 1;
+  await assert.rejects(researchContextFromRetrieval({ ...input, question: 'Conflicting pages' }), { code: 'SOURCE_CHANGED' });
+  assert.throws(() => agentContextsFromRetrieval({ ...input, targets }), { code: 'SOURCE_CHANGED' });
+});
 test('remote snippets keep original chunk numbers, exact pages, hashes and omitted coverage in the actual Research payload', async () => {
   const f = retrievalFixture(), receipt = await retrievalReceipt(f), sync = synced(f), row = receipt.result.evidence.at(-1)!;
   const context = await researchContextFromRetrieval({ receipt, evidenceIds: [row.id], sync, question: 'What is the scope of the evidence?' });
