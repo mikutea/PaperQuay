@@ -12,10 +12,11 @@ const SYSTEM_CATEGORIES = [
   ['system-favorites', 'Favorites', 'favorites', 3],
 ];
 
-function createAppPaths(app, dataDirectory) {
-  // Pin explicitly selected/profile-owned roots before deriving companions.
+function createAppPaths(app, dataDirectory, { canonicalDataDirectory = false } = {}) {
+  // An adopted root was already canonicalized during inspection. Resolving it
+  // again here would authorize an attacker's newly substituted junction.
   const profileLibrary = canonicalPath(path.join(app.getPath('userData'), 'PaperQuay'));
-  const dataDir = canonicalPath(dataDirectory || profileLibrary);
+  const dataDir = canonicalDataDirectory && dataDirectory ? path.resolve(dataDirectory) : canonicalPath(dataDirectory || profileLibrary);
   const normalizedPath = (value) => {
     let ancestor = path.resolve(value);
     const missing = [];
@@ -25,7 +26,8 @@ function createAppPaths(app, dataDirectory) {
     const canonical = path.join(fs.realpathSync.native(ancestor), ...missing);
     return process.platform === 'win32' ? canonical.toLowerCase() : canonical;
   };
-  const external = normalizedPath(dataDir) !== normalizedPath(profileLibrary);
+  const dataKey = canonicalDataDirectory ? (process.platform === 'win32' ? dataDir.toLowerCase() : dataDir) : normalizedPath(dataDir);
+  const external = dataKey !== normalizedPath(profileLibrary);
 
   return {
     dataDir,
@@ -35,7 +37,7 @@ function createAppPaths(app, dataDirectory) {
     legacyConfigPath: path.join(profileLibrary, 'paperquay-data', 'paperquay.config.json'),
     backupSnapshotDir: path.join(profileLibrary, '.backup-snapshots'),
     privateLibrarySettingsPath: external ? path.join(profileLibrary, '.settings', 'libraries',
-      hashBytes(Buffer.from(normalizedPath(dataDir))) + '.json') : null,
+      hashBytes(Buffer.from(dataKey)) + '.json') : null,
     mineruCacheDir: path.join(dataDir, '.mineru-cache'),
     remotePdfDownloadDir: path.join(dataDir, '.downloads', 'pdfs'),
     libraryPath: path.join(dataDir, 'paperquay-library.json'),

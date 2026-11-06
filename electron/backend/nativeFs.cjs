@@ -19,4 +19,5 @@ module.exports = {
   readSync: (filePath, options = {}) => binding.runSync(request('read', filePath, options)),
   openRead: (filePath) => binding.run(request('openRead', filePath)),
   remove: (filePath, options = {}) => binding.run(request('remove', filePath, options)),
+  removeSync: (filePath, options = {}) => binding.runSync(request('remove', filePath, options)),
 };

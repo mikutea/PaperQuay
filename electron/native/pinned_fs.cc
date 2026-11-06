@@ -78,7 +78,8 @@ static const auto NtSet = reinterpret_cast<NtSetInformationFileFn>(GetProcAddres
 static const auto NtError = reinterpret_cast<RtlNtStatusToDosErrorFn>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlNtStatusToDosError"));
 static void ntCheck(NTSTATUS status, const char* op) { if (status < 0) winError(NtError(status), op); }
 static Handle relativeOpen(Handle parent, const Name& name, ACCESS_MASK access, ULONG disposition,
-                           bool directory, bool denyDelete = true) {
+                           bool directory, bool denyDelete = true, ULONG extraOptions = 0,
+                           ULONG share = FILE_SHARE_READ | FILE_SHARE_WRITE, ULONG fileAttributes = FILE_ATTRIBUTE_NORMAL) {
   if (!NtCreate || !NtSet || !NtError) unsafe("Native filesystem APIs unavailable.");
   if (name.size() > 32760) unsafe("Path component is too long.");
   UNICODE_STRING text{}; text.Buffer = const_cast<wchar_t*>(name.data());
@@ -89,9 +90,9 @@ static Handle relativeOpen(Handle parent, const Name& name, ACCESS_MASK access, 
   // OPEN_REPARSE_POINT is essential for the *single* component. A multi-part
   // relative name would still follow an intermediate junction.
   ntCheck(NtCreate(&result, access | SYNCHRONIZE | FILE_READ_ATTRIBUTES, &attributes, &io, nullptr,
-    FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ | FILE_SHARE_WRITE | (denyDelete ? 0 : FILE_SHARE_DELETE),
+    fileAttributes, share | (denyDelete ? 0 : FILE_SHARE_DELETE),
     disposition, 0x00200000 /* FILE_OPEN_REPARSE_POINT */ | 0x20 /* FILE_SYNCHRONOUS_IO_NONALERT */ |
-    (directory ? 0x1 /* FILE_DIRECTORY_FILE */ : 0), nullptr, 0), "Relative open");
+    (directory ? 0x1 /* FILE_DIRECTORY_FILE */ : 0) | extraOptions, nullptr, 0), "Relative open");
   return result;
 }
 struct Info { bool directory; bool reparse; uint64_t size; uint64_t device; uint64_t inode; uint64_t links; uint64_t modified; };
@@ -566,6 +567,7 @@ static napi_value resultValue(napi_env env, const Result& output) {
   napi_value object; napi_create_object(env, &object);
   auto put = [&](const char* key, napi_value value) { napi_set_named_property(env, object, key, value); };
   napi_value size; napi_create_double(env, (double)output.stat.size, &size); put("size", size);
+  napi_value links; napi_create_double(env, double(output.stat.links), &links); put("links", links);
   put("identity", string(env, identity(output.stat))); put("actual", string(env, output.actual));
   put("version", string(env, version(output.stat)));
   put("linkPath", string(env, output.linkPath)); put("target", string(env, output.target)); put("suffix", string(env, output.suffix));
@@ -621,9 +623,13 @@ static napi_value runSync(napi_env env, napi_callback_info info) {
   catch (const std::exception& error) { napi_throw(env, errorValue(env, "EIO", error.what())); }
   return nullptr;
 }
+#include "sqlite_boundary.inc.cc"
+
 static napi_value initialize(napi_env env, napi_value exports) {
   napi_property_descriptor descriptors[] = {{"run", nullptr, run, nullptr, nullptr, nullptr, napi_default, nullptr},
-    {"runSync", nullptr, runSync, nullptr, nullptr, nullptr, napi_default, nullptr}};
-  napi_define_properties(env, exports, 2, descriptors); return exports;
+    {"runSync", nullptr, runSync, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"sqlitePin", nullptr, sqliteBoundary::pin, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"sqliteRelease", nullptr, sqliteBoundary::release, nullptr, nullptr, nullptr, napi_default, nullptr}};
+  napi_define_properties(env, exports, 4, descriptors); return exports;
 }
 NAPI_MODULE(NODE_GYP_MODULE_NAME, initialize)

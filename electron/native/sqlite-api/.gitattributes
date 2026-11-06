@@ -1,0 +1,2 @@
+# Preserve the upstream public headers byte-for-byte, including their spaces.
+*.h text eol=lf whitespace=-blank-at-eol

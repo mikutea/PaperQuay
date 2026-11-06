@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
-const { DatabaseSync, sqlStringLiteral, withTransaction } = require('./nodeSqlite.cjs');
+const { DatabaseSync, vacuumInto, withTransaction } = require('./nodeSqlite.cjs');
 const { cleanString } = require('./utils.cjs');
 const nativeFs = require('./nativeFs.cjs');
 const { isDeepStrictEqual } = require('node:util');
@@ -63,12 +63,16 @@ function readLegacyLibrary(filePath) {
 }
 
 function openDatabase(databasePath) {
-  fs.mkdirSync(path.dirname(databasePath), { recursive: true });
   const db = new DatabaseSync(databasePath, { timeout: 5000 });
-  db.exec('PRAGMA journal_mode = WAL;');
-  db.exec('PRAGMA foreign_keys = ON;');
-  createSchema(db);
-  return db;
+  try {
+    db.exec('PRAGMA journal_mode = WAL;');
+    db.exec('PRAGMA foreign_keys = ON;');
+    createSchema(db);
+    return db;
+  } catch (error) {
+    if (db.isOpen) db.close();
+    throw error;
+  }
 }
 
 function createSchema(db) {
@@ -799,10 +803,7 @@ function createLibraryDatabaseStore(appPaths, helpers) {
     },
 
     snapshotTo(targetPath) {
-      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-      fs.rmSync(targetPath, { force: true });
-      db.exec(`VACUUM main INTO ${sqlStringLiteral(targetPath)}`);
-      return targetPath;
+      return vacuumInto(db, targetPath);
     },
 
     loadLegacyRagIndexes() {

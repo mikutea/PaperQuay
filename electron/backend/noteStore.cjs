@@ -1,6 +1,4 @@
-const fs = require('node:fs');
-const path = require('node:path');
-const { DatabaseSync, sqlStringLiteral, withTransaction } = require('./nodeSqlite.cjs');
+const { DatabaseSync, vacuumInto, withTransaction } = require('./nodeSqlite.cjs');
 const { cleanString, id, now } = require('./utils.cjs');
 const { withSnapshotDatabase, assertSnapshotTables, replaceTables } = require('./databaseRestore.cjs');
 
@@ -8,7 +6,6 @@ const NOTE_TYPES = new Set(['highlight', 'area', 'standalone', 'ai-chat']);
 const GLOBAL_NOTES_PAPER_ID = 'global-notes';
 
 function openDatabase(databasePath) {
-  fs.mkdirSync(path.dirname(databasePath), { recursive: true });
   const db = new DatabaseSync(databasePath, { timeout: 5000 });
   try {
     db.exec('PRAGMA journal_mode = WAL;');
@@ -1047,10 +1044,7 @@ function createNoteStore(appPaths) {
     listTags,
     updateNote,
     snapshotTo(targetPath) {
-      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-      fs.rmSync(targetPath, { force: true });
-      db.exec(`VACUUM main INTO ${sqlStringLiteral(targetPath)}`);
-      return targetPath;
+      return vacuumInto(db, targetPath);
     },
     async replaceWithSnapshot(snapshotPath) {
       const tables = ['notes', 'note_tags', 'note_links', 'note_paper_links'];

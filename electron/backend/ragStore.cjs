@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const sqliteVec = require('sqlite-vec');
-const { DatabaseSync, sqlStringLiteral, withTransaction } = require('./nodeSqlite.cjs');
+const { DatabaseSync, vacuumInto, withTransaction } = require('./nodeSqlite.cjs');
 const { cleanString, toError } = require('./utils.cjs');
 const { withSnapshotDatabase, assertSnapshotTables, copyTable, replaceTables } = require('./databaseRestore.cjs');
 const { createHash } = require('node:crypto');
@@ -237,8 +237,6 @@ function createSchema(db) {
 }
 
 function openDatabase(databasePath) {
-  fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-
   const db = new DatabaseSync(databasePath, {
     allowExtension: true,
     timeout: 5000,
@@ -803,10 +801,7 @@ function createRagStore(appPaths) {
     reportFailure,
     retrieveDocumentChunks,
     snapshotTo(targetPath) {
-      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-      fs.rmSync(targetPath, { force: true });
-      db.exec(`VACUUM main INTO ${sqlStringLiteral(targetPath)}`);
-      return targetPath;
+      return vacuumInto(db, targetPath);
     },
     async replaceWithSnapshot(snapshotPath) {
       const tables = ['rag_indexes', 'rag_chunks', 'rag_vec_dimensions'];
