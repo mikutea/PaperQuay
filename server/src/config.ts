@@ -1,6 +1,7 @@
 import {loadModelGatewayConfig,type ModelGatewayConfig} from './model-config.ts';
 import { isIP } from 'node:net';
 import { ApiError } from './errors.ts';
+import {loadNativeAssociations,type NativeAssociations} from './native-links.ts';
 
 export interface ServerConfig {
   host: string;
@@ -27,6 +28,7 @@ export interface ServerConfig {
   cloudPdfAccountBytes: number;
   requestsPerMinute: number;
   trustedProxyIps: string[];
+  nativeAssociations?:NativeAssociations|null;
 }
 
 export const SERVER_LIMITS = Object.freeze({
@@ -211,5 +213,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     desktopPdfStunUrls: checkedDesktopPdfStunUrls(env.PAPERQUAY_DESKTOP_PDF_STUN_URLS),
     cloudPdfAccountBytes: checkedCloudPdfByteLimit(Number(env.PAPERQUAY_CLOUD_PDF_ACCOUNT_BYTES ?? SERVER_LIMITS.cloudPdfAccountBytes)),
     requestsPerMinute, trustedProxyIps: trustedProxyIps(env.PAPERQUAY_TRUSTED_PROXY_IPS),
+    nativeAssociations:loadNativeAssociations(env),
   };
 }

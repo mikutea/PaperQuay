@@ -1,4 +1,5 @@
 import {registerModelInferenceRoutes,MODEL_INFERENCE_CAPABILITY} from './model-inference.ts';
+import {registerNativeAssociationRoutes} from './native-links.ts';
 import type {ModelInferenceRepository} from './model-inference-store.ts';
 import type {ModelGatewayControl} from './model-inference.ts';
 import { createHash, randomUUID } from 'node:crypto';
@@ -210,6 +211,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   });
 
   app.get('/health/live', { onRequest: enforceRateLimit }, async () => ({ status: 'ok' }));
+  registerNativeAssociationRoutes(app,config.nativeAssociations,enforceRateLimit);
   app.get('/health/ready', { onRequest: enforceRateLimit }, async (_request, reply) => {
     const ready = await repository.ready();
     return reply.code(ready ? 200 : 503).send({ status: ready ? 'ready' : 'not_ready' });

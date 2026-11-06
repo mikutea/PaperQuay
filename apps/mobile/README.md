@@ -1,5 +1,7 @@
 # PaperQuay 移动端
 
+正式原生 HTTPS 回调的构建绑定、关联文档与独立客户端配置见 [原生回调说明](../../docs/mobile-sync/native-links.md)。构建成功仍需签名及系统域名关联验收。
+
 独立 React + Vite 客户端，使用同仓 `packages/sync-core`，并提供 Capacitor iOS/Android 工程。M2 接入系统浏览器登录、安全存储、SQLite 与 PDF 私有缓存；原生接入说明见 [NATIVE.md](NATIVE.md)。当前自动化与浏览器证据不代表原生生命周期或四类设备验收完成。
 
 ## 最新开发状态（2026-11-04）

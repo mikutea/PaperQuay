@@ -1,5 +1,7 @@
 # PaperQuay 账号同步与可选私有 PDF 服务
 
+可选原生域名关联文档由 `PAPERQUAY_NATIVE_LINK_ORIGIN`、实际签名应用前缀及证书指纹配置，默认返回 404。配置只提供公开关联文档，不自动开通 OAuth 客户端、API 客户端 ID 或 CORS。构建、部署和独立验收说明见 [原生 HTTPS 回调](../docs/mobile-sync/native-links.md)。
+
 本目录提供独立 Fastify API、PostgreSQL 持久层和 OIDC 访问令牌校验。账号同步包含文献元数据、附件版本描述、Markdown 笔记、PDF 批注和阅读位置。私有 PDF 副本是默认关闭的独立能力，启用后仍需用户对已同步版本明确上传；不接收桌面数据库、绝对路径、第三方模型密钥或账号密码。现有桌面库的导出/导入由 `packages/sync-core` 与桌面适配器负责，服务端不连接用户本地库。
 
 M1 的“设备”是 `(issuer, sub, sid)` 对应的 OIDC 登录会话。服务生成设备 UUID，忽略任何客户端自报的账号归属。刷新令牌仍沿用同一 `sid`；重新登录可以得到新会话。这个设计不证明硬件身份，也不阻止仍有效的 Bearer token 被盗用。原生发布的安全存储、DPoP、正式 IdP/TLS/备份运维属于后续验收。

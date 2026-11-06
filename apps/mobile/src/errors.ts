@@ -22,6 +22,7 @@ export type ClientErrorCode =
   | 'SYNC_FAILED'
   | 'SYNC_FEATURE_UNAVAILABLE'
   | 'NATIVE_NOT_READY'
+  | 'NATIVE_LINKS_REQUIRED'
   | 'CONFLICT_CHANGED'
   | 'EDIT_CHANGED'
   | 'IMPORT_CHANGED'
@@ -54,6 +55,7 @@ const messages: Record<ClientErrorCode, string> = {
   SYNC_FAILED: '同步未完成，请重试或查看待处理操作。',
   SYNC_FEATURE_UNAVAILABLE:'当前账号服务尚未支持这类内容。已保存的内容与待同步操作会保留，请连接支持相应能力的服务后重试。',
   NATIVE_NOT_READY: '此安装包缺少所需原生组件，请使用完整构建的应用。',
+  NATIVE_LINKS_REQUIRED: '此原生安装包尚未配置 HTTPS 认证回调。请使用已开通的网页入口，或联系维护者完成签名与域名关联验收。',
   CONFLICT_CHANGED: '这条记录又有更新，请重新查看双方内容后解决冲突。',
   EDIT_CHANGED: '编辑期间收到新版本。你的草稿仍在，请查看当前版本后再保存。',
   IMPORT_CHANGED: '文库或导入选择已有变化，请重新预览并确认后导入。',

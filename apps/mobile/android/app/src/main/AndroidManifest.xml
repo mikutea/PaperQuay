@@ -47,6 +47,14 @@
                 <data android:mimeType="text/ris" />
             </intent-filter>
 
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="${paperquayCallbackHost}" android:path="/auth/native/android/callback" />
+                <data android:scheme="https" android:host="${paperquayCallbackHost}" android:path="/auth/native/android/logout" />
+            </intent-filter>
+
         </activity>
 
         <provider

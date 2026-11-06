@@ -37,6 +37,12 @@ jobs:
       - name: Install and compile the mobile web bundle
         run: |
           npm ci --prefix apps/mobile
+          # Synthetic public metadata proves build wiring, never device trust.
+          cp apps/mobile/tests/fixtures/native-link-settings.json "$RUNNER_TEMP/native-link-settings.json"
+          npm run configure:native-links --prefix apps/mobile -- \
+            --input "$RUNNER_TEMP/native-link-settings.json" \
+            --output "$RUNNER_TEMP/native-links-android" --platform android
+          export PAPERQUAY_NATIVE_LINK_SETTINGS="$RUNNER_TEMP/native-links-android/native-build.settings.json"
           npm run build --prefix apps/mobile
       - name: Sync native plugins and verify Android
         working-directory: apps/mobile
@@ -59,6 +65,11 @@ jobs:
       - name: Install and compile the mobile web bundle
         run: |
           npm ci --prefix apps/mobile
+          cp apps/mobile/tests/fixtures/native-link-settings.json "$RUNNER_TEMP/native-link-settings.json"
+          npm run configure:native-links --prefix apps/mobile -- \
+            --input "$RUNNER_TEMP/native-link-settings.json" \
+            --output "$RUNNER_TEMP/native-links-ios" --platform ios
+          export PAPERQUAY_NATIVE_LINK_SETTINGS="$RUNNER_TEMP/native-links-ios/native-build.settings.json"
           npm run build --prefix apps/mobile
       - name: Sync native plugins and compile without signing
         working-directory: apps/mobile
@@ -66,6 +77,7 @@ jobs:
           xcodebuild -version
           npx cap sync ios
           xcodebuild -project ios/App/App.xcodeproj -scheme App \
+            -xcconfig "$RUNNER_TEMP/native-links-ios/NativeLinks.xcconfig" \
             -configuration Debug -sdk iphonesimulator \
             -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath "$RUNNER_TEMP/paperquay-ios-build" \
