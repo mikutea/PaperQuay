@@ -33,6 +33,16 @@ def wait_for(action):
     raise ops.OpsError('FIXTURE_START_TIMEOUT')
 
 
+def identity_ready(response):
+    headers, separator, body = response.replace('\r\n', '\n').partition('\n\n')
+    if not separator or not re.match(r'^HTTP/1\.[01] 200\b', headers):
+        return False
+    try:
+        return json.loads(body).get('status') == 'UP'
+    except (ValueError, AttributeError):
+        return False
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--allow-disposable-docker-writes', action='store_true', required=True)
@@ -92,6 +102,7 @@ await app.listen({host:config.host,port:config.port});
             'oidcAuthority': 'https://reader.example.test/identity/realms/paperquay', 'oidcClientId': 'paperquay-mobile'}), 0o644)
         stack = None
         phase = 'configuration'
+        health = ''
         try:
             stack = ops.Stack(target)
             phase = 'database_start'
@@ -141,8 +152,13 @@ console.log(JSON.stringify(statuses));
             ops.require(direct(122, 10) == [200] * 120 + [429, 429] and direct(1, 11) == [200], 'PROXY_SPOOF_GUARD_FAILED')
             identity, _ = stack.container('identity')
             phase = 'identity_health'
-            wait_for(lambda: '"status": "UP"' in ops.capture(['docker', 'exec', identity, 'bash', '-c',
-                "exec 3<>/dev/tcp/127.0.0.1/9000; printf 'GET /health/ready HTTP/1.0\r\n\r\n' >&3; cat <&3"]))
+            def check_identity():
+                nonlocal health
+                health = ops.capture(['docker', 'exec', identity, 'bash', '-c',
+                    "exec 3<>/dev/tcp/127.0.0.1/9000; printf 'GET /health/ready HTTP/1.0\r\n\r\n' >&3; cat <&3"])
+                return identity_ready(health)
+
+            wait_for(check_identity)
             # A real realm and signing keys become part of the PostgreSQL dump.
             phase = 'identity_realm'
             ops.run(['docker', 'exec', identity, 'bash', '-c',
@@ -210,6 +226,13 @@ try {
                     logs = subprocess.run(['docker', 'logs', '--tail', '60', database], stdout=subprocess.PIPE,
                         stderr=subprocess.STDOUT, timeout=15).stdout.decode('utf-8', errors='replace')
                     detail += '\n' + '\n'.join(line for line in logs.splitlines() if 'ERROR:' in line or 'FATAL:' in line)
+                except Exception:
+                    pass
+            if phase == 'identity_health' and stack:
+                try:
+                    logs = subprocess.run(['docker', 'logs', '--tail', '60', stack.container('identity')[0]],
+                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=15).stdout.decode('utf-8', errors='replace')
+                    detail += '\n' + health[:2048] + '\n' + logs
                 except Exception:
                     pass
             for value in [password, *ops.read_env(target / 'sync.env').values()]:
