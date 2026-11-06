@@ -22,6 +22,7 @@ public final class IncomingShareStoreTest {
         byte[] bytes, quarantine;
         boolean failWrite, failClear;
         public byte[] read() { return bytes == null ? null : bytes.clone(); }
+        public boolean hasQuarantine() { return quarantine != null; }
         public void write(byte[] value) throws IOException { if (failWrite) throw new IOException("private detail"); bytes = value.clone(); }
         public void quarantineAndReset(byte[] empty) throws IOException {
             if (failClear || quarantine != null) throw new IOException();
@@ -42,6 +43,7 @@ public final class IncomingShareStoreTest {
     }
     public static void main(String[] args) throws Exception {
         if (args.length == 2 && args[0].equals("--bridge-fixtures")) { writeBridgeFixtures(args[1]); return; }
+        ownedErasure();
         Memory memory = new Memory(); IncomingShareStore store = new IncomingShareStore(memory);
         String raw = "\ufeff标题\r\n\t$\\alpha$ e\u0301 😀\n";
         IncomingShareStore.Item first = add(store, bytes(raw), false);
@@ -122,6 +124,24 @@ public final class IncomingShareStoreTest {
         ownerIsolation();
         strictNames();
         System.out.println("PASS IncomingShareStoreTest: " + assertions + " assertions (pure Java; no Android runtime)");
+    }
+    private static void ownedErasure() throws Exception {
+        Memory memory = new Memory(); IncomingShareStore store = new IncomingShareStore(memory);
+        IncomingShareStore.Item own = add(store, bytes("own private input"), false);
+        IncomingShareStore.Item foreign = add(store, bytes("foreign private input"), false);
+        IncomingShareStore.Item unassigned = add(store, bytes("unassigned input"), false);
+        store.read(own.id, OWNER_A); store.read(foreign.id, OWNER_B);
+        memory.failWrite = true;
+        failure(IncomingSharePolicy.Code.STORAGE_UNAVAILABLE, () -> store.purgeOwned(OWNER_A));
+        equal("own private input", new IncomingShareStore(memory).read(own.id, OWNER_A).text);
+        memory.failWrite = false; store.purgeOwned(OWNER_A);
+        IncomingShareStore restarted = new IncomingShareStore(memory);
+        equal(1, restarted.list(OWNER_A).size()); equal(unassigned.id, restarted.list(OWNER_A).get(0).id);
+        equal(2, restarted.list(OWNER_B).size()); equal("foreign private input", restarted.read(foreign.id, OWNER_B).text);
+        store.purgeOwned(OWNER_A); equal(1, new IncomingShareStore(memory).list(OWNER_A).size());
+        memory.quarantine = bytes("unknown corrupt private content");
+        failure(IncomingSharePolicy.Code.INVALID, () -> store.purgeOwned(OWNER_A));
+        equal(1, new IncomingShareStore(memory).list(OWNER_A).size());
     }
     private static void ownerIsolation() throws Exception {
         Memory memory = new Memory(); IncomingShareStore inbox = new IncomingShareStore(memory);

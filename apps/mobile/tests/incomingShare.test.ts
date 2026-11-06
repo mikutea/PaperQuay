@@ -26,6 +26,30 @@ function driver(change: Partial<IncomingShareDriver> = {}) {
   return { source, calls, client: createIncomingShareClient(source, true, ownerKey) };
 }
 
+test('account purge fences retained clients and late claim results, is retryable, and never calls ordinary inbox clear',async()=>{
+  const owner='privacy-erasure-owner-'+crypto.randomUUID(),wait=gate<unknown>(),entered=gate<void>();
+  let purges=0,clears=0,fail=true;
+  const source:IncomingShareDriver={
+    list:async()=>({items:[meta()],notice:null}),read:async()=>{entered.resolve();return wait.promise;},
+    remove:async()=>{},clear:async()=>{clears++;},
+    purgeOwned:async({owner:hashed})=>{assert.match(hashed,/^[a-f0-9]{64}$/);purges++;if(fail)throw Error('private storage details');},
+    addListener:async()=>({remove:async()=>{}}),
+  };
+  const first=createIncomingShareClient(source,true,owner),retained=createIncomingShareClient(source,true,owner);
+  const reading=retained.read(meta()),rejected=assert.rejects(reading,{code:'CHANGED'});await entered.promise;
+  await assert.rejects(first.purgeOwned(),{code:'CLEAR_FAILED'});
+  wait.resolve(item());await rejected;
+  await assert.rejects(first.read(meta()),{code:'CHANGED'});await assert.rejects(retained.list(),{code:'CHANGED'});
+  fail=false;await first.purgeOwned();assert.equal(purges,2);assert.equal(clears,0);
+  const foreign=createIncomingShareClient(source,true,owner+'-foreign');assert.equal((await foreign.list()).items.length,1);
+  await assert.rejects(first.purgeOwned({current:()=>false}),{code:'CHANGED'});assert.equal(purges,2);
+});
+
+test('an older native plugin without an owner-only purge cannot acknowledge a complete erase',async()=>{
+  const source=driver().source,client=createIncomingShareClient(source,true,'older-plugin-'+crypto.randomUUID());
+  await assert.rejects(client.purgeOwned(),{code:'CLEAR_FAILED'});
+});
+
 test('metadata listing is detached and never reads a body; notifications discard every payload field', async () => {
   const value = driver(), list = await value.client.list(); assert.equal(value.calls.read, 0); assert.deepEqual(list.items, [meta()]);
   let received: unknown[] = ['not-called']; const subscription = await value.client.subscribe((...args) => { received = args; });

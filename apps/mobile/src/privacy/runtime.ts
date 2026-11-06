@@ -1,6 +1,6 @@
 import {normalizeServiceUrl,type AppConfig} from '../config.ts';
 import type {AuthSession} from '../auth/oidc.ts';
-import type {AccountStorage,AccountScope} from '../storage/accountStore.ts';
+import {accountScopeKey,type AccountStorage,type AccountScope} from '../storage/accountStore.ts';
 import type {SecretStore} from '../platform/secretStore.ts';
 import type {StoredWorkspace,WorkspaceController} from '../sync/workspace.ts';
 import {verifiedBinding} from '../storage/verifiedBinding.ts';
@@ -49,6 +49,7 @@ export function createPrivacyRuntime(config:AppConfig,auth:AuthSession,store:Acc
           ?structuredClone(saved.identity):null;
       }};
       await eraseLocalAccount(config.apiBaseUrl,status,current,{binding:recoverableBinding,store,stop:()=>controller.deactivate(),
+        clearIncoming:async scope=>{const {purgeIncomingShareOwner}=await import('../platform/incomingShare.ts');check();await purgeIncomingShareOwner(accountScopeKey(scope),{current});},
         async clearSecrets(scope,workspace) {
           check();const [{LocalAiConfigStore,aiSecretNamespace,AI_SECRET_KEY},{zoteroSecretNamespace,ZOTERO_SECRET_KEY},{radarSecretNamespace}]=await Promise.all([
             import('../ai/provider.ts'),import('../library/zoteroClient.ts'),import('../radar/client.ts')]);

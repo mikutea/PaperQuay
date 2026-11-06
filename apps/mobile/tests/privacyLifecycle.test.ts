@@ -52,7 +52,7 @@ async function fixture() {
   const state={binding:identity as AccountIdentity|null,acks:0,sessions:0,stops:0,fail:'',current:true};
   const clear=async(name:string,_scope:AccountScope)=>{assert.equal(_scope.accountId,scope.accountId);if(state.fail===name)throw Error('synthetic '+name);};
   const dependencies:ErasureDependencies={store,binding:{read:async()=>state.binding,remove:async()=>{state.binding=null;}},
-    stop:()=>{state.stops++;},clearSecrets:s=>clear('secrets',s),clearPdf:s=>clear('pdf',s),clearParsed:s=>clear('parsed',s),
+    stop:()=>{state.stops++;},clearIncoming:s=>clear('incoming',s),clearSecrets:s=>clear('secrets',s),clearPdf:s=>clear('pdf',s),clearParsed:s=>clear('parsed',s),
     clearAi:s=>clear('ai',s),clearExports:s=>clear('exports',s),
     acknowledge:async id=>{assert.equal(id,device);if(state.fail==='ack')throw Error('synthetic lost ACK');state.acks++;},
     clearSession:async afterPersisted=>{if(state.fail==='session')throw Error('synthetic credential removal failure');
@@ -70,7 +70,7 @@ test('a foreign or missing stored binding never clears a scope selected only by 
 });
 
 test('every failed local payload cleanup keeps erasure pending and preserves the original authenticated binding',async()=>{
-  for(const failure of['secrets','pdf','parsed','ai','exports']){
+  for(const failure of['incoming','secrets','pdf','parsed','ai','exports']){
     const f=await fixture();try{f.state.fail=failure;await assert.rejects(f.erase());
       assert.equal(f.state.acks,0);assert.equal(f.state.sessions,0);assert.equal(f.state.binding?.device.id,device);
       assert(await f.store.read(scope));assert(await f.store.read(other));

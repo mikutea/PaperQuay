@@ -8,6 +8,7 @@ export interface ErasureDependencies {
   binding:{read():Promise<AccountIdentity|null>;remove():Promise<void>};
   store:AccountStorage<StoredWorkspace>;
   stop():void;
+  clearIncoming(scope:AccountScope):Promise<void>;
   clearSecrets(scope:AccountScope,workspace:StoredWorkspace|null):Promise<void>;
   clearPdf(scope:AccountScope):Promise<void>;
   clearParsed(scope:AccountScope):Promise<void>;
@@ -28,6 +29,7 @@ export async function eraseLocalAccount(apiBaseUrl:string,status:AccountPrivacyS
   dependencies.stop();check();
   const workspace=await dependencies.store.read(scope);check();
   if(workspace&&workspace.sync.accountId!==binding.accountId)throw new PrivacyError('INVALID');
+  await dependencies.clearIncoming(scope);check();
   await dependencies.clearSecrets(scope,workspace);check();
   await dependencies.clearPdf(scope);check();
   await dependencies.clearParsed(scope);check();
