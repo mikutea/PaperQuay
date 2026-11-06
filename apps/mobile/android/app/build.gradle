@@ -1,10 +1,18 @@
 apply plugin: 'com.android.application'
 
+// Supplied together with the Web bundle's native-link build metadata outside
+// Git. The default is intentionally unassociated and cannot enable login.
+def nativeLinkHost = System.getenv('PAPERQUAY_NATIVE_LINK_HOST') ?: 'unconfigured.invalid'
+if (nativeLinkHost.length() > 253 || !(nativeLinkHost ==~ /(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{1,62}/)) {
+    throw new GradleException('PAPERQUAY_NATIVE_LINK_HOST_INVALID')
+}
+
 android {
     namespace = "dev.paperquay.mobile"
     compileSdk = rootProject.ext.compileSdkVersion
     defaultConfig {
         applicationId "dev.paperquay.mobile"
+        manifestPlaceholders = [paperquayCallbackHost: nativeLinkHost]
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1

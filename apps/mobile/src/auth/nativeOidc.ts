@@ -2,7 +2,8 @@ import { Capacitor } from '@capacitor/core';
 import { App } from '@capacitor/app';
 import { Browser } from '@capacitor/browser';
 import { Log, OidcClient, User, type OidcClientSettings } from 'oidc-client-ts';
-import { NATIVE_LOGOUT_URI, NATIVE_REDIRECT_URI, type AppConfig } from '../config.ts';
+import {configuredNativeLinks,nativeRedirects,type AppConfig} from '../config.ts';
+import type {NativeLinkBinding} from './nativeLinks.ts';
 import { ClientError } from '../errors.ts';
 import { createSecretStore, type SecretStore } from '../platform/secretStore.ts';
 import type { AuthSession, AuthSnapshot, AuthSubject, ClearLocalSessionOptions } from './oidc.ts';
@@ -20,6 +21,8 @@ interface NativeAuthOptions {
   secrets: SecretStore;
   bridge: NativeAuthBridge;
   protocol?: (settings: OidcClientSettings) => NativeOidcProtocol;
+  /** Trusted build metadata; never supplied by the public settings form. */
+  links?:NativeLinkBinding|null;
 }
 
 export function nativeAuthNamespace(config: AppConfig): string {
@@ -75,7 +78,8 @@ export class NativeOidcSession implements AuthSession {
   private refresh: Promise<string> | null = null;
 
   constructor(private readonly config: AppConfig, private readonly options: NativeAuthOptions) {
-    if (config.redirectUri !== NATIVE_REDIRECT_URI || config.logoutRedirectUri !== NATIVE_LOGOUT_URI) throw new ClientError('CONFIG_INVALID');
+    const callbacks=nativeRedirects(config,options.links===undefined?configuredNativeLinks():options.links,import.meta.env?.PROD===true);
+    if(config.redirectUri!==callbacks.redirectUri||config.logoutRedirectUri!==callbacks.logoutRedirectUri)throw new ClientError('CONFIG_INVALID');
     Log.setLevel(Log.NONE);
     this.namespace = nativeAuthNamespace(config);
     this.states = new SecureOidcStateStore(options.secrets, this.namespace);

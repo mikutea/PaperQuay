@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { test, type TestContext } from 'node:test';
-import { parseAppConfig, NATIVE_REDIRECT_URI } from '../src/config.ts';
+import { parseAppConfig, NATIVE_REDIRECT_URI,type AppConfig } from '../src/config.ts';
+import {nativeLinkBinding,type NativeLinkBinding} from '../src/auth/nativeLinks.ts';
 import { NativeOidcSession, nativeAuthNamespace, nativeCallback, type NativeAuthBridge } from '../src/auth/nativeOidc.ts';
 import { SecureOidcStateStore } from '../src/auth/secureStateStore.ts';
 import { MemorySecretStore } from '../src/platform/secretStore.ts';
@@ -73,7 +74,7 @@ class Bridge implements NativeAuthBridge {
   async listenFinished(listener: () => void) { this.finished = listener; return async () => { this.finished = undefined; }; }
   async launchUrl() { return this.launch; }
 }
-function fixture(t: TestContext, secrets = new MemorySecretStore()) {
+function fixture(t: TestContext, secrets = new MemorySecretStore(),nativeConfig:AppConfig=config,links?:NativeLinkBinding|null) {
   const bridge = new Bridge();
   const exchangeEntered = deferred();
   const refreshEntered = deferred();
@@ -90,9 +91,9 @@ function fixture(t: TestContext, secrets = new MemorySecretStore()) {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input, init) => {
     const url = String(input);
-    if (url === `${config.oidcAuthority}/.well-known/openid-configuration`) return Response.json({ issuer: config.oidcAuthority,
-      authorization_endpoint: `${config.oidcAuthority}/authorize`, token_endpoint: `${config.oidcAuthority}/token`, end_session_endpoint: `${config.oidcAuthority}/logout` });
-    assert.equal(url, `${config.oidcAuthority}/token`);
+    if (url === `${nativeConfig.oidcAuthority}/.well-known/openid-configuration`) return Response.json({ issuer: nativeConfig.oidcAuthority,
+      authorization_endpoint: `${nativeConfig.oidcAuthority}/authorize`, token_endpoint: `${nativeConfig.oidcAuthority}/token`, end_session_endpoint: `${nativeConfig.oidcAuthority}/logout` });
+    assert.equal(url, `${nativeConfig.oidcAuthority}/token`);
     assert.equal(init?.credentials, 'omit');
     const body = new URLSearchParams(String(init?.body));
     bodies.push(body);
@@ -106,7 +107,7 @@ function fixture(t: TestContext, secrets = new MemorySecretStore()) {
     }
     const request = new URL(bridge.urls[0]);
     const now = Math.floor(Date.now() / 1000);
-    const payload = { iss: config.oidcAuthority, sub: 'subject-one', aud: config.oidcClientId, sid: 'session-one', name: 'Paper reader', iat: now,
+    const payload = { iss: nativeConfig.oidcAuthority, sub: 'subject-one', aud: nativeConfig.oidcClientId, sid: 'session-one', name: 'Paper reader', iat: now,
       exp: now + 3600, nonce: nonceOverride ?? request.searchParams.get('nonce'), ...alteredClaims };
     // This fixture exercises the real code-flow library's state/nonce/claim checks over a mocked TLS token response.
     const idToken = `${Buffer.from(JSON.stringify({ alg: 'RS256', kid: 'test-only' })).toString('base64url')}.${Buffer.from(JSON.stringify(payload)).toString('base64url')}.fixture`;
@@ -114,9 +115,9 @@ function fixture(t: TestContext, secrets = new MemorySecretStore()) {
       ...(includeRefresh ? { refresh_token: `refresh-${refreshes}` } : {}), id_token: idToken, scope: 'openid profile offline_access' });
   };
   t.after(() => { globalThis.fetch = originalFetch; });
-  const session = new NativeOidcSession(config, { secrets, bridge });
+  const session = new NativeOidcSession(nativeConfig, { secrets, bridge,links });
   t.after(() => session.dispose());
-  const callback = () => `${config.redirectUri}?code=code-one&state=${new URL(bridge.urls[0]).searchParams.get('state')}`;
+  const callback = () => `${nativeConfig.redirectUri}?code=code-one&state=${new URL(bridge.urls[0]).searchParams.get('state')}`;
   return { secrets, bridge, session, callback, bodies, exchangeEntered, refreshEntered,
     get exchanges() { return exchanges; }, get refreshes() { return refreshes; },
     set lifetime(value: number) { lifetime = value; }, set includeRefresh(value: boolean) { includeRefresh = value; },
