@@ -349,7 +349,7 @@ export function LibraryTransferPanel({ entities, controller, scopeKey, accountCu
         : kind === 'library'
         ? { name: `PaperQuay-library-${new Date().toISOString().slice(0, 10)}.json`, text: result!.json, mime: 'application/json' }
         : richExport ? { name: exportFilename(note!.title || '未命名笔记', 'json'), text: richExport.json, mime: 'application/json' }
-        : { name: exportFilename(note!.title || '未命名笔记', 'md'), text: note!.body, mime: 'text/markdown' }, current);
+        : { name: exportFilename(note!.title || '未命名笔记', 'md'), text: note!.body, mime: 'text/markdown' }, current,undefined,controller.getAccountScope()??undefined);
       if (current()) setFeedback(outcome === 'download' ? '已开始下载，请在浏览器下载列表中查看文件。' : '系统分享面板已关闭；保存结果请在所选应用中确认。');
     } catch (cause) { if (current()) setError(message(cause)); }
     finally { busyRef.current = false; if (alive.current) setBusy(false); }

@@ -329,6 +329,7 @@ export class WorkspaceController {
     return () => this.listeners.delete(listener);
   };
   getSnapshot = (): WorkspaceSnapshot => this.snapshot;
+  getAccountScope = ():AccountScope|null => this.snapshot.status==='ready'&&this.scope?{...this.scope}:null;
   getContentCapabilities=(value=this.snapshot.workspace,allowOffline=true)=>{
     const remembered=allowOffline&&(!this.snapshot.online||this.snapshot.needsLogin);
     return{richNotes:this.supportsRichNotes()||Boolean(remembered&&value?.richNotesVersion),
@@ -1314,6 +1315,7 @@ export class WorkspaceController {
         return;
       }
       const safe = safeError(error);
+      if(safe.code==='ACCOUNT_CLOSED'){this.deactivate();this.publish({status:'error',error:safe});return;}
       if (
         safe.code === 'AUTH_REQUIRED' ||
         safe.code === 'SESSION_REVOKED' ||

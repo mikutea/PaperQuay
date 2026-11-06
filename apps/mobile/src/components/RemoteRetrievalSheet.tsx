@@ -112,7 +112,7 @@ export function RemoteRetrievalSheet(p: RemoteRetrievalSheetProps) {
     if (!session) throw new RetrievalError('CHANGED');
     const valid = () => guard() && (candidate ? runner.getSnapshot().candidate === candidate : live(session));
     const result = await exportTextFile({ name: exportFilename('账号关键词检索与原文', 'json'), mime: 'application/json',
-      text: JSON.stringify({ format: 'paperquay-remote-retrieval', version: 1, unconfirmedSave: !!candidate, session }) }, valid, latest.current.exportRuntime);
+      text: JSON.stringify({ format: 'paperquay-remote-retrieval', version: 1, unconfirmedSave: !!candidate, session }) }, valid, latest.current.exportRuntime,p.controller.getAccountScope()??undefined);
     if (valid()) setNotice(result === 'share' ? '已打开系统分享，请在目标应用确认接收。' : '已交给浏览器下载。');
   }); }
   function close() { if (!current()) return; if (busy || running.candidate) { setClosing(true); return; } latest.current.onClose(); }

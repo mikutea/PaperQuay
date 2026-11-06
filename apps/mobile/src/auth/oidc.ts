@@ -18,15 +18,20 @@ export interface AuthSnapshot {
 }
 
 export interface AuthSubject { issuer: string; subject: string; }
+export interface ClearLocalSessionOptions {
+  /** Runs after stored credentials are removed, before forgetting the original
+   * in-memory session needed for its own erasure acknowledgement. */
+  afterPersisted?(accessToken:string|null):Promise<void>;
+}
 export interface AuthSession {
   subscribe(listener: () => void): () => void;
   getSnapshot(): AuthSnapshot;
   getSubject(): AuthSubject | null;
-  signIn(): Promise<void>;
+  signIn(options?:{reauthenticate?:boolean}): Promise<void>;
   completeSignIn(url: string): Promise<void>;
   getAccessToken(): Promise<string>;
   signOut(): Promise<void>;
-  clearLocalSession(): Promise<void>;
+  clearLocalSession(options?:ClearLocalSessionOptions): Promise<void>;
   initialize(): Promise<void>;
   dispose(): Promise<void>;
 }
@@ -110,14 +115,14 @@ export class OidcSession implements AuthSession {
     for (const listener of this.listeners) listener();
   }
 
-  async signIn(): Promise<void> {
+  async signIn(options?:{reauthenticate?:boolean}): Promise<void> {
     this.epoch += 1;
     this.user = null;
     this.setSnapshot({ status: 'signing-in' });
     try {
       await this.manager.removeUser();
       await this.manager.clearStaleState();
-      await this.manager.signinRedirect({ nonce: crypto.randomUUID() });
+      await this.manager.signinRedirect({ nonce: crypto.randomUUID(),...(options?.reauthenticate?{prompt:'login',max_age:0}:{}) });
     } catch {
       const error = new ClientError('AUTH_FAILED');
       this.setSnapshot({ status: 'error', error });
@@ -204,10 +209,13 @@ export class OidcSession implements AuthSession {
     }
   }
 
-  async clearLocalSession(): Promise<void> {
-    this.epoch += 1;
+  async clearLocalSession(options?:ClearLocalSessionOptions): Promise<void> {
+    const epoch=++this.epoch,token=this.user?.access_token??null;
+    await this.manager.removeUser();
+    if(epoch!==this.epoch)throw new ClientError('ACCOUNT_CHANGED');
+    await options?.afterPersisted?.(token);
+    if(epoch!==this.epoch)throw new ClientError('ACCOUNT_CHANGED');
     this.user = null;
     this.setSnapshot({ status: 'signed-out' });
-    await this.manager.removeUser();
   }
 }

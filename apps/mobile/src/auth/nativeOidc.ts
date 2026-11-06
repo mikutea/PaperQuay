@@ -5,7 +5,7 @@ import { Log, OidcClient, User, type OidcClientSettings } from 'oidc-client-ts';
 import { NATIVE_LOGOUT_URI, NATIVE_REDIRECT_URI, type AppConfig } from '../config.ts';
 import { ClientError } from '../errors.ts';
 import { createSecretStore, type SecretStore } from '../platform/secretStore.ts';
-import type { AuthSession, AuthSnapshot, AuthSubject } from './oidc.ts';
+import type { AuthSession, AuthSnapshot, AuthSubject, ClearLocalSessionOptions } from './oidc.ts';
 import { SecureOidcStateStore, serializeSecret } from './secureStateStore.ts';
 
 export interface NativeAuthBridge {
@@ -204,7 +204,7 @@ export class NativeOidcSession implements AuthSession {
     this.callbackTail = result.catch(() => undefined);
     return result;
   }
-  async signIn(): Promise<void> {
+  async signIn(options?:{reauthenticate?:boolean}): Promise<void> {
     await this.initialize();
     const epoch = ++this.epoch;
     this.assertCurrent(epoch);
@@ -215,7 +215,8 @@ export class NativeOidcSession implements AuthSession {
     try {
       await this.clearPersisted();
       this.assertCurrent(epoch);
-      const request = await this.client(epoch).createSigninRequest({ request_type: 'si:r', nonce: crypto.randomUUID() });
+      const request = await this.client(epoch).createSigninRequest({ request_type: 'si:r', nonce: crypto.randomUUID(),
+        ...(options?.reauthenticate?{prompt:'login',max_age:0}:{}) });
       this.assertCurrent(epoch);
       this.awaitingBrowser = true;
       await this.options.bridge.open(browserUrl(request.url));
@@ -313,14 +314,22 @@ export class NativeOidcSession implements AuthSession {
       throw new ClientError('AUTH_REQUIRED');
     }
   }
-  async clearLocalSession(): Promise<void> {
+  async clearLocalSession(options?:ClearLocalSessionOptions): Promise<void> {
+    const token=this.user?.access_token??null;
     const epoch = ++this.epoch;
     this.awaitingBrowser = false;
-    this.user = null;
     this.refresh = null;
-    this.blockedCredentials = false;
-    this.publish({ status: 'signed-out' });
-    await this.clearPersisted();
+    this.blockedCredentials = true;
+    try {
+      await this.clearPersisted();this.assertCurrent(epoch);
+      await options?.afterPersisted?.(token);this.assertCurrent(epoch);
+      this.user=null;this.blockedCredentials=false;
+      this.publish({status:'signed-out'});
+    } catch(error) {
+      if(this.current(epoch))this.publish({...this.snapshot,status:this.user?'signed-in':'error',needsLogin:true,
+        error:new ClientError('STORAGE_FAILED')});
+      throw error;
+    }
     if (this.current(epoch)) await this.options.bridge.close().catch(() => undefined);
   }
   async signOut(): Promise<void> {

@@ -35,7 +35,7 @@ export function ModelRoutingPanel(p:Props){
    if(action==='gatewaySave')await router!.retryGatewaySave(r.request.id,signal);
    if(action==='backup'||action==='gatewayBackup'){
     const value=action==='backup'?await router!.backup(r.request.id):await router!.gatewayCandidate(r.request.id,signal);if(!guard())return;
-    const result=await exportTextFile({name:exportFilename('模型请求-'+r.request.id.slice(0,8),'json'),mime:'application/json',text:JSON.stringify(value,null,2)},guard,p.exportRuntime);
+    const result=await exportTextFile({name:exportFilename('模型请求-'+r.request.id.slice(0,8),'json'),mime:'application/json',text:JSON.stringify(value,null,2)},guard,p.exportRuntime,p.scope);
     if(guard())setNotice(result==='share'?'已打开系统分享，请在目标应用确认接收。':'已交给浏览器下载，请核对保存的文件。');
    }else if(guard())setNotice(action==='cancel'?'已查询原请求的取消状态；已经发出的调用仍可能计费。':'已核对原请求，没有新建模型调用。');
   });

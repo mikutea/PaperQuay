@@ -50,7 +50,7 @@ const text = (node: ReactTestInstance): string => node.children.map(child => typ
 const flush = async () => { await act(async () => { await new Promise<void>(resolve => setImmediate(resolve)); }); };
 async function setup(t: TestContext, change: Partial<NoteExportPanelProps> = {}, adapter = runtime()) {
   const busy: boolean[] = []; let active = true, disposed = false;
-  let props: NoteExportPanelProps = { entities: fixture(), scopeKey: 'account-one-generation-one', accountCurrent: () => active,
+  let props: NoteExportPanelProps = { scope:{apiBaseUrl:'https://sync.example.test',accountId:id(999)},entities: fixture(), scopeKey: 'account-one-generation-one', accountCurrent: () => active,
     onBusyChange: value => busy.push(value), exportRuntime: adapter.platform, ...change };
   let view!: ReactTestRenderer;
   await act(async () => { view = create(createElement(NoteExportPanel, props)); });
@@ -64,6 +64,7 @@ async function setup(t: TestContext, change: Partial<NoteExportPanelProps> = {},
   const select = async (label: string, value: string) => { await act(async () => { control(label).props.onChange({ target: { value } }); }); };
   const toggle = async (label: string, checked: boolean) => { await act(async () => { control(label).props.onChange({ target: { checked } }); }); };
   const update = async (next: Partial<NoteExportPanelProps>) => { props = { ...props, ...next };
+    if(next.scopeKey&&!next.scope)props.scope={apiBaseUrl:'https://sync.example.test',accountId:next.scopeKey.includes('two')?id(998):id(999)};
     await act(async () => { view.update(createElement(NoteExportPanel, props)); }); };
   const unmount = async () => { if (!disposed) { disposed = true; await act(async () => { view.unmount(); }); } };
   t.after(unmount);

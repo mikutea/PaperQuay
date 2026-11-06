@@ -11,6 +11,7 @@ export interface ParsedCacheOptions { signal?: AbortSignal; guard?: () => boolea
 export interface VerifiedParsedDocument { document: ParsedDocumentPackage; digest: string }
 export interface ParsedCacheEntry { versionId: string; sha256: string; sizeBytes: number; storedAt: number }
 export interface ParsedCache {
+  exportEntry?(scope:AccountScope,entry:ParsedCacheEntry,options?:ParsedCacheOptions):Promise<VerifiedParsedDocument>;
   read(scope: AccountScope, version: PdfVersion, pageCount: number, options?: ParsedCacheOptions): Promise<VerifiedParsedDocument | null>;
   put(scope: AccountScope, validated: VerifiedParsedDocument, options: ParsedCacheOptions): Promise<void>;
   remove(scope: AccountScope, versionId: string, options?: ParsedCacheOptions): Promise<void>;
@@ -112,7 +113,7 @@ function expectedVersion(version: PdfVersion, pageCount: number): PdfVersion {
       || (captured.data.pageCount !== null && captured.data.pageCount !== pageCount)) throw new PdfError('VERSION_MISMATCH');
   return captured;
 }
-async function verifyRow(value: unknown, account: string, version: PdfVersion, pageCount: number,
+async function verifyRow(value: unknown, account: string, version: PdfVersion | null, pageCount: number,
   options: ParsedCacheOptions): Promise<VerifiedParsedDocument> {
   check(options);
   let verified: VerifiedParsedDocument;
@@ -124,6 +125,7 @@ async function verifyRow(value: unknown, account: string, version: PdfVersion, p
   } catch { check(options); throw new PdfError('CACHE_CORRUPT'); }
   check(options);
   const document = verified.document;
+  if (!version) return verified;
   if (document.paperId !== version.data.paperId || document.attachmentVersionId !== version.entityId
       || document.pdf.sha256 !== version.data.sha256 || document.pdf.sizeBytes !== version.data.sizeBytes
       || document.pdf.pageCount !== pageCount) throw new PdfError('VERSION_MISMATCH');
@@ -212,6 +214,13 @@ export class WebParsedCache implements ParsedCache {
     const rows = await this.query(account, keyFor(account, expected.entityId, expected.data.sha256), options);
     check(options);
     return rows.length ? verifyRow(rows[0], account, expected, pageCount, options) : null;
+  }
+  async exportEntry(scope:AccountScope,entry:ParsedCacheEntry,options:ParsedCacheOptions={}) {
+    const account=scopeKey(scope),rows=await this.query(account,keyFor(account,entry.versionId,entry.sha256),options);check(options);
+    if(rows.length!==1)throw new PdfError('CACHE_CORRUPT');
+    const row=record(rows[0],account);
+    if(row.storedAt!==entry.storedAt||row.sizeBytes!==entry.sizeBytes)throw new PdfError('CACHE_CORRUPT');
+    return verifyRow(row,account,null,0,options);
   }
   private async mutate(account: string, options: ParsedCacheOptions,
     action: (rows: Metadata[], packages: IDBObjectStore, index: IDBObjectStore) => IDBRequest[]): Promise<void> {
@@ -353,6 +362,16 @@ export class SqliteParsedCache implements ParsedCache {
     sqlMetadata(rows[0], account);
     return verifyRow(rows[0], account, expected, pageCount, options);
   }
+  async exportEntry(scope:AccountScope,entry:ParsedCacheEntry,options:ParsedCacheOptions={}) {
+    const account=scopeKey(scope),key=keyFor(account,entry.versionId,entry.sha256);check(options);
+    const rows=await this.run<Record<string,unknown>[]>(async driver=>{
+      check(options);const result=await driver.query(`SELECT ${selectMetadata}, CASE WHEN length(CAST(payload AS BLOB)) <= ${maxPackageBytes} THEN payload ELSE NULL END AS payload FROM parsed_packages WHERE scope_key = ? AND cache_key = ?`,[account,key]);
+      check(options);return result;
+    });check(options);
+    if(rows.length!==1)throw new PdfError('CACHE_CORRUPT');sqlMetadata(rows[0],account);const row=record(rows[0],account);
+    if(row.storedAt!==entry.storedAt||row.sizeBytes!==entry.sizeBytes)throw new PdfError('CACHE_CORRUPT');
+    return verifyRow(row,account,null,0,options);
+  }
   private async mutate(account: string, options: ParsedCacheOptions,
     action: (driver: AccountSqliteDriver, rows: Metadata[]) => Promise<void>, inspectRows = true): Promise<void> {
     check(options);
@@ -447,6 +466,10 @@ class NativeParsedCache implements ParsedCache {
   }
   async clear(scope: AccountScope, options: ParsedCacheOptions = {}) {
     const capturedScope = { ...scope }; check(options); return (await this.get()).clear(capturedScope, options);
+  }
+  async exportEntry(scope:AccountScope,entry:ParsedCacheEntry,options:ParsedCacheOptions={}) {
+    const capturedScope={...scope},capturedEntry={...entry};check(options);
+    return (await this.get()).exportEntry(capturedScope,capturedEntry,options);
   }
   async list(scope: AccountScope) { const capturedScope = { ...scope }; return (await this.get()).list(capturedScope); }
 }

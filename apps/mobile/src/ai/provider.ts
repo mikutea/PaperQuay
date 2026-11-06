@@ -17,6 +17,11 @@ export class LocalAiConfigStore {
     try {const value=this.#storage.getItem(PUBLIC_CONFIG_PREFIX+'external.'+encodeURIComponent(aiAccountKey(scope)));if(value&&value.length<=8192){const config=parseAiProvider(JSON.parse(value));if(!config.execution)return config;}}catch{}
     const current=this.load(scope);return current.execution?defaultAiProvider():current;
   }
+  clear(scope:AiAccountScope):void {
+    const key=encodeURIComponent(aiAccountKey(scope));
+    try{this.#storage.removeItem(PUBLIC_CONFIG_PREFIX+key);this.#storage.removeItem(PUBLIC_CONFIG_PREFIX+'external.'+key);}
+    catch{throw new AiError('SETTINGS_STORAGE_FAILED');}
+  }
   save(scope: AiAccountScope, config: AiProviderConfig): void {
     const safe = parseAiProvider(config);
     try {

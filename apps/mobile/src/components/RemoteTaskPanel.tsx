@@ -117,7 +117,7 @@ export function RemoteTaskPanel(props:Props){
         latest.current.onParsed?.(task.target.attachmentVersionId,value.digest);current.check();
         setNotice('解析包已核验并保存到本机缓存，可在此 PDF 的“解析”面板中离线阅读。');
       }else{
-        const mode=await exportTextFile({name:exportFilename(task.target.fileName+'-向量索引','json'),text:new TextDecoder().decode(value.bytes),mime:'application/json'},()=>{try{targetCurrent(task);return current.guard();}catch{return false;}});
+        const mode=await exportTextFile({name:exportFilename(task.target.fileName+'-向量索引','json'),text:new TextDecoder().decode(value.bytes),mime:'application/json'},()=>{try{targetCurrent(task);return current.guard();}catch{return false;}},undefined,props.scope);
         current.check();setNotice(mode==='share'?'已打开已核验索引文件的系统分享界面；目标应用是否接收由系统确认。':'已发起已核验索引文件的下载。');
       }
     });

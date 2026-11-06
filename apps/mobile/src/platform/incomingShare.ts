@@ -16,6 +16,7 @@ export interface IncomingShareDriver {
   read(options: { id: string; owner: string }): Promise<unknown>;
   remove(options: { id: string; owner: string }): Promise<void>;
   clear(options: { owner: string }): Promise<void>;
+  purgeOwned?(options: { owner: string }): Promise<void>;
   addListener(event: 'changed', callback: () => void): Promise<IncomingShareSubscription>;
 }
 export interface IncomingShareClient {
@@ -24,6 +25,7 @@ export interface IncomingShareClient {
   read(meta: IncomingShareMeta, options?: IncomingShareOptions): Promise<IncomingShareItem>;
   remove(id: string, options?: IncomingShareOptions): Promise<void>;
   clear(options?: IncomingShareOptions): Promise<void>;
+  purgeOwned(options?: IncomingShareOptions): Promise<void>;
   subscribe(changed: () => void, options?: IncomingShareOptions): Promise<IncomingShareSubscription>;
 }
 export class IncomingShareError extends Error {
@@ -93,15 +95,21 @@ export function validateIncomingShareList(value: unknown): IncomingShareList {
 }
 
 const clientOwners = new WeakMap<object, string>();
+// Closed owners are fenced across retained clients for this process lifetime.
+// Refuse an implausible number rather than forgetting a previously sealed owner.
+const sealedOwners = new Set<string>();
 /** A retained test/runtime client for account A must not be injected into B's sheet. */
 export function incomingShareClientMatchesOwner(client: IncomingShareClient, ownerKey: string): boolean {
   return typeof ownerKey === 'string' && ownerKey.length > 0 && clientOwners.get(client) === ownerKey;
 }
 export function createIncomingShareClient(driver: IncomingShareDriver, available = true, ownerKey = ''): IncomingShareClient {
-  const check = (options?: IncomingShareOptions) => { assertIncomingShareCurrent(options); if (!available) fail('UNAVAILABLE'); };
+  const check = (options?: IncomingShareOptions, erasing=false) => {
+    assertIncomingShareCurrent(options); if (!available) fail('UNAVAILABLE');
+    if (!erasing && sealedOwners.has(ownerKey)) fail('CHANGED');
+  };
   let ownerPromise: Promise<string> | undefined;
-  const owner = async (options?: IncomingShareOptions): Promise<string> => {
-    check(options);
+  const owner = async (options?: IncomingShareOptions, erasing=false): Promise<string> => {
+    check(options, erasing);
     if (typeof ownerKey !== 'string' || !ownerKey || ownerKey.trim() !== ownerKey || ownerKey.length > 4096
       || /[\u0000-\u001f\u007f]/u.test(ownerKey)) return fail('INVALID');
     textBytes(ownerKey);
@@ -115,9 +123,9 @@ export function createIncomingShareClient(driver: IncomingShareDriver, available
     let digest: string;
     try { digest = await pending; } catch {
       if (ownerPromise === pending) ownerPromise = undefined;
-      check(options); return fail('CRYPTO_UNAVAILABLE');
+      check(options, erasing); return fail('CRYPTO_UNAVAILABLE');
     }
-    check(options); return digest;
+    check(options, erasing); return digest;
   };
   const invoke = async <T>(operation: () => Promise<T>, code: IncomingShareError['code'], options?: IncomingShareOptions) => {
     check(options);
@@ -139,6 +147,19 @@ export function createIncomingShareClient(driver: IncomingShareDriver, available
     },
     async remove(value, options) { check(options); const selected = id(value), boundOwner = await owner(options); await invoke(() => driver.remove({ id: selected, owner: boundOwner }), 'REMOVE_FAILED', options); },
     async clear(options) { const boundOwner = await owner(options); await invoke(() => driver.clear({ owner: boundOwner }), 'CLEAR_FAILED', options); },
+    async purgeOwned(options) {
+      const boundOwner=await owner(options,true);check(options,true);
+      if(!sealedOwners.has(ownerKey)&&sealedOwners.size>=128)fail('CLEAR_FAILED');
+      sealedOwners.add(ownerKey);
+      try {
+        const purge=driver.purgeOwned;
+        if(typeof purge!=='function')throw new IncomingShareError('CLEAR_FAILED');
+        // Native operations serialize read/claim and this atomic owner-only
+        // purge. New/late JS reads are fenced without touching unassigned items.
+        await purge.call(driver,{owner:boundOwner});
+      } catch {check(options,true);fail('CLEAR_FAILED');}
+      check(options,true);
+    },
     async subscribe(changed, options) {
       await owner(options); check(options);
       let subscription: IncomingShareSubscription;
@@ -156,4 +177,9 @@ export function getIncomingShareClient(ownerKey: string): IncomingShareClient {
   if (!singleton || singleton.ownerKey !== ownerKey) singleton = { ownerKey, client: createIncomingShareClient(registerPlugin<IncomingShareDriver>('PaperQuayIncomingShare'),
     Capacitor.isNativePlatform() && Capacitor.isPluginAvailable('PaperQuayIncomingShare'), ownerKey) };
   return singleton.client;
+}
+export async function purgeIncomingShareOwner(ownerKey:string,options:IncomingShareOptions={}) {
+  assertIncomingShareCurrent(options);
+  if(!Capacitor.isNativePlatform())return;
+  await getIncomingShareClient(ownerKey).purgeOwned(options);
 }

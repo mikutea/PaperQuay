@@ -22,6 +22,7 @@ final class IncomingShareStore {
         byte[] read() throws IOException;
         void write(byte[] bytes) throws IOException;
         void quarantineAndReset(byte[] empty) throws IOException;
+        boolean hasQuarantine() throws IOException;
     }
     static final class Corrupt extends IOException { }
     static final class Item {
@@ -124,6 +125,19 @@ final class IncomingShareStore {
         List<Item> next = new ArrayList<>();
         for (Item item : items) if (item.owner != null && !item.owner.equals(owner)) next.add(item);
         commit(next); return false;
+    }
+    synchronized void purgeOwned(String owner) throws IncomingSharePolicy.Failure {
+        IncomingSharePolicy.owner(owner); load();
+        try {
+            // A quarantined corrupt snapshot has unknown owners. Preserve it,
+            // but do not acknowledge complete erasure while it still exists.
+            if (storage.hasQuarantine()) throw new IncomingSharePolicy.Failure(IncomingSharePolicy.Code.INVALID);
+        } catch (IOException | RuntimeException error) {
+            throw new IncomingSharePolicy.Failure(IncomingSharePolicy.Code.STORAGE_UNAVAILABLE);
+        }
+        List<Item> next = new ArrayList<>();
+        for (Item item : items) if (!owner.equals(item.owner)) next.add(item);
+        commit(next);
     }
     private void commit(List<Item> next) throws IncomingSharePolicy.Failure {
         try { storage.write(serialize(next)); items = next; }

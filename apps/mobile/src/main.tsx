@@ -16,3 +16,5 @@ void loadRuntimeConfig(location.origin).then(defaults => {
 });
 
 import './components/incomingShare.css';
+
+import './components/accountPrivacy.css';
