@@ -213,13 +213,16 @@ function createDesktopOidcSession({ openExternal, fetch: fetchImpl = globalThis.
       const redirectUri = `http://127.0.0.1:${server.address().port}${CALLBACK_PATH}`;
       const authorizationUrl = oidc.buildAuthorizationUrl(oauth, {
         redirect_uri: redirectUri, scope: 'openid profile', response_type: 'code',
+        // A local sign-out cannot clear the shared system browser's SSO cookie.
+        // Every explicit desktop sign-in therefore requires fresh authentication.
+        prompt: 'login', max_age: '0',
         code_challenge: challenge, code_challenge_method: 'S256', nonce, state,
       });
       await abortable(Promise.resolve(openExternal(authorizationUrl.href)), controller.signal);
       const received = await abortable(callback, controller.signal);
       try {
         const tokens = await oidc.authorizationCodeGrant(oauth, received.url, {
-          pkceCodeVerifier: verifier, expectedState: state, expectedNonce: nonce, idTokenExpected: true,
+          pkceCodeVerifier: verifier, expectedState: state, expectedNonce: nonce, idTokenExpected: true, maxAge: 0,
         });
         check(generation);
         const values = captureTokens(tokens);

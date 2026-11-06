@@ -3,6 +3,58 @@ import Capacitor
 
 class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     var window: UIWindow?
+    private var privacyCover: UIView?
+
+    // Scene snapshots can be captured before JavaScript receives a background
+    // event. Cover the native window synchronously, without an animation.
+    private func hidePrivateContent() {
+        guard let window = window else { return }
+        if let cover = privacyCover {
+            window.bringSubviewToFront(cover)
+            return
+        }
+        let cover = UIView(frame: window.bounds)
+        cover.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        cover.backgroundColor = .systemBackground
+        cover.isAccessibilityElement = true
+        cover.accessibilityLabel = "PaperQuay 内容已隐藏"
+        cover.accessibilityViewIsModal = true
+        let label = UILabel()
+        label.text = "PaperQuay"
+        label.font = .preferredFont(forTextStyle: .headline)
+        label.adjustsFontForContentSizeCategory = true
+        label.textColor = .label
+        label.textAlignment = .center
+        label.numberOfLines = 0
+        label.translatesAutoresizingMaskIntoConstraints = false
+        cover.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.centerXAnchor.constraint(equalTo: cover.centerXAnchor),
+            label.centerYAnchor.constraint(equalTo: cover.centerYAnchor),
+            label.leadingAnchor.constraint(greaterThanOrEqualTo: cover.leadingAnchor, constant: 24),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: cover.trailingAnchor, constant: -24)
+        ])
+        window.addSubview(cover)
+        privacyCover = cover
+    }
+
+    func sceneWillResignActive(_ scene: UIScene) {
+        hidePrivateContent()
+    }
+
+    func sceneDidEnterBackground(_ scene: UIScene) {
+        hidePrivateContent()
+    }
+
+    func sceneDidBecomeActive(_ scene: UIScene) {
+        privacyCover?.removeFromSuperview()
+        privacyCover = nil
+    }
+
+    func sceneDidDisconnect(_ scene: UIScene) {
+        privacyCover?.removeFromSuperview()
+        privacyCover = nil
+    }
 
     func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
         guard let windowScene = scene as? UIWindowScene else { return }

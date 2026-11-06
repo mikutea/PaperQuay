@@ -41,6 +41,7 @@ async function fixture(options = {}) {
       }
       if (options.oversizedTokenBody) { response.setHeader('Content-Type', 'application/json'); response.end('x'.repeat(1024 * 1024 + 1)); return; }
       const claims = { sid: isRefresh && options.changedSid ? 'other-session' : 'test-session',
+        ...(options.missingAuthTime ? {} : { auth_time: Math.floor(Date.now()/1000) - (options.staleAuthTime ? 3600 : 0) }),
         name: 'Desktop Test', ...(isRefresh ? {} : { nonce: options.badNonce ? 'wrong-nonce' : authorization.searchParams.get('nonce') }) };
       const idToken = await new SignJWT(claims).setProtectedHeader({ alg: 'RS256', kid: 'test-key' })
         .setIssuer(issuer).setAudience(options.badAudience ? 'wrong-client' : 'desktop-test')
@@ -62,6 +63,8 @@ async function fixture(options = {}) {
       assert.equal(authorization.searchParams.get('code_challenge_method'), 'S256');
       assert.equal(authorization.searchParams.get('response_type'), 'code');
       assert.equal(authorization.searchParams.get('scope'), 'openid profile');
+      assert.equal(authorization.searchParams.get('prompt'), 'login');
+      assert.equal(authorization.searchParams.get('max_age'), '0');
       opened();
       if (options.manualCallback) return;
       const callback = callbackUrl();
@@ -125,7 +128,7 @@ test('malformed callback path and incorrect state cannot crash or consume the re
   assert.equal(f.counters().grantCount, 1);
 });
 
-for (const option of ['badNonce', 'badAudience', 'badSignature', 'oversizedTokenBody']) {
+for (const option of ['badNonce', 'badAudience', 'badSignature', 'oversizedTokenBody', 'missingAuthTime', 'staleAuthTime']) {
   test(`invalid identity response is rejected: ${option}`, async (t) => {
     const f = await fixture({ [option]: true }); t.after(() => f.close());
     await assert.rejects(f.auth.signIn(f.config), /AUTH_SIGN_IN_FAILED/);
@@ -138,6 +141,16 @@ test('metadata cannot send authorization or tokens to another origin', async (t)
   const f = await fixture({ foreignEndpoint: 'http://127.0.0.1:1/token' }); t.after(() => f.close());
   await assert.rejects(f.auth.signIn(f.config), /AUTH_SIGN_IN_FAILED/);
   assert.equal(f.counters().grantCount, 0);
+});
+
+test('manual sign-in after local sign-out forces authentication again instead of silently reusing browser SSO', async (t) => {
+  const f = await fixture(); t.after(() => f.close());
+  await f.auth.signIn(f.config); await f.auth.signOut();
+  await assert.rejects(f.auth.getAccessToken(), /AUTHENTICATION_REQUIRED/);
+  // The fixture checks prompt=login/max_age=0 on every browser request, and
+  // token validation independently requires a fresh signed auth_time.
+  await f.auth.signIn(f.config);
+  assert.equal(f.counters().grantCount, 2); assert.equal(f.auth.getSnapshot().status, 'signed-in');
 });
 
 test('cancel login closes loopback and late callbacks cannot restore identity', async (t) => {

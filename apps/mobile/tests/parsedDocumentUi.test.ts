@@ -190,15 +190,16 @@ test('storage failure leaves the previous package visible and account cleanup re
   assert.doesNotMatch(text(model.renderer.root), /Original parsed/);
 });
 
-test('a successful cache commit acknowledged after cancellation retires the old AI source and permits explicit reload', async (t) => {
-  const model = await mount(t, false, true), gate = deferred<void>(); let committed = false;
+test('a successful cache commit acknowledged after cancellation retires the old AI source and permits explicit reload', {timeout:5000}, async (t) => {
+  const model = await mount(t, false, true), gate = deferred<void>(), entered=deferred<void>();
   t.mock.method(model.cache, 'put', async (_scope: AccountScope, value: VerifiedParsedDocument) => {
-    model.stored.current = value; model.stored.writes++; committed = true; await gate.promise;
+    model.stored.current = value; model.stored.writes++; entered.resolve(); await gate.promise;
   });
   const replacement = fixture(); replacement.blocks[0].text = 'Committed replacement'; replacement.blocks[0].markdown = 'Committed replacement';
   const fileBytes = new TextEncoder().encode(JSON.stringify(replacement)).buffer;
   const delayedRead = new Promise<ArrayBuffer>((resolve) => setTimeout(() => resolve(fileBytes), 50));
-  await model.upload(replacement, delayedRead); await until(() => committed);
+  // Wait for the actual commit entry after asynchronous file/crypto work.
+  await model.upload(replacement, delayedRead); await act(async()=>entered.promise);
   await act(async () => { button(model.renderer, '取消解析操作').props.onClick(); });
   await until(() => text(model.renderer.root).includes('已取消'));
   gate.resolve();
