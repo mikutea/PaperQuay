@@ -5,7 +5,7 @@ import type {ModelInferenceRepository} from './model-inference-store.ts';
 import type {ModelGatewayDriver} from './model-gateway-driver.ts';
 import {ApiError} from './errors.ts';
 export const MODEL_INFERENCE_CAPABILITY:Readonly<ModelInferenceCapability>=Object.freeze({protocolVersion:1,transport:'model-invocations-v1',maxInputBytes:L.inputBytes,maxRequestBytes:L.requestBytes,maxOutputBytes:L.outputBytes,maxOutputTokens:L.maxOutputTokens,maxMessages:L.messages,maxProfiles:L.profiles,maxProviders:L.providers,presenceSeconds:L.presenceSeconds,leaseSeconds:L.leaseSeconds,maxActive:L.active,maxQueued:L.queued,maxRetained:L.retained,maxReceipts:L.receipts,maxAccountBytes:L.accountBytes,contentTtlSeconds:L.contentTtlSeconds});
-export type ModelGatewayControl=Pick<ModelGatewayDriver,'dispatch'|'observe'|'cancel'|'inspect'|'candidate'|'retrySave'|'forget'|'close'>;
+export type ModelGatewayControl=Pick<ModelGatewayDriver,'dispatch'|'observe'|'cancel'|'inspect'|'candidate'|'retrySave'|'forget'|'close'|'eraseAccount'>;
 export interface ModelInferenceRouteOptions{enabled?:boolean;gatewayEnabled?:boolean;repository?:ModelInferenceRepository;gateway?:ModelGatewayControl;authenticate(request:FastifyRequest,reply:FastifyReply):Promise<void>}
 const emptyQuery={type:'object',additionalProperties:false,properties:{}},idParams={type:'object',additionalProperties:false,required:['id'],properties:{id:{type:'string',pattern:'^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'}}};
 function who(request:FastifyRequest){if(!request.identity)throw new ApiError('AUTHENTICATION_REQUIRED',401);return request.identity;}

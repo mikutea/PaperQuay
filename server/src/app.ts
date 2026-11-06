@@ -310,6 +310,6 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   await registerRemoteTaskRoutes(app,{enabled:config.remoteTasksEnabled,repository:options.remoteTaskRepository,authenticate});
   await registerRemoteRetrievalRoutes(app,{enabled:config.remoteRetrievalEnabled,repository:options.remoteRetrievalRepository,authenticate});
   await registerModelInferenceRoutes(app,{enabled:config.modelInferenceEnabled,gatewayEnabled:Boolean(config.modelGateway),repository:options.modelInferenceRepository,gateway:options.modelGatewayDriver,authenticate});
-  if(options.accountPrivacyRepository)registerAccountPrivacyRoutes(app,options.accountPrivacyRepository,authenticate);
+  if(options.accountPrivacyRepository)registerAccountPrivacyRoutes(app,options.accountPrivacyRepository,authenticate,identity=>options.modelGatewayDriver?.eraseAccount(identity));
   return app;
 }

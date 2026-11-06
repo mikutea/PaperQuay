@@ -6,17 +6,20 @@ import type {ModelInferenceRepository} from './model-inference-store.ts';
 import type {VerifiedIdentity} from './auth.ts';
 import {ApiError} from './errors.ts';
 type Repository=Pick<ModelInferenceRepository,'lookupInvocation'|'claimGateway'|'heartbeatGateway'|'completeGateway'|'failGateway'>;
+type DispatchTicket={owner:string;closed:boolean};
 type Phase='queued'|'claiming'|'requesting'|'saving'|'save-unconfirmed';
 type Outcome={output:ModelInferenceOutput}|{failure:ModelInferenceFailure};
 interface Work{key:string;who:VerifiedIdentity;id:string;phase:Phase;abort:AbortController;claim:ModelInferenceClaim|null;outcome:Outcome|null;stopReason:'cancel'|'shutdown'|null;retryTimer:ReturnType<typeof setTimeout>|null}
 export interface ModelGatewayRecoveryInfo{id:string;phase:'none'|Phase;hasOutput:boolean}
 export interface ModelGatewayDriverOptions{repository:Repository;getConfiguration():ModelGatewayConfig|null;serverSecret:Uint8Array;fetch?:typeof fetch;adapter?:ModelInferenceAdapter;heartbeatMs?:number;queueDelayMs?:number}
 function fresh(who:VerifiedIdentity){return Number.isSafeInteger(who.expiresAtMs)&&Number(who.expiresAtMs)>Date.now();}
+function ownerKey(who:VerifiedIdentity){return createHash('sha256').update(JSON.stringify([who.issuer,who.subject])).digest('hex');}
 function key(who:VerifiedIdentity,id:string){return createHash('sha256').update(JSON.stringify([who.issuer,who.subject,id])).digest('hex');}
 function sameProfile(a:ModelInferenceClaim['job']['profile'],b:ModelInferenceClaim['job']['profile']){return a.id===b.id&&a.revision===b.revision&&a.digest===b.digest&&a.model===b.model;}
 /** A queued request can be claimed once. Persistence recovery never calls the upstream adapter. */
 export class ModelGatewayDriver{
  #repository:Repository;#configuration:ModelGatewayDriverOptions['getConfiguration'];#secret:Uint8Array;#adapter:ModelInferenceAdapter;
+ #dispatches=new Set<DispatchTicket>();
  #works=new Map<string,Work>();#pending:string[]=[];#operations=new Set<Promise<void>>();#active=0;#closing=false;#closed=false;#closePromise:Promise<void>|null=null;#heartbeatMs:number;#queueDelayMs:number;
  constructor(options:ModelGatewayDriverOptions){
   if(!(options.serverSecret instanceof Uint8Array)||options.serverSecret.length<32||options.serverSecret.length>128)throw new ApiError('CONFIGURATION_INVALID',500);this.#repository=options.repository;this.#configuration=options.getConfiguration;this.#secret=Uint8Array.from(options.serverSecret);this.#adapter=options.adapter??createModelInferenceAdapter({fetch:options.fetch,validateRequest:validateModelInferenceRequest,prepareOutput:prepareModelInferenceOutput,parseJson:parseModelInferenceJson});this.#heartbeatMs=Math.min(options.heartbeatMs??10000,10000);this.#queueDelayMs=Math.min(options.queueDelayMs??1000,1000);if(!Number.isSafeInteger(this.#heartbeatMs)||this.#heartbeatMs<1||!Number.isSafeInteger(this.#queueDelayMs)||this.#queueDelayMs<1)throw new ApiError('CONFIGURATION_INVALID',500);
@@ -51,10 +54,21 @@ export class ModelGatewayDriver{
   }catch{if(this.#owns(work)){if(work.claim){work.outcome??={failure:'OUTCOME_UNKNOWN'};await this.#save(work,work.who);}else this.#drop(work);}}
   finally{if(heartbeat)clearInterval(heartbeat);}
  }
- dispatch(who:VerifiedIdentity,id:string):Promise<ModelGatewayRecoveryInfo>{const result=this.#dispatch(who,id);let tracked!:Promise<void>;tracked=result.then(()=>{},()=>{}).finally(()=>this.#operations.delete(tracked));this.#operations.add(tracked);return result;}
- async #dispatch(who:VerifiedIdentity,id:string):Promise<ModelGatewayRecoveryInfo>{
-  if(this.#closing||this.#closed)throw new ApiError('MODEL_GATEWAY_CLOSED',503);if(!fresh(who))throw new ApiError('AUTHENTICATION_REQUIRED',401);this.#configurationFor(who);const status=await this.#repository.lookupInvocation(who,id);if(this.#closing||this.#closed)throw new ApiError('MODEL_GATEWAY_CLOSED',503);if(!fresh(who))throw new ApiError('AUTHENTICATION_REQUIRED',401);this.#configurationFor(who);this.observe(who,status);const existing=this.#works.get(key(who,id));if(existing){if(existing.phase==='queued'){existing.who={...who};if(!existing.retryTimer&&!this.#pending.includes(existing.key)){this.#pending.push(existing.key);this.#pump();}}return this.inspect(who,id);}
+ dispatch(who:VerifiedIdentity,id:string):Promise<ModelGatewayRecoveryInfo>{const ticket:DispatchTicket={owner:ownerKey(who),closed:false};this.#dispatches.add(ticket);const result=this.#dispatch(who,id,ticket).finally(()=>this.#dispatches.delete(ticket));let tracked!:Promise<void>;tracked=result.then(()=>{},()=>{}).finally(()=>this.#operations.delete(tracked));this.#operations.add(tracked);return result;}
+ async #dispatch(who:VerifiedIdentity,id:string,ticket:DispatchTicket):Promise<ModelGatewayRecoveryInfo>{
+  if(this.#closing||this.#closed)throw new ApiError('MODEL_GATEWAY_CLOSED',503);if(!fresh(who))throw new ApiError('AUTHENTICATION_REQUIRED',401);this.#configurationFor(who);const status=await this.#repository.lookupInvocation(who,id);if(ticket.closed)throw new ApiError('ACCOUNT_CLOSED',410);if(this.#closing||this.#closed)throw new ApiError('MODEL_GATEWAY_CLOSED',503);if(!fresh(who))throw new ApiError('AUTHENTICATION_REQUIRED',401);this.#configurationFor(who);this.observe(who,status);const existing=this.#works.get(key(who,id));if(existing){if(existing.phase==='queued'){existing.who={...who};if(!existing.retryTimer&&!this.#pending.includes(existing.key)){this.#pending.push(existing.key);this.#pump();}}return this.inspect(who,id);}
   if(status.status!=='known'||status.job?.target.kind!=='gateway'||status.job.state!=='queued')return{id,phase:'none',hasOutput:false};if([...this.#works.values()].filter(w=>w.phase==='queued').length>=16)throw new ApiError('MODEL_GATEWAY_BUSY',429);const work:Work={key:key(who,id),who:{...who},id,phase:'queued',abort:new AbortController(),claim:null,outcome:null,stopReason:null,retryTimer:null};this.#works.set(work.key,work);this.#pending.push(work.key);this.#pump();return this.inspect(who,id);
+ }
+ /** Called only after application-account closure has committed. Retire all
+  * phases and pre-closure asynchronous dispatch lookups for this issuer/sub.
+  * Aborting local waiting cannot promise upstream cancellation or a refund. */
+ eraseAccount(who:VerifiedIdentity){
+  const owner=ownerKey(who);
+  for(const ticket of this.#dispatches)if(ticket.owner===owner)ticket.closed=true;
+  for(const work of this.#works.values())if(ownerKey(work.who)===owner){
+   work.abort.abort();this.#drop(work);work.claim=null;work.outcome=null;
+  }
+  this.#pump();
  }
  inspect(who:VerifiedIdentity,id:string):ModelGatewayRecoveryInfo{const work=this.#works.get(key(who,id));return{id,phase:work?.phase??'none',hasOutput:Boolean(work?.outcome&&'output'in work.outcome)};}
  /** The route calls this only after an authenticated repository read; observing never dispatches an upstream call. */

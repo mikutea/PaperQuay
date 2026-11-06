@@ -205,7 +205,8 @@ export function createAccountPrivacyRepository(options: Options): AccountPrivacy
 }
 
 export function registerAccountPrivacyRoutes(app: FastifyInstance, repository: AccountPrivacyRepository,
-  authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>) {
+  authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>,
+  onClosed?: (identity:VerifiedIdentity)=>void) {
   const exports=new Set<string>();
   const uuid = { type: 'string', pattern: UUID_PATTERN };
   app.get('/v1/privacy/status', { onRequest: authenticate }, request => repository.status(request.identity!));
@@ -214,7 +215,11 @@ export function registerAccountPrivacyRoutes(app: FastifyInstance, repository: A
       required: ['accountId', 'requestId', 'confirmation', 'deleteCloudCopies', 'eraseDevices'],
       properties: { accountId: uuid, requestId: uuid, confirmation: { type: 'string', minLength: 1, maxLength: 80 },
         deleteCloudCopies: { const: true }, eraseDevices: { type: 'boolean' } } } },
-  }, request => repository.close(request.identity!, request.body));
+  }, async request => {
+    const result=await repository.close(request.identity!,request.body);
+    if(result.state==='closed')onClosed?.(request.identity!);
+    return result;
+  });
   app.post<{ Body: { deviceId: string } }>('/v1/privacy/erasure-ack', { onRequest: authenticate,
     schema: { body: { type: 'object', additionalProperties: false, required: ['deviceId'], properties: { deviceId: uuid } } },
   }, request => repository.acknowledgeErasure(request.identity!, request.body.deviceId));

@@ -47,3 +47,27 @@ test('shutdown waits for an initial dispatch lookup and a late reply cannot clai
  await new Promise(r=>setTimeout(r,5));assert.equal(closed,false);late.resolve(status);
  await assert.rejects(pending,(e:any)=>e.code==='MODEL_GATEWAY_CLOSED');await stopping;assert.equal(a.claims(),0);assert.equal(a.calls(),0);assert.equal(a.driver.inspect(a.who,a.request.id).phase,'none');
 });
+
+test('committed account erasure drops all retained private results and frees dispatch capacity for other owners',async t=>{
+ const a=await fixture(t);a.setSave('before');const ids:string[]=[];
+ for(let i=0;i<16;i++){const request=i?await a.add(a.who):a.request;ids.push(request.id);await a.driver.dispatch(a.who,request.id);await wait(()=>a.driver.inspect(a.who,request.id).phase==='save-unconfirmed');}
+ const foreign=a.newWho(),request=await a.add(foreign);await a.driver.dispatch(foreign,request.id);assert.equal(a.calls(),16);
+ a.driver.eraseAccount(a.who);await wait(()=>a.calls()===17);await a.driver.settled();
+ for(const id of ids)assert.deepEqual(a.driver.inspect(a.who,id),{id,phase:'none',hasOutput:false});
+ assert.equal(a.driver.inspect(foreign,request.id).hasOutput,true);
+ await assert.rejects(a.driver.candidate(a.who,a.request.id),(e:any)=>e.code==='MODEL_INFERENCE_NOT_FOUND');
+});
+test('erasure aborts a requesting owner and a late response cannot restore its claim or result',async t=>{
+ const a=await fixture(t,{hold:true}),foreign=a.newWho(),request=await a.add(foreign);
+ await a.driver.dispatch(a.who,a.request.id);await a.driver.dispatch(foreign,request.id);await wait(()=>a.calls()===2);
+ a.driver.eraseAccount(a.who);a.waits[0].resolve(wire('Must not retain this closed-account response'));
+ assert.equal(a.driver.inspect(a.who,a.request.id).phase,'none');assert.equal(a.driver.inspect(foreign,request.id).phase,'requesting');
+ a.waits[1].resolve(wire());await a.driver.settled();assert.equal(a.driver.inspect(a.who,a.request.id).hasOutput,false);assert.equal(a.completions(),1);
+});
+test('erasure fences a dispatch whose old lookup returns after the closure commit',async t=>{
+ const a=await fixture(t),late=deferred<ModelInferenceStatus>(),status=a.result(a.who,a.request.id),original=a.repository.lookupInvocation;
+ a.repository.lookupInvocation=async()=>late.promise;const pending=a.driver.dispatch(a.who,a.request.id);
+ a.driver.eraseAccount(a.who);late.resolve(status);await assert.rejects(pending,(e:any)=>e.code==='ACCOUNT_CLOSED');
+ assert.equal(a.claims(),0);assert.equal(a.calls(),0);a.repository.lookupInvocation=original;
+ const foreign=a.newWho(),request=await a.add(foreign);await a.driver.dispatch(foreign,request.id);await a.driver.settled();assert.equal(a.calls(),1);
+});

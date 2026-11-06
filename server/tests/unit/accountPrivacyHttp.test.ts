@@ -5,6 +5,26 @@ import {buildApp} from '../../src/app.ts';
 import type {AccountPrivacyRepository} from '../../src/account-privacy.ts';
 import type {SyncRepository} from '../../src/types.ts';
 import {identity,testConfig} from '../fixtures.ts';
+import {ApiError} from '../../src/errors.ts';
+import type {ModelGatewayControl} from '../../src/model-inference.ts';
+
+test('gateway erasure notification runs only after closure succeeds, including an explicit committed replay',async()=>{
+  const who=identity(),accountId=randomUUID(),requestId=randomUUID();let failed=true,notifications=0;
+  const closed={accountId,state:'closed' as const,closedAt:new Date().toISOString(),closureRequestId:requestId,
+    deviceErasure:{requested:false,pending:0,acknowledged:0,thisDevicePending:false}};
+  const privacy:AccountPrivacyRepository={status:async()=>closed,close:async()=>{if(failed)throw new ApiError('SYNTHETIC_ROLLBACK',503);return closed;},
+    acknowledgeErasure:async()=>({acknowledged:true}),async *exportData(){throw Error('unexpected export');}};
+  const gateway={eraseAccount:(identity:typeof who)=>{assert.deepEqual(identity,who);notifications++;},close:async()=>undefined} as ModelGatewayControl;
+  const app=await buildApp({config:testConfig(),repository:{ready:async()=>true} as SyncRepository,
+    accountPrivacyRepository:privacy,modelGatewayDriver:gateway,verifyToken:async()=>who});
+  try {
+    const request={method:'POST' as const,url:'/v1/privacy/close',headers:{authorization:'Bearer synthetic'},
+      payload:{accountId,requestId,confirmation:'注销 '+accountId,deleteCloudCopies:true,eraseDevices:false}};
+    assert.equal((await app.inject(request)).statusCode,503);assert.equal(notifications,0);
+    failed=false;assert.equal((await app.inject(request)).statusCode,200);assert.equal(notifications,1);
+    assert.equal((await app.inject(request)).statusCode,200);assert.equal(notifications,2);
+  }finally{await app.close();}
+});
 
 test('real HTTP exports reserve bounded account/process slots and release after disconnect without blocking readiness',async()=>{
   const owners=['a','b','c'].map(()=>({...identity(),accountId:randomUUID()}));
