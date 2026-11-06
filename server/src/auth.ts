@@ -8,6 +8,8 @@ export interface VerifiedIdentity {
   subject: string;
   sessionId: string;
   clientId: string;
+  /** Expiry from the verified JWT, never from a request field. Desktop leases require it. */
+  expiresAtMs?: number;
 }
 export type TokenVerifier = (authorization: string | undefined) => Promise<VerifiedIdentity>;
 
@@ -83,7 +85,7 @@ export async function createOidcVerifier(options: OidcOptions): Promise<TokenVer
         || (payload.iat as number) > Math.floor(Date.now() / 1000) + 5) {
         throw new ApiError('AUTHENTICATION_REQUIRED', 401);
       }
-      return { issuer, subject, sessionId, clientId };
+      return { issuer, subject, sessionId, clientId, expiresAtMs: (payload.exp as number) * 1000 };
     } catch (error) {
       if (error instanceof ApiError) throw error;
       const code = error && typeof error === 'object' && 'code' in error ? error.code : '';

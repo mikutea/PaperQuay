@@ -1,3 +1,4 @@
+import { Capacitor } from '@capacitor/core';
 import { ClientError } from '../errors.ts';
 import { normalizeServiceUrl } from '../config.ts';
 
@@ -14,6 +15,21 @@ interface AccountRow {
 }
 type Decode<T> = (value: unknown) => T;
 
+export interface AccountStorage<T> {
+  read(scope: AccountScope): Promise<T | null>;
+  update(scope: AccountScope, reducer: (current: T | null) => T, guard?: () => boolean): Promise<T>;
+  remove(scope: AccountScope): Promise<void>;
+  close(): Promise<void>;
+}
+
+export async function createAccountStorage<T>(options: { decode: Decode<T> }): Promise<AccountStorage<T>> {
+  if (Capacitor.isNativePlatform()) {
+    const { createNativeAccountStorage } = await import('./nativeAccountStore.ts');
+    return createNativeAccountStorage(options);
+  }
+  return new AccountStore(options);
+}
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export function accountScopeKey(scope: AccountScope): string {
@@ -22,7 +38,7 @@ export function accountScopeKey(scope: AccountScope): string {
 }
 
 /** A reducer must be synchronous: IndexedDB transactions cannot survive network awaits. */
-export class AccountStore<T> {
+export class AccountStore<T> implements AccountStorage<T> {
   private readonly database: Promise<IDBDatabase>;
   private readonly decode: Decode<T>;
 

@@ -1,4 +1,6 @@
 const path = require('node:path');
+const { randomUUID } = require('node:crypto');
+const { createParsedDocumentProvenance } = require('./parsedDocumentProvenance.cjs');
 const { createWriteAuthorizer, readAuthorizedFile } = require('./pathAccess.cjs');
 const {
   MINERU_API_BASE,
@@ -13,6 +15,7 @@ const {
 function createMineruCommands(context) {
   const { appPaths } = context;
   const authorizeWrite = context.authorizeLocalWrite ||= createWriteAuthorizer(context);
+  const provenance = context.parsedDocumentProvenance ||= createParsedDocumentProvenance(context);
 
   return {
     async run_mineru_cloud_parse({ options }) {
@@ -90,11 +93,18 @@ function createMineruCommands(context) {
       const zipResponse = await fetch(finalResult.full_zip_url);
       if (!zipResponse.ok) throw new Error(`MinerU zip download failed: HTTP ${zipResponse.status}`);
 
-      const extractDir = authorizeWrite(options.extractDir || path.join(
+      const runId = randomUUID();
+      const outputRoot = authorizeWrite(options.extractDir || path.join(
         appPaths.mineruCacheDir,
         `${path.basename(fileName, '.pdf')}-${hashBytes(Buffer.from(dataId)).slice(0, 8)}`,
       ));
-      const extracted = await readZipWithAdm(Buffer.from(await zipResponse.arrayBuffer()), extractDir, authorizeWrite);
+      // Every response gets a fresh directory, including OCR retries. Assets
+      // absent from this ZIP can never come from an earlier parser run.
+      const extractDir = authorizeWrite(path.join(outputRoot, `parse-${runId}`));
+      const zipBytes = Buffer.from(await zipResponse.arrayBuffer());
+      const extracted = await readZipWithAdm(zipBytes, extractDir, authorizeWrite);
+      const parseProvenance = await provenance.capture({ uploadBytes, zipBytes, extracted,
+        model: options.modelVersion || 'vlm', runId });
 
       return {
         batchId,
@@ -103,6 +113,7 @@ function createMineruCommands(context) {
         state: finalResult.state,
         fullZipUrl: finalResult.full_zip_url,
         ...extracted,
+        provenance: parseProvenance,
       };
     },
   };

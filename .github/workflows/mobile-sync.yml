@@ -14,6 +14,63 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  android:
+    name: Android debug build and lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/mobile/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+        with:
+          # The default "tools" package is absent from the SDK repository used by CI.
+          packages: 'platform-tools platforms;android-36'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install and compile the mobile web bundle
+        run: |
+          npm ci --prefix apps/mobile
+          npm run build --prefix apps/mobile
+      - name: Sync native plugins and verify Android
+        working-directory: apps/mobile
+        run: |
+          npx cap sync android
+          cd android
+          bash gradlew --no-daemon assembleDebug lintDebug
+
+  ios:
+    name: iOS simulator compile
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/mobile/package-lock.json
+      - name: Install and compile the mobile web bundle
+        run: |
+          npm ci --prefix apps/mobile
+          npm run build --prefix apps/mobile
+      - name: Sync native plugins and compile without signing
+        working-directory: apps/mobile
+        run: |
+          xcodebuild -version
+          npx cap sync ios
+          xcodebuild -project ios/App/App.xcodeproj -scheme App \
+            -configuration Debug -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/paperquay-ios-build" \
+            CODE_SIGNING_ALLOWED=NO build
+
   integration:
     name: PostgreSQL, OIDC and mobile foundation
     runs-on: ubuntu-latest
@@ -32,7 +89,7 @@ jobs:
       PAPERQUAY_TEST_ADMIN_DATABASE_URL: postgresql://postgres:paperquay-ci-bootstrap-only@127.0.0.1:5432/postgres
       PAPERQUAY_OIDC_ISSUER: http://127.0.0.1:18081/realms/paperquay-local
       PAPERQUAY_OIDC_AUDIENCE: paperquay-sync
-      PAPERQUAY_OIDC_CLIENT_IDS: paperquay-mobile,paperquay-integration
+      PAPERQUAY_OIDC_CLIENT_IDS: paperquay-mobile,paperquay-desktop,paperquay-integration
       PAPERQUAY_ALLOWED_ORIGINS: http://127.0.0.1:4317,http://127.0.0.1:4318
       PAPERQUAY_TEST_USERNAME: qa-reader
       PAPERQUAY_TEST_OTHER_USERNAME: qa-other
@@ -99,6 +156,7 @@ jobs:
         run: |
           npm run typecheck --prefix server
           npm test --prefix server
+          npm run test:socket --prefix server
           npm run test:integration --prefix server
       - name: Check mobile persistence, recovery and production build
         env:

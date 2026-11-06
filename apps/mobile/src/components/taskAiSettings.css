@@ -1,0 +1,8 @@
+.task-ai-entry { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; margin: 0 0 20px; border-radius: 12px; background: var(--theme-soft); }
+.task-ai-entry > div { display: grid; gap: 3px; min-width: 0; }
+.task-ai-entry span { color: var(--muted); font-size: .8125rem; }
+.task-ai-entry strong { font-size: .9375rem; font-weight: 500; overflow-wrap: anywhere; }
+.task-ai-entry > button { min-height: 44px; flex-shrink: 0; }
+.task-ai-settings-sheet { background: var(--theme-background); }
+.task-ai-settings-sheet .reader-sheet-content { padding: 20px 16px calc(24px + env(safe-area-inset-bottom)); background: var(--theme-background); }
+.task-ai-return-help { margin: 0 0 12px; color: var(--muted); font-size: .8125rem; line-height: 1.6; }

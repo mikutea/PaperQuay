@@ -1,3 +1,6 @@
+import {registerModelInferenceRoutes,MODEL_INFERENCE_CAPABILITY} from './model-inference.ts';
+import type {ModelInferenceRepository} from './model-inference-store.ts';
+import type {ModelGatewayControl} from './model-inference.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { isIP } from 'node:net';
 import Fastify, { LogController } from 'fastify';
@@ -8,13 +11,21 @@ import {
   ENTITY_TYPES, ENTITY_DATA_SCHEMAS, ISO_TIMESTAMP_PATTERN, UUID_PATTERN,
   PUSH_REQUEST_SCHEMA, PUSH_RESPONSE_SCHEMA, PUSH_RESULT_SCHEMA, PULL_RESPONSE_SCHEMA,
   SYNC_OPERATION_SCHEMA, SYNC_RECORD_SCHEMA, SYNC_LIMITS,
+  SYNC_FEATURE_HEADER, PAPER_ORGANIZATION_FEATURE, projectLegacyPaper,RICH_NOTES_FEATURE,AI_CONVERSATIONS_FEATURE,GRAPH_RELATIONS_FEATURE,supportsSyncRecord,
 } from '../../packages/sync-core/src/index.ts';
-import type { PushRequest } from '../../packages/sync-core/src/index.ts';
+import type { PushRequest, PushResult } from '../../packages/sync-core/src/index.ts';
 import type { TokenVerifier, VerifiedIdentity } from './auth.ts';
 import { ApiError, isTransientDatabaseError } from './errors.ts';
 import { SERVER_LIMITS } from './config.ts';
 import type { ServerConfig } from './config.ts';
-import type { DeviceRegistration, ResolveRequest, SyncRepository } from './types.ts';
+import type { CloudPdfRepository, DesktopPdfRepository, DeviceRegistration, ResolveRequest, SyncRepository } from './types.ts';
+import { registerCloudPdfRoutes } from './cloud-pdf.ts';
+import { desktopPdfCapability, registerDesktopPdfRoutes } from './desktop-pdf.ts';
+import type { DesktopPdfTimings } from './desktop-pdf.ts';
+import {registerRemoteTaskRoutes,REMOTE_TASK_CAPABILITY,REMOTE_TASK_UPLOAD_HEADERS} from './remote-tasks.ts';
+import type {RemoteTaskRepository} from './remote-task-store.ts';
+import { registerRemoteRetrievalRoutes, REMOTE_RETRIEVAL_CAPABILITY } from './remote-retrieval.ts';
+import type { RemoteRetrievalRepository } from './remote-retrieval-store.ts';
 
 declare module 'fastify' {
   interface FastifyRequest { identity: VerifiedIdentity | null }
@@ -23,10 +34,18 @@ declare module 'fastify' {
 interface AppOptions {
   config: ServerConfig;
   repository: SyncRepository;
+  cloudPdfRepository?: CloudPdfRepository;
+  desktopPdfRepository?: DesktopPdfRepository;
+  remoteTaskRepository?:RemoteTaskRepository;
+  remoteRetrievalRepository?:RemoteRetrievalRepository;
+  modelInferenceRepository?:ModelInferenceRepository;
+  modelGatewayDriver?:ModelGatewayControl;
   verifyToken: TokenVerifier;
   logger?: FastifyServerOptions['logger'];
   /** Used only by isolated tests, never set by process environment. */
   rateLimitEnabled?: boolean;
+  cloudPdfTransferTimeoutMs?: number;
+  desktopPdfTimings?: Partial<DesktopPdfTimings>;
 }
 
 class PrivateLogController extends LogController {
@@ -85,6 +104,22 @@ function identity(request: FastifyRequest): VerifiedIdentity {
   return request.identity;
 }
 
+function organizationEnabled(request: FastifyRequest): boolean {
+  const header = request.headers[SYNC_FEATURE_HEADER.toLowerCase()];
+  return typeof header === 'string' && header.split(',').map((value) => value.trim()).includes(PAPER_ORGANIZATION_FEATURE);
+}
+function negotiatedFeatures(request:FastifyRequest){
+  const value=request.headers[SYNC_FEATURE_HEADER.toLowerCase()];
+  const features=typeof value==='string'?value.split(',').map(item=>item.trim()):[];
+  return{richNotes:features.includes(RICH_NOTES_FEATURE),aiConversations:features.includes(AI_CONVERSATIONS_FEATURE),...(features.includes(GRAPH_RELATIONS_FEATURE)?{graphRelations:true}:{})};
+}
+
+function presentResult(request: FastifyRequest, result: PushResult): PushResult {
+  if(result.record&&!supportsSyncRecord(negotiatedFeatures(request),result.record))return{opId:result.opId,status:'rejected',replayed:false,code:'FEATURE_NOT_NEGOTIATED',retryable:false};
+  return organizationEnabled(request) || !result.record ? result
+    : { ...result, record: projectLegacyPaper(result.record) };
+}
+
 function pageLimit(value: string | undefined, maximum: number): number {
   const number = value === undefined ? Math.min(100, maximum) : Number(value);
   if (!Number.isInteger(number) || number < 1 || number > maximum) throw new ApiError('VALIDATION_FAILED');
@@ -122,7 +157,8 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   app.decorateRequest('identity', null);
   await app.register(cors, {
     origin: config.allowedOrigins.length ? config.allowedOrigins : false,
-    methods: ['GET', 'POST', 'DELETE'], allowedHeaders: ['Authorization', 'Content-Type'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE'], allowedHeaders: ['Authorization', 'Content-Type', SYNC_FEATURE_HEADER,...REMOTE_TASK_UPLOAD_HEADERS],
+    exposedHeaders: ['Accept-Ranges','X-PaperQuay-Artifact-Digest'],
     credentials: false, strictPreflight: true, maxAge: 600,
   });
   if (options.rateLimitEnabled !== false) {
@@ -177,6 +213,8 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   app.get('/v1/capabilities', { onRequest: enforceRateLimit }, async () => ({
     protocolVersion: 1,
     entitySchemas: Object.fromEntries(ENTITY_TYPES.map((type) => [type, [1]])),
+    features: { ...(config.remoteRetrievalEnabled?{remoteRetrieval:1}:{}),...(config.modelInferenceEnabled?{modelInference:1}:{}),paperOrganization: 1,richNotes:1,aiConversations:1,graphRelations:1,...(config.remoteTasksEnabled?{remoteTasks:1}:{}), ...(config.cloudPdfEnabled ? { privatePdfStorage: 1 } : {}),
+      ...(config.desktopPdfEnabled ? { desktopPdfTransfer: 1 } : {}) },
     deviceBinding: 'oidc-session',
     limits: {
       maxBatchOperations: SYNC_LIMITS.maxBatchOperations,
@@ -194,7 +232,13 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       maxActiveDeviceSessions: SERVER_LIMITS.maxDevices,
       maxRetainedDeviceSessions: SERVER_LIMITS.maxRetainedDeviceSessions,
     },
-    pdfStorage: false,
+    pdfStorage: config.cloudPdfEnabled,
+    ...(config.cloudPdfEnabled ? { cloudPdf: { maxFileBytes: SERVER_LIMITS.cloudPdfMaxFileBytes,
+      maxAccountBytes: config.cloudPdfAccountBytes, maxCopies: SERVER_LIMITS.cloudPdfMaxCopies } } : {}),
+    ...(config.desktopPdfEnabled ? { desktopPdf: desktopPdfCapability(config.desktopPdfStunUrls) } : {}),
+    ...(config.remoteTasksEnabled?{remoteTasks:REMOTE_TASK_CAPABILITY}:{}),
+    ...(config.remoteRetrievalEnabled?{remoteRetrieval:REMOTE_RETRIEVAL_CAPABILITY}:{}),
+    ...(config.modelInferenceEnabled?{modelInference:MODEL_INFERENCE_CAPABILITY}:{}),
     tombstoneRetention: 'no-pruning-in-m1',
   }));
   app.post<{ Body: DeviceRegistration }>('/v1/devices', {
@@ -218,13 +262,24 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     onRequest: authenticate,
     schema: { params: idParams, response: { 200: { type: 'object', additionalProperties: false, required: ['revoked', 'deviceId'],
       properties: { revoked: { const: true }, deviceId: uuid } } } },
-  }, async (request) => repository.revokeDevice(identity(request), request.params.id));
+  }, async (request) => {
+    const result = await repository.revokeDevice(identity(request), request.params.id);
+    desktop.revokeDevice(identity(request), result.deviceId);
+    return result;
+  });
   app.post<{ Body: PushRequest }>('/v1/sync/push', {
     onRequest: authenticate, schema: { body: PUSH_REQUEST_SCHEMA, response: { 200: PUSH_RESPONSE_SCHEMA } },
-  }, async (request) => repository.push(identity(request), request.body));
+  }, async (request) => {
+    const result = await repository.push(identity(request), request.body,negotiatedFeatures(request));
+    return { ...result, results: result.results.map((item) => presentResult(request, item)) };
+  });
   app.get<{ Querystring: { cursor?: string; limit?: string } }>('/v1/sync/pull', {
     onRequest: authenticate, schema: { querystring: paginationSchema, response: { 200: PULL_RESPONSE_SCHEMA } },
-  }, async (request) => repository.pull(identity(request), request.query.cursor, pageLimit(request.query.limit, SERVER_LIMITS.maxPullRecords)));
+  }, async (request) => {
+    const result = await repository.pull(identity(request), request.query.cursor, pageLimit(request.query.limit, SERVER_LIMITS.maxPullRecords));
+    const records=result.records.filter(record=>supportsSyncRecord(negotiatedFeatures(request),record));
+    return {...result,records:organizationEnabled(request)?records:records.map(record=>projectLegacyPaper(record))};
+  });
   app.get<{ Querystring: { cursor?: string; limit?: string } }>('/v1/conflicts', {
     onRequest: authenticate,
     schema: { querystring: paginationSchema, response: { 200: {
@@ -232,9 +287,26 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
         conflicts: { type: 'array', items: conflictSchema }, nextCursor: { type: 'string' }, hasMore: { type: 'boolean' },
       },
     } } },
-  }, async (request) => repository.listConflicts(identity(request), request.query.cursor, pageLimit(request.query.limit, SERVER_LIMITS.maxConflictRecords)));
+  }, async (request) => {
+    const result = await repository.listConflicts(identity(request), request.query.cursor, pageLimit(request.query.limit, SERVER_LIMITS.maxConflictRecords));
+    const conflicts=result.conflicts.filter(conflict=>supportsSyncRecord(negotiatedFeatures(request),conflict.attemptedOperation)
+      &&(!conflict.observedRecord||supportsSyncRecord(negotiatedFeatures(request),conflict.observedRecord))&&(!conflict.currentRecord||supportsSyncRecord(negotiatedFeatures(request),conflict.currentRecord)));
+    return organizationEnabled(request) ? {...result,conflicts} : { ...result, conflicts: conflicts.map((conflict) => ({
+      ...conflict,
+      attemptedOperation: projectLegacyPaper(conflict.attemptedOperation),
+      observedRecord: conflict.observedRecord ? projectLegacyPaper(conflict.observedRecord) : null,
+      currentRecord: conflict.currentRecord ? projectLegacyPaper(conflict.currentRecord) : null,
+    })) };
+  });
   app.post<{ Params: { id: string }; Body: ResolveRequest }>('/v1/conflicts/:id/resolve', {
     onRequest: authenticate, schema: { params: idParams, body: resolveSchema, response: { 200: PUSH_RESULT_SCHEMA } },
-  }, async (request) => repository.resolveConflict(identity(request), request.params.id, request.body));
+  }, async (request) => presentResult(request, await repository.resolveConflict(identity(request), request.params.id, request.body,negotiatedFeatures(request))));
+  await registerCloudPdfRoutes(app, { enabled: config.cloudPdfEnabled, repository: options.cloudPdfRepository,
+    sessions: repository, authenticate, transferTimeoutMs: options.cloudPdfTransferTimeoutMs });
+  const desktop = await registerDesktopPdfRoutes(app, { enabled: config.desktopPdfEnabled, repository: options.desktopPdfRepository,
+    authenticate, timings: options.desktopPdfTimings });
+  await registerRemoteTaskRoutes(app,{enabled:config.remoteTasksEnabled,repository:options.remoteTaskRepository,authenticate});
+  await registerRemoteRetrievalRoutes(app,{enabled:config.remoteRetrievalEnabled,repository:options.remoteRetrievalRepository,authenticate});
+  await registerModelInferenceRoutes(app,{enabled:config.modelInferenceEnabled,gatewayEnabled:Boolean(config.modelGateway),repository:options.modelInferenceRepository,gateway:options.modelGatewayDriver,authenticate});
   return app;
 }

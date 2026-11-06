@@ -5,6 +5,7 @@ import {
   validatePullResponse, validatePushRequest, validatePushResponse, validatePushResult, validateRecord,
 } from '../packages/sync-core/src/index.ts';
 import type { EntityDataMap, SyncOperation, SyncRecord } from '../packages/sync-core/src/index.ts';
+import { conversationFixture } from './fixtures/extendedSync.ts';
 
 const id = (number: number) => `00000000-0000-4000-8000-${number.toString(16).padStart(12, '0')}`;
 const at = '2026-10-24T06:00:00.000Z';
@@ -14,6 +15,9 @@ const data: EntityDataMap = {
   note: { paperId: id(1), title: 'Note', body: '# Reading\n\nAn offline note.', format: 'markdown' },
   annotation: { paperId: id(1), attachmentVersionId: id(3), kind: 'highlight', color: '#ffaa00', comment: '', anchor: { pageIndex: 0, coordinateSpace: 'pdf-crop-box-unrotated-normalized', quads: [[0.1, 0.1, 0.6, 0.1, 0.6, 0.2, 0.1, 0.2]], quote: { exact: 'a quote', prefix: '', suffix: '' } } },
   readingPosition: { paperId: id(1), attachmentVersionId: id(3), pageIndex: 2, offsetRatio: 0.4, furthestPageIndex: 3, furthestOffsetRatio: 0.1, sessionId: id(4), deviceSequence: 6, observedAt: at },
+  graphRelation:{source:{entityType:'paper',entityId:id(1)},target:{entityType:'note',entityId:id(2)},relationType:'custom_relation',label:'Supports',description:'Synthetic explicit relation',confidence:null,weight:0.58,createdAt:at,updatedAt:null},
+  aiConversation: conversationFixture(),
+  aiTemplate: { version: 1, title: '阅读问题', action: 'ask', question: '作者如何验证结论？' },
 };
 const operation = (entityType: keyof EntityDataMap = 'note'): SyncOperation => ({ opId: id(10), entityType, entityId: id(11), mutation: 'put', baseRevision: 0, schemaVersion: 1, data: data[entityType], clientCreatedAt: at } as SyncOperation);
 const record = (entityType: keyof EntityDataMap = 'note'): SyncRecord => ({ entityType, entityId: id(11), schemaVersion: 1, revision: 1, deletedAt: null, updatedAt: at, modifiedByDeviceId: id(12), data: data[entityType] } as SyncRecord);

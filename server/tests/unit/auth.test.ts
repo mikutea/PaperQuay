@@ -19,7 +19,7 @@ async function token(overrides: Record<string, unknown> = {}, algorithm = 'RS256
 
 test('signed OIDC access token supplies issuer/sub/sid, never client-supplied device identity', async () => {
   assert.deepEqual(await verify(await token()), { issuer: fixtureIssuer, subject: 'test-subject',
-    sessionId: 'test-login-session', clientId: 'paperquay-test' });
+    sessionId: 'test-login-session', clientId: 'paperquay-test', expiresAtMs: (now + 300) * 1000 });
 });
 
 test('wrong issuer/audience/client, missing session, expiry, future issuance and conflicting client claims fail closed', async () => {

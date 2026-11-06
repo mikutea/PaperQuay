@@ -1,8 +1,16 @@
+import {ModelInvocationApi} from './modelRouting/api.ts';
+import {ModelServiceError,isModelServiceCode} from './modelRouting/errors.ts';
+import {readModelResponse,waitForModelCall} from './modelRouting/wire.ts';
+import {validateModelInferenceCapability,type ModelInferenceCapability} from '../../../packages/sync-core/src/modelInference.ts';
+import {validateRemoteRetrievalCapability,type RemoteRetrievalCapability} from '../../../packages/sync-core/src/remoteRetrieval.ts';
 import {
   validatePullResponse,
   validatePushResponse,
   validateSyncOperation,
   validateSyncRecord,
+  SYNC_FEATURE_HEADER,
+  PAPER_ORGANIZATION_FEATURE,
+  RICH_NOTES_FEATURE,AI_CONVERSATIONS_FEATURE,GRAPH_RELATIONS_FEATURE,
   type EntityType,
   type PullResponse,
   type PushRequest,
@@ -15,6 +23,10 @@ import {
 } from '../../../packages/sync-core/src/index.ts';
 import { normalizeServiceUrl } from './config.ts';
 import { ClientError, errorFromResponse } from './errors.ts';
+import { getPlatformCapabilities } from './platform.ts';
+import type { CloudPdfCapability } from './pdf/cloudCopies.ts';
+import { isDesktopPdfCapability, type DesktopPdfCapability } from './pdf/desktopCopies.ts';
+import { validateRemoteTaskCapability, type RemoteTaskCapability } from '../../../packages/sync-core/src/remoteTasks.ts';
 
 export interface DeviceSession {
   id: string;
@@ -90,6 +102,7 @@ function identity(value: unknown): AccountIdentity {
   if (!isObject(value)) throw new ClientError('INVALID_RESPONSE');
   return { accountId: uuid(value.accountId), device: device(value.device) };
 }
+export const parseAccountIdentity = identity;
 function syncRecord(value: unknown): SyncRecord | null {
   if (value === null) return null;
   const parsed = validateSyncRecord(value);
@@ -129,13 +142,32 @@ async function boundedJson(response: Response): Promise<unknown> {
   }
 }
 
+export interface ServiceCapabilitySnapshot {
+  paperOrganization:boolean;richNotes:boolean;aiConversations:boolean;graphRelations?:boolean;
+  cloudPdf:CloudPdfCapability|null;desktopPdf:DesktopPdfCapability|null;remoteTasks:RemoteTaskCapability|null;modelInference:ModelInferenceCapability|null;
+  remoteRetrieval?:RemoteRetrievalCapability|null;
+}
 export class SyncApi {
+  private capabilityGeneration=0;
+  supportsPaperOrganization = false;
+  supportsRichNotes=false;
+  supportsAiConversations=false;
+  supportsGraphRelations=false;
+  cloudPdfCapability: CloudPdfCapability | null = null;
+  desktopPdfCapability: DesktopPdfCapability | null = null;
+  remoteTaskCapability: RemoteTaskCapability | null = null;
+  modelInferenceCapability:ModelInferenceCapability|null=null;
+  remoteRetrievalCapability:RemoteRetrievalCapability|null=null;
+  readonly modelInvocations:ModelInvocationApi;
   private readonly baseUrl: string;
   private readonly getToken: () => Promise<string>;
   private readonly fetcher: typeof fetch;
-  constructor(baseUrl: string, getToken: () => Promise<string>, fetcher?: typeof fetch) {
+  private readonly getIdentityKey?: () => string | null;
+  constructor(baseUrl: string, getToken: () => Promise<string>, fetcher?: typeof fetch, getIdentityKey?: () => string | null) {
     this.baseUrl = normalizeServiceUrl(baseUrl);
     this.getToken = getToken;
+    this.getIdentityKey = getIdentityKey;
+    this.modelInvocations=new ModelInvocationApi((path,signal,method,data)=>this.request(path,signal,method,data),()=>this.modelInferenceCapability);
     // Native Window.fetch requires its Window receiver in some browsers.
     this.fetcher = fetcher ?? ((input, init) => globalThis.fetch(input, init));
   }
@@ -146,20 +178,29 @@ export class SyncApi {
     method = 'GET',
     data?: unknown,
   ): Promise<unknown> {
+    const isModel=path.startsWith('/v1/model-inference/');
     if (signal.aborted) throw new ClientError('ACCOUNT_CHANGED');
+    const identityKey = this.getIdentityKey?.();
+    const checkIdentity = () => {
+      if (signal.aborted || this.getIdentityKey?.() !== identityKey)
+        throw new ClientError('ACCOUNT_CHANGED');
+    };
     const controller = new AbortController();
     const onAbort = () => controller.abort();
     signal.addEventListener('abort', onAbort, { once: true });
     const timeout = setTimeout(() => controller.abort('timeout'), 30_000);
     try {
-      const token = await this.getToken();
-      if (signal.aborted) throw new ClientError('ACCOUNT_CHANGED');
-      const response = await this.fetcher(`${this.baseUrl}${path}`, {
+      const token = await (isModel?waitForModelCall(this.getToken(),controller.signal):this.getToken());
+      checkIdentity();
+      const pendingResponse = this.fetcher(`${this.baseUrl}${path}`, {
         method,
         body: data === undefined ? undefined : JSON.stringify(data),
         headers: {
           Authorization: `Bearer ${token}`,
           Accept: 'application/json',
+          ...((this.supportsPaperOrganization||this.supportsRichNotes||this.supportsAiConversations||this.supportsGraphRelations)?{[SYNC_FEATURE_HEADER]:[
+            ...(this.supportsPaperOrganization?[PAPER_ORGANIZATION_FEATURE]:[]),...(this.supportsRichNotes?[RICH_NOTES_FEATURE]:[]),
+            ...(this.supportsAiConversations?[AI_CONVERSATIONS_FEATURE]:[]),...(this.supportsGraphRelations?[GRAPH_RELATIONS_FEATURE]:[])].join(', ')}:{}),
           ...(data === undefined ? {} : { 'Content-Type': 'application/json' }),
         },
         redirect: 'error',
@@ -168,26 +209,31 @@ export class SyncApi {
         referrerPolicy: 'no-referrer',
         signal: controller.signal,
       });
+      const response=await(isModel?waitForModelCall(pendingResponse.then(value=>{if(controller.signal.aborted)void value.body?.cancel().catch(()=>{});return value;}),controller.signal):pendingResponse);
+      checkIdentity();
+      if(isModel&&(response.redirected||['opaque','opaqueredirect','error'].includes(response.type)||response.url&&response.url!==this.baseUrl+path)){void response.body?.cancel().catch(()=>{});throw new ModelServiceError('MODEL_RESPONSE_INVALID',502);}
       let body: unknown;
       try {
-        body = await boundedJson(response);
+        body = isModel?await readModelResponse(response,controller.signal):await boundedJson(response);
       } catch (error) {
         if (response.status === 401 || response.status === 403)
           throw errorFromResponse(response.status);
         throw error;
       }
+      checkIdentity();
       if (!response.ok) {
         const code =
           isObject(body) && isObject(body.error) && typeof body.error.code === 'string'
             ? body.error.code
             : undefined;
+        if(isModel&&response.status!==401&&response.status!==403&&isModelServiceCode(code))throw new ModelServiceError(code,response.status);
         throw errorFromResponse(response.status, code);
       }
       return body;
     } catch (error) {
-      if (signal.aborted) throw new ClientError('ACCOUNT_CHANGED');
+      checkIdentity();
       if (controller.signal.reason === 'timeout') throw new ClientError('REQUEST_TIMEOUT', true);
-      if (error instanceof ClientError) throw error;
+      if (error instanceof ClientError||error instanceof ModelServiceError) throw error;
       throw new ClientError('NETWORK_UNAVAILABLE', true);
     } finally {
       clearTimeout(timeout);
@@ -195,11 +241,75 @@ export class SyncApi {
     }
   }
 
+  async capabilities(signal: AbortSignal): Promise<{ paperOrganization: boolean }> {
+    const generation=++this.capabilityGeneration;
+    this.supportsRichNotes=false;this.supportsAiConversations=false;this.supportsGraphRelations=false;
+    this.cloudPdfCapability = null;
+    this.desktopPdfCapability = null;
+    this.remoteTaskCapability = null;
+    this.modelInferenceCapability=null;
+    this.remoteRetrievalCapability=null;
+    const body = await this.request('/v1/capabilities', signal);
+    if(generation!==this.capabilityGeneration)throw new ClientError('ACCOUNT_CHANGED');
+    if (!isObject(body) || body.protocolVersion !== 1) throw new ClientError('INVALID_RESPONSE');
+    this.supportsPaperOrganization = isObject(body.features) && body.features.paperOrganization === 1;
+    this.supportsRichNotes=isObject(body.features)&&body.features.richNotes===1;
+    this.supportsAiConversations=isObject(body.features)&&body.features.aiConversations===1;
+    if (isObject(body.features) && body.features.remoteTasks === 1) {
+      try { this.remoteTaskCapability = validateRemoteTaskCapability(body.remoteTasks); }
+      catch { throw new ClientError('INVALID_RESPONSE'); }
+    }
+    let modelCapability:ModelInferenceCapability|null=null;
+    if(isObject(body.features)&&body.features.modelInference===1){try{modelCapability=validateModelInferenceCapability(body.modelInference);}catch{throw new ClientError('INVALID_RESPONSE');}}
+    let retrievalCapability:RemoteRetrievalCapability|null=null;
+    if(isObject(body.features)&&body.features.remoteRetrieval===1){try{retrievalCapability=validateRemoteRetrievalCapability(body.remoteRetrieval);}catch{throw new ClientError('INVALID_RESPONSE');}}
+    let desktopCapability: DesktopPdfCapability | null = null;
+    if (isObject(body.features) && body.features.desktopPdfTransfer === 1) {
+      const limits = body.desktopPdf;
+      if (!isDesktopPdfCapability(limits)) throw new ClientError('INVALID_RESPONSE');
+      desktopCapability = { transport: limits.transport, maxFileBytes: limits.maxFileBytes,
+        requestTtlMs: limits.requestTtlMs, pollTimeoutMs: limits.pollTimeoutMs,
+        ...(limits.direct ? { direct: { transport: limits.direct.transport, attemptMs: limits.direct.attemptMs,
+          maxSdpBytes: limits.direct.maxSdpBytes, stunUrls: [...limits.direct.stunUrls] } } : {}) };
+    }
+    if (body.pdfStorage === true && isObject(body.features) && body.features.privatePdfStorage === 1) {
+      const limits = body.cloudPdf;
+      if (!isObject(limits) || !Number.isSafeInteger(limits.maxFileBytes) || Number(limits.maxFileBytes) < 1
+        || Number(limits.maxFileBytes) > 64 * 1024 * 1024 || !Number.isSafeInteger(limits.maxAccountBytes)
+        || Number(limits.maxAccountBytes) < 1 || Number(limits.maxAccountBytes) > 10 * 1024 * 1024 * 1024
+        || !Number.isSafeInteger(limits.maxCopies) || Number(limits.maxCopies) < 1 || Number(limits.maxCopies) > 512)
+        throw new ClientError('INVALID_RESPONSE');
+      this.cloudPdfCapability = { maxFileBytes: Number(limits.maxFileBytes), maxAccountBytes: Number(limits.maxAccountBytes),
+        maxCopies: Number(limits.maxCopies) };
+    }
+    this.supportsGraphRelations=isObject(body.features)&&body.features.graphRelations===1;
+    this.desktopPdfCapability = desktopCapability;
+    this.modelInferenceCapability=modelCapability;
+    this.remoteRetrievalCapability=retrievalCapability;
+    return { paperOrganization: this.supportsPaperOrganization };
+  }
+
+  /** Read through a detached client; a failed/cancelled inspection never changes
+   * transport capabilities used by an in-flight operation. Metadata schema opt-ins
+   * remain owned by workspace binding, which also resets its pull cursor. */
+  async inspectCapabilities(signal:AbortSignal):Promise<ServiceCapabilitySnapshot>{
+    const generation=++this.capabilityGeneration,identityKey=this.getIdentityKey?.();
+    const probe=new SyncApi(this.baseUrl,this.getToken,this.fetcher,this.getIdentityKey);
+    await probe.capabilities(signal);
+    if(signal.aborted||generation!==this.capabilityGeneration||identityKey!==this.getIdentityKey?.())throw new ClientError('ACCOUNT_CHANGED');
+    const snapshot:ServiceCapabilitySnapshot={paperOrganization:probe.supportsPaperOrganization,richNotes:probe.supportsRichNotes,aiConversations:probe.supportsAiConversations,graphRelations:probe.supportsGraphRelations,
+      cloudPdf:probe.cloudPdfCapability,desktopPdf:probe.desktopPdfCapability,remoteTasks:probe.remoteTaskCapability,modelInference:probe.modelInferenceCapability,remoteRetrieval:probe.remoteRetrievalCapability};
+    this.cloudPdfCapability=structuredClone(snapshot.cloudPdf);this.desktopPdfCapability=structuredClone(snapshot.desktopPdf);this.remoteTaskCapability=structuredClone(snapshot.remoteTasks);this.modelInferenceCapability=structuredClone(snapshot.modelInference);
+    this.remoteRetrievalCapability=structuredClone(snapshot.remoteRetrieval??null);
+    return structuredClone(snapshot);
+  }
+
   async register(name: string, signal: AbortSignal): Promise<AccountIdentity> {
+    const platform = getPlatformCapabilities().platform;
     return identity(
       await this.request('/v1/devices', signal, 'POST', {
         name: name.trim().slice(0, 80) || 'Web 浏览器',
-        platform: 'web',
+        platform: platform === 'ios' || platform === 'android' ? platform : 'web',
       }),
     );
   }

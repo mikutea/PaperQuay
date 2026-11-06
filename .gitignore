@@ -27,6 +27,7 @@ coverage/
 
 # Electron / desktop packaging output
 electron/native/bin/
+electron/generated/
 builder-debug.yml
 builder-effective-config.yaml
 *.asar
@@ -131,6 +132,9 @@ backup*.tar.gz
 
 # Local test papers and parser outputs
 *.pdf
+!apps/mobile/tests/fixtures/pdf-scanned/jpx.pdf
+!apps/mobile/tests/fixtures/pdf-scanned/jbig2.pdf
+!apps/mobile/tests/fixtures/pdf-scanned/ccitt.pdf
 /icon.png
 /content_list*.json
 /middle.json

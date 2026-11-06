@@ -1,0 +1,41 @@
+@import 'katex/dist/katex.min.css';
+
+.rich-note-editor { min-width: 0; color: var(--text-primary, inherit); }
+.rich-note-toolbar, .rich-note-form-row { display: flex; align-items: center; flex-wrap: wrap; gap: .45rem; margin-block: .6rem; }
+.rich-note-toolbar button, .rich-note-controls button { min-height: 2.5rem; padding: .45rem .65rem; font-size: .85rem; }
+.rich-note-toolbar button[aria-pressed='true'] { background: var(--accent-soft, #e0f2fe); border-color: var(--accent, #0284c7); }
+.rich-note-controls { border: 1px solid var(--border, #cbd5e1); border-radius: .65rem; padding: .6rem; margin-block: .6rem; }
+.rich-note-controls summary { cursor: pointer; font-weight: 600; min-height: 1.7rem; }
+.rich-note-form-row label { display: flex; flex-direction: column; gap: .2rem; flex: 1 1 9rem; max-width: 100%; }
+.rich-note-form-row input, .rich-note-form-row textarea, .rich-note-form-row select { min-width: 0; width: 100%; box-sizing: border-box; }
+.rich-note-form-row textarea { min-height: 4.5rem; }
+.rich-note-form-row input[type='number'] { max-width: 7rem; }
+.rich-note-content { overflow-wrap: anywhere; line-height: 1.65; }
+.rich-note-content .tiptap { min-height: 13rem; border: 1px solid var(--border, #cbd5e1); border-radius: .65rem; padding: .8rem; white-space: pre-wrap; outline: none; }
+.rich-note-content .tiptap:focus-visible { outline: 2px solid var(--accent, #0284c7); outline-offset: 2px; }
+.rich-note-content p { margin-block: .55rem; }
+.rich-note-content h1, .rich-note-content h2, .rich-note-content h3, .rich-note-content h4, .rich-note-content h5, .rich-note-content h6 { line-height: 1.3; margin-block: 1rem .5rem; }
+.rich-note-content blockquote { margin-inline: 0; padding-inline-start: .8rem; border-inline-start: 3px solid var(--border, #94a3b8); }
+.rich-note-content pre { white-space: pre-wrap; overflow-x: auto; border-radius: .4rem; padding: .7rem; background: var(--surface-secondary, #f1f5f9); }
+.rich-note-content ul, .rich-note-content ol { padding-inline-start: 1.5rem; }
+.rich-note-content ul[data-type='taskList'] { list-style: none; padding-inline-start: .1rem; }
+.rich-note-content li[data-type='taskItem'] { display: flex; gap: .55rem; align-items: baseline; }
+.rich-note-content li[data-type='taskItem'] > label { flex: 0 0 auto; }
+.rich-note-content li[data-type='taskItem'] > div { flex: 1; min-width: 0; }
+.rich-note-content input[type='checkbox'] { width: 1.1rem; height: 1.1rem; accent-color: var(--accent, #0284c7); }
+.rich-note-image { margin-inline: 0; text-align: center; }
+.rich-note-image img { max-width: 100%; height: auto; object-fit: contain; }
+.rich-note-image figcaption { font-size: .85rem; opacity: .8; }
+.rich-note-reference { display: inline-block; background: var(--surface-secondary, #f1f5f9); color: inherit; border: 1px solid var(--border, #cbd5e1); border-radius: .35rem; padding: .1rem .35rem; font-size: .85em; white-space: pre-wrap; }
+aside.rich-note-reference { display: block; padding: .6rem; margin-block: .6rem; }
+.rich-note-component { border: 1px solid var(--border, #cbd5e1); border-radius: .5rem; padding: .6rem; margin-block: .65rem; }
+.rich-note-component-title { font-weight: 650; font-size: .9rem; margin-bottom: .4rem; }
+.rich-note-table-scroll, .rich-note-content .tableWrapper { overflow: auto; max-width: 100%; margin-block: .7rem; }
+.rich-note-content table { border-collapse: collapse; table-layout: fixed; min-width: 16rem; width: max-content; max-width: none; }
+.rich-note-content td, .rich-note-content th { position: relative; min-width: 4rem; border: 1px solid var(--border, #94a3b8); padding: .4rem; vertical-align: top; }
+.rich-note-content th { background: var(--surface-secondary, #f1f5f9); }
+.rich-note-content .selectedCell { background: var(--accent-soft, #dbeafe); outline: 2px solid var(--accent, #0284c7); outline-offset: -2px; }
+.rich-note-content .ProseMirror-selectednode { outline: 2px solid var(--accent, #0284c7); }
+.rich-note-math-block, .rich-note-content .tiptap-mathematics-render[data-type='block-math'] { display: block; overflow-x: auto; max-width: 100%; padding-block: .4rem; }
+.rich-note-help { font-size: .8rem; }
+@media (max-width: 480px) { .rich-note-toolbar { gap: .3rem; } .rich-note-toolbar button { font-size: .8rem; } .rich-note-content .tiptap { padding: .6rem; } }

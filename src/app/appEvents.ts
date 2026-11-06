@@ -11,6 +11,7 @@ export interface OpenPreferencesEventDetail {
   section?:
     | 'general'
     | 'library'
+    | 'desktopAccount'
     | 'reading'
     | 'mineru'
     | 'backup'

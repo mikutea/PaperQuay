@@ -5,6 +5,7 @@ import {
   FolderOpen,
   Languages,
   Library,
+  Laptop,
   RefreshCw,
   Settings2,
   Sparkles,
@@ -50,6 +51,7 @@ import {
 import { ReaderPreferencesBackupSection } from './readerPreferencesBackupSection';
 import { ReaderPreferencesModelsSection } from './readerPreferencesModelsSection';
 import { ReaderPreferencesUpdateSection } from './readerPreferencesUpdateSection';
+import { ReaderPreferencesDesktopAccountSection } from './readerPreferencesDesktopAccountSection';
 import type {
   ReaderPreferencesLocalizer,
   ReaderPreferencesSectionDescriptor,
@@ -116,6 +118,7 @@ interface ReaderPreferencesContentProps
     | 'batchSummaryProgress'
   > {
   activeSection: PreferencesSectionKey;
+  onNavigate?: (section: PreferencesSectionKey) => void;
   l: ReaderPreferencesLocalizer;
 }
 
@@ -140,7 +143,7 @@ export function buildReaderPreferencesSections(
   return [
     {
       key: 'general',
-      title: l('通用', 'General'),
+      title: l('外观与语言', 'Appearance and language'),
       description: l(
         '语言、主题和基础应用行为',
         'Language, theme, and basic application behavior',
@@ -149,31 +152,37 @@ export function buildReaderPreferencesSections(
     },
     {
       key: 'library',
-      title: l('文库与 Zotero', 'Library & Zotero'),
+      title: l('文库与导入', 'Library and imports'),
       description: l('Zotero、本地路径和 PDF 来源', 'Zotero, local paths, and PDF sources'),
       icon: <Library className="h-4 w-4" strokeWidth={1.8} />,
+    },
+    {
+      key: 'desktopAccount',
+      title: l('账号与多设备', 'Account and devices'),
+      description: l('登录账号，选择可供手机和平板读取的 PDF', 'Sign in and choose PDFs for your phone and tablet'),
+      icon: <Laptop className="h-4 w-4" strokeWidth={1.8} />,
     },
     {
       key: 'reading',
       title: l('阅读显示', 'Reader Display'),
       description: l(
-        '联动、滚动、布局和结构块显示',
+        '调整页面、滚动和阅读布局',
         'Linking, scrolling, layout, and block display',
       ),
       icon: <BookOpenText className="h-4 w-4" strokeWidth={1.8} />,
     },
     {
       key: 'mineru',
-      title: 'MinerU',
+      title: l('文献解析', 'Document parsing'),
       description: l(
-        'API Key、缓存、自动解析和批量任务',
+        '让 PDF 更好阅读，并用于问答',
         'API key, cache, auto parse, and batch jobs',
       ),
       icon: <Database className="h-4 w-4" strokeWidth={1.8} />,
     },
     {
       key: 'backup',
-      title: l('备份 / WebDAV', 'Backup / WebDAV'),
+      title: l('备份与恢复', 'Backup and recovery'),
       description: l(
         '配置手动远程副本、连接测试和立即备份',
         'Configure manual remote copies, connection test, and backup now',
@@ -191,18 +200,18 @@ export function buildReaderPreferencesSections(
     },
     {
       key: 'models',
-      title: l('AI 模型', 'AI Models'),
+      title: l('AI 服务', 'AI services'),
       description: l(
-        '模型预设、功能绑定和 Embedding',
+        '连接 AI，选择问答、翻译与检索服务',
         'Model presets, role bindings, and embedding',
       ),
       icon: <Sparkles className="h-4 w-4" strokeWidth={1.8} />,
     },
     {
       key: 'summaryQa',
-      title: l('概览与问答', 'Overview & QA'),
+      title: l('总结与问答', 'Summaries and questions'),
       description: l(
-        '概览输入、批量概览和问答上下文',
+        '设置总结习惯与回答使用的内容',
         'Overview input, batch overview, and QA context',
       ),
       icon: <Database className="h-4 w-4" strokeWidth={1.8} />,
@@ -221,6 +230,7 @@ export function buildReaderPreferencesSections(
 
 export function ReaderPreferencesContent({
   activeSection,
+  onNavigate,
   l,
   settings,
   librarySettings,
@@ -303,6 +313,7 @@ export function ReaderPreferencesContent({
 
   return (
     <div className="mx-auto max-w-3xl space-y-4">
+      {activeSection === 'desktopAccount' ? <ReaderPreferencesDesktopAccountSection l={l} onNavigate={onNavigate} /> : null}
       {activeSection === 'general' ? (
         <>
         <SettingsField

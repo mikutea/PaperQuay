@@ -19,6 +19,7 @@ import EmptyState from '../../components/EmptyState';
 import { ContextMenu, type ContextMenuEntry } from '../../components/ContextMenu';
 import { useWheelScrollDelegate } from '../../hooks/useWheelScrollDelegate';
 import { approveWritePath, selectSavePdfPath, writeLocalBinaryFile } from '../../services/desktop';
+import { createDesktopReadingReaderAccess, DesktopReadingReaderError, type DesktopReadingReaderAccess, type DesktopReadingReaderPoint } from '../../services/desktopReadingReader';
 import {
   extractTranslatableMarkdownFromMineruBlock,
   extractTextFromMineruBlock,
@@ -157,6 +158,7 @@ interface PdfViewerProps {
   onScrollPositionChange?: (position: PdfScrollPosition) => void;
   onReadingHeatmapChange?: (heatmap: PdfReadingHeatmap) => void;
   onSaveSuccess?: (path: string) => void;
+  onAccountReadingAccess?: (access: DesktopReadingReaderAccess | null) => void;
 }
 
 function resolveToolMode(mode: AnnotationEditorTool) {
@@ -250,6 +252,7 @@ function PdfViewer({
   onScrollPositionChange,
   onReadingHeatmapChange,
   onSaveSuccess,
+  onAccountReadingAccess,
 }: PdfViewerProps) {
   const l = useLocaleText();
   const documentInit = useMemo(() => buildPdfJsDocumentInit(source, pdfData), [pdfData, source]);
@@ -287,6 +290,9 @@ function PdfViewer({
   const pageCountRef = useRef(0);
   const scrollPositionRef = useRef<PdfScrollPosition | null>(scrollPosition);
   const sourceSignatureRef = useRef('');
+  const accountPositionCallback = useRef(onScrollPositionChange);
+  accountPositionCallback.current = onScrollPositionChange;
+  const accountPointListeners = useRef(new Set<(point: DesktopReadingReaderPoint) => void>());
   const restoringScrollRef = useRef(false);
   const restoredScrollKeyRef = useRef('');
   const externalScrollRestoreKeyRef = useRef('');
@@ -353,6 +359,10 @@ function PdfViewer({
     () => getPdfSourceSignature(source, currentPdfName),
     [currentPdfName, source],
   );
+  // This render-owned identity rejects an old access immediately, before
+  // asynchronous PDF teardown or a passive effect can finish.
+  const accountReaderContext = useRef({ documentInit, sourceSignature, active, pageCount });
+  accountReaderContext.current = { documentInit, sourceSignature, active, pageCount };
 
   useEffect(() => {
     sourceSignatureRef.current = sourceSignature;
@@ -669,8 +679,13 @@ function PdfViewer({
     return nextPosition;
   }, [buildCurrentScrollPosition]);
 
+  const emitAccountPoint = useCallback((position: PdfScrollPosition) => {
+    if (position.sourceKey !== sourceSignatureRef.current || typeof position.pageOffsetRatio !== 'number') return;
+    const point = { pageIndex: position.page - 1, offsetRatio: position.pageOffsetRatio, observedAt: new Date(position.updatedAt).toISOString() };
+    for (const listener of [...accountPointListeners.current]) listener(point);
+  }, []);
   const emitScrollPosition = useCallback((options?: { syncPageState?: boolean }) => {
-    if (!onScrollPositionChange) {
+    if (!onScrollPositionChange && !accountPointListeners.current.size) {
       return;
     }
 
@@ -686,8 +701,55 @@ function PdfViewer({
       return;
     }
 
-    onScrollPositionChange(nextPosition);
-  }, [onScrollPositionChange, updateLocalScrollPosition]);
+    onScrollPositionChange?.(nextPosition); emitAccountPoint(nextPosition);
+  }, [onScrollPositionChange, updateLocalScrollPosition, emitAccountPoint]);
+
+  const accountReadingEnabled = Boolean(onAccountReadingAccess);
+  useEffect(() => {
+    const loadedDocument = pdfDocumentRef.current;
+    if (!accountReadingEnabled || !active || !pageCount || !loadedDocument || !isPdfDocumentUsable(loadedDocument)
+      || loadedPageCount?.documentInit !== documentInit || loadedDocument.numPages !== pageCount) { onAccountReadingAccess?.(null); return; }
+    const current = () => { const value = accountReaderContext.current; return value.active && value.documentInit === documentInit
+      && value.sourceSignature === sourceSignature && value.pageCount === pageCount && pdfDocumentRef.current === loadedDocument && isPdfDocumentUsable(loadedDocument); };
+    const access = createDesktopReadingReaderAccess({ isCurrent: current, pageCount: () => loadedDocument.numPages,
+      readBytes: () => loadedDocument.getData(),
+      subscribePosition: listener => { accountPointListeners.current.add(listener); return () => { accountPointListeners.current.delete(listener); }; },
+      readPoint: () => {
+        const point = buildCurrentScrollPosition();
+        if (!point || point.sourceKey !== sourceSignature || typeof point.pageOffsetRatio !== 'number') return null;
+        return { pageIndex: point.page - 1, offsetRatio: point.pageOffsetRatio, observedAt: new Date(point.updatedAt).toISOString() };
+      },
+      applyPoint: point => {
+        if (!current()) throw new DesktopReadingReaderError('READING_READER_CHANGED');
+        const container = containerRef.current, host = viewerRef.current?.querySelector<HTMLDivElement>(`.page[data-page-number="${point.pageIndex + 1}"]`);
+        const height = host ? getPageElementHeight(host) : 0;
+        if (!container || !host || height <= 0) throw new DesktopReadingReaderError('READING_POSITION_UNAVAILABLE');
+        const rawTop = host.offsetTop + point.offsetRatio * height, maximum = Math.max(0, container.scrollHeight - container.clientHeight);
+        if (rawTop < -1 || rawTop > maximum + 1) throw new DesktopReadingReaderError('READING_POSITION_UNREACHABLE');
+        const top = Math.min(Math.max(0, rawTop), maximum);
+        const left = Math.min(Math.max(0, container.scrollLeft), Math.max(0, container.scrollWidth - container.clientWidth));
+        const previousTop = container.scrollTop, previousLeft = container.scrollLeft;
+        restoringScrollRef.current = true;
+        try {
+          pendingScrollRestoreKeyRef.current = '';
+          container.scrollTo({ top, left, behavior: 'instant' });
+          const reached = buildCurrentScrollPosition();
+          if (!reached || reached.sourceKey !== sourceSignature || reached.page - 1 !== point.pageIndex || typeof reached.pageOffsetRatio !== 'number'
+            || Math.abs(reached.pageOffsetRatio - point.offsetRatio) > 1.01 / height) {
+            container.scrollTo({ top: previousTop, left: previousLeft, behavior: 'instant' });
+            throw new DesktopReadingReaderError('READING_POSITION_UNREACHABLE');
+          }
+          currentPageRef.current = point.pageIndex + 1; setNumberStateIfChanged(setCurrentPage, point.pageIndex + 1);
+          const actual = updateLocalScrollPosition();
+          if (!actual || actual.sourceKey !== sourceSignature) throw new DesktopReadingReaderError('READING_READER_CHANGED');
+          restoredScrollKeyRef.current = buildScrollRestoreKey(actual);
+          accountPositionCallback.current?.(actual); emitAccountPoint(actual);
+        } finally { restoringScrollRef.current = false; }
+      },
+    });
+    onAccountReadingAccess?.(access);
+    return () => { access.dispose(); onAccountReadingAccess?.(null); };
+  }, [active, documentInit, loadedPageCount, pageCount, sourceSignature, accountReadingEnabled, buildCurrentScrollPosition, updateLocalScrollPosition, emitAccountPoint, onAccountReadingAccess]);
 
   const getSavedScrollPage = useCallback((pagesCount?: number) => {
     const position = scrollPositionRef.current;
@@ -1141,7 +1203,7 @@ function PdfViewer({
   useEffect(() => {
     const container = containerRef.current;
 
-    if (!active || !container || !onScrollPositionChange || !sourceSignature) {
+    if (!active || !container || (!onScrollPositionChange && !accountReadingEnabled) || !sourceSignature) {
       return undefined;
     }
 
@@ -1208,6 +1270,7 @@ function PdfViewer({
     emitScrollPosition,
     hasPendingExternalScrollRestore,
     onScrollPositionChange,
+    accountReadingEnabled,
     active,
     sourceSignature,
     updateLocalScrollPosition,

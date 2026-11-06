@@ -9,6 +9,8 @@ const { createNoteStore } = require('./backend/noteStore.cjs');
 const { createReviewCommands } = require('./backend/reviewCommands.cjs');
 const { createUpdateCommands } = require('./backend/updateCommands.cjs');
 const { createRadarController } = require('./backend/radarCommands.cjs');
+const { createDesktopAccountCommands } = require('./backend/desktopAccountCommands.cjs');
+const { createRichNoteExportCommands } = require('./backend/richNoteExport.cjs');
 
 function toErrorMessage(error) {
   return error instanceof Error ? error.message : String(error);
@@ -98,7 +100,31 @@ function createBackend({ app, libraryLocation }) {
     }
   } });
   radar.start();
+  let graphProjectionIdentity = '';
+  function notifyGraphProjection() {
+    const projection = JSON.stringify(desktopAccount.graphProjection());
+    if (projection === graphProjectionIdentity) return;
+    graphProjectionIdentity = projection;
+    const { BrowserWindow } = require('electron');
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.webContents.isDestroyed()) window.webContents.send('paperquay:event', 'knowledge-graph:changed', {});
+    }
+  }
+  const desktopAccount = createDesktopAccountCommands(context, { onGraphChange: notifyGraphProjection, onChange: (change = {}) => {
+    const { BrowserWindow } = require('electron');
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.webContents.isDestroyed()) window.webContents.send('paperquay:event', 'desktop-account:changed', change);
+    }
+  } });
 
+  context.accountGraphProjection = () => desktopAccount.graphProjection();
+  context.updateAccountGraphRelation = async request => {
+    await desktopAccount.updateGraphRelation(request);
+    return desktopAccount.graphProjection().relations.find(row => row.id === request.id);
+  };
+  context.deleteAccountGraphRelation = id => desktopAccount.deleteGraphRelation(id);
+
+  const richNoteExport = createRichNoteExportCommands(context);
   const commands = {
     ...fileCommands,
     ...createLibraryCommands(context),
@@ -109,6 +135,8 @@ function createBackend({ app, libraryLocation }) {
     ...createReviewCommands(context),
     ...createUpdateCommands(context),
     ...radar.commands,
+    ...desktopAccount.commands,
+    ...richNoteExport.commands,
     ...(libraryLocation ? {
       library_location_status: () => libraryLocation.status(),
       library_location_select: () => libraryLocation.selectExisting(),
@@ -118,7 +146,10 @@ function createBackend({ app, libraryLocation }) {
 
   return {
     authorizeLocalRead: context.authorizeLocalRead,
+    stopDesktopProvider: () => desktopAccount.stopProvider(),
     close() {
+      richNoteExport.close();
+      desktopAccount.close();
       radar.close();
       noteStore.close();
       ragStore.close();
@@ -131,7 +162,13 @@ function createBackend({ app, libraryLocation }) {
         throw new Error(`Unsupported Electron command: ${command}`);
       }
 
-      return handler(args ?? {}, event);
+      const same = (value) => typeof value === 'string' && (process.platform === 'win32' ? require('node:path').resolve(value).toLowerCase() : require('node:path').resolve(value));
+      const configWrite = command === 'write_text_file' && [appPaths.configPath, appPaths.legacyConfigPath].filter(Boolean).some((file) => same(file) === same(args?.path));
+      if (configWrite) await desktopAccount.configurationWillChange(String(args?.content ?? ''));
+      const result = await handler(args ?? {}, event);
+      if (/^(?:library_|notes_|knowledge_graph_)/.test(command)) notifyGraphProjection();
+      if (configWrite) await desktopAccount.configurationDidChange();
+      return result;
     },
   };
 }

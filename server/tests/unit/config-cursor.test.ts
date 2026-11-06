@@ -16,6 +16,14 @@ test('listener is loopback by default and remote HTTP origins/issuers are reject
   assert.equal(checkedHttpUrl('http://127.0.0.1:18081/realms/test', true).hostname, '127.0.0.1');
 });
 
+test('only the exact Capacitor loopback origin is accepted outside HTTP origins', () => {
+  assert.deepEqual(testConfig({ PAPERQUAY_ALLOWED_ORIGINS: 'capacitor://localhost,https://localhost' }).allowedOrigins,
+    ['capacitor://localhost', 'https://localhost']);
+  for (const origin of ['capacitor://evil.test', 'capacitor://localhost/', 'capacitor://user@localhost', 'file://', 'null', 'capacitor://localhost:123'])
+    assert.throws(() => testConfig({ PAPERQUAY_ALLOWED_ORIGINS: origin }), { code: 'CONFIGURATION_INVALID' });
+  assert.throws(() => testConfig({ PAPERQUAY_OIDC_ISSUER: 'capacitor://localhost' }), { code: 'CONFIGURATION_INVALID' });
+});
+
 test('retained-byte quota defaults to 256 MiB and rejects invalid or unbounded configuration before opening a pool', () => {
   assert.equal(testConfig().maxAccountRetainedBytes, 256 * 1024 * 1024);
   for (const limit of [1, 4096, SERVER_LIMITS.maxConfiguredAccountRetainedBytes]) {

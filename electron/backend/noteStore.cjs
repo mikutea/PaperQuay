@@ -46,6 +46,7 @@ function createSchema(db) {
       content_text TEXT,
       excerpt TEXT,
       anchors TEXT,
+      reference_metadata TEXT,
       linked_paper_id TEXT,
       folder_id TEXT,
       pdf_page_number INTEGER,
@@ -97,6 +98,7 @@ function createSchema(db) {
   ensureColumn(db, 'notes', 'content_text', 'TEXT');
   ensureColumn(db, 'notes', 'excerpt', 'TEXT');
   ensureColumn(db, 'notes', 'anchors', 'TEXT');
+  ensureColumn(db, 'notes', 'reference_metadata', 'TEXT');
   ensureColumn(db, 'notes', 'linked_paper_id', 'TEXT');
   ensureColumn(db, 'notes', 'folder_id', 'TEXT');
   ensureColumn(db, 'notes', 'pdf_page_number', 'INTEGER');
@@ -189,6 +191,43 @@ function normalizeStringList(value) {
   return output;
 }
 
+function normalizeUnresolvedReferences(value) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > 1000) throw new Error('INVALID_NOTE_REFERENCE_METADATA');
+  const seen = new Set();
+  return value.map(entry => {
+    if (!entry || typeof entry !== 'object' || Object.keys(entry).sort().join(',') !== 'id,kind,label,reason'
+      || !['note', 'paper', 'folder', 'ai-chat'].includes(entry.kind) || typeof entry.id !== 'string'
+      || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(entry.id) || typeof entry.label !== 'string' || entry.label.length > 2048
+      || !['unmapped', 'missing', 'historical-unverified'].includes(entry.reason)) throw new Error('INVALID_NOTE_REFERENCE_METADATA');
+    if (entry.id.startsWith('unresolved:') && !entry.id.startsWith(`unresolved:${entry.kind}:`)) throw new Error('INVALID_NOTE_REFERENCE_METADATA');
+    const key = `${entry.kind}:${entry.id}`;
+    if (seen.has(key)) throw new Error('INVALID_NOTE_REFERENCE_METADATA');
+    seen.add(key);
+    return { kind: entry.kind, id: entry.id, label: entry.label, reason: entry.reason };
+  });
+}
+
+function referenceMetadata(value) {
+  const result = { linkedNoteIds: normalizeStringList(value?.linkedNoteIds), linkedPaperIds: normalizeStringList(value?.linkedPaperIds),
+    unresolvedReferences: normalizeUnresolvedReferences(value?.unresolvedReferences) };
+  if ([result.linkedNoteIds, result.linkedPaperIds].some(list => list.length > 1000 || list.some(id => id.length > 512))
+    || Buffer.byteLength(JSON.stringify(result)) > 1024 * 1024) throw new Error('INVALID_NOTE_REFERENCE_METADATA');
+  return result;
+}
+
+function structuredReferences(document) {
+  const notes = [], papers = [];
+  const visit = node => {
+    if (!node || typeof node !== 'object') return;
+    if (node.type === 'wikiLink' && typeof node.attrs?.id === 'string') notes.push(node.attrs.id);
+    if (node.type === 'paperReference' && typeof node.attrs?.paperId === 'string') papers.push(node.attrs.paperId);
+    for (const child of Array.isArray(node.content) ? node.content : []) visit(child);
+  };
+  visit(document);
+  return { notes, papers };
+}
+
 function normalizeBoolean(value, fallback = false) {
   if (value === undefined || value === null) return Boolean(fallback);
   return value === true || value === 1 || value === '1';
@@ -270,7 +309,8 @@ function normalizeAnchors(value) {
       ? item.source
       : undefined;
     const pdfLocation = normalizePdfLocation(item.pdfLocation);
-    const createdAt = normalizeTimestamp(item.createdAt) || now();
+    const createdAt = item.createdAt === 0 ? 0 : normalizeTimestamp(item.createdAt) || now();
+    if (item.verification !== undefined && item.verification !== 'unverified') throw new Error('INVALID_NOTE_ANCHOR_VERIFICATION');
 
     seen.add(idValue);
     output.push({
@@ -280,6 +320,9 @@ function normalizeAnchors(value) {
       sourceTitle: sourceTitle || undefined,
       excerpt,
       source,
+      ...(item.blockId === undefined ? {} : { blockId: item.blockId === null ? null : cleanString(item.blockId) || undefined }),
+      ...(item.pageIndex === undefined ? {} : { pageIndex: item.pageIndex === null ? null : Number.isSafeInteger(item.pageIndex) && item.pageIndex >= 0 ? item.pageIndex : undefined }),
+      ...(item.verification === undefined ? {} : { verification: 'unverified' }),
       pdfLocation: pdfLocation ?? undefined,
       createdAt,
     });
@@ -434,14 +477,31 @@ function normalizeNoteInput(input, existing = null) {
     : normalizeAnchors(input.anchors);
   const explicitTags = normalizeTags(input?.tags ?? existing?.tags);
   const extractedTags = normalizeTags(extractTagsFromText(contentText));
-  const linkedNoteTitles = normalizeStringList([
+  const structured = contentJson?.type === 'doc' ? structuredReferences(contentJson) : null;
+  const previousReferences = existing?.contentJson?.type === 'doc' ? structuredReferences(existing.contentJson) : { notes: [], papers: [] };
+  const editingDocument = structured && existing && input?.contentJson !== undefined;
+  const explicitReferences = (field, previousIds) => {
+    const supplied = normalizeStringList(input?.[field] ?? (editingDocument ? [] : existing?.[field]));
+    if (!editingDocument) return supplied;
+    // A normal editor save derives body references, but cannot silently remove
+    // independent metadata associations which were never in that body.
+    const previous = new Set(previousIds);
+    return [...supplied, ...normalizeStringList(existing[field]).filter(value => !previous.has(value))];
+  };
+  // A rendered [[label]] is not an identity. Structured references remain
+  // explicit even when their target is unresolved or another note shares a title.
+  const linkedNoteTitles = structured ? [] : normalizeStringList([
     ...normalizeStringList(input?.linkedNoteTitles),
     ...extractWikiTitlesFromText(contentText),
   ]);
   const linkedPaperIds = normalizeStringList([
-    ...normalizeStringList(input?.linkedPaperIds ?? existing?.linkedPaperIds),
-    ...extractPaperRefsFromText(contentText),
+    ...explicitReferences('linkedPaperIds', previousReferences.papers),
+    ...(structured ? structured.papers : extractPaperRefsFromText(contentText)),
   ]);
+  const references = referenceMetadata({
+    linkedNoteIds: [...explicitReferences('linkedNoteIds', previousReferences.notes), ...(structured?.notes ?? [])], linkedPaperIds,
+    unresolvedReferences: input?.unresolvedReferences === undefined ? existing?.unresolvedReferences : input.unresolvedReferences,
+  });
 
   return {
     id: cleanString(input?.id ?? existing?.id) || id('note'),
@@ -470,7 +530,8 @@ function normalizeNoteInput(input, existing = null) {
         : cleanString(input.folderId) || null,
     tags: normalizeTags([...explicitTags, ...extractedTags]),
     color: cleanString(input?.color ?? existing?.color) || '#fef3c7',
-    createdAt: Number(existing?.createdAt) || Math.trunc(Number(input?.createdAt)) || timestamp,
+    createdAt: Number.isSafeInteger(existing?.createdAt) && existing.createdAt >= 0 ? existing.createdAt
+      : Number.isSafeInteger(input?.createdAt) && input.createdAt >= 0 ? input.createdAt : timestamp,
     updatedAt: timestamp,
     deletedAt:
       input?.deletedAt === undefined
@@ -482,14 +543,16 @@ function normalizeNoteInput(input, existing = null) {
         : Number(existing?.wordCount) || countWords(contentText),
     isFavorite: normalizeBoolean(input?.isFavorite, existing?.isFavorite),
     isPinned: normalizeBoolean(input?.isPinned, existing?.isPinned),
-    linkedNoteIds: normalizeStringList(input?.linkedNoteIds ?? existing?.linkedNoteIds),
+    linkedNoteIds: references.linkedNoteIds,
     linkedNoteTitles,
-    linkedPaperIds,
+    linkedPaperIds: references.linkedPaperIds,
+    unresolvedReferences: references.unresolvedReferences,
   };
 }
 
 function rowToNote(row, tags = [], linkedNoteIds = [], linkedPaperIds = [], backlinks = []) {
   if (!row) return null;
+  const references = row.reference_metadata === null || row.reference_metadata === undefined ? null : referenceMetadata(parseJson(row.reference_metadata, null));
 
   const pdfLocation = row.pdf_page_number
     ? {
@@ -526,8 +589,9 @@ function rowToNote(row, tags = [], linkedNoteIds = [], linkedPaperIds = [], back
     wordCount: Number(row.word_count) || 0,
     isFavorite: Boolean(row.is_favorite),
     isPinned: Boolean(row.is_pinned),
-    linkedNoteIds,
-    linkedPaperIds,
+    linkedNoteIds: references ? normalizeStringList([...references.linkedNoteIds, ...linkedNoteIds]) : linkedNoteIds,
+    linkedPaperIds: references ? normalizeStringList([...references.linkedPaperIds, ...linkedPaperIds]) : linkedPaperIds,
+    unresolvedReferences: references?.unresolvedReferences ?? [],
     backlinks,
   };
 }
@@ -657,7 +721,8 @@ function resolveNoteLinks(db, note) {
   const links = new Map();
 
   for (const targetNoteId of note.linkedNoteIds) {
-    if (!targetNoteId || targetNoteId === note.id) continue;
+    if (!targetNoteId || targetNoteId === note.id || targetNoteId.startsWith('unresolved:')
+      || !db.prepare('SELECT id FROM notes WHERE id = ? AND deleted_at IS NULL').get(targetNoteId)) continue;
     links.set(targetNoteId, findNoteTitleById(db, targetNoteId));
   }
 
@@ -728,7 +793,7 @@ function saveRelations(db, note) {
   for (const link of resolveNoteLinks(db, note)) {
     insertNoteLink.run(note.id, link.targetNoteId, link.linkText, timestamp);
   }
-  for (const paperId of note.linkedPaperIds.filter((paperId) => paperId !== note.paperId)) {
+  for (const paperId of note.linkedPaperIds.filter((paperId) => paperId !== note.paperId && !paperId.startsWith('unresolved:'))) {
     insertPaperLink.run(note.id, paperId);
   }
 }
@@ -746,6 +811,7 @@ function upsertNote(db, note) {
       content_text,
       excerpt,
       anchors,
+      reference_metadata,
       linked_paper_id,
       folder_id,
       pdf_page_number,
@@ -764,7 +830,7 @@ function upsertNote(db, note) {
       is_favorite,
       is_pinned
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       paper_id = excluded.paper_id,
       type = excluded.type,
@@ -775,6 +841,7 @@ function upsertNote(db, note) {
       content_text = excluded.content_text,
       excerpt = excluded.excerpt,
       anchors = excluded.anchors,
+      reference_metadata = excluded.reference_metadata,
       linked_paper_id = excluded.linked_paper_id,
       folder_id = excluded.folder_id,
       pdf_page_number = excluded.pdf_page_number,
@@ -802,6 +869,7 @@ function upsertNote(db, note) {
     note.contentText,
     note.excerpt,
     toJson(note.anchors),
+    toJson(referenceMetadata(note)),
     note.linkedPaperId,
     note.folderId,
     note.pdfLocation?.pageNumber ?? null,
@@ -938,7 +1006,7 @@ function createNoteStore(appPaths) {
       const existing = getNoteById(db, noteId, { includeDeleted: true });
       if (!existing) throw new Error(`Note does not exist: ${noteId}`);
 
-      const note = normalizeNoteInput({ ...existing, ...(request.patch ?? {}), id: noteId }, existing);
+      const note = normalizeNoteInput({ ...(request.patch ?? {}), id: noteId }, existing);
       upsertNote(db, note);
       return getNoteById(db, note.id, { includeDeleted: true });
     });

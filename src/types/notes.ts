@@ -23,6 +23,14 @@ export interface NoteAnchor {
   pageIndex?: number | null;
   pdfLocation?: NotePdfLocation;
   createdAt: number;
+  verification?: 'unverified';
+}
+
+export interface NoteUnresolvedReference {
+  kind: 'note' | 'paper' | 'folder' | 'ai-chat';
+  id: string;
+  label: string;
+  reason: 'unmapped' | 'missing' | 'historical-unverified';
 }
 
 export interface NoteAnchorInsertRequest {
@@ -57,6 +65,7 @@ export interface Note {
   isPinned?: boolean;
   linkedNoteIds: string[];
   linkedPaperIds: string[];
+  unresolvedReferences?: NoteUnresolvedReference[];
   backlinks?: NoteBacklink[];
 }
 
@@ -108,6 +117,7 @@ export interface CreateNoteRequest {
   linkedNoteIds?: string[];
   linkedPaperIds?: string[];
   linkedNoteTitles?: string[];
+  unresolvedReferences?: NoteUnresolvedReference[];
 }
 
 export type UpdateNoteRequest = Partial<Omit<CreateNoteRequest, 'paperId'>> & {

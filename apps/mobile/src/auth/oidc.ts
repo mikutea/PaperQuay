@@ -7,12 +7,36 @@ import {
   type UserManagerSettings,
 } from 'oidc-client-ts';
 import type { AppConfig } from '../config.ts';
+import { Capacitor } from '@capacitor/core';
 import { ClientError } from '../errors.ts';
 
 export interface AuthSnapshot {
   status: 'signed-out' | 'signing-in' | 'signed-in' | 'error';
   displayName?: string;
   error?: ClientError;
+  needsLogin?: boolean;
+}
+
+export interface AuthSubject { issuer: string; subject: string; }
+export interface AuthSession {
+  subscribe(listener: () => void): () => void;
+  getSnapshot(): AuthSnapshot;
+  getSubject(): AuthSubject | null;
+  signIn(): Promise<void>;
+  completeSignIn(url: string): Promise<void>;
+  getAccessToken(): Promise<string>;
+  signOut(): Promise<void>;
+  clearLocalSession(): Promise<void>;
+  initialize(): Promise<void>;
+  dispose(): Promise<void>;
+}
+
+export async function createAuthSession(config: AppConfig): Promise<AuthSession> {
+  if (Capacitor.isNativePlatform()) {
+    const { createNativeAuthSession } = await import('./nativeOidc.ts');
+    return createNativeAuthSession(config);
+  }
+  return new OidcSession(config, window.sessionStorage);
 }
 
 export function buildOidcSettings(
@@ -44,8 +68,8 @@ export function buildOidcSettings(
   };
 }
 
-/** Web-only in M1. Tokens are never exposed through reactive snapshots or durable storage. */
-export class OidcSession {
+/** Web tokens are never exposed through reactive snapshots or durable storage. */
+export class OidcSession implements AuthSession {
   private readonly manager: UserManager;
   private readonly config: AppConfig;
   private user: User | null = null;
@@ -53,15 +77,16 @@ export class OidcSession {
   private listeners = new Set<() => void>();
   private refresh: Promise<User | null> | null = null;
   private epoch = 0;
+  private readonly expired = () => {
+    if (this.user && !this.user.refresh_token)
+      this.setSnapshot({ status: 'error', error: new ClientError('AUTH_REQUIRED') });
+  };
 
   constructor(config: AppConfig, transientStorage: Storage) {
     Log.setLevel(Log.NONE);
     this.config = config;
     this.manager = new UserManager(buildOidcSettings(config, transientStorage));
-    this.manager.events.addAccessTokenExpired(() => {
-      if (this.user && !this.user.refresh_token)
-        this.setSnapshot({ status: 'error', error: new ClientError('AUTH_REQUIRED') });
-    });
+    this.manager.events.addAccessTokenExpired(this.expired);
   }
 
   subscribe = (listener: () => void): (() => void) => {
@@ -69,6 +94,16 @@ export class OidcSession {
     return () => this.listeners.delete(listener);
   };
   getSnapshot = (): AuthSnapshot => this.snapshot;
+  getSubject = (): AuthSubject | null => this.user?.profile.iss === this.config.oidcAuthority && this.user.profile.sub
+    ? { issuer: this.user.profile.iss, subject: this.user.profile.sub } : null;
+  async initialize(): Promise<void> {}
+  async dispose(): Promise<void> {
+    this.epoch += 1;
+    this.user = null;
+    this.manager.stopSilentRenew();
+    this.manager.events.removeAccessTokenExpired(this.expired);
+    this.listeners.clear();
+  }
 
   private setSnapshot(next: AuthSnapshot): void {
     this.snapshot = next;
@@ -82,7 +117,7 @@ export class OidcSession {
     try {
       await this.manager.removeUser();
       await this.manager.clearStaleState();
-      await this.manager.signinRedirect();
+      await this.manager.signinRedirect({ nonce: crypto.randomUUID() });
     } catch {
       const error = new ClientError('AUTH_FAILED');
       this.setSnapshot({ status: 'error', error });
@@ -99,7 +134,11 @@ export class OidcSession {
     try {
       const user = await this.manager.signinRedirectCallback(url);
       if (epoch !== this.epoch) throw new ClientError('ACCOUNT_CHANGED');
-      if (!user.access_token || !user.profile.sub || user.expired)
+      const audience = typeof user.profile.aud === 'string' ? [user.profile.aud] : user.profile.aud;
+      if (!user.access_token || !user.profile.sub || user.expired !== false ||
+          user.profile.iss !== this.config.oidcAuthority || !Array.isArray(audience) || !audience.includes(this.config.oidcClientId) ||
+          (audience.length > 1 && user.profile.azp !== this.config.oidcClientId) ||
+          (user.profile.azp !== undefined && user.profile.azp !== this.config.oidcClientId))
         throw new ClientError('AUTH_FAILED');
       this.user = user;
       this.setSnapshot({
@@ -136,6 +175,7 @@ export class OidcSession {
       if (
         !next ||
         next.expired ||
+        next.profile.iss !== user.profile.iss ||
         next.profile.sub !== user.profile.sub ||
         next.profile.sid !== user.profile.sid
       ) {

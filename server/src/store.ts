@@ -1,18 +1,22 @@
+import {GRAPH_RELATION_LIMITS} from '../../packages/sync-core/src/graphRelation.ts';
+import {createModelInferenceRepository,type ModelInferenceRepository,type ModelInferenceRepositoryOptions} from './model-inference-store.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import pg from 'pg';
 import type { PoolClient, PoolConfig } from 'pg';
 import {
-  validateOperation, validatePushRequest,
+  validateOperation, validatePushRequest,canonicalJson,LEGACY_SYNC_FEATURES,supportsSyncRecord,
 } from '../../packages/sync-core/src/index.ts';
 import type {
-  AttachmentVersionData, EntityData, EntityType, PullResponse, PushRequest, PushResponse,
-  PushResult, ReadingPositionData, SyncOperation, SyncRecord,
+  AttachmentVersionData, EntityData, EntityType, PaperData, PullResponse, PushRequest, PushResponse,
+  PushResult, ReadingPositionData, SyncOperation, SyncRecord,SyncFeatureSet,
 } from '../../packages/sync-core/src/index.ts';
 import type { VerifiedIdentity } from './auth.ts';
 import { CursorCodec } from './cursor.ts';
 import { ApiError, isTransientDatabaseError } from './errors.ts';
-import { checkedRetainedByteLimit, SERVER_LIMITS } from './config.ts';
-import type { ConflictPage, Device, DevicePlatform, DeviceRegistration, ResolveRequest, SessionView, SyncRepository } from './types.ts';
+import { checkedCloudPdfByteLimit, checkedRetainedByteLimit, SERVER_LIMITS } from './config.ts';
+import type { CloudPdfCopy, CloudPdfQuota, CloudPdfRepository, CloudPdfStatus, ConflictPage, DesktopPdfAccess, DesktopPdfRepository, DesktopPdfTarget, DesktopPdfVersionPage, Device, DevicePlatform, DeviceRegistration, ResolveRequest, SessionView, SyncRepository } from './types.ts';
+import {createRemoteTaskRepository,type RemoteTaskRepository} from './remote-task-store.ts';
+import {createRemoteRetrievalRepository,type RemoteRetrievalRepository} from './remote-retrieval-store.ts';
 
 interface AccountRow {
   id: string; epoch: string; last_seq: string; last_conflict_seq: string; entity_count: number; receipt_count: number; retained_bytes: string;
@@ -24,6 +28,11 @@ interface EntityRow {
   entity_type: EntityType; entity_id: string; schema_version: 1; revision: string;
   data: EntityData; deleted_at: Date | null; updated_at: Date;
   created_by_device_id: string; modified_by_device_id: string;
+  cloud_pdf_generation: string;
+}
+interface CloudPdfRow {
+  attachment_version_id: string; paper_id: string; sha256: string; size_bytes: number;
+  file_name: string; created_at: Date; available: boolean; content?: Buffer;
 }
 interface ConflictRow {
   id: string; seq: string; entity_type: EntityType; entity_id: string;
@@ -34,11 +43,17 @@ interface TransactionContext {
   client: PoolClient; account: AccountRow; device: DeviceRow;
   preflightedReceiptOpId?: string;
 }
+interface DesktopReadContext { client: PoolClient; accountId: string; device: DeviceRow }
+interface DesktopTargetRow {
+  version_id: string; version_revision: string; version_data: AttachmentVersionData; version_deleted: Date | null;
+  paper_id: string | null; paper_revision: string | null; paper_title: string | null; paper_deleted: Date | null;
+}
 type ResponsePreflight = (result: PushResult) => void;
 type RetainedWriteKind = 'entity' | 'conflict' | 'change' | 'receipt';
 interface StoreHooks {
   /** Fault/concurrency injection for isolated integration tests, never configured from HTTP or environment. */
-  beforeCommit?: (event: { kind: 'push' | 'resolve' | 'revoke'; opId?: string; accountId: string; deviceId: string }) => Promise<void>;
+  beforeCommit?: (event: { kind: 'push' | 'resolve' | 'revoke' | 'cloud-put' | 'cloud-delete'; opId?: string;
+    attachmentVersionId?: string; accountId: string; deviceId: string }) => Promise<void>;
 }
 interface StoreOptions {
   connectionString?: string;
@@ -47,6 +62,8 @@ interface StoreOptions {
   hooks?: StoreHooks;
   responseLimitBytes?: number;
   maxAccountRetainedBytes?: number;
+  cloudPdfEnabled?: boolean;
+  cloudPdfAccountBytes?: number;
 }
 
 class ResponseBudgetExceeded extends Error {}
@@ -58,8 +75,31 @@ function isAccountStorageLimit(error: unknown): boolean {
     && 'constraint' in error && error.constraint === 'paperquay_account_retained_bytes_limit';
 }
 
-const entityColumns = 'entity_type, entity_id, schema_version, revision, data, deleted_at, updated_at, created_by_device_id, modified_by_device_id';
+const entityColumns = 'entity_type, entity_id, schema_version, revision, data, deleted_at, updated_at, created_by_device_id, modified_by_device_id, cloud_pdf_generation';
 const deviceColumns = 'id, name, platform, created_at, last_seen_at, revoked_at';
+const cloudPdfColumns = `c.attachment_version_id, c.paper_id, c.sha256, c.size_bytes, c.file_name, c.created_at,
+  (v.deleted_at IS NULL AND p.deleted_at IS NULL) AS available`;
+const cloudPdfJoins = `JOIN paperquay.entities v ON v.account_id = c.account_id
+    AND v.entity_type = 'attachmentVersion' AND v.entity_id = c.attachment_version_id
+  JOIN paperquay.entities p ON p.account_id = c.account_id AND p.entity_type = 'paper' AND p.entity_id = c.paper_id`;
+const desktopTargetColumns = 'v.entity_id AS version_id, v.revision AS version_revision, v.data AS version_data, v.deleted_at AS version_deleted, '
+  + 'p.entity_id AS paper_id, p.revision AS paper_revision, p.data ->> \'title\' AS paper_title, p.deleted_at AS paper_deleted';
+const desktopTargetFrom = ' FROM paperquay.entities v LEFT JOIN paperquay.entities p ON p.account_id = v.account_id '
+  + 'AND p.entity_type = \'paper\' AND p.entity_id = (v.data ->> \'paperId\')::uuid ';
+
+function toDesktopTarget(row: DesktopTargetRow): DesktopPdfTarget {
+  const data = row.version_data;
+  return { paper: { entityId: row.paper_id!, revision: Number(row.paper_revision), title: row.paper_title! },
+    version: { entityId: row.version_id, revision: Number(row.version_revision), data: {
+      paperId: data.paperId, attachmentId: data.attachmentId, sha256: data.sha256, sizeBytes: data.sizeBytes,
+      mediaType: data.mediaType, fileName: data.fileName, pageCount: data.pageCount,
+    } } };
+}
+
+function toCloudPdf(row: CloudPdfRow): CloudPdfCopy {
+  return { attachmentVersionId: row.attachment_version_id, paperId: row.paper_id, sha256: row.sha256,
+    sizeBytes: row.size_bytes, fileName: row.file_name, createdAt: row.created_at.toISOString(), available: row.available };
+}
 
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']';
@@ -96,16 +136,20 @@ function rejected(opId: string, code: string, retryable = false): PushResult {
 }
 
 /** Every request uses a transaction-local identity; a pooled connection never carries tenant state. */
-export class PostgresSyncStore implements SyncRepository {
+export class PostgresSyncStore implements SyncRepository, CloudPdfRepository, DesktopPdfRepository {
   readonly pool: pg.Pool;
   readonly cursors: CursorCodec;
   readonly hooks: StoreHooks;
   readonly responseLimitBytes: number;
   readonly maxAccountRetainedBytes: number;
+  readonly cloudPdfEnabled: boolean;
+  readonly cloudPdfAccountBytes: number;
   private readonly ownsPool: boolean;
 
   constructor(options: StoreOptions) {
     this.maxAccountRetainedBytes = checkedRetainedByteLimit(options.maxAccountRetainedBytes ?? SERVER_LIMITS.maxAccountRetainedBytes);
+    this.cloudPdfEnabled = options.cloudPdfEnabled ?? false;
+    this.cloudPdfAccountBytes = checkedCloudPdfByteLimit(options.cloudPdfAccountBytes ?? SERVER_LIMITS.cloudPdfAccountBytes);
     this.ownsPool = !options.pool;
     const poolOptions: PoolConfig = {
       connectionString: options.connectionString, max: 10, connectionTimeoutMillis: 10000,
@@ -124,8 +168,20 @@ export class PostgresSyncStore implements SyncRepository {
   async ready(): Promise<boolean> {
     try {
       const result = await this.pool.query<{ version: string }>('SELECT version FROM paperquay.schema_migrations ORDER BY version');
-      return result.rows.map((row) => row.version).join(',') === '001_initial.sql,002_receipt_quota.sql,003_retained_bytes_quota.sql';
+      return result.rows.map((row) => row.version).join(',') === '001_initial.sql,002_receipt_quota.sql,003_retained_bytes_quota.sql,004_private_cloud_pdfs.sql,005_remote_tasks.sql,006_extended_sync_content.sql,007_remote_task_recovery.sql,008_remote_journal_holder.sql,009_remote_request_cancellation.sql,010_model_inference.sql,011_graph_relations.sql,012_remote_retrieval.sql';
     } catch { return false; }
+  }
+
+  modelInference(options:Pick<ModelInferenceRepositoryOptions,'gateway'>={}):ModelInferenceRepository{
+    return createModelInferenceRepository({...options,withAccount:(identity,work)=>this.withAccount(identity,false,context=>work(context))});
+  }
+
+  remoteTasks():RemoteTaskRepository{
+    return createRemoteTaskRepository({withAccount:(identity,work)=>this.withAccount(identity,false,context=>work(context))});
+  }
+
+  remoteRetrieval():RemoteRetrievalRepository{
+    return createRemoteRetrievalRepository({withAccount:(identity,work)=>this.withAccount(identity,false,context=>work(context))});
   }
 
   private async withAccount<T>(identity: VerifiedIdentity, create: boolean,
@@ -137,6 +193,7 @@ export class PostgresSyncStore implements SyncRepository {
       await client.query("SET LOCAL lock_timeout = '10s'");
       await client.query("SELECT set_config('paperquay.issuer', $1, true), set_config('paperquay.subject', $2, true)", [identity.issuer, identity.subject]);
       await client.query("SELECT set_config('paperquay.retained_byte_limit', $1, true)", [String(this.maxAccountRetainedBytes)]);
+      await client.query("SELECT set_config('paperquay.cloud_pdf_byte_limit', $1, true)", [String(this.cloudPdfAccountBytes)]);
       if (create) {
         await client.query(`INSERT INTO paperquay.accounts(id, issuer, subject, epoch)
           VALUES ($1,$2,$3,$4) ON CONFLICT (issuer, subject) DO NOTHING`, [randomUUID(), identity.issuer, identity.subject, randomUUID()]);
@@ -195,6 +252,96 @@ export class PostgresSyncStore implements SyncRepository {
     return this.withAccount(identity, false, async ({ account, device }) => ({ accountId: account.id, device: toDevice(device) }));
   }
 
+  /** Streaming checks must not hold the account write lock or mutate last_seen_at. */
+  private async withDesktopAccount<T>(identity: VerifiedIdentity, action: (context: DesktopReadContext) => Promise<T>): Promise<T> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN READ ONLY');
+      await client.query("SET LOCAL statement_timeout = '1s'");
+      await client.query("SET LOCAL lock_timeout = '1s'");
+      await client.query("SELECT set_config('paperquay.issuer', $1, true), set_config('paperquay.subject', $2, true)", [identity.issuer, identity.subject]);
+      const accounts = await client.query<{ id: string }>('SELECT id FROM paperquay.accounts WHERE issuer = $1 AND subject = $2', [identity.issuer, identity.subject]);
+      const accountId = accounts.rows[0]?.id;
+      if (!accountId) throw new ApiError('DEVICE_NOT_REGISTERED', 403);
+      await client.query("SELECT set_config('paperquay.account_id', $1, true)", [accountId]);
+      const devices = await client.query<DeviceRow>('SELECT ' + deviceColumns + ' FROM paperquay.devices WHERE account_id = $1 AND session_id = $2', [accountId, identity.sessionId]);
+      const device = devices.rows[0];
+      if (!device) throw new ApiError('DEVICE_NOT_REGISTERED', 403);
+      if (device.revoked_at) throw new ApiError('SESSION_REVOKED', 403);
+      const result = await action({ client, accountId, device });
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally { client.release(); }
+  }
+
+  async desktopPdfSession(identity: VerifiedIdentity): Promise<SessionView> {
+    return this.withDesktopAccount(identity, async ({ accountId, device }) => ({ accountId, device: toDevice(device) }));
+  }
+
+  private async desktopPdfTarget(context: DesktopReadContext, attachmentVersionId: string): Promise<DesktopPdfTarget> {
+    const result = await context.client.query<DesktopTargetRow>('SELECT ' + desktopTargetColumns + desktopTargetFrom
+      + "WHERE v.account_id = $1 AND v.entity_type = 'attachmentVersion' AND v.entity_id = $2", [context.accountId, attachmentVersionId]);
+    const row = result.rows[0];
+    if (!row) throw new ApiError('NOT_FOUND', 404);
+    if (row.version_deleted || !row.paper_id || row.paper_deleted) throw new ApiError('ATTACHMENT_VERSION_UNAVAILABLE', 410);
+    if (row.version_data.mediaType !== 'application/pdf') throw new ApiError('INVALID_PDF', 415);
+    if (row.version_data.sizeBytes > SERVER_LIMITS.desktopPdfMaxFileBytes) throw new ApiError('REQUEST_TOO_LARGE', 413);
+    return toDesktopTarget(row);
+  }
+
+  async getDesktopPdfVersion(identity: VerifiedIdentity, attachmentVersionId: string): Promise<DesktopPdfTarget> {
+    return this.withDesktopAccount(identity, (context) => this.desktopPdfTarget(context, attachmentVersionId));
+  }
+
+  async listDesktopPdfVersions(identity: VerifiedIdentity, after: string | undefined, limit: number): Promise<DesktopPdfVersionPage> {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new ApiError('VALIDATION_FAILED');
+    return this.withDesktopAccount(identity, async (context) => {
+      const result = await context.client.query<DesktopTargetRow>('SELECT ' + desktopTargetColumns + desktopTargetFrom
+        + "WHERE v.account_id = $1 AND v.entity_type = 'attachmentVersion' AND v.deleted_at IS NULL "
+        + "AND p.entity_id IS NOT NULL AND p.deleted_at IS NULL AND v.data ->> 'mediaType' = 'application/pdf' "
+        + "AND (v.data ->> 'sizeBytes')::bigint <= $2 AND ($3::uuid IS NULL OR v.entity_id > $3::uuid) "
+        + 'ORDER BY v.entity_id LIMIT $4', [context.accountId, SERVER_LIMITS.desktopPdfMaxFileBytes, after ?? null, limit + 1]);
+      const items = result.rows.slice(0, limit).map(toDesktopTarget);
+      const hasMore = result.rows.length > limit;
+      return { items, hasMore, nextAfter: hasMore ? items[items.length - 1].version.entityId : null };
+    });
+  }
+
+  async checkDesktopPdfTransfer(consumer: VerifiedIdentity, provider: VerifiedIdentity | null, target: DesktopPdfTarget): Promise<DesktopPdfAccess> {
+    if (provider && (consumer.issuer !== provider.issuer || consumer.subject !== provider.subject || consumer.sessionId === provider.sessionId)) {
+      throw new ApiError('NOT_FOUND', 404);
+    }
+    return this.withDesktopAccount(consumer, async (context) => {
+      // Both devices and both entities are observed by one statement. A long
+      // stream never holds this transaction or an account row lock open.
+      const result = await context.client.query<DesktopTargetRow & {
+        consumer_device_id: string; consumer_revoked_at: Date | null;
+        provider_device_id: string | null; provider_revoked_at: Date | null; provider_platform: DevicePlatform | null;
+      }>('SELECT ' + desktopTargetColumns + ', c.id AS consumer_device_id, c.revoked_at AS consumer_revoked_at, '
+        + 'd.id AS provider_device_id, d.revoked_at AS provider_revoked_at, d.platform AS provider_platform'
+        + desktopTargetFrom
+        + 'JOIN paperquay.devices c ON c.account_id = v.account_id AND c.session_id = $3 '
+        + 'LEFT JOIN paperquay.devices d ON d.account_id = v.account_id AND d.session_id = $4 '
+        + "WHERE v.account_id = $1 AND v.entity_type = 'attachmentVersion' AND v.entity_id = $2",
+      [context.accountId, target.version.entityId, consumer.sessionId, provider?.sessionId ?? null]);
+      const row = result.rows[0];
+      if (!row) throw new ApiError('NOT_FOUND', 404);
+      if (row.consumer_revoked_at) throw new ApiError('SESSION_REVOKED', 403);
+      if (row.version_deleted || !row.paper_id || row.paper_deleted) throw new ApiError('ATTACHMENT_VERSION_UNAVAILABLE', 410);
+      const current = toDesktopTarget(row);
+      if (current.paper.entityId !== target.paper.entityId || current.paper.revision !== target.paper.revision
+        || current.version.revision !== target.version.revision || current.version.data.sha256 !== target.version.data.sha256
+        || current.version.data.sizeBytes !== target.version.data.sizeBytes) throw new ApiError('DESKTOP_PDF_CHANGED', 409);
+      if (provider && (!row.provider_device_id || row.provider_revoked_at
+        || !['windows', 'macos', 'linux'].includes(row.provider_platform ?? '')
+        || row.provider_device_id === row.consumer_device_id)) throw new ApiError('DESKTOP_PDF_UNAVAILABLE', 404);
+      return { accountId: context.accountId, consumerDeviceId: row.consumer_device_id, providerDeviceId: row.provider_device_id };
+    });
+  }
+
   async listDevices(identity: VerifiedIdentity): Promise<{ devices: Device[] }> {
     return this.withAccount(identity, false, async ({ client, account }) => {
       const result = await client.query<DeviceRow>(`SELECT ${deviceColumns} FROM paperquay.devices
@@ -217,6 +364,129 @@ export class PostgresSyncStore implements SyncRepository {
     const result = await context.client.query<EntityRow>(`SELECT ${entityColumns} FROM paperquay.entities
       WHERE account_id = $1 AND entity_type = $2 AND entity_id = $3`, [context.account.id, type, id]);
     return result.rows[0];
+  }
+
+  private requireCloudPdfs(): void {
+    if (!this.cloudPdfEnabled) throw new ApiError('CLOUD_PDF_STORAGE_DISABLED', 503);
+  }
+
+  private async cloudPdfQuota(context: TransactionContext): Promise<CloudPdfQuota> {
+    const result = await context.client.query<{ cloud_pdf_bytes: string; cloud_pdf_count: number }>(
+      'SELECT cloud_pdf_bytes, cloud_pdf_count FROM paperquay.accounts WHERE id = $1', [context.account.id]);
+    return { usedBytes: Number(result.rows[0].cloud_pdf_bytes), maxBytes: this.cloudPdfAccountBytes,
+      usedCopies: result.rows[0].cloud_pdf_count, maxCopies: SERVER_LIMITS.cloudPdfMaxCopies };
+  }
+
+  private async cloudPdfVersion(context: TransactionContext, id: string, active: boolean): Promise<EntityRow> {
+    const version = await this.entity(context, 'attachmentVersion', id);
+    if (!version) throw new ApiError('NOT_FOUND', 404);
+    if (active) {
+      const paper = await this.entity(context, 'paper', (version.data as AttachmentVersionData).paperId);
+      if (version.deleted_at || !paper || paper.deleted_at) throw new ApiError('ATTACHMENT_VERSION_UNAVAILABLE', 410);
+    }
+    return version;
+  }
+
+  private async cloudPdfRow(context: TransactionContext, id: string, content = false): Promise<CloudPdfRow | undefined> {
+    const result = await context.client.query<CloudPdfRow>(`SELECT ${cloudPdfColumns}${content ? ', c.content' : ''}
+      FROM paperquay.cloud_pdfs c ${cloudPdfJoins} WHERE c.account_id = $1 AND c.attachment_version_id = $2`, [context.account.id, id]);
+    return result.rows[0];
+  }
+
+  private checkCloudPdfHeadroom(quota: CloudPdfQuota, size: number): void {
+    if (size > SERVER_LIMITS.cloudPdfMaxFileBytes) throw new ApiError('REQUEST_TOO_LARGE', 413);
+    if (quota.usedCopies >= quota.maxCopies || size > quota.maxBytes - quota.usedBytes) {
+      throw new ApiError('CLOUD_PDF_QUOTA_EXCEEDED', 409);
+    }
+  }
+
+  async listCloudPdfs(identity: VerifiedIdentity): Promise<{ copies: CloudPdfCopy[]; quota: CloudPdfQuota }> {
+    this.requireCloudPdfs();
+    return this.withAccount(identity, false, async (context) => {
+      const result = await context.client.query<CloudPdfRow>(`SELECT ${cloudPdfColumns}
+        FROM paperquay.cloud_pdfs c ${cloudPdfJoins} WHERE c.account_id = $1
+        ORDER BY c.created_at, c.attachment_version_id`, [context.account.id]);
+      return { copies: result.rows.map(toCloudPdf), quota: await this.cloudPdfQuota(context) };
+    });
+  }
+
+  async getCloudPdf(identity: VerifiedIdentity, attachmentVersionId: string): Promise<CloudPdfStatus> {
+    this.requireCloudPdfs();
+    return this.withAccount(identity, false, async (context) => {
+      await this.cloudPdfVersion(context, attachmentVersionId, false);
+      const row = await this.cloudPdfRow(context, attachmentVersionId);
+      return { copy: row ? toCloudPdf(row) : null, quota: await this.cloudPdfQuota(context) };
+    });
+  }
+
+  async prepareCloudPdfUpload(identity: VerifiedIdentity, attachmentVersionId: string): Promise<{ accountId: string; sizeBytes: number; generation: string }> {
+    this.requireCloudPdfs();
+    return this.withAccount(identity, false, async (context) => {
+      const version = await this.cloudPdfVersion(context, attachmentVersionId, true);
+      const data = version.data as AttachmentVersionData;
+      if (data.sizeBytes > SERVER_LIMITS.cloudPdfMaxFileBytes) throw new ApiError('REQUEST_TOO_LARGE', 413);
+      const existing = await this.cloudPdfRow(context, attachmentVersionId);
+      if (!existing) this.checkCloudPdfHeadroom(await this.cloudPdfQuota(context), data.sizeBytes);
+      return { accountId: context.account.id, sizeBytes: data.sizeBytes, generation: version.cloud_pdf_generation };
+    });
+  }
+
+  async putCloudPdf(identity: VerifiedIdentity, attachmentVersionId: string, content: Buffer, generation: string): Promise<{ copy: CloudPdfCopy; replayed: boolean; quota: CloudPdfQuota }> {
+    this.requireCloudPdfs();
+    try {
+      return await this.withAccount(identity, false, async (context) => {
+        const version = await this.cloudPdfVersion(context, attachmentVersionId, true);
+        if (generation !== version.cloud_pdf_generation) throw new ApiError('CLOUD_PDF_CHANGED', 409);
+        const data = version.data as AttachmentVersionData;
+        if (!Buffer.isBuffer(content) || content.byteLength !== data.sizeBytes
+          || createHash('sha256').update(content).digest('hex') !== data.sha256) throw new ApiError('PDF_INTEGRITY_MISMATCH', 422);
+        if (content.byteLength > SERVER_LIMITS.cloudPdfMaxFileBytes) throw new ApiError('REQUEST_TOO_LARGE', 413);
+        // Marker checks do not claim complete PDF parsing, page validation or safety.
+        if (content.subarray(0, 5).toString('ascii') !== '%PDF-'
+          || !content.subarray(Math.max(0, content.byteLength - 1024)).includes(Buffer.from('%%EOF'))) {
+          throw new ApiError('INVALID_PDF', 415);
+        }
+        const existing = await this.cloudPdfRow(context, attachmentVersionId);
+        if (existing) return { copy: toCloudPdf(existing), replayed: true, quota: await this.cloudPdfQuota(context) };
+        this.checkCloudPdfHeadroom(await this.cloudPdfQuota(context), content.byteLength);
+        await context.client.query(`INSERT INTO paperquay.cloud_pdfs(account_id,attachment_version_id,paper_id,sha256,size_bytes,file_name,content)
+          VALUES ($1,$2,$3,$4,$5,$6,$7)`, [context.account.id, attachmentVersionId, data.paperId, data.sha256, data.sizeBytes, data.fileName, content]);
+        await this.hooks.beforeCommit?.({ kind: 'cloud-put', attachmentVersionId, accountId: context.account.id, deviceId: context.device.id });
+        return { copy: toCloudPdf((await this.cloudPdfRow(context, attachmentVersionId))!), replayed: false,
+          quota: await this.cloudPdfQuota(context) };
+      });
+    } catch (error) {
+      if (typeof error === 'object' && error !== null && 'constraint' in error && error.constraint === 'paperquay_cloud_pdf_quota') {
+        throw new ApiError('CLOUD_PDF_QUOTA_EXCEEDED', 409);
+      }
+      throw error;
+    }
+  }
+
+  async downloadCloudPdf(identity: VerifiedIdentity, attachmentVersionId: string): Promise<{ copy: CloudPdfCopy; content: Buffer }> {
+    this.requireCloudPdfs();
+    return this.withAccount(identity, false, async (context) => {
+      await this.cloudPdfVersion(context, attachmentVersionId, true);
+      const row = await this.cloudPdfRow(context, attachmentVersionId, true);
+      if (!row) throw new ApiError('CLOUD_PDF_NOT_FOUND', 404);
+      return { copy: toCloudPdf(row), content: row.content! };
+    });
+  }
+
+  async deleteCloudPdf(identity: VerifiedIdentity, attachmentVersionId: string): Promise<{ attachmentVersionId: string; deleted: boolean; quota: CloudPdfQuota }> {
+    this.requireCloudPdfs();
+    return this.withAccount(identity, false, async (context) => {
+      const version = await this.cloudPdfVersion(context, attachmentVersionId, false);
+      if (BigInt(version.cloud_pdf_generation) >= BigInt(Number.MAX_SAFE_INTEGER)) throw new ApiError('CLOUD_PDF_CHANGED', 409);
+      // Even an absent-copy delete invalidates already-admitted uploads. Only an
+      // explicit later request can obtain this new generation and create a copy.
+      await context.client.query(`UPDATE paperquay.entities SET cloud_pdf_generation = cloud_pdf_generation + 1
+        WHERE account_id = $1 AND entity_type = 'attachmentVersion' AND entity_id = $2`, [context.account.id, attachmentVersionId]);
+      const deleted = await context.client.query('DELETE FROM paperquay.cloud_pdfs WHERE account_id = $1 AND attachment_version_id = $2',
+        [context.account.id, attachmentVersionId]);
+      await this.hooks.beforeCommit?.({ kind: 'cloud-delete', attachmentVersionId, accountId: context.account.id, deviceId: context.device.id });
+      return { attachmentVersionId, deleted: deleted.rowCount === 1, quota: await this.cloudPdfQuota(context) };
+    });
   }
 
   private async receipt(context: TransactionContext, opId: string, hash: string): Promise<PushResult | undefined> {
@@ -325,7 +595,7 @@ export class PostgresSyncStore implements SyncRepository {
         entity_type: operation.entityType, entity_id: operation.entityId, schema_version: 1,
         revision: String(revision), data, deleted_at: deletedAt ? new Date(deletedAt) : null,
         updated_at: new Date(updatedAt), created_by_device_id: existing?.created_by_device_id ?? context.device.id,
-        modified_by_device_id: context.device.id,
+        modified_by_device_id: context.device.id, cloud_pdf_generation: existing?.cloud_pdf_generation ?? '0',
       }),
     };
     preflight?.(candidate);
@@ -371,19 +641,33 @@ export class PostgresSyncStore implements SyncRepository {
   private async validateReferences(context: TransactionContext, operation: SyncOperation): Promise<PushResult | undefined> {
     if (!operation.data || operation.mutation === 'delete' || operation.entityType === 'paper') return undefined;
     const data = operation.data;
+
+    if(operation.entityType==='graphRelation'){
+      for(const endpoint of [operation.data.source,operation.data.target]){
+        const target=await this.entity(context,endpoint.entityType,endpoint.entityId);
+        if(!target)return rejected(operation.opId,'DEPENDENCY_NOT_READY',true);
+        if(target.deleted_at)return rejected(operation.opId,'REFERENCE_DELETED');
+      }
+      return undefined;
+    }
+
     if ('paperId' in data && data.paperId) {
       const paper = await this.entity(context, 'paper', data.paperId);
       if (!paper) return rejected(operation.opId, 'DEPENDENCY_NOT_READY', true);
       // Notes survive removal of their bibliographic record and may still be edited.
       if (paper.deleted_at && operation.entityType !== 'note') return rejected(operation.opId, 'REFERENCE_DELETED');
     }
-    if (operation.entityType === 'annotation' || operation.entityType === 'readingPosition') {
+    if (operation.entityType === 'annotation' || operation.entityType === 'readingPosition' || operation.entityType==='aiConversation') {
       const location = operation.data;
       const attachment = await this.entity(context, 'attachmentVersion', location.attachmentVersionId);
       if (!attachment) return rejected(operation.opId, 'DEPENDENCY_NOT_READY', true);
       if (attachment.deleted_at) return rejected(operation.opId, 'REFERENCE_DELETED');
       const version = attachment.data as AttachmentVersionData;
       if (version.paperId !== location.paperId) return rejected(operation.opId, 'REFERENCE_MISMATCH');
+      if(operation.entityType==='aiConversation'){
+        if(version.sha256!==operation.data.sha256||version.pageCount!==null&&version.pageCount!==operation.data.context.totalPages)return rejected(operation.opId,'IMMUTABLE_VERSION_BINDING');
+        return undefined;
+      }
       const page = operation.entityType === 'annotation' ? operation.data.anchor.pageIndex : operation.data.pageIndex;
       const furthest = operation.entityType === 'readingPosition' ? operation.data.furthestPageIndex : page;
       if (version.pageCount !== null && (page >= version.pageCount || furthest >= version.pageCount)) return rejected(operation.opId, 'PAGE_OUT_OF_RANGE');
@@ -396,8 +680,10 @@ export class PostgresSyncStore implements SyncRepository {
     return undefined;
   }
 
-  private async applyMutation(context: TransactionContext, operation: SyncOperation, preflight?: ResponsePreflight): Promise<PushResult> {
+  private async applyMutation(context: TransactionContext, operation: SyncOperation, preflight?: ResponsePreflight,features:SyncFeatureSet=LEGACY_SYNC_FEATURES): Promise<PushResult> {
     const existing = await this.entity(context, operation.entityType, operation.entityId);
+    if(!supportsSyncRecord(features,operation)||existing&&!supportsSyncRecord(features,{entityType:existing.entity_type,data:existing.data}))return rejected(operation.opId,'FEATURE_NOT_NEGOTIATED');
+    if(existing?.entity_type==='note'&&'format'in existing.data&&existing.data.format==='tiptap-json'&&operation.mutation!=='delete'&&operation.data&&'format'in operation.data&&operation.data.format!=='tiptap-json')return rejected(operation.opId,'RICH_NOTE_DOWNGRADE_FORBIDDEN');
     if (existing && operation.entityType === 'readingPosition' && existing.created_by_device_id !== context.device.id) {
       return rejected(operation.opId, 'CHECKPOINT_DEVICE_MISMATCH');
     }
@@ -405,6 +691,13 @@ export class PostgresSyncStore implements SyncRepository {
     if (existing && operation.baseRevision !== Number(existing.revision)) return this.makeConflict(context, operation, existing, preflight);
     if (existing?.deleted_at && operation.mutation === 'put') return rejected(operation.opId, 'RESTORE_REQUIRED');
     if (existing && !existing.deleted_at && operation.mutation === 'restore') return rejected(operation.opId, 'ENTITY_NOT_DELETED');
+    if (existing && operation.entityType === 'paper' && operation.data
+      && operation.mutation !== 'delete' && operation.data.organization === undefined) {
+      // M1 clients cannot represent organization. Their bibliographic edits
+      // must not erase it; M2 clears it by explicitly sending empty defaults.
+      const organization = (existing.data as PaperData).organization;
+      if (organization) operation = { ...operation, data: { ...operation.data, organization } };
+    }
     if (operation.data && Buffer.byteLength(JSON.stringify(operation.data)) > SERVER_LIMITS.entityLimitBytes) return rejected(operation.opId, 'ENTITY_TOO_LARGE');
     if (BigInt(context.account.last_seq) >= BigInt(SERVER_LIMITS.maxAccountChanges)) return rejected(operation.opId, 'ACCOUNT_CHANGE_LIMIT');
     if (!existing && context.account.entity_count >= SERVER_LIMITS.maxAccountEntities) return rejected(operation.opId, 'ACCOUNT_ENTITY_LIMIT');
@@ -416,6 +709,8 @@ export class PostgresSyncStore implements SyncRepository {
         ? ['paperId', 'attachmentId', 'sha256', 'sizeBytes', 'mediaType']
         : (operation.entityType === 'annotation' || operation.entityType === 'readingPosition') ? ['paperId', 'attachmentVersionId'] : [];
       if (immutable.some((field) => before[field] !== after[field])) return rejected(operation.opId, 'IMMUTABLE_VERSION_BINDING');
+      if(operation.entityType==='graphRelation'&&['source','target','relationType','createdAt'].some(field=>canonicalJson(before[field])!==canonicalJson(after[field])))return rejected(operation.opId,'IMMUTABLE_GRAPH_BINDING');
+      if(operation.entityType==='aiConversation'&&canonicalJson(before.context)!==canonicalJson(after.context))return rejected(operation.opId,'IMMUTABLE_AI_SOURCE');
       if (operation.entityType === 'attachmentVersion' && before.pageCount !== null && before.pageCount !== after.pageCount) return rejected(operation.opId, 'IMMUTABLE_VERSION_BINDING');
       if (operation.entityType === 'readingPosition') {
         const previous = existing.data as ReadingPositionData;
@@ -429,6 +724,22 @@ export class PostgresSyncStore implements SyncRepository {
     }
     const invalidReference = await this.validateReferences(context, operation);
     if (invalidReference) return invalidReference;
+
+    if(operation.entityType==='graphRelation'&&operation.mutation!=='delete'&&operation.data){
+      // withAccount serializes writes, including concurrent creates/restores.
+      // Deleted row copies remain covered by the account retained-byte quota.
+      const totals=await context.client.query<{count:string;bytes:string}>(
+        "SELECT count(*) AS count, COALESCE(sum(octet_length(data::text)),0) AS bytes FROM paperquay.entities WHERE account_id=$1 AND entity_type='graphRelation' AND deleted_at IS NULL AND entity_id<>$2",
+        [context.account.id,operation.entityId]);
+      if(Number(totals.rows[0].count)>=GRAPH_RELATION_LIMITS.relations)return rejected(operation.opId,'GRAPH_COLLECTION_LIMIT');
+      const size=await context.client.query<{bytes:number}>('SELECT octet_length($1::jsonb::text) AS bytes',[JSON.stringify(operation.data)]);
+      if(Number(totals.rows[0].bytes)+Number(size.rows[0].bytes)>GRAPH_RELATION_LIMITS.accountBytes)return rejected(operation.opId,'GRAPH_COLLECTION_LIMIT');
+    }
+
+    if((operation.entityType==='aiConversation'||operation.entityType==='aiTemplate')&&operation.mutation!=='delete'&&(!existing||existing.deleted_at)){
+      const count=await context.client.query<{count:string}>(`SELECT count(*) FROM paperquay.entities WHERE account_id=$1 AND entity_type=$2 AND deleted_at IS NULL`,[context.account.id,operation.entityType]);
+      if(Number(count.rows[0].count)>=(operation.entityType==='aiConversation'?50:100))return rejected(operation.opId,'AI_COLLECTION_LIMIT');
+    }
     if (!existing && operation.entityType === 'readingPosition' && operation.data) {
       const duplicate = await context.client.query(`SELECT 1 FROM paperquay.entities
         WHERE account_id = $1 AND entity_type = 'readingPosition' AND created_by_device_id = $2
@@ -444,7 +755,7 @@ export class PostgresSyncStore implements SyncRepository {
     return { opId: operation.opId, status: 'applied', replayed: false, record };
   }
 
-  async push(identity: VerifiedIdentity, request: PushRequest): Promise<PushResponse> {
+  async push(identity: VerifiedIdentity, request: PushRequest,features:SyncFeatureSet=LEGACY_SYNC_FEATURES): Promise<PushResponse> {
     if (!validatePushRequest(request).ok) throw new ApiError('VALIDATION_FAILED');
     const results: PushResult[] = [];
     // Leave room for the envelope and small retryable results for every remaining
@@ -467,8 +778,10 @@ export class PostgresSyncStore implements SyncRepository {
       try {
         const result = await this.withAccount(identity, false, async (context) => {
           if (context.device.id !== request.deviceId) throw new ApiError('DEVICE_SESSION_MISMATCH', 403);
+          if(!supportsSyncRecord(features,operation))return rejected(operation.opId,'FEATURE_NOT_NEGOTIATED');
           const hash = operationHash({ kind: 'push', operation });
           const previous = await this.receipt(context, operation.opId, hash);
+          if(previous?.record&&!supportsSyncRecord(features,previous.record))return rejected(operation.opId,'FEATURE_NOT_NEGOTIATED');
           if (!previous && !storageLimited && context.account.receipt_count >= SERVER_LIMITS.maxAccountReceipts) {
             const result = rejected(operation.opId, 'ACCOUNT_RECEIPT_LIMIT');
             checkResponseBudget(result);
@@ -479,7 +792,7 @@ export class PostgresSyncStore implements SyncRepository {
           // New operations must not repeat large reads or rolled-back writes.
           const result = previous ?? (storageLimited
             ? rejected(operation.opId, 'ACCOUNT_STORAGE_LIMIT', true)
-            : await this.applyMutation(context, operation, checkResponseBudget));
+            : await this.applyMutation(context, operation, checkResponseBudget,features));
           // Replays and small rejections also need a check. For mutations this
           // rechecks the actual database result against the same budget.
           checkResponseBudget(result);
@@ -579,12 +892,12 @@ export class PostgresSyncStore implements SyncRepository {
     });
   }
 
-  async resolveConflict(identity: VerifiedIdentity, conflictId: string, request: ResolveRequest): Promise<PushResult> {
+  async resolveConflict(identity: VerifiedIdentity, conflictId: string, request: ResolveRequest,features:SyncFeatureSet=LEGACY_SYNC_FEATURES): Promise<PushResult> {
     try {
       return await this.withAccount(identity, false, async (context) => {
         const hash = operationHash({ kind: 'resolve', conflictId, request });
         const previous = await this.receipt(context, request.opId, hash);
-        if (previous) return previous;
+        if (previous) return previous.record&&!supportsSyncRecord(features,previous.record)?rejected(request.opId,'FEATURE_NOT_NEGOTIATED'):previous;
         if (context.account.receipt_count >= SERVER_LIMITS.maxAccountReceipts) return rejected(request.opId, 'ACCOUNT_RECEIPT_LIMIT');
         this.requireStorageHeadroom(context);
         const found = await context.client.query<ConflictRow>(`SELECT id,seq,entity_type,entity_id,attempted_operation,observed_record,created_at,resolved_at
@@ -594,6 +907,7 @@ export class PostgresSyncStore implements SyncRepository {
         if (conflict.resolved_at) return this.remember(context, hash, rejected(request.opId, 'CONFLICT_ALREADY_RESOLVED'));
         const current = await this.entity(context, conflict.entity_type, conflict.entity_id);
         if (!current) throw new ApiError('STORAGE_INVARIANT_FAILED', 500);
+        if(!supportsSyncRecord(features,conflict.attempted_operation)||!supportsSyncRecord(features,{entityType:current.entity_type,data:current.data}))return rejected(request.opId,'FEATURE_NOT_NEGOTIATED');
         if (Number(current.revision) !== request.expectedRevision) {
           return this.remember(context, hash, { opId: request.opId, status: 'conflict', replayed: false,
             conflictId, record: toRecord(current) });
@@ -614,7 +928,7 @@ export class PostgresSyncStore implements SyncRepository {
             clientCreatedAt: new Date().toISOString(),
           } as SyncOperation;
           if (!validateOperation(operation).ok) return this.remember(context, hash, rejected(request.opId, 'VALIDATION_FAILED'));
-          result = await this.applyMutation(context, operation);
+          result = await this.applyMutation(context, operation,undefined,features);
         }
         if (result.status === 'applied') {
           // An already-deleted no-op still closes the conflict and needs its

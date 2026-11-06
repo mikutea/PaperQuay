@@ -1,3 +1,4 @@
+import {loadModelGatewayConfig,type ModelGatewayConfig} from './model-config.ts';
 import { isIP } from 'node:net';
 import { ApiError } from './errors.ts';
 
@@ -14,6 +15,14 @@ export interface ServerConfig {
   responseLimitBytes: number;
   entityLimitBytes: number;
   maxAccountRetainedBytes: number;
+  cloudPdfEnabled: boolean;
+  desktopPdfEnabled: boolean;
+  remoteTasksEnabled?:boolean;
+  remoteRetrievalEnabled?:boolean;
+  modelInferenceEnabled?:boolean;
+  modelGateway?:ModelGatewayConfig|null;
+  desktopPdfStunUrls: string[];
+  cloudPdfAccountBytes: number;
   requestsPerMinute: number;
   trustedProxyIps: string[];
 }
@@ -34,7 +43,57 @@ export const SERVER_LIMITS = Object.freeze({
   maxPullRecords: 1000,
   maxConflictRecords: 100,
   maxCursorLength: 4096,
+  cloudPdfMaxFileBytes: 64 * 1024 * 1024,
+  cloudPdfAccountBytes: 1024 * 1024 * 1024,
+  cloudPdfMaxConfiguredAccountBytes: 10 * 1024 * 1024 * 1024,
+  cloudPdfMaxCopies: 512,
+  cloudPdfMaxTransfers: 2,
+  desktopPdfMaxFileBytes: 64 * 1024 * 1024,
+  desktopPdfRequestTtlMs: 30000,
+  desktopPdfPollTimeoutMs: 20000,
+  desktopPdfPresenceTtlMs: 30000,
+  desktopPdfClaimTimeoutMs: 10000,
+  desktopPdfRecheckIntervalMs: 1000,
+  desktopPdfRecheckTimeoutMs: 1500,
+  desktopPdfMaxTransfers: 2,
+  desktopPdfMaxProviders: 32,
+  desktopPdfMaxAccountProviders: 4,
+  desktopPdfByteWindowMs: 15 * 60 * 1000,
+  desktopPdfAccountWindowBytes: 256 * 1024 * 1024,
+  desktopPdfProcessWindowBytes: 1024 * 1024 * 1024,
+  desktopPdfMaxBudgetAccounts: 256,
+  desktopPdfChunkBytes: 64 * 1024,
+  desktopPdfDirectAttemptMs: 6000,
+  desktopPdfDirectAuthorizationMs: 2000,
+  desktopPdfDirectReceiptMs: 5000,
+  desktopPdfDirectMaxReceipts: 64,
+  desktopPdfDirectMaxSdpBytes: 32768,
+  desktopPdfDirectMaxCandidates: 32,
 });
+
+/** Admin-only STUN configuration. This never accepts peer-supplied servers or credentials. */
+export function checkedDesktopPdfStunUrls(value: string | undefined): string[] {
+  if (value === undefined) return [];
+  if (value.length > 256) throw new ApiError('CONFIGURATION_INVALID', 500);
+  if (value.trim() === '') return [];
+  const urls = value.split(',').map((item) => item.trim());
+  if (urls.length > 2 || urls.some((item) => {
+    const match = /^(stuns?):(\[[0-9a-fA-F:.]+\]|[A-Za-z0-9.-]+)(?::([1-9][0-9]{0,4}))?$/.exec(item);
+    if (!match || (match[3] && Number(match[3]) > 65535)) return true;
+    const host = match[2];
+    if (host.startsWith('[')) return isIP(host.slice(1, -1)) !== 6;
+    if (/^[0-9.]+$/.test(host)) return isIP(host) !== 4;
+    return host.length > 253 || host.split('.').some((label) => !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/.test(label));
+  })) throw new ApiError('CONFIGURATION_INVALID', 500);
+  return [...new Set(urls)];
+}
+
+export function checkedCloudPdfByteLimit(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 1 || value > SERVER_LIMITS.cloudPdfMaxConfiguredAccountBytes) {
+    throw new ApiError('CONFIGURATION_INVALID', 500);
+  }
+  return value;
+}
 
 export function checkedRetainedByteLimit(value: number): number {
   if (!Number.isSafeInteger(value) || value < 1 || value > SERVER_LIMITS.maxConfiguredAccountRetainedBytes) {
@@ -100,7 +159,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const oidcClientIds = required(env, 'PAPERQUAY_OIDC_CLIENT_IDS').split(',').map((item) => item.trim()).filter(Boolean);
   if (!oidcClientIds.length || oidcClientIds.some((item) => item.length > 255)) throw new ApiError('CONFIGURATION_INVALID', 500);
   const allowedOrigins = (env.PAPERQUAY_ALLOWED_ORIGINS || '').split(',').map((item) => item.trim()).filter(Boolean)
-    .map((item) => checkedHttpUrl(item, false).origin);
+    .map((item) => item === 'capacitor://localhost' ? item : checkedHttpUrl(item, false).origin);
   const secret = required(env, 'PAPERQUAY_CURSOR_SECRET');
   if (!/^[A-Za-z0-9+/]+={0,2}$/.test(secret)) throw new ApiError('CONFIGURATION_INVALID', 500);
   const cursorSecret = Buffer.from(secret, 'base64');
@@ -111,12 +170,30 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   if (!Number.isInteger(requestsPerMinute) || requestsPerMinute < 1 || requestsPerMinute > 10000) {
     throw new ApiError('CONFIGURATION_INVALID', 500);
   }
+  const cloudPdfEnabled = env.PAPERQUAY_CLOUD_PDF_ENABLED ?? '0';
+  if (!['0', '1'].includes(cloudPdfEnabled)) throw new ApiError('CONFIGURATION_INVALID', 500);
+  const desktopPdfEnabled = env.PAPERQUAY_DESKTOP_PDF_ENABLED ?? '0';
+  if (!['0', '1'].includes(desktopPdfEnabled)) throw new ApiError('CONFIGURATION_INVALID', 500);
+  const remoteTasksEnabled=env.PAPERQUAY_REMOTE_TASKS_ENABLED??'0';
+  if(!['0','1'].includes(remoteTasksEnabled))throw new ApiError('CONFIGURATION_INVALID',500);
+  const remoteRetrievalEnabled=env.PAPERQUAY_REMOTE_RETRIEVAL_ENABLED??'0';
+  if(!['0','1'].includes(remoteRetrievalEnabled))throw new ApiError('CONFIGURATION_INVALID',500);
+  const modelInferenceEnabled=env.PAPERQUAY_MODEL_INFERENCE_ENABLED??'0';
+  if(!['0','1'].includes(modelInferenceEnabled))throw new ApiError('CONFIGURATION_INVALID',500);
   return {
     host, port, databaseUrl, oidcIssuer, oidcAudience, oidcClientIds, allowedOrigins, cursorSecret,
     bodyLimitBytes: SERVER_LIMITS.bodyLimitBytes,
     responseLimitBytes: SERVER_LIMITS.responseLimitBytes,
     entityLimitBytes: SERVER_LIMITS.entityLimitBytes,
     maxAccountRetainedBytes: checkedRetainedByteLimit(Number(env.PAPERQUAY_MAX_ACCOUNT_RETAINED_BYTES ?? SERVER_LIMITS.maxAccountRetainedBytes)),
+    cloudPdfEnabled: cloudPdfEnabled === '1',
+    desktopPdfEnabled: desktopPdfEnabled === '1',
+    remoteTasksEnabled:remoteTasksEnabled==='1',
+    remoteRetrievalEnabled:remoteRetrievalEnabled==='1',
+    modelInferenceEnabled:modelInferenceEnabled==='1',
+    modelGateway:loadModelGatewayConfig(env,modelInferenceEnabled==='1'),
+    desktopPdfStunUrls: checkedDesktopPdfStunUrls(env.PAPERQUAY_DESKTOP_PDF_STUN_URLS),
+    cloudPdfAccountBytes: checkedCloudPdfByteLimit(Number(env.PAPERQUAY_CLOUD_PDF_ACCOUNT_BYTES ?? SERVER_LIMITS.cloudPdfAccountBytes)),
     requestsPerMinute, trustedProxyIps: trustedProxyIps(env.PAPERQUAY_TRUSTED_PROXY_IPS),
   };
 }

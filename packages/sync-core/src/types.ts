@@ -1,5 +1,17 @@
-export const ENTITY_TYPES = ['paper', 'attachmentVersion', 'note', 'annotation', 'readingPosition'] as const;
+import type {RichNoteData} from './richNote.ts';
+import type {AiConversationData,AiTemplateData} from '../../ai-core/src/conversation.ts';
+import type {GraphRelationData} from './graphRelation.ts';
+export const ENTITY_TYPES = ['paper', 'attachmentVersion', 'note', 'annotation', 'readingPosition', 'aiConversation', 'aiTemplate', 'graphRelation'] as const;
 export type EntityType = typeof ENTITY_TYPES[number];
+
+export interface PaperOrganization {
+  favorite: boolean;
+  readingStatus: 'unread' | 'reading' | 'read';
+  tags: string[];
+  collections: string[];
+  /** Null is outside the reading queue; equal ranks sort by stable entity ID. */
+  queueRank: number | null;
+}
 
 export interface PaperData {
   title: string;
@@ -9,6 +21,7 @@ export interface PaperData {
   abstractText: string | null;
   authors: string[];
   keywords: string[];
+  organization?: PaperOrganization;
 }
 
 export interface AttachmentVersionData {
@@ -21,12 +34,13 @@ export interface AttachmentVersionData {
   pageCount: number | null;
 }
 
-export interface NoteData {
+export interface MarkdownNoteData {
   paperId: string | null;
   title: string;
   body: string;
   format: 'markdown';
 }
+export type NoteData=MarkdownNoteData|RichNoteData;
 
 export type PdfQuad = [number, number, number, number, number, number, number, number];
 export interface AnnotationAnchor {
@@ -63,6 +77,9 @@ export interface EntityDataMap {
   note: NoteData;
   annotation: AnnotationData;
   readingPosition: ReadingPositionData;
+  aiConversation: AiConversationData;
+  aiTemplate: AiTemplateData;
+  graphRelation: GraphRelationData;
 }
 export type EntityData = EntityDataMap[EntityType];
 export type SyncMutation = 'put' | 'delete' | 'restore';

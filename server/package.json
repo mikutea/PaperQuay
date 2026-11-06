@@ -10,6 +10,7 @@
     "migrate": "node scripts/migrate.ts",
     "typecheck": "node node_modules/typescript/bin/tsc --noEmit",
     "test": "node --test tests/unit/*.test.ts",
+    "test:socket": "node --test tests/socket/*.test.ts",
     "test:integration": "node --test --test-concurrency=1 tests/integration/*.test.ts"
   },
   "dependencies": {

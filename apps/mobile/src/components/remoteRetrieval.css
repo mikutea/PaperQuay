@@ -1,0 +1,28 @@
+.retrieval-sheet{max-width:900px}
+.remote-retrieval{padding:20px 24px 32px;min-width:0;line-height:1.65}
+.remote-retrieval :is(p,li,button,strong,small,blockquote){overflow-wrap:anywhere}
+.remote-retrieval>section{border-top:1px solid var(--line);padding-block:18px;margin-block:10px}
+.remote-retrieval h3{font-size:1.15rem;text-wrap:balance;margin-block:0 12px}
+.remote-retrieval :is(button,summary){min-height:44px;white-space:normal;touch-action:manipulation}
+.remote-retrieval summary{cursor:pointer;display:flex;align-items:center;font-weight:600;padding-block:10px}
+.remote-retrieval summary::before{content:'+';margin-inline-end:10px}
+.remote-retrieval details[open]>summary::before{content:'−'}
+.remote-retrieval :is(button,input,textarea,summary):focus-visible{outline:2px solid var(--focus-ring);outline-offset:3px}
+.remote-retrieval textarea{width:100%;min-width:0;min-height:100px;resize:vertical;font:inherit}
+.remote-retrieval .field{display:grid;gap:8px;margin-block:16px;min-width:0}
+.retrieval-actions{display:flex;flex-wrap:wrap;gap:8px;margin-block:12px}
+.retrieval-actions button{max-width:100%}
+.retrieval-sources,.retrieval-excerpts{list-style:none;padding:0;margin-block:14px}
+.retrieval-sources li,.retrieval-excerpts li{padding-block:14px;border-bottom:1px solid var(--line)}
+.retrieval-choice{display:flex;align-items:flex-start;gap:12px;min-height:44px;cursor:pointer}
+.retrieval-choice input{flex:none;width:20px;height:20px;margin-block-start:4px;accent-color:var(--accent)}
+.retrieval-choice span{min-width:0}
+.retrieval-choice :is(strong,small){display:block}
+.remote-retrieval small{display:block;color:var(--muted);font-size:.875rem}
+.retrieval-selected{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-block:16px}
+.retrieval-selected button{text-align:start;max-width:100%}
+.remote-retrieval blockquote{margin:12px 0;padding:12px 16px;border-inline-start:3px solid var(--accent);background:var(--reader-control-fill);white-space:pre-wrap;font:inherit}
+.remote-retrieval pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:340px;overflow:auto;font-size:.875rem}
+.remote-retrieval .retrieval-warning{padding:16px;border:1px solid var(--accent);border-radius:12px;background:var(--theme-selected);margin-block:16px}
+.retrieval-request>button{margin-block:12px}
+@media(max-width:560px){.remote-retrieval{padding:16px 16px 24px}.retrieval-actions{display:grid;grid-template-columns:minmax(0,1fr)}.retrieval-actions button{width:100%}.remote-retrieval blockquote{padding:12px}}

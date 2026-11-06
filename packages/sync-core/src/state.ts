@@ -1,4 +1,5 @@
 import { ENTITY_TYPES } from './types.ts';
+import { isPaperOrganizationHydration } from './features.ts';
 import type { AccountSyncState, EditIdentity, EntityType, LocalEdit, OutboxEntry, PendingEdit, PreparedPush, PullResponse, PushResponse, SyncContext, SyncOperation, SyncRecord, ValidationResult, VisibleEntity } from './types.ts';
 import { ENTITY_DATA_SCHEMAS, ISO_TIMESTAMP_PATTERN, SYNC_LIMITS, SYNC_OPERATION_SCHEMA, SYNC_RECORD_SCHEMA, UUID_PATTERN } from './schema.ts';
 import type { JsonSchema } from './schema.ts';
@@ -145,7 +146,7 @@ function sameIntent(operation: SyncOperation | PendingEdit, pending: PendingEdit
 }
 
 function hasPendingLinkedNote(state: AccountSyncState, paperId: string): boolean {
-  const references = (pending: SyncOperation | PendingEdit): boolean => pending.entityType === 'note' && pending.data?.paperId === paperId;
+  const references = (pending: SyncOperation | PendingEdit): boolean => (pending.entityType === 'note' || pending.entityType === 'aiConversation') && pending.data?.paperId === paperId;
   // An attempted note must finish with its original payload before an unlink
   // overlay can run, so both the original operation and its successor matter.
   return state.outbox.some((entry) => references(entry.operation)) || Object.values(state.overlays).some(references);
@@ -200,6 +201,168 @@ export function queueLocalEdit(state: AccountSyncState, edit: LocalEdit, identit
   return next;
 }
 
+/** Atomically prepare new entities without repeatedly cloning and validating the whole library. */
+export function queueLocalCreates(state: AccountSyncState, edits: readonly LocalEdit[], identities: readonly EditIdentity[]): AccountSyncState {
+  assertState(state);
+  if (!Array.isArray(edits) || !Array.isArray(identities) || edits.length !== identities.length) fail('INVALID_CREATE_BATCH');
+  if (state.outbox.length + edits.length > SYNC_LIMITS.maxLocalOperations) fail('LOCAL_CAPACITY_EXCEEDED');
+  const keys = new Set(Object.keys(state.serverRecords));
+  const opIds = new Set<string>();
+  for (const operation of [
+    ...state.outbox.map((entry) => entry.operation),
+    ...Object.values(state.overlays),
+    ...Object.values(state.conflicts).map((conflict) => conflict.attempted),
+  ]) {
+    keys.add(operationKey(operation));
+    opIds.add(operation.opId);
+  }
+  for (const conflict of Object.values(state.conflicts)) {
+    if (conflict.current) keys.add(operationKey(conflict.current));
+  }
+  const operations: SyncOperation[] = [];
+  for (let index = 0; index < edits.length; index += 1) {
+    const edit = edits[index];
+    const identity = identities[index];
+    if (!validateJsonSchema(identitySchema, identity).ok) fail('INVALID_EDIT_IDENTITY');
+    if (!validateJsonSchema(editSchema, edit).ok || edit.mutation !== 'put') fail('INVALID_EDIT');
+    const operation = { ...edit, ...identity, schemaVersion: 1, baseRevision: 0 } as SyncOperation;
+    if (!validateOperation(operation).ok) fail('INVALID_EDIT');
+    const key = operationKey(operation);
+    // Include tombstones, invisible pending work, and retained conflicts. A batch
+    // can only create new IDs; it never coalesces, restores, or reuses an opId.
+    if (keys.has(key)) fail('ENTITY_ALREADY_EXISTS');
+    if (opIds.has(identity.opId)) fail('OP_ID_REUSED');
+    keys.add(key);
+    opIds.add(identity.opId);
+    operations.push(operation);
+  }
+  if (keys.size > SYNC_LIMITS.maxLocalEntities) fail('LOCAL_CAPACITY_EXCEEDED');
+  if (!operations.length) return state;
+  const next = copy({ ...state, outbox: [...state.outbox, ...operations.map((operation) => newEntry(operation, state.deviceId))] });
+  assertState(next);
+  return next;
+}
+
+/** Atomically queue puts for new or clean synced entities, using each current server revision. */
+export function queueLocalPuts(state: AccountSyncState, edits: readonly LocalEdit[], identities: readonly EditIdentity[]): AccountSyncState {
+  assertState(state);
+  if (!Array.isArray(edits) || !Array.isArray(identities) || edits.length !== identities.length) fail('INVALID_PUT_BATCH');
+  // Bound the batch before inspecting its rows or allocating property descriptors.
+  if (edits.length > SYNC_LIMITS.maxLocalOperations - state.outbox.length) fail('LOCAL_CAPACITY_EXCEEDED');
+  const batchSchema: JsonSchema = { type: 'array', maxItems: SYNC_LIMITS.maxLocalOperations };
+  if (!validateJsonSchema(batchSchema, edits).ok || !validateJsonSchema(batchSchema, identities).ok) fail('INVALID_PUT_BATCH');
+  if (!edits.length) return state;
+
+  const keys = new Set(Object.keys(state.serverRecords));
+  const pendingKeys = new Set<string>();
+  const opIds = new Set<string>();
+  for (const operation of [
+    ...state.outbox.map((entry) => entry.operation),
+    ...Object.values(state.overlays),
+    ...Object.values(state.conflicts).map((conflict) => conflict.attempted),
+  ]) {
+    const key = operationKey(operation);
+    keys.add(key);
+    pendingKeys.add(key);
+    opIds.add(operation.opId);
+  }
+  for (const conflict of Object.values(state.conflicts)) {
+    if (conflict.current) {
+      const key = operationKey(conflict.current);
+      keys.add(key);
+      pendingKeys.add(key);
+    }
+  }
+  if (keys.size > SYNC_LIMITS.maxLocalEntities) fail('LOCAL_CAPACITY_EXCEEDED');
+
+  const targets = new Set<string>();
+  const operations: SyncOperation[] = [];
+  for (let index = 0; index < edits.length; index += 1) {
+    const edit = edits[index];
+    const identity = identities[index];
+    if (!validateJsonSchema(identitySchema, identity).ok) fail('INVALID_EDIT_IDENTITY');
+    if (!validateJsonSchema(editSchema, edit).ok || edit.mutation !== 'put') fail('INVALID_EDIT');
+    const key = operationKey(edit);
+    if (targets.has(key)) fail('INVALID_PUT_BATCH');
+    // Retained conflicts can be absent from the visible library and the outbox.
+    // Never coalesce or silently resolve any pending work during a batch import.
+    if (pendingKeys.has(key)) fail('TARGET_HAS_PENDING_EDITS');
+    const current = Object.hasOwn(state.serverRecords, key) ? state.serverRecords[key] : undefined;
+    if (edit.entityType === 'readingPosition' && current && current.modifiedByDeviceId !== state.deviceId) fail('READING_DEVICE_MISMATCH');
+    if (current?.deletedAt !== null && current?.deletedAt !== undefined) fail('RESTORE_REQUIRED');
+    if (opIds.has(identity.opId)) fail('OP_ID_REUSED');
+    const operation = {
+      entityType: edit.entityType, entityId: edit.entityId, mutation: 'put', data: edit.data,
+      opId: identity.opId, clientCreatedAt: identity.clientCreatedAt,
+      schemaVersion: 1, baseRevision: current?.revision ?? 0,
+    } as SyncOperation;
+    if (!validateOperation(operation).ok) fail('INVALID_EDIT');
+    targets.add(key);
+    keys.add(key);
+    if (keys.size > SYNC_LIMITS.maxLocalEntities) fail('LOCAL_CAPACITY_EXCEEDED');
+    opIds.add(operation.opId);
+    operations.push(operation);
+  }
+  // Clone the library and all prepared payloads together only after the complete
+  // batch has passed. Neither a late error nor later caller edits can leak in.
+  const next = copy({ state, operations });
+  next.state.outbox.push(...next.operations.map((operation) => newEntry(operation, next.state.deviceId)));
+  assertState(next.state);
+  return next.state;
+}
+
+/**
+ * Atomically queue explicitly approved edits to existing papers, cloning the
+ * library once. Callers must bind every target to the reviewed data/version.
+ * Unsent edits coalesce; attempted operations remain immutable with a successor
+ * overlay. Conflicts, deletions and blocked work never become implicit restores.
+ */
+export function queueLocalApprovedPaperPuts(state: AccountSyncState, edits: readonly LocalEdit[], identities: readonly EditIdentity[]): AccountSyncState {
+  assertState(state);
+  if (!Array.isArray(edits) || !Array.isArray(identities) || edits.length !== identities.length) fail('INVALID_PUT_BATCH');
+  const batchSchema: JsonSchema = { type: 'array', maxItems: SYNC_LIMITS.maxLocalOperations };
+  if (!validateJsonSchema(batchSchema, edits).ok || !validateJsonSchema(batchSchema, identities).ok) fail('INVALID_PUT_BATCH');
+  if (!edits.length) return state;
+  const entries = new Map(state.outbox.map((entry,index) => [operationKey(entry.operation), { entry,index }]));
+  const blockedKeys = new Set(Object.values(state.conflicts).map(c => operationKey(c.attempted)));
+  const existingIds = new Map([
+    ...state.outbox.map(e => e.operation), ...Object.values(state.overlays), ...Object.values(state.conflicts).map(c => c.attempted),
+  ].map(operation => [operation.opId, operation]));
+  const targets = new Set<string>(), proposedIds = new Set<string>();
+  const actions: { kind:'replace'|'overlay'|'add'; key:string; index:number; candidate:PendingEdit; operation:SyncOperation }[] = [];
+  let additions = 0;
+  for (let i=0;i<edits.length;i++) {
+    const edit=edits[i],identity=identities[i];
+    if (!validateJsonSchema(identitySchema,identity).ok) fail('INVALID_EDIT_IDENTITY');
+    if (!validateJsonSchema(editSchema,edit).ok || edit.entityType!=='paper' || edit.mutation!=='put') fail('INVALID_EDIT');
+    let candidate={...edit,...identity} as PendingEdit;
+    if (!validatePending(candidate).ok) fail('INVALID_EDIT');
+    const key=operationKey(candidate),existing=entries.get(key),entry=existing?.entry,current=state.serverRecords[key],overlay=state.overlays[key];
+    if (targets.has(key)) fail('INVALID_PUT_BATCH');targets.add(key);
+    if (proposedIds.has(identity.opId)) fail('OP_ID_REUSED');proposedIds.add(identity.opId);
+    if (blockedKeys.has(key) || entry&&['conflict','rejected','device-blocked'].includes(entry.status) || !entry&&overlay) fail('TARGET_HAS_PENDING_EDITS');
+    if (entry?.operation.mutation==='delete' || overlay?.mutation==='delete') fail('RESTORE_REQUIRED');
+    if (!entry && !current) fail('TARGET_MISSING');
+    if (!entry && current?.deletedAt!==null && current?.deletedAt!==undefined) fail('RESTORE_REQUIRED');
+    if (entry?.operation.mutation==='restore' && (entry.status==='queued'&&entry.attempts===0 || entry.operation.opId===candidate.opId)) candidate={...candidate,mutation:'restore'} as PendingEdit;
+    const duplicate=existingIds.get(identity.opId);
+    if (duplicate) { if(!sameIntent(duplicate,candidate))fail('OP_ID_REUSED');continue; }
+    const kind=entry?(entry.status==='queued'&&entry.attempts===0?'replace':'overlay'):'add';
+    if (kind==='add' && state.outbox.length+(++additions)>SYNC_LIMITS.maxLocalOperations) fail('LOCAL_CAPACITY_EXCEEDED');
+    const base=entry?entry.operation.baseRevision:current!.revision;
+    const operation=pendingAsOperation(candidate,base);
+    actions.push({kind,key,index:existing?.index??-1,candidate:{...candidate,data:operation.data} as PendingEdit,operation});
+  }
+  if (!actions.length) return state;
+  const next=copy({state,actions});
+  for (const action of next.actions) {
+    if (action.kind==='replace') { next.state.outbox[action.index].operation=action.operation;delete next.state.overlays[action.key]; }
+    else if (action.kind==='overlay') next.state.overlays[action.key]=action.candidate;
+    else next.state.outbox.push(newEntry(action.operation,next.state.deviceId));
+  }
+  assertState(next.state);return next.state;
+}
+
 /** Commit state first; send request only when opIds is non-empty. */
 export function preparePush(state: AccountSyncState, context: SyncContext, limit: number = SYNC_LIMITS.maxBatchOperations): PreparedPush {
   assertContext(state, context);
@@ -230,7 +393,10 @@ function storeServerRecord(state: AccountSyncState, record: SyncRecord): void {
   const current = state.serverRecords[key];
   if (current && current.revision > record.revision) return;
   if (current && current.revision === record.revision) {
-    if (canonicalJson(current) !== canonicalJson(record)) fail('REVISION_COLLISION');
+    if (canonicalJson(current) !== canonicalJson(record)) {
+      if (!isPaperOrganizationHydration(current, record)) fail('REVISION_COLLISION');
+      state.serverRecords[key] = copy(record);
+    }
     return;
   }
   if (!current && Object.keys(state.serverRecords).length >= SYNC_LIMITS.maxLocalEntities) fail('LOCAL_CAPACITY_EXCEEDED');

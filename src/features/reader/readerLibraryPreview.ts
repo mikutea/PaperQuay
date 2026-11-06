@@ -170,6 +170,7 @@ export async function writeMineruParseCache({
   dataId,
   fileName,
   zipEntries,
+  provenance,
   mineruCacheDir,
 }: {
   item: WorkspaceItem;
@@ -183,6 +184,7 @@ export async function writeMineruParseCache({
   dataId?: string;
   fileName?: string;
   zipEntries?: string[];
+  provenance?: MineruCacheManifest['provenance'];
   mineruCacheDir: string;
 }) {
   if (!mineruCacheDir.trim()) {
@@ -204,6 +206,16 @@ export async function writeMineruParseCache({
     writeTasks.push(writeLocalTextFile(cachePaths.markdownPath, markdownText));
   }
 
+  if (sourceKind === 'cloud') {
+    // A parser retry can return only middle.json or omit Markdown. Empty old
+    // alternatives so a higher-priority artifact cannot survive from another
+    // run; resources always resolve against the original fresh output root.
+    if (!contentJsonText?.trim()) writeTasks.push(writeLocalTextFile(cachePaths.contentJsonPath, ''));
+    writeTasks.push(writeLocalTextFile(cachePaths.contentListJsonPath, ''));
+    if (!middleJsonText?.trim()) writeTasks.push(writeLocalTextFile(cachePaths.middleJsonPath, ''));
+    if (!markdownText?.trim()) writeTasks.push(writeLocalTextFile(cachePaths.markdownPath, ''));
+  }
+
   const manifest: MineruCacheManifest = {
     version: 1,
     documentKey: item.itemKey,
@@ -216,13 +228,11 @@ export async function writeMineruParseCache({
     dataId,
     fileName,
     zipEntries,
+    provenance,
   };
 
-  writeTasks.push(
-    writeLocalTextFile(cachePaths.manifestPath, JSON.stringify(manifest, null, 2)),
-  );
-
   await Promise.all(writeTasks);
+  await writeLocalTextFile(cachePaths.manifestPath, JSON.stringify(manifest, null, 2));
   return cachePaths;
 }
 

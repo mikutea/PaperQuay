@@ -4,9 +4,21 @@ const sqliteVec = require('sqlite-vec');
 const { DatabaseSync, sqlStringLiteral, withTransaction } = require('./nodeSqlite.cjs');
 const { cleanString, toError } = require('./utils.cjs');
 const { withSnapshotDatabase, assertSnapshotTables, copyTable, replaceTables } = require('./databaseRestore.cjs');
+const { createHash } = require('node:crypto');
 
 const RAG_SOURCE_TYPES = new Set(['mineru-markdown', 'pdf-text']);
 const MAX_VECTOR_DIMENSION = 32768;
+const RAG_SIMILARITY_LIMITS = Object.freeze({ documentKeys: 32, rows: 8192, vectorElements: 2000000, textBytes: 8 * 1024 * 1024, comparisons: 4096, edges: 512 });
+const similarityFailure = code => { throw Object.assign(new Error(code), { code }); };
+const similarityHash = value => createHash('sha256').update(value).digest('hex');
+function cachedVector(bytes, dimension) {
+  if (!(bytes instanceof Uint8Array) || bytes.byteLength !== dimension * 4) similarityFailure('RAG_SIMILARITY_INVALID');
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength), values = new Float64Array(dimension);
+  for (let i = 0; i < dimension; i++) {
+    const value = view.getFloat32(i * 4, true); if (!Number.isFinite(value)) similarityFailure('RAG_SIMILARITY_INVALID'); values[i] = value;
+  }
+  return values;
+}
 
 function resolveSqliteVecLoadablePath() {
   const loadablePath = typeof sqliteVec.getLoadablePath === 'function'
@@ -606,107 +618,118 @@ function createRagStore(appPaths) {
       .slice(0, topK);
   }
 
-  function listDocumentSimilarities(request = {}) {
-    const limit = Math.max(0, normalizeNonNegativeInteger(request.limit, 80));
-    const minSimilarity = Number.isFinite(Number(request.minSimilarity))
-      ? Math.max(-1, Math.min(1, Number(request.minSimilarity)))
-      : 0.82;
-    const allowedDocumentKeys = Array.isArray(request.documentKeys)
-      ? new Set(request.documentKeys.map((key) => cleanString(key)).filter(Boolean))
-      : null;
-
-    if (limit === 0) {
-      return [];
-    }
-
-    const documents = [];
-
-    for (const dimension of knownVectorDimensions(db)) {
-      const table = vectorTableName(dimension);
-      const rows = db.prepare(`
-        SELECT
-          c.document_key,
-          c.source_type,
-          v.embedding
-        FROM ${table} v
-        JOIN rag_chunks c ON c.id = v.rowid
-        JOIN rag_indexes i
-          ON i.document_key = c.document_key
-         AND i.source_type = c.source_type
-         AND i.status = 'ready'
-         AND i.embedding_dimension = ?
-        ORDER BY c.document_key, c.source_type, c.chunk_index
-      `).all(dimension);
-      const grouped = new Map();
-
-      for (const row of rows) {
-        const documentKey = cleanString(row.document_key);
-
-        if (!documentKey || (allowedDocumentKeys && !allowedDocumentKeys.has(documentKey))) {
-          continue;
-        }
-
-        const key = `${documentKey}::${dimension}`;
-        const entry = grouped.get(key) ?? {
-          documentKey,
-          dimension,
-          sourceTypes: new Set(),
-          vectors: [],
-        };
-        const embedding = Array.from(row.embedding ?? []);
-
-        if (embedding.length === dimension) {
-          entry.vectors.push(embedding);
-          entry.sourceTypes.add(cleanString(row.source_type));
-          grouped.set(key, entry);
-        }
-      }
-
-      for (const entry of grouped.values()) {
-        if (entry.vectors.length === 0) {
-          continue;
-        }
-
-        documents.push({
-          documentKey: entry.documentKey,
-          dimension,
-          sourceTypes: Array.from(entry.sourceTypes).sort(),
-          vector: averageVectors(entry.vectors, dimension),
-        });
-      }
-    }
-
-    const edges = [];
-
-    for (let leftIndex = 0; leftIndex < documents.length; leftIndex += 1) {
-      for (let rightIndex = leftIndex + 1; rightIndex < documents.length; rightIndex += 1) {
-        const left = documents[leftIndex];
-        const right = documents[rightIndex];
-
-        if (left.dimension !== right.dimension) {
-          continue;
-        }
-
-        const similarity = cosineSimilarity(left.vector, right.vector);
-
-        if (similarity < minSimilarity) {
-          continue;
-        }
-
-        edges.push({
-          sourceDocumentKey: left.documentKey,
-          targetDocumentKey: right.documentKey,
-          similarity,
-          sourceTypes: Array.from(new Set([...left.sourceTypes, ...right.sourceTypes])).sort(),
-        });
-      }
-    }
-
-    return edges
-      .sort((left, right) => right.similarity - left.similarity)
-      .slice(0, limit);
+  function similarityOptions(request, strict) {
+    const limits = RAG_SIMILARITY_LIMITS;
+    if (strict && (!request || Object.getPrototypeOf(request) !== Object.prototype
+      || Reflect.ownKeys(request).some(key => typeof key !== 'string' || !['documentKeys', 'minSimilarity', 'maxRows', 'maxVectorElements', 'maxTextBytes', 'maxComparisons', 'maxEdges'].includes(key))
+      || Object.values(Object.getOwnPropertyDescriptors(request)).some(row => !row.enumerable || !('value' in row)))) similarityFailure('RAG_SIMILARITY_INVALID');
+    if (strict && (!Array.isArray(request.documentKeys) || Object.getPrototypeOf(request.documentKeys) !== Array.prototype
+      || Reflect.ownKeys(request.documentKeys).length !== request.documentKeys.length + 1 || Object.keys(request.documentKeys).length !== request.documentKeys.length
+      || Object.values(Object.getOwnPropertyDescriptors(request.documentKeys)).some(row => !('value' in row)))) similarityFailure('RAG_SIMILARITY_INVALID');
+    const keys = Array.isArray(request.documentKeys) ? [...new Set(request.documentKeys.map(key => cleanString(key)).filter(Boolean))].sort() : null;
+    if (strict && (!Array.isArray(request.documentKeys) || !keys || keys.length !== request.documentKeys.length
+      || keys.length > limits.documentKeys || keys.some(key => key.length > 1024) || request.documentKeys.some(key => typeof key !== 'string' || key !== key.trim()))) similarityFailure('RAG_SIMILARITY_INVALID');
+    const rawMinimum = request.minSimilarity === undefined ? 0.82 : request.minSimilarity, minimum = Number(rawMinimum);
+    if (strict && (typeof rawMinimum !== 'number' || !Number.isFinite(minimum) || minimum < -1 || minimum > 1)) similarityFailure('RAG_SIMILARITY_INVALID');
+    const budget = (name, maximum) => {
+      if (!strict) return Infinity;
+      const value = request[name] ?? maximum;
+      if (!Number.isSafeInteger(value) || value < 0 || value > maximum) similarityFailure('RAG_SIMILARITY_LIMIT'); return value;
+    };
+    return { keys, minimum: Number.isFinite(minimum) ? Math.max(-1, Math.min(1, minimum)) : 0.82,
+      rows: budget('maxRows', limits.rows), elements: budget('maxVectorElements', limits.vectorElements), text: budget('maxTextBytes', limits.textBytes),
+      comparisons: budget('maxComparisons', limits.comparisons), edges: budget('maxEdges', limits.edges) };
   }
 
+  function computeDocumentSimilarities(request, strict) {
+    const options = similarityOptions(request, strict), grouped = new Map();
+    const stats = { rows: 0, vectorElements: 0, textBytes: 0, comparisons: 0 };
+    if (options.keys && !options.keys.length) return { documents: [], similarities: [], fingerprint: similarityHash('[]'), stats };
+    const clauses = options.keys ? ` AND document_key IN (${options.keys.map(() => '?').join(',')})` : '';
+    const indexes = db.prepare(`SELECT document_key, source_type, source_signature, embedding_model_key, embedding_dimension,
+      chunk_count, indexed_chunk_count, total_chunk_count, indexed_at FROM rag_indexes WHERE status = 'ready'${clauses}
+      ORDER BY document_key, embedding_model_key, embedding_dimension, source_type`).all(...(options.keys || []));
+    for (const index of indexes) {
+      const dimension = Number(index.embedding_dimension), modelKey = index.embedding_model_key;
+      if (dimension === 0 && Number(index.indexed_chunk_count) === 0) continue;
+      if (!Number.isSafeInteger(dimension) || dimension < 1 || dimension > MAX_VECTOR_DIMENSION
+        || !Number.isSafeInteger(Number(index.total_chunk_count)) || Number(index.total_chunk_count) < 0
+        || typeof modelKey !== 'string' || !modelKey.trim() || modelKey.length > 16384 || typeof index.source_signature !== 'string'
+        || index.source_signature.length > 65536 || !Number.isSafeInteger(Number(index.indexed_at)) || Number(index.indexed_at) < 0) similarityFailure('RAG_SIMILARITY_INVALID');
+      if (!hasVectorTable(db, dimension)) similarityFailure('RAG_SIMILARITY_INVALID');
+      const table = vectorTableName(dimension), parameters = [index.document_key, index.source_type];
+      const count = db.prepare(`SELECT COUNT(*) AS rows, COALESCE(SUM(length(CAST(c.text AS BLOB))), 0) AS text_bytes
+        FROM ${table} v JOIN rag_chunks c ON c.id = v.rowid
+        WHERE v.document_key = ? AND v.source_type = ? AND c.document_key = v.document_key AND c.source_type = v.source_type`).get(...parameters);
+      const rowsCount = Number(count.rows), textBytes = Number(count.text_bytes);
+      if (!Number.isSafeInteger(rowsCount) || rowsCount !== Number(index.indexed_chunk_count) || rowsCount !== Number(index.chunk_count)
+        || rowsCount < Number(index.total_chunk_count) || rowsCount < 1 || !Number.isSafeInteger(textBytes) || textBytes < 0) similarityFailure('RAG_SIMILARITY_INVALID');
+      stats.rows += rowsCount; stats.vectorElements += rowsCount * dimension; stats.textBytes += textBytes;
+      if (stats.rows > options.rows || stats.vectorElements > options.elements || strict && stats.textBytes > options.text) similarityFailure('RAG_SIMILARITY_LIMIT');
+      const rows = db.prepare(`SELECT c.chunk_id, c.chunk_index, c.page_index, c.block_id, ${strict ? 'c.text,' : ''} v.embedding
+        FROM ${table} v JOIN rag_chunks c ON c.id = v.rowid
+        WHERE v.document_key = ? AND v.source_type = ? AND c.document_key = v.document_key AND c.source_type = v.source_type
+        ORDER BY c.chunk_index, c.chunk_id, c.id`).all(...parameters);
+      if (rows.length !== rowsCount) similarityFailure('RAG_SIMILARITY_INVALID');
+      // One exact provider/model/input-format key defines one vector space.
+      // Neither equal dimension nor equal display model name proves compatibility.
+      const key = JSON.stringify([index.document_key, dimension, modelKey]), entry = grouped.get(key) || {
+        documentKey: index.document_key, dimension, modelKey, modelDigest: similarityHash(modelKey), sourceTypes: new Set(),
+        sum: new Float64Array(dimension), count: 0, indexedAt: 0, parts: [],
+      };
+      const digest = strict ? createHash('sha256').update(JSON.stringify(['paperquay-rag-source-v1', index.source_type, index.source_signature, modelKey,
+        dimension, Number(index.indexed_at), rowsCount, Number(index.total_chunk_count)])) : null;
+      for (const row of rows) {
+        const vector = cachedVector(row.embedding, dimension);
+        for (let i = 0; i < dimension; i++) entry.sum[i] += vector[i];
+        entry.count++;
+        if (digest) {
+          digest.update(JSON.stringify([row.chunk_id, row.chunk_index, row.page_index, row.block_id, row.text]));
+          digest.update(Buffer.from(row.embedding));
+        }
+      }
+      entry.indexedAt = Math.max(entry.indexedAt, Number(index.indexed_at)); entry.sourceTypes.add(index.source_type);
+      if (digest) entry.parts.push({ sourceType: index.source_type, digest: digest.digest('hex') }); grouped.set(key, entry);
+    }
+    const documents = [...grouped.values()].map(entry => ({ documentKey: entry.documentKey, dimension: entry.dimension, modelDigest: entry.modelDigest,
+      sourceTypes: [...entry.sourceTypes].sort(), chunkCount: entry.count, indexedAt: entry.indexedAt,
+      cacheDigest: strict ? similarityHash(JSON.stringify(['mean-chunk-cosine-v1', entry.dimension, entry.modelDigest, entry.parts])) : '',
+      modelKey: entry.modelKey, vector: entry.sum.map(value => value / entry.count) }));
+    const similarities = [];
+    for (let leftIndex = 0; leftIndex < documents.length; leftIndex++) for (let rightIndex = leftIndex + 1; rightIndex < documents.length; rightIndex++) {
+      const left = documents[leftIndex], right = documents[rightIndex];
+      if (left.documentKey === right.documentKey || left.dimension !== right.dimension || left.modelKey !== right.modelKey) continue;
+      if (++stats.comparisons > options.comparisons) similarityFailure('RAG_SIMILARITY_LIMIT');
+      const similarity = Math.max(-1, Math.min(1, cosineSimilarity(left.vector, right.vector))); if (!Number.isFinite(similarity)) similarityFailure('RAG_SIMILARITY_INVALID');
+      if (similarity < options.minimum) continue;
+      if (similarities.length >= options.edges) similarityFailure('RAG_SIMILARITY_LIMIT');
+      similarities.push({ sourceDocumentKey: left.documentKey, targetDocumentKey: right.documentKey, similarity, dimension: left.dimension,
+        modelDigest: left.modelDigest, sourceCacheDigest: left.cacheDigest, targetCacheDigest: right.cacheDigest, indexedAt: Math.max(left.indexedAt, right.indexedAt),
+        sourceTypes: [...new Set([...left.sourceTypes, ...right.sourceTypes])].sort() });
+    }
+    similarities.sort((left, right) => right.similarity - left.similarity || left.sourceDocumentKey.localeCompare(right.sourceDocumentKey)
+      || left.targetDocumentKey.localeCompare(right.targetDocumentKey) || left.modelDigest.localeCompare(right.modelDigest));
+    const publicDocuments = documents.map(({ modelKey: _modelKey, vector: _vector, ...row }) => row);
+    return { documents: publicDocuments, similarities, stats, fingerprint: similarityHash(JSON.stringify([options.keys, publicDocuments])) };
+  }
+
+  function readSimilaritySnapshot(request, strict) {
+    db.exec('BEGIN');
+    try { const value = computeDocumentSimilarities(request, strict); db.exec('COMMIT'); return value; }
+    catch (error) { try { db.exec('ROLLBACK'); } catch {} throw error; }
+  }
+
+  function listDocumentSimilarities(request = {}) {
+    const limit = Math.max(0, normalizeNonNegativeInteger(request.limit, 80)); if (!limit) return [];
+    return readSimilaritySnapshot(request, false).similarities.slice(0, limit)
+      .map(({ sourceDocumentKey, targetDocumentKey, similarity, sourceTypes }) => ({ sourceDocumentKey, targetDocumentKey, similarity, sourceTypes }));
+  }
+
+  /** Explicit bounded evidence capture. No index creation, text/vector export,
+   * implicit model request, partial result or truncation occurs here. */
+  function captureDocumentSimilarityEvidence(request = {}) {
+    return readSimilaritySnapshot(request, true);
+  }
   function migrateFromLibraryRagIndexes(ragIndexes) {
     const entries = Object.entries(ragIndexes && typeof ragIndexes === 'object' ? ragIndexes : {});
     const summary = {
@@ -775,6 +798,7 @@ function createRagStore(appPaths) {
     getDocumentIndexStatus,
     indexDocument,
     listDocumentSimilarities,
+    captureDocumentSimilarityEvidence,
     migrateFromLibraryRagIndexes,
     reportFailure,
     retrieveDocumentChunks,
@@ -812,4 +836,4 @@ function createRagStore(appPaths) {
   };
 }
 
-module.exports = { createRagStore };
+module.exports = { createRagStore, RAG_SIMILARITY_LIMITS };

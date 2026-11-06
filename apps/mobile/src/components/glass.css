@@ -1,0 +1,32 @@
+/* A material for floating controls, never for document pixels or modal ancestors. */
+.app-glass {
+  color: var(--glass-text);
+  background: var(--glass-solid);
+  border: 1px solid var(--glass-border);
+  box-shadow: inset 0 1px 0 var(--glass-highlight), var(--glass-shadow);
+}
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  @media (prefers-reduced-transparency: no-preference) {
+    .app-glass {
+      background: var(--glass-surface);
+      -webkit-backdrop-filter: blur(20px) saturate(145%);
+      backdrop-filter: blur(20px) saturate(145%);
+    }
+  }
+}
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .app-glass {
+    background: var(--glass-solid);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+@media (prefers-contrast: more) {
+  .app-glass { border-color: currentColor; box-shadow: none; }
+}
+@media (forced-colors: active) {
+  .app-glass {
+    color: CanvasText; background: Canvas; border-color: ButtonText; box-shadow: none;
+    -webkit-backdrop-filter: none; backdrop-filter: none;
+  }
+}

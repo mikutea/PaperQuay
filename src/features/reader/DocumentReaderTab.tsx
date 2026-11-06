@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReaderWorkspace from './ReaderWorkspace';
+import { DesktopReadingPositionPanel } from './desktopReadingPositionPanel';
+import type { DesktopReadingReaderAccess } from '../../services/desktopReadingReader';
+import { useDesktopReadingTracking } from './useDesktopReadingTracking';
 import { updateBlockTextMarks } from '../blocks/blockTextMarks';
 import { PDF_ANNOTATION_COLOR_PRESETS } from '../pdf/annotationColors';
 import {
@@ -375,6 +378,10 @@ function DocumentReaderTab({
   const [currentDocument, setCurrentDocument] = useState<WorkspaceItem>(document);
   const [pdfSource, setPdfSource] = useState<PdfSource>(null);
   const [pdfData, setPdfData] = useState<Uint8Array | null>(null);
+  const [accountReadingOpen, setAccountReadingOpen] = useState(false);
+  const [accountReadingAccess, setAccountReadingAccess] = useState<DesktopReadingReaderAccess | null>(null);
+  const handleAccountReadingAccess = useCallback((access: DesktopReadingReaderAccess | null) => setAccountReadingAccess(access), []);
+  const accountReadingTracking = useDesktopReadingTracking(currentDocument.source === 'native-library' ? currentDocument.itemKey : null, accountReadingAccess, isActive);
   const [pdfPath, setPdfPath] = useState('');
   const pdfScrollPositionsRef = useRef<Record<string, PdfScrollPosition>>({});
   const pdfReadingHeatmapsRef = useRef<Record<string, PdfReadingHeatmap>>({});
@@ -909,6 +916,7 @@ function DocumentReaderTab({
       dataId,
       fileName,
       zipEntries,
+      provenance,
     }: {
       item: WorkspaceItem;
       pdfPath: string;
@@ -921,6 +929,7 @@ function DocumentReaderTab({
       dataId?: string;
       fileName?: string;
       zipEntries?: string[];
+      provenance?: Parameters<typeof writeMineruParseCache>[0]['provenance'];
     }) => {
       return writeMineruParseCache({
         item,
@@ -934,6 +943,7 @@ function DocumentReaderTab({
         dataId,
         fileName,
         zipEntries,
+        provenance,
         mineruCacheDir: settings.mineruCacheDir,
       });
     },
@@ -1610,6 +1620,7 @@ function DocumentReaderTab({
           item: currentDocument,
           pdfPath,
           sourceKind: 'cloud',
+          sourcePath: result.contentJsonPath || result.middleJsonPath || undefined,
           contentJsonText: result.contentJsonText,
           middleJsonText: result.middleJsonText,
           markdownText: result.markdownText,
@@ -1617,6 +1628,7 @@ function DocumentReaderTab({
           dataId: result.dataId,
           fileName: result.fileName,
           zipEntries: result.zipEntries,
+          provenance: result.provenance,
         }).catch(() => null);
 
         if (savedPaths) {
@@ -1631,6 +1643,10 @@ function DocumentReaderTab({
         }
       }
 
+      if (result.provenance?.status === 'unavailable') nextStatusMessage += lRef.current(
+        '。解析内容已保留，但来源证据不可用，暂不能导出解析包。',
+        '. Parsed content is preserved, but provenance is unavailable and verified export is disabled.',
+      );
       applyMineruPages(pages, nextMineruPath, {
         item: currentDocument,
         pdfPath,
@@ -3856,6 +3872,8 @@ function DocumentReaderTab({
         originalPdfPath={originalPdfPath}
         pdfSource={pdfSource}
         pdfData={pdfData}
+        onAccountReadingAccess={currentDocument.source === 'native-library' ? handleAccountReadingAccess : undefined}
+        onOpenAccountReading={currentDocument.source === 'native-library' ? () => setAccountReadingOpen(true) : undefined}
         pdfScrollPosition={pdfScrollPosition}
         pdfReadingHeatmap={pdfReadingHeatmap}
         onPdfScrollPositionChange={handlePdfScrollPositionChange}
@@ -3950,6 +3968,11 @@ function DocumentReaderTab({
         onAttachAssistant={handleAttachAssistant}
         showLibraryToggle={false}
       />
+      {accountReadingOpen && <DesktopReadingPositionPanel key={currentDocument.workspaceId}
+        localPaperId={currentDocument.source === 'native-library' ? currentDocument.itemKey : null}
+        reader={accountReadingAccess} tracking={accountReadingTracking} active={isActive} onClose={() => setAccountReadingOpen(false)}
+        onConfigureAccount={() => { setAccountReadingOpen(false); onOpenPreferences(); }}
+      />}
     </div>
   );
 }

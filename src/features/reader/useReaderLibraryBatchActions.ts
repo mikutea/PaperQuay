@@ -443,6 +443,7 @@ export function useReaderLibraryBatchActions({
                 item,
                 pdfPath,
                 sourceKind: 'cloud',
+                sourcePath: result.contentJsonPath || result.middleJsonPath || undefined,
                 contentJsonText: result.contentJsonText,
                 middleJsonText: result.middleJsonText,
                 markdownText: result.markdownText,
@@ -450,6 +451,7 @@ export function useReaderLibraryBatchActions({
                 dataId: result.dataId,
                 fileName: result.fileName,
                 zipEntries: result.zipEntries,
+                provenance: result.provenance,
               });
 
               const resolvedJsonPath =
@@ -460,12 +462,15 @@ export function useReaderLibraryBatchActions({
                     ? savedPaths.contentJsonPath
                     : savedPaths.middleJsonPath
                   : 'content_list_v2.json');
-              const status = savedPaths
+              const status = (savedPaths
                 ? l(
                     `已完成 MinerU 解析并写入缓存：${savedPaths.directory}`,
                     `MinerU parsing finished and was cached in: ${savedPaths.directory}`,
                   )
-                : l('已完成 MinerU 解析', 'MinerU parsing finished');
+                : l('已完成 MinerU 解析', 'MinerU parsing finished')) + (result.provenance?.status === 'unavailable' ? l(
+                  '。解析内容已保留，但来源证据不可用，暂不能导出解析包。',
+                  '. Parsed content is preserved, but provenance is unavailable and verified export is disabled.',
+                ) : '');
 
               syncLibraryParsedState(item, jsonText, resolvedJsonPath, status);
               if (item.source === 'native-library') {

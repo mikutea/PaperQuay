@@ -16,15 +16,21 @@ M1 的设备条目代表 **OIDC 登录会话**：JWT 的 issuer/sub/sid 与服�
 
 | entityType | data 字段（拒绝额外字段） |
 | --- | --- |
-| `paper` | `title, doi:null|string, year:null|string, publication:null|string, abstractText:null|string, authors:string[], keywords:string[]` |
+| `paper` | `title, doi:null|string, year:null|string, publication:null|string, abstractText:null|string, authors:string[], keywords:string[], organization?:PaperOrganization` |
 | `attachmentVersion` | `paperId, attachmentId, sha256, sizeBytes, mediaType:'application/pdf', fileName, pageCount:null|integer` |
-| `note` | `paperId:null|UUID, title, body, format:'markdown'` |
+| `note` | Markdown：`paperId, title, body, format:'markdown'`；富文本：`paperId, title, body, format:'tiptap-json', document, metadata, assets` |
+| `aiConversation` | `version:1, title, paperId, attachmentVersionId, sha256, context, turns` |
+| `aiTemplate` | `version:1, title, action, question` |
 | `annotation` | `paperId, attachmentVersionId, kind:'highlight'|'underline'|'area', color, comment, anchor` |
 | `readingPosition` | `paperId, attachmentVersionId, pageIndex, offsetRatio, furthestPageIndex, furthestOffsetRatio, sessionId, deviceSequence, observedAt` |
 
 `sha256` 为经验证的 64 位小写十六进制；附件身份、hash、sizeBytes 不可变。`fileName` 仅 basename。附件/批注/阅读位置必须引用同账号且匹配 paperId 的实体。未知 hash 不伪造 attachmentVersion。
 
-`anchor` 为 `{pageIndex, coordinateSpace:'pdf-crop-box-unrotated-normalized', quads:number[8][], quote:{exact,prefix,suffix}|null}`。页码从 0 开始，坐标/offset 在 `[0,1]`。阅读位置每设备/版本独立；不允许设备写另一个设备的检查点。最近阅读位置与最远阅读进度分开；时间只显示，不用于冲突胜负。
+`anchor` 为 `{pageIndex, coordinateSpace:'pdf-crop-box-unrotated-normalized', quads:number[8][], quote:{exact,prefix,suffix}|null}`。页码从 0 开始，坐标/offset 在 `[0,1]`。锚点以**未旋转 CropBox** 归一化：`x=(pdfX-xMin)/width`，`y=(pdfY-yMin)/height`，Y 轴向上；四个角按多边形顺序保存。选区先逆变换当前 viewport，显示时再应用 viewport，因此文件自带旋转、用户旋转和缩放不会改写锚点。阅读位置每设备/版本独立；不允许设备写另一个设备的检查点。最近阅读位置与最远阅读进度分开；时间只显示，不用于冲突胜负。
+
+`PaperOrganization` 为 `{favorite:boolean, readingStatus:'unread'|'reading'|'read', tags:string[], collections:string[], queueRank:number|null}`。它是可选的完整对象，标签至多 64 个、合集至多 32 个，每项至多 80 字符；队列顺序为非负安全整数或 null。清空分类必须显式写入空值，不能靠省略对象清空。
+
+`GET /v1/capabilities` 返回 `features.paperOrganization:1` 后，新客户端才发送 `X-PaperQuay-Features: paper-organization-v1` 并开放分类编辑。旧客户端收到的 pull、push、冲突和解决结果投影掉新增对象；旧客户端 put/restore 省略它时服务端保留当前分类，且仍按合并后的完整载荷计算配额。升级后的本地库只重置一次拉取游标，保留 outbox/冲突；同 revision 只允许旧投影补回这一字段，其他同版本内容变化仍拒绝。
 
 记录信封为：
 
@@ -43,12 +49,21 @@ type SyncOperation = {
 
 创建 baseRevision 为 0。服务端分配 revision/updatedAt；delete 的 data 为 null。restore 必须显式且引用当前墓碑 revision，不能以普通 put 复活。
 
+新内容通过 `rich-notes-v1`、`ai-conversations-v1` 单独协商。旧客户端拉取时隐藏不支持的记录但继续推进游标，不能修改／删除隐藏内容；启用能力时只重置一次拉取游标，保留 outbox 与冲突。服务端拒绝把富文本静默降为 Markdown，或改变已保存会话的共同原文。
+
+富文本保留受支持 TipTap AST、显式元数据及有 SHA-256／尺寸／字节数的 PNG/JPEG/WebP 资源，正文是校验后的派生文字。历史坐标保留 `verification:unverified`，未知引用显式未解析。单条最多 1 MiB，超限和未知节点整条拒绝；资源不能使用远程 URL、本机路径或过期 blob。v2 文件中的源 ID 仅用于包内重绑，不自动连接当前账号同名实体。
+
+会话保存共同 PDF／解析上下文和最多 24 轮真实问答终态，单条最多 1 MiB；同账号至多 50 个会话、100 个模板。公开模型引用可同步，密钥、端点 headers 和本机模型设置不进入实体。续问显式恢复保存的原文，每次只把此前完成的问答加入前文；保存事务重新核对完整快照、revision、冲突和待决解决操作。纯模块位于 `packages/ai-core`，平台存储与网络适配保留在各客户端。
+
 ## API 与事务
 
 | API | 行为 |
 | --- | --- |
 | `GET /health/live`、`GET /health/ready` | 无敏感内容的存活/数据库就绪检查 |
 | `GET /v1/capabilities` | 协议/schema/请求上限；不泄露其他账号信息 |
+| `GET /v1/cloud-pdfs`、`GET /v1/cloud-pdfs/:id` | 显式启用的私有 PDF 副本列表、版本状态与独立额度 |
+| `PUT /v1/cloud-pdfs/:id`、`GET /v1/cloud-pdfs/:id/content`、`DELETE /v1/cloud-pdfs/:id` | 逐份保存、核验下载或单独删除云副本；完整契约见 [私有云 PDF](private-cloud-pdf.md) |
+| `/v1/desktop-pdfs/versions`、`/provider/poll`、`/requests` 及其请求内容子路由 | 同账号不同会话的短期文件请求、提供方长轮询、完整 PDF 临时转发与取消；见 [在线电脑取文件](desktop-pdf.md) |
 | `POST /v1/devices` | 当前 OIDC 会话注册；body `{name,platform}`；返回当前设备 |
 | `GET /v1/me`、`GET /v1/devices`、`DELETE /v1/devices/:id` | 当前身份、本人设备会话、撤销 |
 | `POST /v1/sync/push` | `{protocolVersion:1,deviceId,operations:SyncOperation[]}` |
@@ -71,15 +86,53 @@ cursor 是绑定账号/epoch/seq 的不透明值。M1 不裁剪 changelog；过�
 - 冲突保存 attempted operation 与 current record；解决冲突要验证当前 revision，期间又有更新则继续提示，不覆盖新版本。
 - 本地数据按账号独立；网络身份与存储账号必须一致，账号切换停止旧同步。暂时故障保留 outbox，永久拒绝和冲突有可见处理入口。
 
+M2 Web 快照使用 IndexedDB，原生快照使用 SQLite 事务；原生登录令牌与模型密钥使用系统安全存储。原生离线恢复仅接受此前通过服务端注册确认的 `(api, issuer, client, sub) → account/device` 绑定及已有本地快照，过期凭据不用于网络请求。网络恢复后先重新验证身份/设备，再同步；撤销会话不能借离线绑定重新注册。异步令牌获取、网络返回及本地写入均检查主体，旧账号任务不能写入新账号内容。
+
+笔记与批注的“已保存”表示本地事务完成。保存期间的新输入继续保持未保存状态；位置、评论和并行批注分别计入离开守卫。保存完成后的即时返回读取同一份实时状态，不等待 React 下一次渲染。
+
 ## 文件与 AI 的独立边界
 
 账号元数据同步、PDF 传输、向模型发送文本是三个独立能力。服务器默认不存 PDF；内容来源按版本/可用性/成本选择。PDF 可用来源失败时保留题录和笔记，不阻塞整个文库。
 
 公开源并不天然可信，DOI 落地页不等于 PDF。部分 Range 下载未完成前不能宣称整文件 SHA-256 已核验；可用可信 chunk 清单验证已取字节，或待完整临时下载后再启用精确版本锚定。默认关闭自动全文件预取；不支持 Range 的源由用户选择完整下载。
 
-电脑提供文件时只接受授权附件 ID，由电脑适配器解析已导入路径；不开放任意路径/URL 读取。信令、直传与中继均绑定账号、设备、附件版本、权限和有效期。云副本由用户明确上传；流量、空间和删除单独管理。
+M2 具体实现先检查公开源，再由用户明确选择完整读取并核对 SHA-256、字节数与 PDF 解析结果；即使来源支持 Range，也不把部分下载当作已验证版本。单文件最多 64 MiB/2000 页；同时渲染至多 3 页、单 canvas 至多 4M 像素。账号缓存总上限 256 MiB，其中临时 128 MiB、主动保留 192 MiB，条目至多 512；默认清理只删临时副本，显式清理账号包含主动保留副本，原始来源文件与同步记录不随之删除。
+
+M3 的统一入口仅针对已有版本，按只读缓存、同账号在线电脑、私有云、显式填写公开链接依次读取，分别限制 5/15/15/30 秒、整次 60 秒；获取成功后仍进入同一解析和缓存路径。认证或目标失效停止整次获取，普通来源故障才回退。公开来源不附带账号令牌。补写版本页数和保存阅读位置在实际 AccountStore 事务内再次检查目标，防止等待队列期间的取消、删除或改名被旧数据覆盖。操作与状态边界见 [按版本打开全文](pdf-sources.md)。
+
+阅读器首次按需加载时携带匹配版本的 PDF.js worker、CMap、标准字体与 WASM 白名单资源。以后新开文档和首次渲染其他文字页不再请求远端解码资源；每次文档独立持有工作线程，取消/关闭释放资源。资源不可用与文件本身无效分别报告。该离线保证针对已加载应用或原生打包资源；Web 未提供离线冷启动 PWA，刷新后仍需重新加载应用与登录。
+
+电脑提供文件时只接受授权附件 ID，由电脑适配器解析明确关联的已导入文件；不开放任意路径/URL 读取。桌面主进程以系统浏览器 PKCE 登录，令牌只存内存；选定文献的题录、附件版本、映射和 outbox 通过共享同步核心发布，旧 SQLite 不接受远端快照回写。每次重启或登录后须重新开启提供。
+
+在线电脑能力保留 `http-relay-v1`，并协商可选 `webrtc-data-v1`。消费者先创建 DataChannel offer，服务将有界信令交给同账号的另一个已注册桌面会话；桌面使用独立 sandbox renderer，主进程仍负责登录、文件授权和读取。每秒控制查询续发最多两秒许可；整个直连尝试最多六秒。文件完整核验后须取得服务端最终权限确认，才可被采用。失败关闭 peer 并丢弃部分内容，再用同一租约、槽位和预算切换中继；旧客户端和提供方继续走原中继。协议见 [直连约定](direct-transfer-contract.md)。
+
+HTTP 中继是单进程、短期内存转发，不持久化 PDF。流式背压、完整哈希、最后一块延迟提交、持续会话复核、并发槽位与 15 分钟流量预算共同限制传输。撤销或连接结束会清理请求，实际 I/O/数据库操作结束后才释放槽位。直连默认不配置 STUN，也不使用 TURN；跨公网 NAT、分布式 broker 与持久计费尚未验收或实现。云副本仍由用户单独上传；流量、空间和删除分别管理。
 
 AI 请求由用户选择的设备直连或受控网关执行，必须有实际选段/全文上下文及可核查引用。模型配置引用可同步，密钥与鉴权 headers 不进入普通同步；不会将已有桌面密钥默默搬到云端。
+
+## 版本绑定的解析阅读
+
+解析包是独立的本机衍生数据，文件交接，不进入账号同步。桌面主进程把实际上传 PDF 字节、独立结果目录和产物摘要绑定为 HMAC 证据，密钥受系统安全存储保护；导出前及保存框返回后复验登录、映射、附件版本和原文件。缺少证据的旧结果不能补标可信。移动端必须先打开 PDF，再比较文献 ID、附件版本 ID、SHA-256、字节数和实际页数。
+
+包为闭合 JSON，保留受支持结构和包内位图；表格不能完整表达时拒绝，资源目标不得携带本机路径。KaTeX 不信任扩展命令，Markdown 不执行 HTML 或加载远程图片。续块复用来源内容但保留当前块位置，页面级跳转不假定 bbox 坐标系。
+
+Web 独立 IndexedDB 的正文和目录在同一事务提交，原生使用独立 SQLite；每账号 64 MiB/32 份，满额拒绝。读取核对目录、正文和资源；导入失败保留旧包，损坏缓存可单篇或全账号清理。缓存不等于云端认证或跨端同步，清理不会删除 PDF/笔记/文库。详细边界见 [解析包](parsed-documents.md)，当前验收状态见 [检查点](m3-parsed-checkpoint.md)。
+
+## 解析文本与 AI 上下文
+
+移动端每次准备解析文本都重新校验完整包与 PDF 目标。请求 identity 除文献/版本/hash/文本外，还包括规范解析包摘要；本页使用解析面板当前页，包范围只列实际有文字的页，均不声称完整文档。公式、表格结构和题注转成有限文本；不传图像资源、坐标或包的原始对象。用户在发送预览之后主动请求自己配置的模型，解析文本不自动进入网关或账号同步。
+
+缓存替换、单篇或账号解析清理通过成功提交结果使对应旧解析上下文失效；取消发生在提交之后时撤下旧显示并要求重新载入。AI 笔记保存既检查点击时来源，也在实际本地事务中读取实时上下文/解析摘要及事务的可见版本，避免排队期间变更被旧快照漏过。笔记记录来源摘要后按既有 note 协议同步，未明确存入同步会话的本机记录与解析缓存仍独立保存。见 [操作与边界](parsed-ai.md)。
+
+## 外部增量与受控远程任务
+
+Zotero 增量仅请求固定官方 API，分页、删除列表和最终版本须一致；每轮最多 500 个键、4 MiB、24 次请求与 30 秒。预览后采用，在一个账号事务中复核旧游标和计划，再提交映射、题录、outbox 与新游标；来源删除仅提示。映射／游标留在本设备，密钥按账号／服务／来源隔离，不随题录同步。
+
+`/v1/remote-tasks` 默认关闭，管理员显式启用后开放同账号 provider、任务、租约、状态、取消、恢复、产物和清理路由；DTO 位于 `packages/sync-core/src/remoteTasks.ts`。迁移 005–008 增加持久队列、RLS、幂等回执、租约 fence 和最近执行日志持有方。移动端先原子保存请求身份与载荷再 POST；结果不明只允许显式重放原请求。
+
+桌面须每次启动后明确开启，私有配置与凭据代次不公开。实际读取固定映射的 PDF 并重验 hash／字节数；每次付费请求之前持久保存执行阶段。重登录换绑须核对本机旧日志，再用当前有效租约确认接管。提交结果不明保留记录且不重发；已知 MinerU batch 只恢复查询／下载，向量按已确认批次复用。结果绑定原版本，解析包进入独立缓存，索引提供真实文件导出；M4 检索尚未接入。完整预算及清理范围见 [完整文库](m3-full-library.md)。
+
+桌面笔记导出使用独立 `desktopRichNoteArchive` 纯模块包，从已保存 NoteStore 只读捕获；文件选择返回后再次核验源指纹，通过受控文件适配器写出 v2。仅纳入能核验的资源，整条跳过的原因写入报告；不修改旧笔记或账号身份映射。
 
 ## 官方依据
 
@@ -89,3 +142,6 @@ AI 请求由用户选择的设备直连或受控网关执行，必须有实际�
 - [PostgreSQL 行锁](https://www.postgresql.org/docs/current/explicit-locking.html)：事务与账号内提交序列。
 - [Fastify Schema 验证](https://fastify.dev/docs/latest/Reference/Validation-and-Serialization/)：服务端固定 schema 与输入输出限制。
 - [PDF.js 加载参数](https://mozilla.github.io/pdf.js/api/draft/module-pdfjsLib.html)：Range、自动预取与 streaming 边界。
+
+
+2026-10-29 系统分享采用 Native 本机 inbox → 首次读取认领账号 → 生产本地格式校验 → 明确查询/预览 → Workspace 原子导入与回执。原文不自动进入同步；owner 使用稳定服务/账号键的 SHA-256，回执仅存在本机账号存储。完整契约与损坏/容量/重复语义见 [系统分享设计](incoming-share.md)。

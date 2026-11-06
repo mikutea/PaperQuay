@@ -31,6 +31,7 @@ import type { LiteraturePaper } from '../../types/library';
 import type { Note, NoteAnchor } from '../../types/notes';
 import { cn } from '../../utils/cn';
 import { NoteEditor } from './NoteEditor';
+import { RichNoteExportButton } from './RichNoteExportButton';
 import {
   copyTextToClipboard,
   NotesContextMenu,
@@ -1196,6 +1197,7 @@ export function NotesWorkspace() {
                 </div>
               </div>
             </div>
+            <RichNoteExportButton noteId={activeNoteId} disabled={saving} />
             <button
               type="button"
               onClick={handleCreateNoteInCurrentFolder}

@@ -51,6 +51,7 @@ async function startup({ unavailable = false, recover = false, backendFailure = 
     './localPdfProtocol.cjs': { registerLocalPdfProtocolScheme() {}, registerLocalPdfProtocol() {} },
     './windowSaveBarrier.cjs': { createWindowSaveBarrier: () => ({ attach() {} }) },
     './rendererTrust.cjs': require('../electron/rendererTrust.cjs'),
+    './appWindowLifecycle.cjs': require('../electron/appWindowLifecycle.cjs'),
   };
   vm.runInNewContext(source, {
     require(name) { assert.ok(name in dependencies, name); return dependencies[name]; },

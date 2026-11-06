@@ -1,0 +1,13 @@
+.ai-sync-panel { margin-top: 1.2rem; padding: 1rem; border: 1px solid var(--line, #d9e2df); border-radius: 12px; min-width: 0; }
+.ai-sync-panel > summary { cursor: pointer; font-weight: 650; overflow-wrap: anywhere; }
+.ai-sync-panel > summary span { display: block; font-size: .82rem; font-weight: 400; margin-top: .3rem; }
+.ai-sync-panel h3 { margin: 1.2rem 0 .65rem; font-size: 1rem; }
+.ai-sync-list { list-style: none; padding: 0; margin: .65rem 0; display: grid; gap: .65rem; }
+.ai-sync-list > li { border-bottom: 1px solid var(--line, #d9e2df); padding: .65rem 0; display: grid; gap: .3rem; min-width: 0; }
+.ai-sync-actions { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; margin: .7rem 0; }
+.ai-sync-actions button, .ai-sync-list button { max-width: 100%; white-space: normal; overflow-wrap: anywhere; text-align: start; }
+.ai-sync-detail { min-width: 0; padding: .8rem; border-radius: 8px; background: var(--surface-soft, #edf3f0); }
+.ai-sync-detail pre { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; max-height: 25rem; overflow: auto; font: inherit; }
+.ai-sync-detail article { padding: .7rem 0; border-bottom: 1px solid var(--line, #d9e2df); }
+.ai-sync-template { display: grid; gap: .5rem; padding: .8rem; min-width: 0; border: 1px solid var(--line, #d9e2df); }
+.ai-sync-template input, .ai-sync-template select, .ai-sync-template textarea { width: 100%; min-width: 0; max-width: 100%; }

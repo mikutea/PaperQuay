@@ -1,0 +1,17 @@
+import assert from 'node:assert/strict';
+import path from 'node:path';
+import {pathToFileURL} from 'node:url';
+import {createRequire} from 'node:module';
+import {randomUUID} from 'node:crypto';
+const root=path.resolve(process.argv[2]??''),load=createRequire(path.join(root,'package.json'));
+const core=load('./electron/generated/desktopSyncCore.cjs');
+for(const name of ['prepareModelInferenceRequest','validateModelInferenceRequest','validateModelInferenceClaim','validateModelInferenceStatus','validateModelInferenceProfile','validateModelInferenceCapability','prepareModelInferenceOutput','parseModelInferenceJson'])assert.equal(typeof core[name],'function',name);
+for(const [file,name]of [['desktopModels.cjs','createDesktopModels'],['computerModelWorker.cjs','createComputerModelWorker'],['modelInferenceStorage.cjs','createModelJournal'],['modelBackupExport.cjs','createModelBackupExporter']])assert.equal(typeof load('./electron/backend/'+file)[name],'function',file);
+const {createModelInferenceAdapter}=await import(pathToFileURL(path.join(root,'packages/model-inference/index.mjs')).href);
+let calls=0;
+const request=await core.prepareModelInferenceRequest({id:randomUUID(),target:{kind:'computer',deviceId:randomUUID()},profileRef:{id:'chat-default',revision:1,digest:'a'.repeat(64)},model:'package-fixture',messages:[{role:'user',content:'Synthetic package evidence'}],maxOutputTokens:64});
+const adapter=createModelInferenceAdapter({validateRequest:core.validateModelInferenceRequest,prepareOutput:core.prepareModelInferenceOutput,parseJson:core.parseModelInferenceJson,fetch:async(url,init)=>{calls++;assert.equal(String(url),'https://model.package.fixture/v1/chat/completions');assert.equal(init.redirect,'error');return new Response(JSON.stringify({choices:[{index:0,message:{role:'assistant',content:'Package result synthetic-package-key'},finish_reason:'stop'}]}),{headers:{'content-type':'application/json'}});}});
+assert.equal(calls,0);
+const output=await adapter.execute({request,config:{endpoint:'https://model.package.fixture/v1',model:'package-fixture',apiKey:'synthetic-package-key',requiresKey:true,tokenParameter:'max_tokens',maxOutputTokens:64},authorize:async()=>true});
+assert.equal(calls,1);assert.equal(output.redacted,true);assert(!output.text.includes('synthetic-package-key'));assert.equal((await core.validateModelInferenceOutput(output)).digest,output.digest);
+console.log('Packaged independent model protocol, private adapter, desktop coordinator and native backup modules passed with one synthetic request and no network.');

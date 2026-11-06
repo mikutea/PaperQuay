@@ -1,0 +1,4 @@
+import type {KnowledgeGraphRequest,KnowledgeGraphSnapshot,KnowledgeGraphNode} from './types.ts';
+export type * from './types.ts';
+export interface GraphContext {store:{load():{papers:any[];categories:any[]};loadAllReferences?():any[]};noteStore:{listAllNotes():any[]};ragStore?:{available?:boolean;listDocumentSimilarities?(request:unknown):any[]};appPaths?:unknown}
+export function createKnowledgeGraphCore(options?:{cleanString?:(v:unknown)=>string;listCustomRelations?:(paths:unknown)=>any[]}):{createKnowledgeGraphSnapshot(context:GraphContext,request?:KnowledgeGraphRequest):KnowledgeGraphSnapshot;filterLocalGraph(snapshot:KnowledgeGraphSnapshot,nodeId:string,depth:number):KnowledgeGraphSnapshot;matchesSearch(node:KnowledgeGraphNode,query:string):boolean;extractPaperReferenceCandidates(paper:unknown):any[];[key:string]:any};

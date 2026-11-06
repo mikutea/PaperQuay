@@ -5,9 +5,11 @@ import { dirname, resolve } from 'node:path';
 // production Keycloak: its direct-grant client exists solely for integration tests.
 const output = process.argv[2];
 const password = process.env.PAPERQUAY_TEST_PASSWORD;
+const realmName = process.env.PAPERQUAY_TEST_REALM || 'paperquay-local';
 if (!output || !password || password.length < 16) {
   throw new Error('Provide an output path and a generated PAPERQUAY_TEST_PASSWORD (at least 16 characters).');
 }
+if (!/^paperquay-[a-z0-9-]{1,48}$/.test(realmName)) throw new Error('Use a named disposable PaperQuay test realm.');
 const audience = {
   name: 'paperquay-sync-audience',
   protocol: 'openid-connect',
@@ -16,7 +18,7 @@ const audience = {
   config: { 'included.custom.audience': 'paperquay-sync', 'id.token.claim': 'false', 'access.token.claim': 'true' },
 };
 const realm = {
-  realm: 'paperquay-local', enabled: true, displayName: 'PaperQuay 本机测试',
+  realm: realmName, enabled: true, displayName: 'PaperQuay 本机测试',
   registrationAllowed: false, resetPasswordAllowed: false, sslRequired: 'external',
   accessTokenLifespan: 300,
   clients: [
@@ -30,6 +32,16 @@ const realm = {
         'pkce.code.challenge.method': 'S256',
         'post.logout.redirect.uris': 'http://127.0.0.1:4317/##http://127.0.0.1:4318/',
       },
+      protocolMappers: [audience],
+    },
+    {
+      clientId: 'paperquay-desktop', name: 'PaperQuay desktop development', enabled: true,
+      protocol: 'openid-connect', publicClient: true, standardFlowEnabled: true,
+      directAccessGrantsEnabled: false, implicitFlowEnabled: false,
+      // Keycloak matches HTTP loopback callbacks against port 80, permitting an
+      // ephemeral listener while retaining an exact host and callback path.
+      redirectUris: ['http://127.0.0.1/paperquay-oidc/callback'],
+      webOrigins: [], attributes: { 'pkce.code.challenge.method': 'S256' },
       protocolMappers: [audience],
     },
     {

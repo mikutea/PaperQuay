@@ -1,7 +1,10 @@
+import {validateGraphRelationData} from './graphRelation.ts';
 import { ENTITY_TYPES } from './types.ts';
 import type { EntityDataMap, EntityType, PullResponse, PushRequest, PushResponse, PushResult, SyncOperation, SyncRecord, ValidationIssue, ValidationResult } from './types.ts';
 import { ENTITY_DATA_SCHEMAS, PULL_RESPONSE_SCHEMA, PUSH_REQUEST_SCHEMA, PUSH_RESPONSE_SCHEMA, PUSH_RESULT_SCHEMA, SYNC_LIMITS, SYNC_OPERATION_SCHEMA, SYNC_RECORD_SCHEMA } from './schema.ts';
 import type { JsonSchema } from './schema.ts';
+import {validateRichNoteData} from './richNote.ts';
+import {validateAiConversation,validateAiTemplate} from '../../ai-core/src/conversation.ts';
 
 export function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -107,25 +110,37 @@ function checkPositionOrder(type: EntityType, data: unknown): ValidationIssue[] 
   return [];
 }
 
+/** Semantic contracts are required in addition to the transport envelope. */
+function checkEntityContent(type:EntityType,data:unknown):ValidationIssue[]{
+  if(data===null)return[];
+  try{
+    if(type==='note'&&isPlainObject(data)&&data.format==='tiptap-json')validateRichNoteData(data);
+    else if(type==='aiConversation')validateAiConversation(data);
+    else if(type==='aiTemplate')validateAiTemplate(data);
+    else if(type==='graphRelation')validateGraphRelationData(data);
+  }catch{return[{path:'$',code:type==='graphRelation'?'INVALID_GRAPH_RELATION':type==='note'?'INVALID_RICH_NOTE':type==='aiConversation'?'INVALID_AI_CONVERSATION':'INVALID_AI_TEMPLATE'}];}
+  return checkPositionOrder(type,data);
+}
+
 export function validateEntityData<T extends EntityType>(type: T, value: unknown): ValidationResult<EntityDataMap[T]> {
   if (!ENTITY_TYPES.includes(type)) return { ok: false, issues: [{ path: '$', code: 'INVALID_ENTITY_TYPE' }] };
   const result = validateJsonSchema<EntityDataMap[T]>(ENTITY_DATA_SCHEMAS[type], value);
   if (!result.ok) return result;
-  const issues = checkPositionOrder(type, value);
+  const issues = checkEntityContent(type, value);
   return issues.length ? { ok: false, issues } : result;
 }
 
 export function validateOperation(value: unknown): ValidationResult<SyncOperation> {
   const result = validateJsonSchema<SyncOperation>(SYNC_OPERATION_SCHEMA, value);
   if (!result.ok) return result;
-  const issues = checkPositionOrder(result.value.entityType, result.value.data);
+  const issues = checkEntityContent(result.value.entityType, result.value.data);
   return issues.length ? { ok: false, issues } : result;
 }
 
 export function validateRecord(value: unknown): ValidationResult<SyncRecord> {
   const result = validateJsonSchema<SyncRecord>(SYNC_RECORD_SCHEMA, value);
   if (!result.ok) return result;
-  const issues = checkPositionOrder(result.value.entityType, result.value.data);
+  const issues = checkEntityContent(result.value.entityType, result.value.data);
   return issues.length ? { ok: false, issues } : result;
 }
 
