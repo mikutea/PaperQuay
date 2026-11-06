@@ -15,11 +15,21 @@ The binaries are not code-signed. Windows SmartScreen may show an unrecognized-a
 
 Linux x64 packages and macOS Intel/Apple Silicon disk images are also provided. This is a prerelease, not a stable-release or live-upgrade guarantee.
 
-## Known limitation
+## Validation and deployment
 
-The startup database-path P2 reported in [#26](https://github.com/mikutea/PaperQuay/pull/26#discussion_r4214657505) remains unfixed in this prerelease. If another party can modify an adopted library while it is being opened, the SQLite path can be redirected outside that library. Use only library/profile directories that you control and that untrusted users cannot modify; accepting a library does not remove this risk.
+These downloads are desktop prerelease packages. Native mobile distribution requires deployment-specific HTTPS callbacks, platform signing and OS association checks; device and external-provider acceptance remain separate requirements. Connection settings and signing material are supplied outside the repository.
 
-## Changes since app-v0.1.26-mikutea.14
+The startup database-path P2 from [#26](https://github.com/mikutea/PaperQuay/pull/26#discussion_r4214657505) is fixed by [#42](https://github.com/mikutea/PaperQuay/pull/42): SQLite connections and WAL/SHM/journal operations retain a no-follow directory capability, and registered library roots preserve their approved paths through startup. The fix passed 1,560 tests, all eight CI jobs, code/security reviews, and isolated Electron/ASAR persistence checks.
+
+## Changes since app-v0.1.26-mikutea.15
+
+- Adds opt-in account connections and explicit preview/confirm flows for selected metadata, rich notes, graph evidence, verified file exchange and reading positions, with local drafts, conflict decisions and transaction receipts ([#34](https://github.com/mikutea/PaperQuay/pull/34), [#36](https://github.com/mikutea/PaperQuay/pull/36)).
+- Adds responsive mobile reading, notes and literature workflows, plus Android/iOS projects with independently configured HTTPS OAuth callbacks. Production native clients stay disabled until deployment verification is complete ([#41](https://github.com/mikutea/PaperQuay/pull/41)).
+- Integrates multi-paper question answering, review drafts, literature radar, graph evidence, controlled computer parsing/indexing and approval-based Agent/model steps with durable request records ([#36](https://github.com/mikutea/PaperQuay/pull/36)).
+- Adds container packaging, controlled schema migration, encrypted backup/restore checks, account privacy operations and platform-link configuration tooling. Published examples contain synthetic values ([#38](https://github.com/mikutea/PaperQuay/pull/38), [#39](https://github.com/mikutea/PaperQuay/pull/39), [#40](https://github.com/mikutea/PaperQuay/pull/40)).
+- Fixes the adopted-library SQLite startup path boundary, including ancestor replacement and in-place Windows reparse changes, and tests WAL concurrency, process locks and reopen persistence ([#42](https://github.com/mikutea/PaperQuay/pull/42)).
+
+## Changes already included in .15 (relative to .14)
 
 - Adds a configurable literature radar with Crossref/OpenAlex discovery, a deduplicated candidate inbox, explicit metadata import, and local PDF attachment ([#32](https://github.com/mikutea/PaperQuay/pull/32)).
 - Adds one reading queue for new and existing library papers, with explainable keyword/recency ranking and persistent Pin, Later and manually selected Read states. Queue choices stay separate from PDF position and reading heatmaps.
@@ -42,7 +52,7 @@ The startup database-path P2 reported in [#26](https://github.com/mikutea/PaperQ
 - Adds system-theme following and startup update preferences; pending Reader and application settings are preserved during Zotero import ([#26](https://github.com/mikutea/PaperQuay/pull/26)).
 - Improves the notes workspace with complete collection loading, debounced autosave, layout fixes, and source-bound image access ([#26](https://github.com/mikutea/PaperQuay/pull/26)).
 - Keeps WebDAV collection roots canonical while retaining local path aliases, and makes notes/RAG database restoration transactional with pinned source checks ([#26](https://github.com/mikutea/PaperQuay/pull/26)).
-- Tightens native file read/write/delete and directory-listing authorization, migration inputs, renderer navigation, and MinerU PDF upload boundaries. These fixes do not resolve the startup limitation above ([#26](https://github.com/mikutea/PaperQuay/pull/26)).
+- Tightens native file read/write/delete and directory-listing authorization, migration inputs, renderer navigation, and MinerU PDF upload boundaries. The startup path issue was subsequently fixed in .16 ([#26](https://github.com/mikutea/PaperQuay/pull/26), [#42](https://github.com/mikutea/PaperQuay/pull/42)).
 
 ## Earlier changes in app-v0.1.26-mikutea.12 (since .11)
 
@@ -81,10 +91,6 @@ Local figure assets still depend on their original directory. Older manual-impor
 - Resolves actionable review findings on fork PRs #1, #4, #5, and #6: batches cover more than 1,000 papers, automatic jobs stop on limits and outages, overview preemption resumes translation, and concurrent translation cannot overwrite a paper's cache.
 - Checks this fork's complete prereleases in-app; NSIS installers use the selected release's update manifest, while portable builds remain manual and start through the sandbox-ACL launcher.
 
-The local MiyuoAPI/LM Studio router and its Windows watchdog are personal device configuration, not bundled in the PaperQuay installers. Both TranslateGemma and Nemotron embedding are loaded on demand through the router, switched mutually exclusively, and given a 300-second idle unload TTL.
-
-Personal device-to-device library synchronization is intentionally not an application feature and is not included in these binaries.
-
 ## Verification
 
 - PR #28 completed code review and validation, but its security review did not start and was waived for that merge by explicit maintainer authorization. This is not a completed security review.
@@ -116,11 +122,21 @@ Windows x64 构建：
 
 同时提供 Linux x64 安装包，以及 macOS Intel／Apple Silicon 磁盘映像。这是预发布版本，不代表稳定版或真实设备升级已经验收。
 
-## 已知限制
+## 验证与部署
 
-[#26](https://github.com/mikutea/PaperQuay/pull/26#discussion_r4214657505) 中的启动数据库路径 P2 在此预发布中仍未修复。若其他人能在已有文库打开期间修改其目录，SQLite 路径可能被重定向到文库之外。请仅使用由你控制、且不可信用户无法修改的文库／配置目录；同意接入文库并不能消除这一风险。
+此处下载项是桌面预发布包。原生移动端分发需要部署方完成 HTTPS 回调、平台签名和 OS 域名关联检查；实机与外部提供方验收仍单独执行。连接设置和签名材料由部署方在仓库外提供。
 
-## 相比 app-v0.1.26-mikutea.14 的更新
+[#26](https://github.com/mikutea/PaperQuay/pull/26#discussion_r4214657505) 中的启动数据库路径 P2 已由 [#42](https://github.com/mikutea/PaperQuay/pull/42) 修复：SQLite 连接与 WAL／SHM／日志操作保留 no-follow 目录能力，已注册文库在启动期间保持批准的路径。修复通过 1,560 项测试、全部八项 CI、代码／安全审查和隔离 Electron／ASAR 持久化验证。
+
+## 相比 app-v0.1.26-mikutea.15 的更新
+
+- 新增可选账号连接，为所选题录、富文本笔记、图谱证据、已验证文件交换和阅读位置提供预览／确认流程，保留本地草稿、冲突决定及事务回执（[#34](https://github.com/mikutea/PaperQuay/pull/34)、[#36](https://github.com/mikutea/PaperQuay/pull/36)）。
+- 新增适应移动屏幕的阅读、笔记和文库流程，以及独立配置 HTTPS OAuth 回调的 Android／iOS 工程；生产原生客户端在部署验收完成后再明确启用（[#41](https://github.com/mikutea/PaperQuay/pull/41)）。
+- 集成多篇问答、综述草稿、文献雷达、图谱证据、受控电脑解析／索引和逐项审批的 Agent／模型步骤，并保留持久请求记录（[#36](https://github.com/mikutea/PaperQuay/pull/36)）。
+- 新增容器打包、受控数据库迁移、加密备份／恢复检查、账号隐私操作和平台关联配置工具；公开示例使用合成值（[#38](https://github.com/mikutea/PaperQuay/pull/38)、[#39](https://github.com/mikutea/PaperQuay/pull/39)、[#40](https://github.com/mikutea/PaperQuay/pull/40)）。
+- 修复已有文库启动时的 SQLite 路径边界，覆盖祖先目录替换与 Windows 原地重解析，并验证 WAL 并发、进程锁和重开持久化（[#42](https://github.com/mikutea/PaperQuay/pull/42)）。
+
+## .15 中已有的更新（相对 .14）
 
 - 新增通用文献雷达：通过 Crossref／OpenAlex 查新，将结果放入去重候选箱，再由用户选择题录入库和添加本地 PDF（[#32](https://github.com/mikutea/PaperQuay/pull/32)）。
 - 全库新旧论文进入统一阅读队列，支持可解释的关键词／新近程度排序、置顶、稍后和手动已读；队列状态与 PDF 阅读位置、热力图分别保存。
@@ -143,7 +159,7 @@ Windows x64 构建：
 - 新增跟随系统主题及启动更新检查选项；Zotero 导入期间保留尚未保存的阅读器与应用设置（[#26](https://github.com/mikutea/PaperQuay/pull/26)）。
 - 改善笔记工作区的完整集合加载、延迟自动保存、布局和绑定来源的图片访问（[#26](https://github.com/mikutea/PaperQuay/pull/26)）。
 - WebDAV 备份统一集合根路径并保留本地路径别名；笔记／RAG 数据库恢复采用事务处理及固定源检查（[#26](https://github.com/mikutea/PaperQuay/pull/26)）。
-- 收紧原生文件读取、写入、删除和目录列表授权，以及迁移输入、渲染器导航和 MinerU PDF 上传边界。这些修复不包含上述启动路径限制（[#26](https://github.com/mikutea/PaperQuay/pull/26)）。
+- 收紧原生文件读取、写入、删除和目录列表授权，以及迁移输入、渲染器导航和 MinerU PDF 上传边界。启动路径问题随后在 .16 中修复（[#26](https://github.com/mikutea/PaperQuay/pull/26)、[#42](https://github.com/mikutea/PaperQuay/pull/42)）。
 
 ## .12 中已有的更新（相对 .11）
 
@@ -181,10 +197,6 @@ Windows x64 构建：
 - 保留已验证的 Windows `--user-data-dir` 路径，避免误建空白嵌套文库。
 - 处理 fork 的 #1、#4、#5、#6 PR 中可执行的审查意见：全库任务覆盖超过 1000 篇论文，自动任务在限流或服务不可用时停止，手动概览抢占后恢复翻译，并避免同一论文并发翻译覆盖缓存。
 - 应用内检查本 fork 的完整预发布；NSIS 安装版使用对应发布的更新清单，免安装版通过沙箱权限启动脚本运行并采用手动更新。
-
-本机 MiyuoAPI／LM Studio 路由及 Windows 看护任务属于个人设备配置，不包含在 PaperQuay 安装包中。TranslateGemma 与 Nemotron embedding 均由路由按需装载、互斥切换，空闲 300 秒后卸载。
-
-两台个人设备之间的文献同步明确不是应用功能，也不包含在本软件二进制中。
 
 ## 验证
 
