@@ -130,12 +130,15 @@ for(let i=0;i<count;i++) {const r=await fetch('http://web:8080/api/v1/capabiliti
  statuses.push(r.status);await r.arrayBuffer();}
 console.log(JSON.stringify(statuses));
 """
-            def direct(count):
+            def direct(count, host):
                 return json.loads(ops.capture(['docker', 'run', '--rm', '--network', project + '_application',
+                    '--ip', network + str(host),
                     '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges:true', '--memory', '128m',
                     '--read-only', images['sync'], 'node', '--input-type=module', '-e', client, str(count)]))
 
-            ops.require(direct(122) == [200] * 120 + [429, 429] and direct(1) == [200], 'PROXY_SPOOF_GUARD_FAILED')
+            # Docker can reuse the first released dynamic IP immediately; use
+            # two explicit peers so this actually tests two distinct clients.
+            ops.require(direct(122, 10) == [200] * 120 + [429, 429] and direct(1, 11) == [200], 'PROXY_SPOOF_GUARD_FAILED')
             identity, _ = stack.container('identity')
             phase = 'identity_health'
             wait_for(lambda: '"status": "UP"' in ops.capture(['docker', 'exec', identity, 'bash', '-c',
