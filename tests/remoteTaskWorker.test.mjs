@@ -189,7 +189,8 @@ test('completion response loss keeps a canonical artifact and explicit resumed w
 test('credential/account generation change aborts an actual pending request and sends nothing under the new binding', async (t) => {
   const f = await workerFixture(t, { core: (await import('./remoteTaskFixtures.mjs')).core }); const started = gate(), closed = gate();
   const upstream = await server(t, (_request, response) => { response.once('close', () => closed.resolve()); started.resolve(); });
-  const worker = f.factory({ execute: async ({ signal }) => Buffer.from(await (await fetch(upstream.base, { signal })).arrayBuffer()) });
+  const worker = f.factory({ execute: async ({ signal }) => Buffer.from(await (await fetch(upstream.base, { signal })).arrayBuffer()) },
+    {timings:{pollMs:5,presenceMs:29000,heartbeatMs:5,guardMs:30000}});
   t.after(() => worker.stop()); await worker.start({ manual: true }); const active = worker.runOnce(); await started.promise;
   const before = f.requests.length; f.snapshot.generation.credentials++; f.snapshot.generation.account++;
   await closed.promise; const result = await active; assert.equal(result.state, 'interrupted'); assert.equal(worker.snapshot().running, false);

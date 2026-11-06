@@ -5,8 +5,24 @@ import { parseAppConfig, NATIVE_REDIRECT_URI } from '../src/config.ts';
 import { NativeOidcSession, nativeAuthNamespace, nativeCallback, type NativeAuthBridge } from '../src/auth/nativeOidc.ts';
 import { SecureOidcStateStore } from '../src/auth/secureStateStore.ts';
 import { MemorySecretStore } from '../src/platform/secretStore.ts';
+import {ClientError} from '../src/errors.ts';
 
 const config = parseAppConfig({ apiBaseUrl: 'https://sync.example.test', oidcAuthority: 'https://id.example.test/realms/paperquay', oidcClientId: 'paperquay-mobile' }, 'capacitor://localhost', true);
+
+test('failed secure session deletion preserves a retryable identity and cannot acknowledge before credentials are removed',async t=>{
+  class FaultStore extends MemorySecretStore {
+    fail=false;
+    override async remove(namespace:string,key:string){if(this.fail&&key==='session')throw new ClientError('STORAGE_FAILED');await super.remove(namespace,key);}
+  }
+  const secrets=new FaultStore(),f=fixture(t,secrets);await f.session.initialize();await f.session.signIn();await f.session.completeSignIn(f.callback());
+  const who=f.session.getSubject(),token=await f.session.getAccessToken(),namespace=nativeAuthNamespace(config);let confirmations=0;
+  const afterPersisted=async(value:string|null)=>{assert.equal(await secrets.get(namespace,'session'),null);assert.equal(value,token);confirmations++;};
+  secrets.fail=true;await assert.rejects(f.session.clearLocalSession({afterPersisted}),{code:'STORAGE_FAILED'});
+  assert.equal(confirmations,0);assert.deepEqual(f.session.getSubject(),who);assert.equal(f.session.getSnapshot().status,'signed-in');
+  assert(await secrets.get(namespace,'session'));await assert.rejects(f.session.getAccessToken(),{code:'AUTH_REQUIRED'});
+  secrets.fail=false;await f.session.clearLocalSession({afterPersisted});assert.equal(confirmations,1);
+  assert.equal(f.session.getSubject(),null);assert.equal(f.session.getSnapshot().status,'signed-out');
+});
 function deferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
   const promise = new Promise<T>((done) => { resolve = done; });

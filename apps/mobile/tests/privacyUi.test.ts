@@ -3,10 +3,12 @@ import test from 'node:test';
 import {createElement} from 'react';
 import {act,create,type ReactTestRenderer,type ReactTestInstance} from 'react-test-renderer';
 import {InMemoryWebStorage} from 'oidc-client-ts';
-import {AccountPrivacy} from '../src/components/AccountPrivacy.tsx';
+import {AccountPrivacy,PrivacyHost} from '../src/components/AccountPrivacy.tsx';
 import {PrivacyError,type AccountPrivacyStatus,type ClosureRequest} from '../src/privacy/client.ts';
 import type {PrivacyRuntime} from '../src/privacy/runtime.ts';
 import type {AuthSession} from '../src/auth/oidc.ts';
+import type {WorkspaceController,WorkspaceSnapshot} from '../src/sync/workspace.ts';
+import {ClientError} from '../src/errors.ts';
 
 const accountId='11111111-1111-4111-8111-111111111111';
 const active:AccountPrivacyStatus={accountId,state:'active',closedAt:null,closureRequestId:null,
@@ -45,5 +47,30 @@ test('privacy confirmation separates cloud/local/device scope and retains one ex
     lose=false;await act(async()=>button(renderer.root,'重试同一注销请求').props.onClick());
     assert.equal(calls.length,2);assert.equal(calls[1].requestId,requestId);assert.deepEqual(calls[1],calls[0]);assert.equal(erased,0);
     assert(renderer.root.findAllByType('h2').some(node=>text(node)==='设备清理状态'));
+  }finally{await act(async()=>renderer.unmount());}
+});
+
+test('an automatically opened privacy dialog survives controller deactivation and keeps failed erasure retry controls',async t=>{
+  const old=Object.getOwnPropertyDescriptor(globalThis,'localStorage'),memory=new InMemoryWebStorage();
+  Object.defineProperty(globalThis,'localStorage',{configurable:true,value:{getItem:(key:string)=>memory.getItem(key)??null,setItem:(key:string,value:string)=>memory.setItem(key,value),removeItem:(key:string)=>memory.removeItem(key)}});
+  t.after(()=>{if(old)Object.defineProperty(globalThis,'localStorage',old);else Reflect.deleteProperty(globalThis,'localStorage');});
+  const workspaceListeners=new Set<()=>void>(),authListeners=new Set<()=>void>();
+  let workspace={error:null} as WorkspaceSnapshot,login={status:'signed-in' as 'signed-in'|'signed-out'},attempts=0;
+  const controller={subscribe:(fn:()=>void)=>{workspaceListeners.add(fn);return ()=>workspaceListeners.delete(fn);},getSnapshot:()=>workspace} as unknown as WorkspaceController;
+  const auth={subscribe:(fn:()=>void)=>{authListeners.add(fn);return ()=>authListeners.delete(fn);},getSnapshot:()=>login,
+    getSubject:()=>login.status==='signed-in'?{issuer:'https://id.example.test',subject:'synthetic-owner'}:null} as unknown as AuthSession;
+  const privacy={client:{captureIdentity:()=>()=>login.status==='signed-in',status:async()=>({...active,state:'closed',closedAt:'2026-11-06T00:00:00.000Z',
+    closureRequestId:'22222222-2222-4222-8222-222222222222',deviceErasure:{requested:true,pending:1,acknowledged:0,thisDevicePending:true}})},
+    erase:async()=>{attempts++;workspace={...workspace,error:null};workspaceListeners.forEach(fn=>fn());
+      if(attempts===1)throw Error('Synthetic cache removal failure');login={status:'signed-out'};authListeners.forEach(fn=>fn());}} as unknown as PrivacyRuntime;
+  let renderer!:ReactTestRenderer;
+  await act(async()=>{renderer=create(createElement(PrivacyHost,{privacy,auth,controller,apiBaseUrl:'https://sync.example.test',open:false,onClose:()=>undefined}));});
+  try {
+    await act(async()=>{workspace={...workspace,error:new ClientError('ACCOUNT_CLOSED')};workspaceListeners.forEach(fn=>fn());});
+    assert.equal(attempts,1);assert.equal(renderer.root.findAllByType('dialog').length,1);
+    assert(renderer.root.findAllByProps({role:'alert'}).some(node=>text(node).includes('操作未完成')));
+    await act(async()=>checkbox(renderer.root,'清理本机此账号的副本与凭据').props.onChange({target:{checked:true}}));
+    await act(async()=>button(renderer.root,'清理本机并完成确认').props.onClick());assert.equal(attempts,2);
+    assert.equal(renderer.root.findAllByType('dialog').length,0);
   }finally{await act(async()=>renderer.unmount());}
 });

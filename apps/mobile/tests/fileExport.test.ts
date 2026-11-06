@@ -1,3 +1,6 @@
+const exportScope={apiBaseUrl:'https://sync.example.test',accountId:'11111111-1111-4111-8111-111111111111'};
+const exportRoot='paperquay-exports/'+createHash('sha256').update(JSON.stringify([exportScope.apiBaseUrl,exportScope.accountId])).digest('hex');
+import {createHash} from 'node:crypto';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { exportFilename, exportTextFile, FileExportError, type ExportRuntime } from '../src/platform/exportFile.ts';
@@ -18,15 +21,15 @@ function fixture(overrides: Partial<ExportRuntime> = {}) {
 
 test('web export hands the exact Markdown to a file download', async () => {
   const { platform, calls } = fixture({ native: false });
-  assert.equal(await exportTextFile(file, () => true, platform), 'download');
+  assert.equal(await exportTextFile(file, () => true, platform,exportScope), 'download');
   assert.deepEqual(calls, [{ action: 'download', value: file }]);
 });
 test('native export shares only its generated cache URI and retains the receiver input', async () => {
   const { platform, calls } = fixture();
-  assert.equal(await exportTextFile(file, () => true, platform), 'share');
+  assert.equal(await exportTextFile(file, () => true, platform,exportScope), 'share');
   assert.deepEqual(calls, [
-    { action: 'write', value: { path: 'paperquay-exports/unique-export/我的笔记.md', text: file.text } },
-    { action: 'share', value: 'file:///cache/paperquay-exports/unique-export/我的笔记.md' },
+    { action: 'write', value: { path: exportRoot+'/unique-export/我的笔记.md', text: file.text } },
+    { action: 'share', value: 'file:///cache/'+exportRoot+'/unique-export/我的笔记.md' },
   ]);
 });
 test('native bibliography exports retain their format extension and exact UTF-8 text', async () => {
@@ -35,11 +38,11 @@ test('native bibliography exports retain their format extension and exact UTF-8 
     ['ris', 'application/x-research-info-systems', 'TY  - GEN\r\nTI  - 居游共生\r\nER  - \r\n'],
   ] as const) {
     const { platform, calls } = fixture();
-    assert.equal(await exportTextFile({ name: `研究文库.${extension}`, text, mime }, () => true, platform), 'share');
+    assert.equal(await exportTextFile({ name: `研究文库.${extension}`, text, mime }, () => true, platform,exportScope), 'share');
     assert.deepEqual(calls[0], { action: 'write', value: {
-      path: `paperquay-exports/unique-export/研究文库.${extension}`, text,
+      path: `${exportRoot}/unique-export/研究文库.${extension}`, text,
     } });
-    assert.equal(calls[1].value, `file:///cache/paperquay-exports/unique-export/研究文库.${extension}`);
+    assert.equal(calls[1].value, `file:///cache/${exportRoot}/unique-export/研究文库.${extension}`);
   }
 });
 test('account change while preparing a native file deletes it without opening Share', async () => {
@@ -47,23 +50,23 @@ test('account change while preparing a native file deletes it without opening Sh
   const { platform, calls } = fixture();
   const write = platform.write;
   platform.write = async (...args) => { const uri = await write(...args); current = false; return uri; };
-  await assert.rejects(exportTextFile(file, () => current, platform), (error: unknown) =>
+  await assert.rejects(exportTextFile(file, () => current, platform,exportScope), (error: unknown) =>
     error instanceof FileExportError && error.code === 'CHANGED');
   assert.deepEqual(calls.map((call) => call.action), ['write', 'remove']);
 });
 test('unavailable sharing or a stale account creates no export file', async () => {
   for (const overrides of [{ available: () => false }, { canShare: async () => false }]) {
     const { platform, calls } = fixture(overrides);
-    await assert.rejects(exportTextFile(file, () => true, platform), FileExportError);
+    await assert.rejects(exportTextFile(file, () => true, platform,exportScope), FileExportError);
     assert.deepEqual(calls, []);
   }
   const { platform, calls } = fixture();
-  await assert.rejects(exportTextFile(file, () => false, platform), FileExportError);
+  await assert.rejects(exportTextFile(file, () => false, platform,exportScope), FileExportError);
   assert.deepEqual(calls, []);
 });
 test('native preparation failures expose no plugin error or private content', async () => {
   const { platform, calls } = fixture({ write: async () => { throw new Error(file.text); } });
-  await assert.rejects(exportTextFile(file, () => true, platform), (error: unknown) =>
+  await assert.rejects(exportTextFile(file, () => true, platform,exportScope), (error: unknown) =>
     error instanceof FileExportError && error.message === 'FAILED');
   assert.equal(calls.some((call) => call.action === 'share'), false);
 });

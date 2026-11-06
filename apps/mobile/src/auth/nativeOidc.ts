@@ -5,7 +5,7 @@ import { Log, OidcClient, User, type OidcClientSettings } from 'oidc-client-ts';
 import { NATIVE_LOGOUT_URI, NATIVE_REDIRECT_URI, type AppConfig } from '../config.ts';
 import { ClientError } from '../errors.ts';
 import { createSecretStore, type SecretStore } from '../platform/secretStore.ts';
-import type { AuthSession, AuthSnapshot, AuthSubject } from './oidc.ts';
+import type { AuthSession, AuthSnapshot, AuthSubject, ClearLocalSessionOptions } from './oidc.ts';
 import { SecureOidcStateStore, serializeSecret } from './secureStateStore.ts';
 
 export interface NativeAuthBridge {
@@ -314,14 +314,22 @@ export class NativeOidcSession implements AuthSession {
       throw new ClientError('AUTH_REQUIRED');
     }
   }
-  async clearLocalSession(): Promise<void> {
+  async clearLocalSession(options?:ClearLocalSessionOptions): Promise<void> {
+    const token=this.user?.access_token??null;
     const epoch = ++this.epoch;
     this.awaitingBrowser = false;
-    this.user = null;
     this.refresh = null;
-    this.blockedCredentials = false;
-    this.publish({ status: 'signed-out' });
-    await this.clearPersisted();
+    this.blockedCredentials = true;
+    try {
+      await this.clearPersisted();this.assertCurrent(epoch);
+      await options?.afterPersisted?.(token);this.assertCurrent(epoch);
+      this.user=null;this.blockedCredentials=false;
+      this.publish({status:'signed-out'});
+    } catch(error) {
+      if(this.current(epoch))this.publish({...this.snapshot,status:this.user?'signed-in':'error',needsLogin:true,
+        error:new ClientError('STORAGE_FAILED')});
+      throw error;
+    }
     if (this.current(epoch)) await this.options.bridge.close().catch(() => undefined);
   }
   async signOut(): Promise<void> {

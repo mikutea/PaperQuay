@@ -940,7 +940,7 @@ function ConnectedWorkspace({
       </Suspense>}
       {noteExportOpen && transferScope && <Suspense fallback={<p role="status">正在打开笔记导出…</p>}>
         <ReaderSheet open title="导出笔记、批注与引用" onClose={() => setNoteExportOpen(false)}>
-          <NoteExportPanel entities={entities} initialPaperId={readingId} scopeKey={transferScope}
+          <NoteExportPanel entities={entities} initialPaperId={readingId} scopeKey={transferScope} scope={scope??undefined}
             accountCurrent={() => JSON.stringify(auth.getSubject?.() ?? null) === authSubjectKey} />
         </ReaderSheet>
       </Suspense>}

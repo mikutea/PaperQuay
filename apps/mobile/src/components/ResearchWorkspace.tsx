@@ -100,7 +100,7 @@ export function ResearchWorkspace(props:Props){
   });}
   function download(){const result=session.getSnapshot().result;if(!result||result.status==='running')return;void run('正在导出结果与证据…',async task=>{
     const prepared=await prepare(task);if(prepared.digest!==result.context.digest)throw new ResearchError('CHANGED');
-    await exportTextFile({name:exportFilename('多篇问答','md'),mime:'text/markdown',text:researchResultMarkdown(result)},task.current);task.check();setNotice('已准备问答与实际证据文件。');
+    await exportTextFile({name:exportFilename('多篇问答','md'),mime:'text/markdown',text:researchResultMarkdown(result)},task.current,undefined,props.scope);task.check();setNotice('已准备问答与实际证据文件。');
   });}
   function adoptRemote(receipt:RemoteRetrievalChoice['receipt'],evidenceIds:string[]){
     if(!scopeCurrent())return;

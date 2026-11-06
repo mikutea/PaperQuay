@@ -41,7 +41,7 @@ export function KnowledgeGraphSheet(props:Props){
  async function download(){
   if(!current()||!result||flight.current)return;const captured=result;flight.current=true;setBusy(true);setError('');setNotice('');
   const guard=()=>{if(!current()||viewRef.current!==captured)return false;const workspace=latest.current.controller.getSnapshot().workspace;if(!workspace)return false;try{return buildMobileGraph(listVisibleEntities(workspace.sync),captured.selection,graphEvidenceView(workspace)).identity===captured.identity;}catch{return false;}};
-  try{const mode=await exportTextFile({name:exportFilename('PaperQuay-知识图谱','json'),text:exportGraph(captured),mime:'application/json'},guard,latest.current.exportRuntime);if(guard())setNotice(mode==='share'?'已打开系统分享。':'已交给浏览器下载。');}catch(e){if(current())setError(errorMessage(e));}finally{flight.current=false;if(mounted.current)setBusy(false);}
+  try{const mode=await exportTextFile({name:exportFilename('PaperQuay-知识图谱','json'),text:exportGraph(captured),mime:'application/json'},guard,latest.current.exportRuntime,props.controller.getAccountScope()??undefined);if(guard())setNotice(mode==='share'?'已打开系统分享。':'已交给浏览器下载。');}catch(e){if(current())setError(errorMessage(e));}finally{flight.current=false;if(mounted.current)setBusy(false);}
  }
  const shown=snapshot?.nodes.slice(0,page*GRAPH_LIMITS.page)??[];
  return <ReaderSheet open title="知识图谱" className="graph-sheet" onClose={()=>navigate(props.onClose)}><div className="mobile-graph">

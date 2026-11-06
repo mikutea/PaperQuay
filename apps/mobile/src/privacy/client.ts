@@ -79,8 +79,8 @@ export class AccountPrivacyClient {
     return {signal:controller.signal,check,checkOwner,wait:<T>(value:Promise<T>)=>abortable(value,controller.signal),
       release:()=>{clearTimeout(timer);signal.removeEventListener('abort',stop);this.active.delete(controller);controller.abort();}};
   }
-  private async response(path:string,operation:ReturnType<AccountPrivacyClient['operation']>,method='GET',body?:unknown) {
-    const token=await operation.wait(this.options.getAccessToken());operation.check();
+  private async response(path:string,operation:ReturnType<AccountPrivacyClient['operation']>,method='GET',body?:unknown,originalToken?:string) {
+    const token=originalToken??await operation.wait(this.options.getAccessToken());operation.check();
     if(typeof token!=='string'||!token||token.length>16384||/[\r\n]/.test(token))throw new PrivacyError('AUTH_REQUIRED');
     const pending=this.fetcher(this.base+path,{method,headers:{Authorization:'Bearer '+token,
       Accept:path.endsWith('/export')?'application/x-ndjson':'application/json',...(body===undefined?{}:{'Content-Type':'application/json'})},
@@ -90,10 +90,10 @@ export class AccountPrivacyClient {
     if(response.redirected||['opaque','opaqueredirect','error'].includes(response.type)||response.url&&response.url!==this.base+path){void response.body?.cancel().catch(()=>undefined);invalid();}
     return response;
   }
-  private async json(path:string,signal:AbortSignal,method='GET',body?:unknown):Promise<unknown> {
+  private async json(path:string,signal:AbortSignal,method='GET',body?:unknown,originalToken?:string):Promise<unknown> {
     const operation=this.operation(signal);let reader:ReadableStreamDefaultReader<Uint8Array>|undefined;
     try {
-      const response=await this.response(path,operation,method,body);
+      const response=await this.response(path,operation,method,body,originalToken);
       if(!response.body)invalid();reader=response.body.getReader();const parts:Uint8Array[]=[];let bytes=0;
       for(;;){const next=await operation.wait(reader.read());operation.check();if(next.done)break;bytes+=next.value.length;
         if(bytes>16384)invalid();parts.push(next.value);}
@@ -121,8 +121,8 @@ export class AccountPrivacyClient {
     const result=privacyStatus(await this.json('/v1/privacy/close',signal,'POST',request));
     if(result.accountId!==request.accountId||result.state!=='closed'||result.closureRequestId!==request.requestId)invalid();return result;
   }
-  async acknowledge(deviceId:string,signal:AbortSignal):Promise<void>{
-    if(!uuid(deviceId))invalid();const value=await this.json('/v1/privacy/erasure-ack',signal,'POST',{deviceId});
+  async acknowledge(deviceId:string,signal:AbortSignal,originalToken?:string):Promise<void>{
+    if(!uuid(deviceId))invalid();const value=await this.json('/v1/privacy/erasure-ack',signal,'POST',{deviceId},originalToken);
     if(!object(value)||value.acknowledged!==true)invalid();
   }
   async exportData(scope:AccountScope,sink:PersonalExportSink,signal:AbortSignal,progress?:(bytes:number)=>void) {

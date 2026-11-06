@@ -66,7 +66,10 @@ function createRemoteTaskWorker(options) {
     if (run.controller.signal.aborted || runtime !== run) fail('DESKTOP_OPERATION_CANCELLED');
     await options.check(run.snapshot);
     const current = snapshotValue(await options.capture());
-    if (JSON.stringify(current) !== JSON.stringify(run.snapshot)) fail('REMOTE_BINDING_CHANGED');
+    if (JSON.stringify(current) !== JSON.stringify(run.snapshot)) {
+      const error=Object.assign(new Error('REMOTE_BINDING_CHANGED'),{code:'REMOTE_BINDING_CHANGED'});
+      invalidate(run,error);throw error;
+    }
     if (run.controller.signal.aborted || runtime !== run) fail('DESKTOP_OPERATION_CANCELLED');
   }
   function pauseForRateLimit(run, error) {

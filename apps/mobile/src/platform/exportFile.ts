@@ -1,6 +1,8 @@
 import { Capacitor } from '@capacitor/core';
 import { Directory, Encoding, Filesystem } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
+import type {AccountScope} from '../storage/accountStore.ts';
+import {beginScopedExport,ScopedExportError} from './exportScope.ts';
 
 export class FileExportError extends Error {
   constructor(readonly code: 'UNAVAILABLE' | 'CHANGED' | 'FAILED') {
@@ -58,33 +60,38 @@ const runtime: ExportRuntime = {
 
 /** The guard is checked again after every preparation await, before opening external UI. */
 export async function exportTextFile(file: TextFileExport, current: () => boolean,
-  platform: ExportRuntime = runtime): Promise<'download' | 'share'> {
+  platform: ExportRuntime = runtime, scope?:AccountScope): Promise<'download' | 'share'> {
   const guard = () => { if (!current()) throw new FileExportError('CHANGED'); };
   guard();
   if (!platform.native) {
     platform.download(file); return 'download';
   }
   if (!platform.available()) throw new FileExportError('UNAVAILABLE');
+  let operation:ReturnType<typeof beginScopedExport>|undefined;
   let path: string | null = null;
   let opened = false;
   try {
+    operation=beginScopedExport(scope,current);
     if (!await platform.canShare()) throw new FileExportError('UNAVAILABLE');
-    guard();
+    guard();operation.check();
     const extension = ({ 'application/json': 'json', 'text/markdown': 'md',
       'application/x-bibtex': 'bib', 'application/x-research-info-systems': 'ris' } as const)[file.mime];
     const name = exportFilename(file.name.replace(/\.(json|md|bib|ris)$/i, ''), extension);
-    path = `paperquay-exports/${platform.id()}/${name}`;
+    const id=platform.id();if(!/^[A-Za-z0-9_-]{1,80}$/.test(id))throw new FileExportError('FAILED');
+    path = `${operation.directory}/${id}/${name}`;
     const uri = await platform.write(path, file.text);
-    guard();
+    guard();operation.check();operation.prepared();
     opened = true;
     await platform.share(uri);
     return 'share';
   } catch (error) {
+    if(error instanceof ScopedExportError)throw new FileExportError(error.code==='LEGACY_UNOWNED'?'FAILED':error.code);
     if (error instanceof FileExportError) throw error;
     throw new FileExportError('FAILED');
   } finally {
     // Share completion does not guarantee that the receiving app has read the file yet.
     // Once sharing is invoked, keep the file in OS-managed cache for the possible recipient.
     if (path && !opened) await platform.remove(path).catch(() => undefined);
+    operation?.release();
   }
 }

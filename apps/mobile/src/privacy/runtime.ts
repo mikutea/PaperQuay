@@ -4,18 +4,21 @@ import type {AccountStorage,AccountScope} from '../storage/accountStore.ts';
 import type {SecretStore} from '../platform/secretStore.ts';
 import type {StoredWorkspace,WorkspaceController} from '../sync/workspace.ts';
 import {verifiedBinding} from '../storage/verifiedBinding.ts';
+import type {AccountIdentity} from '../api.ts';
 import {AccountPrivacyClient,PrivacyError} from './client.ts';
 import type {AccountPrivacyStatus} from './client.ts';
 import {AccountSecretStore} from './secretRegistry.ts';
 import {eraseLocalAccount} from './lifecycle.ts';
 import {clearPrivateExportCache} from './saveExport.ts';
 import type {PersonalExportSink} from './exportStream.ts';
+import {clearScopedNativeExports} from '../platform/exportScope.ts';
 
 export function createPrivacyRuntime(config:AppConfig,auth:AuthSession,store:AccountStorage<StoredWorkspace>,
   secrets:SecretStore,controller:WorkspaceController) {
   const binding=verifiedBinding(config,secrets,auth.getSubject);
   const client=new AccountPrivacyClient({apiBaseUrl:config.apiBaseUrl,getAccessToken:auth.getAccessToken,
     getIdentityKey:binding.key,subscribeIdentity:auth.subscribe});
+  let erasureRecovery:{identity:AccountIdentity;requestId:string;current:()=>boolean}|null=null;
   const scopedSecrets=(scope:AccountScope)=>{
     if(normalizeServiceUrl(scope.apiBaseUrl)!==config.apiBaseUrl)throw new PrivacyError('INVALID');
     return new AccountSecretStore(secrets,scope,client.captureIdentity());
@@ -35,7 +38,17 @@ export function createPrivacyRuntime(config:AppConfig,auth:AuthSession,store:Acc
     },
     async erase(status:AccountPrivacyStatus,explicitLocalConsent=false) {
       const current=client.captureIdentity(),check=()=>{if(!current())throw new PrivacyError('CHANGED');};
-      await eraseLocalAccount(config.apiBaseUrl,status,current,{binding,store,stop:()=>controller.deactivate(),
+      const recoverableBinding={remove:binding.remove,async read(){
+        const verified=await binding.read();check();
+        if(verified){
+          if(verified.accountId===status.accountId&&status.closureRequestId)erasureRecovery={identity:structuredClone(verified),requestId:status.closureRequestId,current};
+          return verified;
+        }
+        const saved=erasureRecovery;
+        return saved&&saved.current()&&saved.requestId===status.closureRequestId&&saved.identity.accountId===status.accountId
+          ?structuredClone(saved.identity):null;
+      }};
+      await eraseLocalAccount(config.apiBaseUrl,status,current,{binding:recoverableBinding,store,stop:()=>controller.deactivate(),
         async clearSecrets(scope,workspace) {
           check();const [{LocalAiConfigStore,aiSecretNamespace,AI_SECRET_KEY},{zoteroSecretNamespace,ZOTERO_SECRET_KEY},{radarSecretNamespace}]=await Promise.all([
             import('../ai/provider.ts'),import('../library/zoteroClient.ts'),import('../radar/client.ts')]);
@@ -50,9 +63,11 @@ export function createPrivacyRuntime(config:AppConfig,auth:AuthSession,store:Acc
         clearPdf:async scope=>{const {clearPdfCache}=await import('../pdf/cache.ts');check();await clearPdfCache(scope,{includePinned:true});},
         clearParsed:async scope=>{const {getParsedCache}=await import('../parsed/cache.ts');check();await getParsedCache().clear(scope,{guard:current});},
         clearAi:async scope=>{const {getAiArchiveStore}=await import('../ai/archiveStore.ts');check();await getAiArchiveStore().clear(scope,{guard:current});},
-        clearExports:clearPrivateExportCache,
-        acknowledge:id=>client.acknowledge(id,new AbortController().signal),clearSession:()=>auth.clearLocalSession(),
+        clearExports:async scope=>{await clearScopedNativeExports(scope);check();await clearPrivateExportCache(scope);},
+        acknowledge:(id,token)=>{if(!token)throw new PrivacyError('AUTH_REQUIRED');return client.acknowledge(id,new AbortController().signal,token);},
+        clearSession:afterPersisted=>auth.clearLocalSession({afterPersisted}),
       },{explicitLocalConsent});
+      erasureRecovery=null;
     },
     dispose:()=>client.dispose(),
   };

@@ -6,8 +6,10 @@ import {ClosureIntentStore,PrivacyError,type AccountPrivacyStatus,type ClosureRe
 import type {AccountScope} from '../storage/accountStore.ts';
 import {openPersonalExportSink} from '../privacy/saveExport.ts';
 import {PrivacyExportError} from '../privacy/exportStream.ts';
+import {ScopedExportError} from '../platform/exportScope.ts';
 
 function message(error:unknown):string {
+  if(error instanceof ScopedExportError&&error.code==='LEGACY_UNOWNED')return '发现旧版无账号标记的导出副本，尚未确认清理。请联系维护者备份并逐份核对；不会猜测归属、删除其他账号文件或确认成功。';
   const code=error instanceof PrivacyError||error instanceof PrivacyExportError?error.code:'';
   if(code==='RECENT_AUTH_REQUIRED')return '请先重新验证登录，再显式重试同一注销请求。刷新令牌不会替代身份验证。';
   if(code==='AUTH_REQUIRED')return '登录已失效。请重新登录后查询账号状态。';
@@ -26,11 +28,14 @@ export function PrivacyHost({privacy,auth,controller,apiBaseUrl,open,onClose}:{p
   const state=useSyncExternalStore(controller.subscribe,controller.getSnapshot);
   const login=useSyncExternalStore(auth.subscribe,auth.getSnapshot);
   const closed=state.error?.code==='ACCOUNT_CLOSED';
+  const identityKey=JSON.stringify(auth.getSubject());
+  const [automaticOwner,setAutomaticOwner]=useState<string|null>(()=>closed?identityKey:null);
   const [dismissed,setDismissed]=useState(false);
   useEffect(()=>{if(!closed)setDismissed(false);},[closed]);
-  if(login.status!=='signed-in'||!open&&(!closed||dismissed))return null;
+  useEffect(()=>{if(closed&&!dismissed)setAutomaticOwner(identityKey);},[closed,dismissed,identityKey]);
+  if(login.status!=='signed-in'||!open&&automaticOwner!==identityKey&&(!closed||dismissed))return null;
   return <AccountPrivacy key={JSON.stringify(auth.getSubject())} privacy={privacy} auth={auth} apiBaseUrl={apiBaseUrl}
-    onClose={()=>{setDismissed(true);onClose();}}/>;
+    onClose={()=>{setAutomaticOwner(null);setDismissed(true);onClose();}}/>;
 }
 
 export function AccountPrivacy({privacy,auth,apiBaseUrl,onClose}:{privacy:PrivacyRuntime;auth:AuthSession;apiBaseUrl:string;onClose():void}) {

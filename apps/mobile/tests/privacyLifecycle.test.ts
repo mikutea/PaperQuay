@@ -55,7 +55,8 @@ async function fixture() {
     stop:()=>{state.stops++;},clearSecrets:s=>clear('secrets',s),clearPdf:s=>clear('pdf',s),clearParsed:s=>clear('parsed',s),
     clearAi:s=>clear('ai',s),clearExports:s=>clear('exports',s),
     acknowledge:async id=>{assert.equal(id,device);if(state.fail==='ack')throw Error('synthetic lost ACK');state.acks++;},
-    clearSession:async()=>{state.sessions++;state.current=false;}};
+    clearSession:async afterPersisted=>{if(state.fail==='session')throw Error('synthetic credential removal failure');
+      await afterPersisted('synthetic original token');state.sessions++;state.current=false;}};
   return {store,state,dependencies,erase:()=>eraseLocalAccount(scope.apiBaseUrl,closed,()=>state.current,dependencies)};
 }
 
@@ -82,6 +83,14 @@ test('a lost ACK can be retried after payload deletion without touching another 
     assert.equal(await f.store.read(scope),null);assert(await f.store.read(other));assert.equal(f.state.binding?.device.id,device);assert.equal(f.state.sessions,0);
     f.state.fail='';await f.erase();assert.equal(f.state.acks,1);assert.equal(f.state.binding,null);assert.equal(f.state.sessions,1);
     assert(await f.store.read(other));
+  }finally{await f.store.close();}
+});
+
+test('failed persisted session removal keeps the verified binding and sends no ACK until an explicit successful retry',async()=>{
+  const f=await fixture();try{
+    f.state.fail='session';await assert.rejects(f.erase());assert.equal(f.state.acks,0);assert.equal(f.state.sessions,0);
+    assert.equal(f.state.binding?.device.id,device);assert.equal(await f.store.read(scope),null);assert(await f.store.read(other));
+    f.state.fail='';await f.erase();assert.equal(f.state.acks,1);assert.equal(f.state.sessions,1);assert.equal(f.state.binding,null);
   }finally{await f.store.close();}
 });
 
