@@ -94,7 +94,7 @@ export interface PdfCache {
   }): Promise<void>;
   setPinned(scope: AccountScope, versionId: string, pinned: boolean): Promise<void>;
   remove(scope: AccountScope, versionId: string): Promise<void>;
-  clear(scope: AccountScope, options?: { includePinned?: boolean }): Promise<void>;
+  clear(scope: AccountScope, options?: { includePinned?: boolean; accountErasure?: boolean }): Promise<void>;
   close(): Promise<void>;
 }
 

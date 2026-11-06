@@ -315,13 +315,18 @@ export class NativeOidcSession implements AuthSession {
     }
   }
   async clearLocalSession(options?:ClearLocalSessionOptions): Promise<void> {
-    const token=this.user?.access_token??null;
     const epoch = ++this.epoch;
     this.awaitingBrowser = false;
     this.refresh = null;
     this.blockedCredentials = true;
     try {
       await this.clearPersisted();this.assertCurrent(epoch);
+      if(options?.afterPersisted&&this.user){
+        const {erasureSession}=await import('./erasureSession.ts');this.assertCurrent(epoch);
+        const renewed=await erasureSession(this.config,this.user,this.client(epoch));this.assertCurrent(epoch);
+        this.user=renewed;
+      }
+      const token=this.user?.access_token??null;
       await options?.afterPersisted?.(token);this.assertCurrent(epoch);
       this.user=null;this.blockedCredentials=false;
       this.publish({status:'signed-out'});

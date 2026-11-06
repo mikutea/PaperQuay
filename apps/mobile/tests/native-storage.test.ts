@@ -71,6 +71,16 @@ test('real SQLite reopens one atomic account snapshot and isolates API/account n
   assert.deepEqual(await reopened.store.read(b), state(2));
 });
 
+test('SQLite erasure tombstone blocks another handle and survives restart and ordinary local removal',async t=>{
+  const setup=await fixture(t),one=setup.open(),two=setup.open();
+  await one.store.update(a,()=>state(1));await two.store.update(b,()=>state(2));
+  await one.store.remove(a,{accountErasure:true});assert.equal(await two.store.read(a),null);
+  await assert.rejects(two.store.update(a,()=>state(3)),{code:'ACCOUNT_CLOSED'});
+  await two.store.remove(a);await one.database.close();await two.database.close();
+  const restarted=setup.open();await assert.rejects(restarted.store.update(a,()=>state(4)),{code:'ACCOUNT_CLOSED'});
+  assert.deepEqual(await restarted.store.read(b),state(2));
+});
+
 test('write failure rolls back content, outbox, cursor and conflicts and survives reopening', async (t) => {
   const setup = await fixture(t);
   const first = setup.open();
