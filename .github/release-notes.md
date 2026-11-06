@@ -23,6 +23,7 @@ The startup database-path P2 from [#26](https://github.com/mikutea/PaperQuay/pul
 
 ## Changes since app-v0.1.26-mikutea.15
 
+- Updates Electron certificate-chain protections, Node CI runtimes, KaTeX and affected build dependencies. See the [dependency maintenance notes](https://github.com/mikutea/PaperQuay/blob/app-v{{VERSION}}/docs/dependency-security.md) for upstream advisories and verification requirements.
 - Adds opt-in account connections and explicit preview/confirm flows for selected metadata, rich notes, graph evidence, verified file exchange and reading positions, with local drafts, conflict decisions and transaction receipts ([#34](https://github.com/mikutea/PaperQuay/pull/34), [#36](https://github.com/mikutea/PaperQuay/pull/36)).
 - Adds responsive mobile reading, notes and literature workflows, plus Android/iOS projects with independently configured HTTPS OAuth callbacks. Production native clients stay disabled until deployment verification is complete ([#41](https://github.com/mikutea/PaperQuay/pull/41)).
 - Integrates multi-paper question answering, review drafts, literature radar, graph evidence, controlled computer parsing/indexing and approval-based Agent/model steps with durable request records ([#36](https://github.com/mikutea/PaperQuay/pull/36)).
@@ -130,6 +131,7 @@ Windows x64 构建：
 
 ## 相比 app-v0.1.26-mikutea.15 的更新
 
+- 更新 Electron 证书信任链防护、CI 的 Node 运行时、KaTeX 及受影响的构建依赖；上游公告和验证要求见[依赖维护说明](https://github.com/mikutea/PaperQuay/blob/app-v{{VERSION}}/docs/dependency-security.md)。
 - 新增可选账号连接，为所选题录、富文本笔记、图谱证据、已验证文件交换和阅读位置提供预览／确认流程，保留本地草稿、冲突决定及事务回执（[#34](https://github.com/mikutea/PaperQuay/pull/34)、[#36](https://github.com/mikutea/PaperQuay/pull/36)）。
 - 新增适应移动屏幕的阅读、笔记和文库流程，以及独立配置 HTTPS OAuth 回调的 Android／iOS 工程；生产原生客户端在部署验收完成后再明确启用（[#41](https://github.com/mikutea/PaperQuay/pull/41)）。
 - 集成多篇问答、综述草稿、文献雷达、图谱证据、受控电脑解析／索引和逐项审批的 Agent／模型步骤，并保留持久请求记录（[#36](https://github.com/mikutea/PaperQuay/pull/36)）。
