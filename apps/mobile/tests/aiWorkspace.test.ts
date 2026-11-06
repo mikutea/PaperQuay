@@ -313,6 +313,15 @@ test('settings opens with simple connection choices, hides fields until asked, a
 });
 
 test('settings has one explicit save for key and model, gives a next step, and never generates a model response', async (t) => {
+  const readKey = MemorySecretStore.prototype.get;
+  let initialKeyRead = true;
+  t.mock.method(MemorySecretStore.prototype, 'get', async function (this: MemorySecretStore, namespace: string, key: string) {
+    if (initialKeyRead) {
+      initialKeyRead = false;
+      await new Promise<void>((resolve) => setTimeout(resolve, 150));
+    }
+    return readKey.call(this, namespace, key);
+  });
   const config = { ...CONFIG, model: '' };
   const ui = await setup({ mode: 'settings', context: null, config, key: false });
   const saveKey = ui.secrets.set.bind(ui.secrets);
@@ -322,6 +331,7 @@ test('settings has one explicit save for key and model, gives a next step, and n
   });
   try {
     ui.openSettings();
+    await until(() => !text(ui.renderer.root).includes('正在检查已保存的密钥'), 'initial settings key availability');
     assert.equal(ui.button('获取可用模型').props.disabled, true);
     assert.match(text(ui.renderer.root), /先填写访问密钥并保存/);
     ui.password.value = KEY;
