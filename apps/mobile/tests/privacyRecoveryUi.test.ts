@@ -29,7 +29,7 @@ test('reopening real privacy runtime preserves explicit erasure retry while ordi
     const accountId=crypto.randomUUID(),deviceId=crypto.randomUUID(),scope={apiBaseUrl:config.apiBaseUrl,accountId};
     const closed:AccountPrivacyStatus={accountId,state:'closed',closedAt:now,closureRequestId:crypto.randomUUID(),
       deviceErasure:{requested:true,pending:1,acknowledged:0,thisDevicePending:true}};
-    let subject:AuthSubject|null={issuer:config.oidcAuthority,subject:accountId},blocked=false,attempts=0,statusCalls=0,acks=0,signIns=0;
+    let subject:AuthSubject|null={issuer:config.oidcAuthority,subject:accountId,sessionKey:'a'.repeat(64)},blocked=false,attempts=0,statusCalls=0,acks=0,signIns=0;
     const listeners=new Set<()=>void>(),secrets=new MemorySecretStore();
     const auth={getSubject:()=>subject,subscribe:(fn:()=>void)=>{listeners.add(fn);return ()=>listeners.delete(fn);},
       getAccessToken:async()=>{if(blocked)throw new ClientError('AUTH_REQUIRED');return 'synthetic original token';},
