@@ -4,7 +4,7 @@ import {accountScopeKey,type AccountStorage,type AccountScope} from '../storage/
 import type {SecretStore} from '../platform/secretStore.ts';
 import type {StoredWorkspace,WorkspaceController} from '../sync/workspace.ts';
 import type {verifiedBinding} from '../storage/verifiedBinding.ts';
-import type {AccountIdentity} from '../api.ts';
+import {parseAccountIdentity,type AccountIdentity} from '../api.ts';
 import {AccountPrivacyClient,PrivacyError} from './client.ts';
 import type {AccountPrivacyStatus} from './client.ts';
 import {AccountSecretStore} from './secretRegistry.ts';
@@ -13,36 +13,107 @@ import {clearPrivateExportCache} from './saveExport.ts';
 import type {PersonalExportSink} from './exportStream.ts';
 import {clearScopedNativeExports} from '../platform/exportScope.ts';
 import type {BrowserErasureCoordinator} from './browserErasure.ts';
+import type {PeerErasureHandler} from './browserAccount.ts';
+
+export interface PeerErasureSnapshot{accountId:string;requestId:string;phase:'preparing'|'pending';failed:boolean;}
+interface PeerErasureEntry{identity:AccountIdentity;current:()=>boolean;snapshot:PeerErasureSnapshot;
+  prepared:boolean;finishing:boolean;prepare():Promise<void>;}
 
 export function createPrivacyRuntime(config:AppConfig,auth:AuthSession,store:AccountStorage<StoredWorkspace>,
   secrets:SecretStore,controller:WorkspaceController,binding:ReturnType<typeof verifiedBinding>,
-  options:{browserErasure?:BrowserErasureCoordinator|null;owner?:object;stop?():void}={}) {
+  options:{browserErasure?:BrowserErasureCoordinator|null;owner?:object;stop?():void;
+    registerPeerErasure?(handler:PeerErasureHandler):()=>void}={}) {
   const runtimeOwner=options.owner??{};
   const client=new AccountPrivacyClient({apiBaseUrl:config.apiBaseUrl,getAccessToken:auth.getAccessToken,
     getIdentityKey:binding.key,subscribeIdentity:auth.subscribe});
+  let erasing=false;
+  const localExports=new Set<{abort:AbortController;done:Promise<void>}>();
+  const sealBusiness=async()=>{
+    erasing=true;const pending=[...localExports];for(const entry of pending)entry.abort.abort();
+    await Promise.all([client.sealForErasure(),...pending.map(entry=>entry.done)]);
+  };
   let erasureRecovery:{identity:AccountIdentity;status:AccountPrivacyStatus;current:()=>boolean}|null=null;
+  let peer:PeerErasureEntry|null=null;
+  const peerListeners=new Set<()=>void>(),emitPeer=()=>{for(const listener of peerListeners)listener();};
+  let ownerKey=binding.key();
+  const peerAuth=auth.subscribe(()=>{
+    const next=binding.key();if(next!==ownerKey){ownerKey=next;erasing=false;}
+    if(peer&&!peer.current()){peer=null;emitPeer();}
+  });
+  const unregisterPeer=options.registerPeerErasure?.(async(scope,requestId,identity,clearRam)=>{
+    const current=client.captureIdentity(),verified=parseAccountIdentity(identity);
+    if(normalizeServiceUrl(scope.apiBaseUrl)!==config.apiBaseUrl||scope.accountId!==verified.accountId||!current())throw new PrivacyError('CHANGED');
+    let pending=peer?.current()&&peer.snapshot.requestId===requestId&&peer.identity.device.id===verified.device.id?peer:null;
+    if(pending?.prepared)return;
+    if(!pending){
+      let preparing:Promise<void>|null=null;
+      const entry:PeerErasureEntry={identity:verified,current,prepared:false,finishing:false,
+        snapshot:{accountId:scope.accountId,requestId,phase:'preparing',failed:false},
+        prepare(){
+          if(entry.prepared)return Promise.resolve();
+          preparing??=(async()=>{await sealBusiness();if(!current())throw new PrivacyError('CHANGED');
+            await clearRam();if(!current())throw new PrivacyError('CHANGED');entry.prepared=true;})().finally(()=>{preparing=null;});
+          return preparing;
+        }};
+      peer=pending=entry;
+    }
+    if(!pending.finishing){pending.snapshot={...pending.snapshot,phase:'preparing',failed:false};emitPeer();}
+    try{await pending.prepare();
+      if(peer===pending&&!pending.finishing){peer.snapshot={...pending.snapshot,phase:'pending'};emitPeer();}}
+    catch(error){if(peer===pending&&pending.current()&&!pending.finishing){peer.snapshot={...pending.snapshot,phase:'pending',failed:true};emitPeer();}throw error;}
+  });
   const scopedSecrets=(scope:AccountScope)=>{
     if(normalizeServiceUrl(scope.apiBaseUrl)!==config.apiBaseUrl)throw new PrivacyError('INVALID');
     return new AccountSecretStore(secrets,scope,client.captureIdentity());
   };
-  return {client,binding,scopedSecrets,
+  const runtime={client,binding,scopedSecrets,
+    subscribePeerErasure:(listener:()=>void)=>{peerListeners.add(listener);return()=>{peerListeners.delete(listener);};},
+    getPeerErasure:():PeerErasureSnapshot|null=>peer?.current()?peer.snapshot:null,
+    async finishPeerErasure(signal:AbortSignal):Promise<AccountPrivacyStatus>{
+      const pending=peer;if(!pending||!pending.current())throw new PrivacyError('CHANGED');
+      if(pending.snapshot.phase==='preparing'||pending.finishing)throw new PrivacyError('BUSY');
+      pending.finishing=true;
+      peer!.snapshot={...pending.snapshot,phase:'preparing',failed:false};emitPeer();
+      try{
+        await pending.prepare();if(!pending.current())throw new PrivacyError('CHANGED');
+        let verified=erasureRecovery?.current()&&erasureRecovery.status.closureRequestId===pending.snapshot.requestId
+          ?structuredClone(erasureRecovery.status):null;
+        if(!verified)await auth.clearLocalSession({retainForErasure:true,renewForErasure:true,afterPersisted:async token=>{
+          if(!token||!pending.current()||signal.aborted)throw new PrivacyError('CHANGED');
+          const status=await client.status(signal,token);
+          if(!pending.current()||status.accountId!==pending.snapshot.accountId||status.state!=='closed'
+            ||status.closureRequestId!==pending.snapshot.requestId)throw new PrivacyError('INVALID');
+          verified=status;
+        }});
+        if(!verified||!pending.current()||signal.aborted)throw new PrivacyError('CHANGED');
+        erasureRecovery={identity:structuredClone(pending.identity),status:structuredClone(verified),current:pending.current};
+        await runtime.erase(verified,true);
+        if(peer===pending){peer=null;emitPeer();}return verified;
+      }catch(error){if(peer===pending&&pending.current()){peer.snapshot={...pending.snapshot,phase:'pending',failed:true};emitPeer();}throw error;}
+      finally{pending.finishing=false;}
+    },
     recoveryStatus():AccountPrivacyStatus|null {
       if(!erasureRecovery?.current()){erasureRecovery=null;return null;}
       return structuredClone(erasureRecovery.status);
     },
     async localExport(scope:AccountScope,sink:PersonalExportSink,signal:AbortSignal,progress?:(bytes:number)=>void){
-      const current=client.captureIdentity();
+      const owner=client.captureIdentity(),current=()=>!erasing&&owner(),abort=new AbortController(),stop=()=>abort.abort();
+      let settled!:()=>void;const entry={abort,done:new Promise<void>(resolve=>{settled=resolve;})};localExports.add(entry);
+      signal.addEventListener('abort',stop,{once:true});if(signal.aborted)stop();
       try {
+        if(!current()||abort.signal.aborted)throw new PrivacyError('CHANGED');
         if(normalizeServiceUrl(scope.apiBaseUrl)!==config.apiBaseUrl)throw new PrivacyError('INVALID');
         const owner=await binding.read();
         if(!current()||owner?.accountId!==scope.accountId)throw new PrivacyError('CHANGED');
         const [{exportLocalData},{getPdfCache},{getParsedCache},{getAiArchiveStore}]=await Promise.all([
           import('./localExport.ts'),import('../pdf/cache.ts'),import('../parsed/cache.ts'),import('../ai/archiveStore.ts')]);
-        if(!current()||signal.aborted)throw new PrivacyError('CHANGED');
-        return await exportLocalData(scope,sink,{store,pdf:getPdfCache(),parsed:getParsedCache(),ai:getAiArchiveStore()},{current,signal,progress});
+        if(!current()||abort.signal.aborted)throw new PrivacyError('CHANGED');
+        return await exportLocalData(scope,sink,{store,pdf:getPdfCache(),parsed:getParsedCache(),ai:getAiArchiveStore()},{current,signal:abort.signal,progress});
       } catch(error){await sink.abort().catch(()=>undefined);throw error;}
+      finally{signal.removeEventListener('abort',stop);localExports.delete(entry);settled();}
     },
     async erase(status:AccountPrivacyStatus,explicitLocalConsent=false) {
+      await sealBusiness();
       const current=client.captureIdentity(),check=()=>{if(!current())throw new PrivacyError('CHANGED');};
       const recoverableBinding={remove:binding.remove,async read(){
         const verified=await (status.deviceErasure.thisDevicePending?binding.readSession():binding.read());check();
@@ -86,7 +157,8 @@ export function createPrivacyRuntime(config:AppConfig,auth:AuthSession,store:Acc
       },{explicitLocalConsent});
       erasureRecovery=null;
     },
-    dispose:()=>{erasureRecovery=null;client.dispose();},
+    dispose:async()=>{erasureRecovery=null;peer=null;unregisterPeer?.();peerAuth();peerListeners.clear();client.dispose();await sealBusiness();},
   };
+  return runtime;
 }
 export type PrivacyRuntime=ReturnType<typeof createPrivacyRuntime>;

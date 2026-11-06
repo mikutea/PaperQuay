@@ -323,7 +323,7 @@ export class NativeOidcSession implements AuthSession {
   async clearLocalSession(options?:ClearLocalSessionOptions): Promise<void> {
     const originalEpoch = this.epoch;
     this.blockedCredentials = true;
-    if (options?.afterPersisted && options.renewForErasure && this.refresh) {
+    if ((options?.retainForErasure || options?.afterPersisted && options.renewForErasure) && this.refresh) {
       // Invalidating the epoch first would discard a consumed refresh token's
       // replacement. Ordinary logout still invalidates immediately.
       await this.refresh.catch(() => undefined);
@@ -342,6 +342,7 @@ export class NativeOidcSession implements AuthSession {
       }
       const token=this.user?.access_token??null;
       await options?.afterPersisted?.(token);this.assertCurrent(epoch);
+      if(options?.retainForErasure){this.signedIn();return;}
       this.user=null;this.blockedCredentials=false;
       this.publish({status:'signed-out'});
     } catch(error) {

@@ -106,6 +106,8 @@ function subscribeCompactReader(listener: () => void) {
   return () => query.removeEventListener('change', listener);
 }
 const PrivacyHost=lazy(()=>import('./components/AccountPrivacy.tsx').then(module=>({default:module.PrivacyHost})));
+const noPeerErasureUpdates=()=>()=>{};
+const noPeerErasureState=()=>null;
 interface Runtime {
   config: AppConfig;
   auth: AuthSession;
@@ -180,7 +182,7 @@ async function makeRuntime(input: PublicConfigInput): Promise<Runtime> {
       identityKey: () => JSON.stringify(auth.getSubject?.() ?? null) },
     dispose: async () => {
     controller.deactivate();
-    privacy.dispose();
+    await privacy.dispose();
     await auth.dispose();
     await store.close();
     await binding.close();
@@ -300,6 +302,7 @@ function ConnectedWorkspace({
 }) {
   const { auth, controller } = runtime;
   const authState = useSyncExternalStore(auth.subscribe, auth.getSnapshot);
+  const peerErasure=useSyncExternalStore(runtime.privacy?.subscribePeerErasure??noPeerErasureUpdates,runtime.privacy?.getPeerErasure??noPeerErasureState);
   const authSubjectKey = JSON.stringify(auth.getSubject?.() ?? null);
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
   const accountOwnerCurrent=()=>{
@@ -490,6 +493,7 @@ function ConnectedWorkspace({
     setUiError(null);
   }
   async function login() {
+    if(runtime.privacy?.getPeerErasure?.()||runtime.privacy?.recoveryStatus?.()){onPrivacy?.();return;}
     if (!canLeave()) return;
     const revoked = state.error?.code === 'SESSION_REVOKED';
     controller.deactivate();
@@ -623,7 +627,7 @@ function ConnectedWorkspace({
               </label>
               <button
                 className="primary full-width"
-                disabled={authState.status === 'signing-in'}
+                disabled={authState.status === 'signing-in'||Boolean(peerErasure)||Boolean(runtime.privacy?.recoveryStatus?.())}
                 onClick={() => void login()}
               >
                 {authState.status === 'signing-in'
@@ -635,6 +639,7 @@ function ConnectedWorkspace({
             </>
           )}
           {error && <ErrorMessage message={error} />}
+          {peerErasure&&<p role="status">本页清理确认尚未完成。请打开“数据与隐私”继续，并保留当前登录。</p>}
           {authState.status==='signed-in'&&onPrivacy&&<button className="secondary" onClick={onPrivacy}>数据与隐私</button>}
           <details className="service-settings">
             <summary>服务设置</summary>

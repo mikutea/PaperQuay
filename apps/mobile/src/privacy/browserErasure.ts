@@ -82,6 +82,7 @@ export class BrowserErasureCoordinator {
     try{if(this.read(scope)!==null){this.fenced.add(key);notifyFence(key);return false;}return true;}
     catch{this.fenced.add(key);notifyFence(key);return false;}
   }
+  pendingRequestId(scope:AccountScope):string|null{return this.read(scope)?.requestId??null;}
   private assertAvailable(scope:AccountScope){if(!this.available(scope))throw new ClientError('ACCOUNT_CLOSED');}
 
   async retain(scope:AccountScope,owner:object,clearRam:()=>Promise<void>):Promise<void> {
