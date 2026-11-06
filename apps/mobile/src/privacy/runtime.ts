@@ -3,7 +3,7 @@ import type {AuthSession} from '../auth/oidc.ts';
 import {accountScopeKey,type AccountStorage,type AccountScope} from '../storage/accountStore.ts';
 import type {SecretStore} from '../platform/secretStore.ts';
 import type {StoredWorkspace,WorkspaceController} from '../sync/workspace.ts';
-import {verifiedBinding} from '../storage/verifiedBinding.ts';
+import type {verifiedBinding} from '../storage/verifiedBinding.ts';
 import type {AccountIdentity} from '../api.ts';
 import {AccountPrivacyClient,PrivacyError} from './client.ts';
 import type {AccountPrivacyStatus} from './client.ts';
@@ -14,8 +14,7 @@ import type {PersonalExportSink} from './exportStream.ts';
 import {clearScopedNativeExports} from '../platform/exportScope.ts';
 
 export function createPrivacyRuntime(config:AppConfig,auth:AuthSession,store:AccountStorage<StoredWorkspace>,
-  secrets:SecretStore,controller:WorkspaceController) {
-  const binding=verifiedBinding(config,secrets,auth.getSubject);
+  secrets:SecretStore,controller:WorkspaceController,binding:ReturnType<typeof verifiedBinding>) {
   const client=new AccountPrivacyClient({apiBaseUrl:config.apiBaseUrl,getAccessToken:auth.getAccessToken,
     getIdentityKey:binding.key,subscribeIdentity:auth.subscribe});
   let erasureRecovery:{identity:AccountIdentity;requestId:string;current:()=>boolean}|null=null;

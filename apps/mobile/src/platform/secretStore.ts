@@ -7,6 +7,9 @@ export interface SecretStore {
   get(namespace: string, key: string): Promise<string | null>;
   set(namespace: string, key: string, value: string): Promise<void>;
   remove(namespace: string, key: string): Promise<void>;
+  /** Native erasure must account for every prefixed system entry, including
+   * entries from versions before the account address registry existed. */
+  verifyErasureInventory?(): Promise<void>;
 }
 
 export function secretAddress(namespace: string, key: string): string {

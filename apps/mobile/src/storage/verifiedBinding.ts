@@ -3,9 +3,19 @@ import type { AuthSubject } from '../auth/oidc.ts';
 import type { AppConfig } from '../config.ts';
 import { ClientError } from '../errors.ts';
 import type { SecretStore } from '../platform/secretStore.ts';
+import { WebBindingStorage, type BindingStorage } from './verifiedBindingStorage.ts';
+
+/** Credentials stay in memory on Web; the independently verified mapping must
+ * survive reload together with the IndexedDB payloads it permits us to erase. */
+export function createVerifiedBinding(config: AppConfig, secrets: SecretStore, subject: () => AuthSubject | null,
+  options: { indexedDB?: IDBFactory; databaseName?: string } = {}) {
+  const storage = secrets.persistence === 'system' ? secrets : new WebBindingStorage(options);
+  return { ...verifiedBinding(config, storage, subject),
+    close: async () => { if (storage instanceof WebBindingStorage) await storage.close(); } };
+}
 
 /** This is a previously server-verified mapping, never a token-claim account id. */
-export function verifiedBinding(config: AppConfig, secrets: SecretStore, subject: () => AuthSubject | null) {
+export function verifiedBinding(config: AppConfig, secrets: BindingStorage, subject: () => AuthSubject | null) {
   const namespace = JSON.stringify(['verified-account-v1', config.apiBaseUrl, config.oidcAuthority, config.oidcClientId]);
   const currentSubject = () => {
     const current = subject();
