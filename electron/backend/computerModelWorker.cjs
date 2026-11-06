@@ -6,9 +6,9 @@ const clone=value=>structuredClone(value);
 const publicCode=error=>typeof error?.code==='string'&&/^(?:MODEL_[A-Z_]{1,64}|PROFILE_CHANGED|CANCELLED|OUTCOME_UNKNOWN|AUTHENTICATION_REQUIRED|SESSION_REVOKED|DESKTOP_OPERATION_CANCELLED|RATE_LIMITED)$/.test(error.code)?error.code:'MODEL_EXECUTION_FAILED';
 const throttled=error=>error?.code==='RATE_LIMITED'||error?.statusCode===429||error?.status===429;
 function createComputerModelWorker(options){
- // Four providers use at most 68 idle requests in a rolling minute, including
- // registration, leaving room in the shared 120/minute account budget.
- const core=options.core||require('../generated/desktopSyncCore.cjs'),timings={pollMs:5000,presenceMs:15000,heartbeatMs:10000,guardMs:1000,...options.timings};
+ // Model and parse/index providers share one account budget. A ten-second
+ // idle poll leaves room for both supported groups and reading checkpoints.
+ const core=options.core||require('../generated/desktopSyncCore.cjs'),timings={pollMs:10000,presenceMs:15000,heartbeatMs:10000,guardMs:1000,...options.timings};
  if(!['capture','check','getPrivate','api'].every(k=>typeof options[k]==='function')||!options.journal||Object.values(timings).some(v=>!Number.isSafeInteger(v)||v<1||v>15000))fail('MODEL_CONFIGURATION_INVALID');
  let runtime=null,startIntent=0,errorCode=null,tail=Promise.resolve(),pollTask=null,adapterPromise=null;
  const candidates=new Map(),operations=new Set();

@@ -8,7 +8,9 @@ const sha = (value) => createHash('sha256').update(value).digest('hex');
 const exact = (value, keys) => value && typeof value === 'object' && !Array.isArray(value)
   && Object.keys(value).sort().join(',') === [...keys].sort().join(',');
 const safe = (value, max = 512) => typeof value === 'string' && value.length > 0 && value.length <= max && !/[\x00-\x1f\x7f]/.test(value);
+const throttled = (error) => error?.code === 'RATE_LIMITED' || error?.statusCode === 429 || error?.status === 429;
 function publicCode(error) {
+  if (throttled(error)) return 'RATE_LIMITED';
   return typeof error?.code === 'string' && /^(?:DESKTOP_|REMOTE_|PROFILE_CHANGED$|SOURCE_UNAVAILABLE$|EXTERNAL_OUTCOME_UNKNOWN$|SESSION_REVOKED$|AUTHENTICATION_REQUIRED$)[A-Z0-9_]*$/.test(error.code)
     ? error.code : 'EXECUTION_FAILED';
 }
@@ -54,7 +56,7 @@ function executionKey(snapshot, task) {
 function createRemoteTaskWorker(options) {
   if (!options || !['capture', 'check', 'api', 'readPdf'].every((key) => typeof options[key] === 'function')
     || !options.journal || typeof options.journal.read !== 'function' || typeof options.journal.write !== 'function') fail('REMOTE_PROVIDER_CONFIGURATION_INVALID');
-  const timings = { pollMs: 2000, presenceMs: 15000, heartbeatMs: 10000, guardMs: 1000, ...options.timings };
+  const timings = { pollMs: 10000, presenceMs: 15000, heartbeatMs: 10000, guardMs: 1000, ...options.timings };
   if (Object.values(timings).some((value) => !Number.isInteger(value) || value < 1 || value > 30000)
     || timings.heartbeatMs >= 30000 || timings.presenceMs >= 30000) fail('REMOTE_PROVIDER_CONFIGURATION_INVALID');
   const core = () => options.core || require('../generated/desktopSyncCore.cjs');
@@ -67,20 +69,43 @@ function createRemoteTaskWorker(options) {
     if (JSON.stringify(current) !== JSON.stringify(run.snapshot)) fail('REMOTE_BINDING_CHANGED');
     if (run.controller.signal.aborted || runtime !== run) fail('DESKTOP_OPERATION_CANCELLED');
   }
-  const call = (run, method, suffix, body, signal = run.controller.signal, bytes, headers) => options.api(run.snapshot,
-    { method, path: '/v1/remote-tasks' + suffix, ...(body === undefined ? {} : { body }), ...(bytes ? { bytes } : {}), ...(headers ? { headers } : {}),
-      signal: AbortSignal.any([signal, AbortSignal.timeout(bytes ? 45000 : 15000)].filter(Boolean)) });
+  function pauseForRateLimit(run, error) {
+    if (!throttled(error)) return false;
+    if (runtime !== run || run.controller.signal.aborted) return true;
+    const now = Date.now();
+    if (run.resumeAt <= now) run.backoffMs = Math.min(300000, Math.max(60000, run.backoffMs * 2));
+    run.resumeAt = Math.max(run.resumeAt, now + run.backoffMs);
+    run.presenceRequired = true; lastError = 'RATE_LIMITED';
+    // Losing a lease renewal cannot authorize more upstream work. Its durable
+    // journal still decides whether recovery may reuse a batch or artifact.
+    run.localController?.abort(); notify(); return true;
+  }
+  async function call(run, method, suffix, body, signal = run.controller.signal, bytes, headers) {
+    try { return await options.api(run.snapshot,
+      { method, path: '/v1/remote-tasks' + suffix, ...(body === undefined ? {} : { body }), ...(bytes ? { bytes } : {}), ...(headers ? { headers } : {}),
+        signal: AbortSignal.any([signal, AbortSignal.timeout(bytes ? 45000 : 15000)].filter(Boolean)) }); }
+    catch (error) { pauseForRateLimit(run, error); throw error; }
+  }
+  async function advertise(run) {
+    if (run.presenceTask) return run.presenceTask;
+    const task = (async () => {
+      await bindingCheck(run); await call(run, 'PUT', '/provider', { profiles: run.snapshot.profiles });
+      await bindingCheck(run); run.presenceRequired = false;
+    })();
+    run.presenceTask = task;
+    try { return await task; } finally { if (run.presenceTask === task) run.presenceTask = null; }
+  }
   function invalidate(run, error) {
     if (run.controller.signal.aborted) return;
     lastError = publicCode(error); run.controller.abort();
     for (const timer of run.timers) clearInterval(timer); run.timers.clear(); notify();
   }
-  function periodic(run, ms, work) {
+  function periodic(run, ms, work, network = false) {
     let running = false;
     const timer = setInterval(() => {
-      if (running || run.controller.signal.aborted) return;
+      if (running || run.controller.signal.aborted || (network && Date.now() < run.resumeAt)) return;
       running = true;
-      Promise.resolve().then(work).catch((error) => invalidate(run, error)).finally(() => { running = false; });
+      Promise.resolve().then(work).catch((error) => { if (!pauseForRateLimit(run, error)) invalidate(run, error); }).finally(() => { running = false; });
     }, ms);
     timer.unref?.(); run.timers.add(timer); return timer;
   }
@@ -99,12 +124,14 @@ function createRemoteTaskWorker(options) {
     await bindingCheck(run);
     const response = await call(run, 'POST', '/provider/claim', {}); await bindingCheck(run);
     if (!exact(response, ['claim'])) fail('REMOTE_TASK_RESPONSE_INVALID');
+    run.backoffMs = 0; run.resumeAt = 0; lastError = null;
     if (response.claim === null) return { worked: false };
     if (!exact(response.claim, ['task', 'lease']) || !exact(response.claim.lease, ['attempt', 'fence'])
       || !UUID.test(response.claim.lease.fence)) fail('REMOTE_TASK_RESPONSE_INVALID');
     const task = parsedTask(response.claim.task, run.snapshot); const lease = { ...response.claim.lease };
     if (task.state !== 'running' || !Number.isInteger(lease.attempt) || lease.attempt !== task.attempt || lease.attempt < 1 || lease.attempt > 100) fail('REMOTE_TASK_RESPONSE_INVALID');
     const local = new AbortController(); const signal = AbortSignal.any([run.controller.signal, local.signal]);
+    run.localController = local;
     let cancelled = false; let heartbeatBusy = false; let heartbeatWork = null;
     const heartbeat = setInterval(() => {
       if (heartbeatBusy || signal.aborted) return;
@@ -199,38 +226,55 @@ function createRemoteTaskWorker(options) {
     } catch (error) {
       const code = publicCode(error);
       if (cancelled) lastError = null; else if (!signal.aborted) lastError = code;
-      if (!run.controller.signal.aborted && !signal.aborted && !cancelled) {
+      if (!run.controller.signal.aborted && !signal.aborted && !cancelled && !throttled(error)) {
         const failure = ['PROFILE_CHANGED', 'SOURCE_UNAVAILABLE', 'EXTERNAL_OUTCOME_UNKNOWN'].includes(code) ? code : 'EXECUTION_FAILED';
         try { await bindingCheck(run); await call(run, 'POST', `/jobs/${task.id}/fail`, { ...lease, code: failure }, AbortSignal.timeout(5000)); } catch {}
       }
       return { worked: true, state: cancelled ? 'cancelled' : 'interrupted', taskId: task.id,
         errorCode: cancelled ? null : signal.aborted ? lastError || 'DESKTOP_OPERATION_CANCELLED' : code };
-    } finally { clearInterval(heartbeat); run.timers.delete(heartbeat); local.abort(); notify(); }
+    } finally {
+      clearInterval(heartbeat); run.timers.delete(heartbeat); local.abort();
+      if (run.localController === local) run.localController = null;
+      notify();
+    }
   }
   const worker = {
     async start({ manual = false } = {}) {
       if (runtime && !runtime.controller.signal.aborted) return;
       if (runtime) await worker.stop();
-      const run = { controller: new AbortController(), snapshot: null, timers: new Set(), active: null, loop: null }; runtime = run;
+      const run = { controller: new AbortController(), snapshot: null, timers: new Set(), active: null, loop: null,
+        resumeAt: 0, backoffMs: 0, presenceRequired: true, presenceTask: null, localController: null }; runtime = run;
       try {
         run.snapshot = snapshotValue(await options.capture()); await bindingCheck(run);
         const published = run.snapshot.profiles.filter((value) => typeof options.adapters?.[value.kind]?.execute === 'function');
         if (published.length !== run.snapshot.profiles.length || !published.length) fail('REMOTE_PROVIDER_CONFIGURATION_INVALID');
-        await call(run, 'PUT', '/provider', { profiles: published }); await bindingCheck(run);
-        lastError = null; notify();
-        periodic(run, timings.guardMs, () => bindingCheck(run));
-        periodic(run, timings.presenceMs, async () => { await bindingCheck(run); await call(run, 'PUT', '/provider', { profiles: published }); });
-        if (!manual) run.loop = (async () => {
-          while (!run.controller.signal.aborted) { await worker.runOnce(); await abortableDelay(timings.pollMs, run.controller.signal); }
-        })().catch((error) => { if (!run.controller.signal.aborted) invalidate(run, error); });
-      } catch (error) { invalidate(run, error); throw Object.assign(new Error(publicCode(error)), { code: publicCode(error) }); }
+        await advertise(run); lastError = null;
+      } catch (error) {
+        if (!run.snapshot || !pauseForRateLimit(run, error) || run.controller.signal.aborted) {
+          invalidate(run, error); throw Object.assign(new Error(publicCode(error)), { code: publicCode(error) });
+        }
+      }
+      notify();
+      periodic(run, timings.guardMs, () => bindingCheck(run));
+      periodic(run, timings.presenceMs, () => advertise(run), true);
+      if (!manual) run.loop = (async () => {
+        while (!run.controller.signal.aborted) { await worker.runOnce(); await abortableDelay(timings.pollMs, run.controller.signal); }
+      })().catch((error) => { if (!run.controller.signal.aborted) invalidate(run, error); });
     },
     async runOnce() {
       const run = runtime; if (!run || run.controller.signal.aborted || !run.snapshot) fail('REMOTE_WORKER_STOPPED');
       if (run.active) return run.active;
-      const active = executeOne(run); run.active = active; notify();
+      const active = (async () => {
+        await bindingCheck(run);
+        if (Date.now() < run.resumeAt) return { worked: false };
+        if (run.presenceRequired) await advertise(run);
+        return executeOne(run);
+      })(); run.active = active; notify();
       try { return await active; }
-      catch (error) { invalidate(run, error); const code = publicCode(error); throw Object.assign(new Error(code), { code }); }
+      catch (error) {
+        if (pauseForRateLimit(run, error)) return { worked: false };
+        invalidate(run, error); const code = publicCode(error); throw Object.assign(new Error(code), { code });
+      }
       finally { if (run.active === active) run.active = null; notify(); }
     },
     async stop() {
