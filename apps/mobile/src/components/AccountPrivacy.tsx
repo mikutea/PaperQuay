@@ -7,8 +7,10 @@ import type {AccountScope} from '../storage/accountStore.ts';
 import {openPersonalExportSink} from '../privacy/saveExport.ts';
 import {PrivacyExportError} from '../privacy/exportStream.ts';
 import {ScopedExportError} from '../platform/exportScope.ts';
+import {ClientError,describeError} from '../errors.ts';
 
 function message(error:unknown):string {
+  if(error instanceof ClientError&&error.code==='LEGACY_SECRETS_UNVERIFIED')return describeError(error);
   if(error instanceof ScopedExportError&&error.code==='LEGACY_UNOWNED')return '发现旧版无账号标记的导出副本，尚未确认清理。请联系维护者备份并逐份核对；不会猜测归属、删除其他账号文件或确认成功。';
   const code=error instanceof PrivacyError||error instanceof PrivacyExportError?error.code:'';
   if(code==='RECENT_AUTH_REQUIRED')return '请先重新验证登录，再显式重试同一注销请求。刷新令牌不会替代身份验证。';

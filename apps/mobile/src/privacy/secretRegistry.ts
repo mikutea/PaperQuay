@@ -41,6 +41,10 @@ export class AccountSecretStore implements SecretStore {
     this.queue.sealed=true;
     return this.serialize(async()=>{this.check(true);const rows=await this.addresses();
       for(const [namespace,key] of rows){this.check(true);await this.base.remove(namespace,key);this.check(true);}
+      if(this.base.persistence==='system'){
+        if(!this.base.verifyErasureInventory)throw new PrivacyError('FAILED');
+        await this.base.verifyErasureInventory();this.check(true);
+      }
       await this.base.remove(this.namespace,'addresses');this.check(true);
     });
   }

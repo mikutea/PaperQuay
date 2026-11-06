@@ -10,6 +10,7 @@ export type ClientErrorCode =
   | 'STORAGE_UNAVAILABLE'
   | 'STORAGE_FAILED'
   | 'STORAGE_CORRUPT'
+  | 'LEGACY_SECRETS_UNVERIFIED'
   | 'ACCOUNT_CLOSED'
   | 'ACCOUNT_CHANGED'
   | 'ACCOUNT_STORAGE_LIMIT'
@@ -40,6 +41,7 @@ const messages: Record<ClientErrorCode, string> = {
   STORAGE_UNAVAILABLE: '此设备暂时无法打开本地安全存储或数据库，请检查设备状态后重试。',
   STORAGE_FAILED: '未能保存到此设备，请检查存储空间后重试。',
   STORAGE_CORRUPT: '此设备的缓存格式无法读取。请保留本地数据并联系维护者。',
+  LEGACY_SECRETS_UNVERIFIED: '系统安全存储存在无法归属的旧凭据，尚不能确认完整清理。请保留当前恢复信息并联系维护者，不会自动删除其他账号的凭据。',
   ACCOUNT_CLOSED: '应用账号已注销。同步已停止，请在数据与隐私中查询设备清理状态。',
   ACCOUNT_CHANGED: '账号已切换，本次同步已停止。',
   ACCOUNT_STORAGE_LIMIT: '账号同步存储额度已满。改动仍保存在此设备，请联系服务管理员处理额度后重试。',

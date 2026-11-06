@@ -33,7 +33,7 @@ import { ClientError, describeError } from './errors.ts';
 import { assertPlatformReady, getPlatformCapabilities } from './platform.ts';
 import { accountScopeKey, createAccountStorage } from './storage/accountStore.ts';
 import { createSecretStore, type SecretStore } from './platform/secretStore.ts';
-import { verifiedBinding } from './storage/verifiedBinding.ts';
+import { createVerifiedBinding } from './storage/verifiedBinding.ts';
 import { filterPapers, organizationOf, readingStatusLabels } from './library/organization.ts';
 import type { PdfAiContext, PdfCitationTarget } from './pdf/types.ts';
 import type { CloudPdfContext } from './pdf/cloudCopies.ts';
@@ -149,7 +149,7 @@ async function makeRuntime(input: PublicConfigInput): Promise<Runtime> {
   const auth = authResult.value;
   const store = storeResult.value;
   const secretStore = secretResult.value;
-  const binding = verifiedBinding(config, secretStore, auth.getSubject);
+  const binding = createVerifiedBinding(config, secretStore, auth.getSubject);
   const api = new SyncApi(config.apiBaseUrl, auth.getAccessToken, undefined, binding.key);
   const controller = new WorkspaceController({
     apiBaseUrl: config.apiBaseUrl,
@@ -162,7 +162,7 @@ async function makeRuntime(input: PublicConfigInput): Promise<Runtime> {
     supportsGraphRelations:()=>api.supportsGraphRelations,
     binding: { ...binding, prepare: (signal) => api.capabilities(signal) },
   });
-  const privacy=createPrivacyRuntime(config,auth,store,secretStore,controller);
+  const privacy=createPrivacyRuntime(config,auth,store,secretStore,controller,binding);
   return { config, auth, controller, secretStore, privacy, modelInvocations:api.modelInvocations, inspectCapabilities:signal=>api.inspectCapabilities(signal),
     cloudPdf: { apiBaseUrl: config.apiBaseUrl, getAccessToken: auth.getAccessToken, getCloudPdfCapability: () => api.cloudPdfCapability },
     desktopPdf: { apiBaseUrl: config.apiBaseUrl, getAccessToken: auth.getAccessToken, getDesktopPdfCapability: () => api.desktopPdfCapability },
@@ -175,6 +175,7 @@ async function makeRuntime(input: PublicConfigInput): Promise<Runtime> {
     privacy.dispose();
     await auth.dispose();
     await store.close();
+    await binding.close();
   } };
 }
 

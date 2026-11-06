@@ -8,6 +8,8 @@ import {eraseLocalAccount,type ErasureDependencies} from '../src/privacy/lifecyc
 import type {AccountPrivacyStatus} from '../src/privacy/client.ts';
 import type {StoredWorkspace} from '../src/sync/workspace.ts';
 import type {AccountIdentity} from '../src/api.ts';
+import {NativeSecretStore,NATIVE_SECRET_INVENTORY} from '../src/platform/nativeSecrets.ts';
+import {createHash} from 'node:crypto';
 
 const scope={apiBaseUrl:'https://sync.example.test',accountId:'11111111-1111-4111-8111-111111111111'};
 const other={...scope,accountId:'22222222-2222-4222-8222-222222222222'};
@@ -113,4 +115,46 @@ test('explicit local cleanup without a pending device ACK does not request token
     assert.equal(finalized,1);assert.equal(f.state.acks,0);assert.equal(f.state.binding,null);
     assert.equal(await f.store.read(scope),null);assert(await f.store.read(other));
   }finally{await f.store.close();}
+});
+
+function nativeFixture() {
+  const entries=new Map<string,unknown>();let failInventory=false;
+  const bridge={get:async(key:string)=>entries.get(key) as string??null,
+    set:async(key:string,value:unknown)=>{if(failInventory&&key===NATIVE_SECRET_INVENTORY)throw Error('synthetic index failure');entries.set(key,value);},
+    remove:async(key:string)=>entries.delete(key),keys:async()=>[...entries.keys()]};
+  return {entries,open:()=>new NativeSecretStore(bridge),fail:()=>{failInventory=true;}};
+}
+
+test('unindexed legacy endpoint credentials block erasure ACK and can only be removed after recovering their exact owner address',async()=>{
+  const f=await fixture(),native=nativeFixture(),base=native.open(),registry=new AccountSecretStore(base,scope,()=>true);
+  const oldNamespace='paperquay.ai.v1.'+'a'.repeat(64),oldAddress=createHash('sha256').update(JSON.stringify([oldNamespace,'api-key'])).digest('hex');
+  native.entries.set(oldAddress,'synthetic former endpoint key');
+  const foreign=new AccountSecretStore(base,other,()=>true);await foreign.set('foreign provider','api-key','foreign secret');
+  await registry.set('current provider','api-key','current secret');
+  f.dependencies.clearSecrets=async()=>registry.erase();
+  try{
+    await assert.rejects(f.erase(),{code:'LEGACY_SECRETS_UNVERIFIED'});
+    assert.equal(f.state.acks,0);assert.equal(f.state.sessions,0);assert(f.state.binding);assert(await f.store.read(scope));
+    assert.equal(native.entries.get(oldAddress),'synthetic former endpoint key');assert.equal(await foreign.get('foreign provider','api-key'),'foreign secret');
+    // A known former endpoint can be explicitly attributed. Never guess an
+    // unknown hash's owner, clear all system keys, or ACK an incomplete wipe.
+    await registry.register([[oldNamespace,'api-key']]);await f.erase();
+    assert.equal(native.entries.has(oldAddress),false);assert.equal(f.state.acks,1);assert.equal(await f.store.read(scope),null);
+    assert.equal(await foreign.get('foreign provider','api-key'),'foreign secret');
+  }finally{await f.store.close();}
+});
+
+test('account provider history survives a native restart and erases former and current endpoints without touching another account',async()=>{
+  const native=nativeFixture(),first=native.open(),old=new AccountSecretStore(first,scope,()=>true),foreign=new AccountSecretStore(first,other,()=>true);
+  await old.set('previous endpoint','api-key','old key');await old.set('replacement endpoint','api-key','new key');
+  await foreign.set('foreign endpoint','api-key','foreign key');
+  const reopened=native.open(),registry=new AccountSecretStore(reopened,scope,()=>true);await registry.erase();await reopened.verifyErasureInventory();
+  assert.equal(await reopened.get('previous endpoint','api-key'),null);assert.equal(await reopened.get('replacement endpoint','api-key'),null);
+  assert.equal(await reopened.get('foreign endpoint','api-key'),'foreign key');
+});
+
+test('native inventory failure prevents a new credential write instead of creating another unindexed key',async()=>{
+  const native=nativeFixture(),store=native.open();native.fail();
+  await assert.rejects(store.set('provider','api-key','must-not-write'),{code:'STORAGE_FAILED'});
+  assert.equal([...native.entries.values()].includes('must-not-write'),false);
 });

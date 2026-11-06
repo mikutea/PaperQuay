@@ -136,8 +136,9 @@ test('native secrets hash namespaces, disable cloud sync and device migration, s
   await Promise.all([store.set('account-a/provider-a', 'api-key', 'private-token'), store.remove('account-a/provider-a', 'api-key')]);
   assert.equal(await store.get('account-a/provider-a', 'api-key'), null);
   assert.equal(store.persistence, 'system');
-  assert.match(String(calls[0][1]), /^[0-9a-f]{64}$/);
-  assert.deepEqual(calls[0].slice(3), [false, false, KeychainAccess.whenUnlockedThisDeviceOnly]);
+  const credentialWrite=calls.find(row=>row[0]==='set'&&row[2]==='private-token')!;
+  assert.match(String(credentialWrite[1]), /^[0-9a-f]{64}$/);
+  assert.deepEqual(credentialWrite.slice(3), [false, false, KeychainAccess.whenUnlockedThisDeviceOnly]);
   await store.set('account-b/provider-a', 'api-key', 'other-token');
   assert.equal(await store.get('account-a/provider-a', 'api-key'), null);
   const failed = new NativeSecretStore({ get: async () => { throw new Error('secret-path-token'); }, set: async () => undefined, remove: async () => false });
