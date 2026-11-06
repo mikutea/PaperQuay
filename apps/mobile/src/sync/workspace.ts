@@ -267,6 +267,8 @@ export class WorkspaceController {
   private readonly binding: {
     key?: () => string | null;
     prepare?: (signal: AbortSignal) => Promise<unknown>;
+    activate?: (identity:AccountIdentity)=>Promise<void>;
+    guard?:()=>boolean;
     read?: () => Promise<AccountIdentity | null>;
     write?: (identity: AccountIdentity) => Promise<void>;
     remove?: () => Promise<void>;
@@ -377,7 +379,7 @@ export class WorkspaceController {
     return this.sameBinding(epoch) && !this.abort.signal.aborted;
   }
   private sameBinding(epoch: number): boolean {
-    return this.epoch === epoch && this.activeBindingKey === this.binding.key?.();
+    return this.epoch === epoch && this.activeBindingKey === this.binding.key?.()&&this.binding.guard?.()!==false;
   }
   private assertBinding(epoch: number): void {
     if (this.sameBinding(epoch)) return;
@@ -469,6 +471,8 @@ export class WorkspaceController {
         this.publish({ status: 'error', error: new ClientError('ACCOUNT_CHANGED') });
         return;
       }
+      await this.binding.activate?.(identity);
+      if(!current())return;
       await this.activate(identity, epoch, false, guard);
       if (!current()) return;
       try { await this.binding.write?.(identity); }
@@ -486,6 +490,8 @@ export class WorkspaceController {
           const cached = await this.binding.read();
           if (!current()) return;
           if (cached) {
+            await this.binding.activate?.(cached);
+            if(!current())return;
             await this.activate(cached, epoch, true, guard);
             if (current()) this.publish({ error: safe });
             return;

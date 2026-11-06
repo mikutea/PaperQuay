@@ -1,5 +1,6 @@
 import{validateRadarRecord}from'./record.ts';
 import type{SecretStore}from'../platform/secretStore.ts';
+import{accountScopeAvailable,subscribeAccountFence}from'../privacy/browserErasure.ts';
 import{radarCore,type RadarRecord,type RadarSource,type RadarTopicConfig}from'./core.ts';
 import{validateRadarConfig}from'./config.ts';
 export const RADAR_HTTP=Object.freeze({pageSize:25,maxPages:2,responseBytes:3*1024*1024,totalBytes:16*1024*1024,deadlineMs:90000,requestMs:15000,gapMs:1100});
@@ -25,11 +26,13 @@ export class RadarClient{
  private fetcher:typeof fetch;private now:()=>number;private mono:()=>number;private pause:(ms:number,signal:AbortSignal)=>Promise<void>;private last=-Infinity;private busy=false;private deadline:number;private gap:number;private requestMs:number;
  constructor(options:RadarClientOptions={}){this.fetcher=options.fetch??globalThis.fetch.bind(globalThis);this.now=options.now??Date.now;this.mono=options.monotonic??(()=>performance.now());this.pause=options.sleep??sleep;this.deadline=Math.min(options.deadlineMs??RADAR_HTTP.deadlineMs,RADAR_HTTP.deadlineMs);this.gap=options.gapMs??RADAR_HTTP.gapMs;this.requestMs=Math.min(options.requestMs??RADAR_HTTP.requestMs,RADAR_HTTP.requestMs);}
  async *search(input:{topic:RadarTopicConfig;timestamp:number;credential?:RadarCredential;current?:()=>boolean;signal?:AbortSignal}):AsyncGenerator<RadarEvent>{
-  if(this.busy)throw new RadarSourceError('LIMIT');const topic=validateRadarConfig(input.topic),op=new Operation(input.current??(()=>true),input.signal,this.deadline);this.busy=true;let allBytes=0,key:string|null=null,keyLoaded=false;
+  if(this.busy)throw new RadarSourceError('LIMIT');let storedScope:RadarScope|null=null,unwatch:(()=>void)|undefined;
+  const topic=validateRadarConfig(input.topic),op=new Operation(()=>
+   (input.current?.()??true)&&(!storedScope||accountScopeAvailable(storedScope)),input.signal,this.deadline);this.busy=true;let allBytes=0,key:string|null=null,keyLoaded=false;
   try{for(const source of topic.sources){let stopped=false;for(const query of topic.queries){if(stopped){yield{kind:'page',source,query,page:0,records:[],received:0,total:null,limited:true,error:'SKIPPED',retryAt:null,bytes:0};continue;}let received=0;for(let page=1;page<=RADAR_HTTP.maxPages;page++){
    op.guard();const cursor={source,query,page};yield{kind:'request',...cursor};op.guard();let event:Extract<RadarEvent,{kind:'page'}>,response:Response|undefined,request:Operation|undefined;let bytes=0;
    try{
-    if(source==='openalex'&&input.credential?.mode==='stored'&&!keyLoaded){const c=input.credential;if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(c.ref))throw new RadarSourceError('SECRET_UNAVAILABLE');let value:string|null;try{value=await op.wait(()=>c.store.get(radarSecretNamespace(c.scope),c.ref));}catch(e){if(e instanceof RadarSourceError)throw e;throw new RadarSourceError('SECRET_UNAVAILABLE');}op.guard();key=validateRadarKey(value);keyLoaded=true;}
+    if(source==='openalex'&&input.credential?.mode==='stored'&&!keyLoaded){const c=input.credential;if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(c.ref))throw new RadarSourceError('SECRET_UNAVAILABLE');let value:string|null;try{const namespace=radarSecretNamespace(c.scope);storedScope=c.scope;unwatch=subscribeAccountFence(storedScope,()=>op.abort('CHANGED'));value=await op.wait(()=>c.store.get(namespace,c.ref));}catch(e){if(e instanceof RadarSourceError)throw e;throw new RadarSourceError('SECRET_UNAVAILABLE');}op.guard();key=validateRadarKey(value);keyLoaded=true;}
     const wait=this.gap-Math.max(0,this.mono()-this.last);if(wait>0)await op.wait(()=>this.pause(wait,op.controller.signal));op.guard();this.last=this.mono();
     request=new Operation(()=>{op.guard();return true;},op.controller.signal,this.requestMs);const req=request,headers:Record<string,string>={Accept:'application/json'};if(source==='openalex'&&key)headers.Authorization='Bearer '+key;
     response=await op.wait(()=>req.wait(()=>this.fetcher(radarSourceUrl(cursor,topic,input.timestamp),{method:'GET',headers,credentials:'omit',redirect:'error',cache:'no-store',referrerPolicy:'no-referrer',signal:req.controller.signal}),r=>{void r.body?.cancel().catch(()=>{});}),r=>{void r.body?.cancel().catch(()=>{});});op.guard();
@@ -42,6 +45,6 @@ export class RadarClient{
    }catch(e){op.guard();const error=e instanceof RadarSourceError?e:new RadarSourceError('NETWORK');if(['CANCELLED','CHANGED'].includes(error.code))throw error;event={kind:'page',...cursor,records:[],received:0,total:null,limited:true,error:error.code,retryAt:error.retryAt,bytes};stopped=true;}
    finally{request?.close();if(response)void response.body?.cancel().catch(()=>{});}
    op.guard();yield event;if(event.error||event.received<RADAR_HTTP.pageSize||received>=event.total!)break;
-  }}}}finally{op.close();this.busy=false;key=null;}
+  }}}}finally{unwatch?.();op.close();this.busy=false;key=null;}
  }
 }

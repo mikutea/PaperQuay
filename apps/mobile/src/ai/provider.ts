@@ -1,4 +1,5 @@
 import {AiError} from './errors.ts';
+import {accountScopeAvailable} from '../privacy/browserErasure.ts';
 import {aiAccountKey,defaultAiProvider,parseAiProvider} from '../../../../packages/ai-core/src/provider.ts';
 import type {AiAccountScope,AiProviderConfig} from './types.ts';
 export * from '../../../../packages/ai-core/src/provider.ts';
@@ -23,6 +24,7 @@ export class LocalAiConfigStore {
     catch{throw new AiError('SETTINGS_STORAGE_FAILED');}
   }
   save(scope: AiAccountScope, config: AiProviderConfig): void {
+    if(!accountScopeAvailable(scope))throw new AiError('CANCELLED');
     const safe = parseAiProvider(config);
     try {
       const key=encodeURIComponent(aiAccountKey(scope)),previous=this.load(scope);

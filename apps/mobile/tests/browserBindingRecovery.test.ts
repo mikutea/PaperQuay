@@ -46,6 +46,7 @@ test('browser closure then reload retains the verified owner without credentials
     assert.deepEqual(await binding.read(),identity);assert.equal((await store.read(scope))!.sync.outbox.length,1);
     let cleared=0,finalized=0;const clear=async()=>{cleared++;};
     await eraseLocalAccount(config.apiBaseUrl,closed,()=>true,{binding,store,stop:()=>controller.deactivate(),
+      fence:async()=>undefined,complete:async(_scope,_request,finish)=>finish(),
       clearIncoming:clear,clearSecrets:clear,clearPdf:clear,clearParsed:clear,clearAi:clear,clearExports:clear,
       acknowledge:async()=>{throw Error('Replacement login must never ACK the original session');},
       clearSession:async(afterPersisted,renew)=>{assert.equal(renew,false);await afterPersisted(null);finalized++;}},

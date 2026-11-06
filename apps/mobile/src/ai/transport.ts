@@ -32,8 +32,9 @@ export class AiRequestGuard {
   #external?: AbortSignal;
   #timer: ReturnType<typeof setTimeout>;
   #reason: AiError | null = null;
+  #cleanup=new Set<()=>void>();
   #externalAbort = () => this.stop(new AiError('CANCELLED'));
-  constructor(signal: AbortSignal | undefined, timeoutMs: number) {
+  constructor(signal: AbortSignal | undefined, timeoutMs: number,private current?:()=>boolean) {
     this.#external = signal;
     this.#timer = setTimeout(() => this.stop(new AiError('TIMEOUT')), timeoutMs);
     signal?.addEventListener('abort', this.#externalAbort, { once: true });
@@ -44,7 +45,11 @@ export class AiRequestGuard {
     this.#reason = reason;
     this.controller.abort();
   }
-  check(): void { if (this.signal.aborted) throw this.#reason ?? new AiError('CANCELLED'); }
+  check(): void {
+    let current=true;try{current=this.current?.()??true;}catch{current=false;}
+    if(!current)this.stop(new AiError('CANCELLED'));
+    if (this.signal.aborted) throw this.#reason ?? new AiError('CANCELLED');
+  }
   wait<T>(promise: Promise<T>, idleMs?: number): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -63,7 +68,9 @@ export class AiRequestGuard {
   close(): void {
     clearTimeout(this.#timer);
     this.#external?.removeEventListener('abort', this.#externalAbort);
+    for(const dispose of this.#cleanup)dispose();this.#cleanup.clear();
   }
+  onClose(dispose:()=>void){this.#cleanup.add(dispose);}
 }
 
 export function cancelResponseBody(response: Response): void {

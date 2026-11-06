@@ -12,9 +12,12 @@ import {eraseLocalAccount} from './lifecycle.ts';
 import {clearPrivateExportCache} from './saveExport.ts';
 import type {PersonalExportSink} from './exportStream.ts';
 import {clearScopedNativeExports} from '../platform/exportScope.ts';
+import type {BrowserErasureCoordinator} from './browserErasure.ts';
 
 export function createPrivacyRuntime(config:AppConfig,auth:AuthSession,store:AccountStorage<StoredWorkspace>,
-  secrets:SecretStore,controller:WorkspaceController,binding:ReturnType<typeof verifiedBinding>) {
+  secrets:SecretStore,controller:WorkspaceController,binding:ReturnType<typeof verifiedBinding>,
+  options:{browserErasure?:BrowserErasureCoordinator|null;owner?:object;stop?():void}={}) {
+  const runtimeOwner=options.owner??{};
   const client=new AccountPrivacyClient({apiBaseUrl:config.apiBaseUrl,getAccessToken:auth.getAccessToken,
     getIdentityKey:binding.key,subscribeIdentity:auth.subscribe});
   let erasureRecovery:{identity:AccountIdentity;status:AccountPrivacyStatus;current:()=>boolean}|null=null;
@@ -51,7 +54,11 @@ export function createPrivacyRuntime(config:AppConfig,auth:AuthSession,store:Acc
         return saved&&saved.current()&&saved.status.closureRequestId===status.closureRequestId&&saved.identity.accountId===status.accountId
           ?structuredClone(saved.identity):null;
       }};
-      await eraseLocalAccount(config.apiBaseUrl,status,current,{binding:recoverableBinding,store,stop:()=>controller.deactivate(),
+      await eraseLocalAccount(config.apiBaseUrl,status,current,{binding:recoverableBinding,store,stop:options.stop??(()=>controller.deactivate()),
+        fence:async(scope,requestId)=>{options.browserErasure?.publish(scope,requestId,runtimeOwner);},
+        complete:async(scope,requestId,finish)=>{
+          if(options.browserErasure)await options.browserErasure.complete(scope,requestId,runtimeOwner,finish);else await finish();
+        },
         clearIncoming:async scope=>{const {purgeIncomingShareOwner}=await import('../platform/incomingShare.ts');check();await purgeIncomingShareOwner(accountScopeKey(scope),{current});},
         async clearSecrets(scope,workspace) {
           check();const [{LocalAiConfigStore,aiSecretNamespace,AI_SECRET_KEY},{zoteroSecretNamespace,ZOTERO_SECRET_KEY},{radarSecretNamespace}]=await Promise.all([
