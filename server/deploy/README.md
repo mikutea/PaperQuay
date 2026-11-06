@@ -50,6 +50,10 @@ Web 只信任这些单独地址，从右向左解析并向 API 发送单个已�
 配置恢复渠道与隐私说明后，核对真实 HTTPS discovery 和签名密钥，再启动 `sync`。
 Web 入口不会代理 master realm 或身份管理控制台。
 
+桌面每次主动登录都发送 `prompt=login`、`max_age=0`，并验证签名 ID token 的最新
+`auth_time`；不能用系统浏览器残留的 SSO 登录状态静默恢复刚退出的应用账号。
+桌面退出会清理应用内存会话，不宣称同时退出其他网站或清除系统浏览器的 Cookie。
+
 执行命令时，使用所选操作目录的 `compose.env`、`compose.production.yml` 和
 `--project-directory`，避免把 shell 当前目录或其他项目带入操作。
 
