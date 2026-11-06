@@ -32,7 +32,16 @@ const button = (renderer: ReactTestRenderer, label: string) => {
   const value = renderer.root.findAllByType('button').find((node) => text(node) === label); assert.ok(value, `Button ${label}`); return value;
 };
 const flush = async () => { await act(async () => { await new Promise<void>((resolve) => setImmediate(resolve)); }); };
-async function until(predicate: () => boolean) { for (let i = 0; i < 100; i++) { if (predicate()) return; await flush(); } assert.fail('UI did not settle'); }
+async function until(predicate: () => boolean) {
+  // Digest/file work can still be pending after many empty event-loop turns.
+  // Bound elapsed time and yield to that work instead of counting fast spins.
+  const deadline = performance.now() + 5000;
+  while (performance.now() < deadline) {
+    if (predicate()) return;
+    await act(async () => { await new Promise<void>((resolve) => setTimeout(resolve, 5)); });
+  }
+  assert.fail('UI did not settle within 5 seconds');
+}
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>((done) => { resolve = done; }); return { resolve, promise }; }
 function version(document = fixture()): PdfVersion { return { entityId: document.attachmentVersionId, data: {
   paperId: document.paperId, attachmentId: id(3), sha256: document.pdf.sha256, sizeBytes: document.pdf.sizeBytes,
@@ -187,9 +196,10 @@ test('a successful cache commit acknowledged after cancellation retires the old 
     model.stored.current = value; model.stored.writes++; entered.resolve(); await gate.promise;
   });
   const replacement = fixture(); replacement.blocks[0].text = 'Committed replacement'; replacement.blocks[0].markdown = 'Committed replacement';
-  // Real crypto/asset preparation runs before this hook. Wait for the actual
-  // commit entry, rather than 100 event-loop turns (only ~12 ms on loaded CI).
-  await model.upload(replacement); await act(async()=>entered.promise);
+  const fileBytes = new TextEncoder().encode(JSON.stringify(replacement)).buffer;
+  const delayedRead = new Promise<ArrayBuffer>((resolve) => setTimeout(() => resolve(fileBytes), 50));
+  // Wait for the actual commit entry after asynchronous file/crypto work.
+  await model.upload(replacement, delayedRead); await act(async()=>entered.promise);
   await act(async () => { button(model.renderer, '取消解析操作').props.onClick(); });
   await until(() => text(model.renderer.root).includes('已取消'));
   gate.resolve();
