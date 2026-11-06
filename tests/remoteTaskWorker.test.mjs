@@ -100,6 +100,7 @@ async function workerFixture(t, options = {}) {
     if (request.url.endsWith('/complete')) {
       assert.equal(request.headers['x-paperquay-remote-fence'], lease.fence);
       assert.equal(request.headers['x-paperquay-remote-attempt'], String(lease.attempt));
+      if (options.limitCompletionOnce) { options.limitCompletionOnce = false; return json(response, { error: { code: 'RATE_LIMITED' } }, 429); }
       if (loseCompletion) { loseCompletion = false; request.socket.destroy(); return; }
       f.task.state = 'succeeded'; f.task.artifact = { digest: sha(data), sizeBytes: data.length, mediaType: 'application/json' };
       return json(response, { task: f.task, replayed: false });
@@ -140,6 +141,25 @@ test('worker explicit start/stop publishes only public profiles and completes th
   assert.deepEqual(provider, { profiles: f.snapshot.profiles });
   assert.equal(JSON.stringify(provider).includes('SYNTHETIC_SESSION_TOKEN'), false); assert.equal(JSON.stringify(provider).includes(external.base), false);
   await worker.stop(); assert.equal(worker.snapshot().running, false); assert.ok(f.requests.some((request) => request.method === 'DELETE'));
+});
+
+test('a completion HTTP 429 retains the artifact and enablement; recovery uploads it without repeating the adapter', async t => {
+  const f = await workerFixture(t, { core: (await import('./remoteTaskFixtures.mjs')).core, limitCompletionOnce: true });
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  let executions = 0;
+  const worker = f.factory({ execute: async () => { executions++; return f.bytes; } });
+  t.after(() => worker.stop()); await worker.start({ manual: true });
+  const first = await worker.runOnce();
+  assert.equal(first.state, 'interrupted'); assert.equal(first.errorCode, 'RATE_LIMITED');
+  assert.equal(worker.snapshot().running, true); assert.equal(worker.snapshot().errorCode, 'RATE_LIMITED');
+  assert.equal((await f.journal.read(f.snapshot.scope, f.task.id)).stage, 'complete_pending');
+  assert.equal(f.requests.filter(request => request.path.endsWith('/fail')).length, 0);
+  const before = f.requests.length; assert.deepEqual(await worker.runOnce(), { worked: false });
+  assert.equal(f.requests.length, before);
+  f.resume(); t.mock.timers.tick(60000);
+  assert.equal((await worker.runOnce()).state, 'succeeded'); assert.equal(executions, 1);
+  assert.equal((await f.journal.read(f.snapshot.scope, f.task.id)).stage, 'completed');
+  assert.equal(worker.snapshot().errorCode, null);
 });
 test('worker stop aborts a real MinerU submission socket; its journal prevents a paid resubmit after restart', async (t) => {
   const f = await workerFixture(t, { core: (await import('./remoteTaskFixtures.mjs')).core });
@@ -232,7 +252,7 @@ test('explicit new-session reassignment recovers only the server-named known Min
   f.resume(); f.snapshot.scope.deviceId = randomUUID(); f.snapshot.generation.account++;
   f.task.providerDeviceId = f.snapshot.scope.deviceId; f.task.recoveryProviderDeviceId = oldScope.deviceId;
   const second = f.factory(adapter()); t.after(() => second.stop()); await second.start({ manual: true });
-  assert.equal((await second.runOnce()).state, 'succeeded'); assert.equal(submissions, 1); assert.equal(uploads, 1); assert.equal(polls, 1);
+  const recovered = await second.runOnce(); assert.equal(recovered.state, 'succeeded', JSON.stringify(recovered)); assert.equal(submissions, 1); assert.equal(uploads, 1); assert.equal(polls, 1);
   assert.equal((await f.journal.read(oldScope, f.task.id)).stage, 'completed');
   assert.equal((await f.journal.read(f.snapshot.scope, f.task.id)).stage, 'completed');
 });
@@ -286,7 +306,7 @@ test('a confirmed intermediate holder preserves newer batch progress for the nex
   f.resume(); f.snapshot.scope.deviceId = randomUUID(); f.task.providerDeviceId = f.snapshot.scope.deviceId;
   const reads = []; const recording = { read: (scope, id) => { reads.push(scope.deviceId); return f.journal.read(scope, id); }, write: f.journal.write };
   const third = f.factory(adapter(), { journal: recording }); t.after(() => third.stop()); await third.start({ manual: true });
-  assert.equal((await third.runOnce()).state, 'succeeded'); assert.equal(submissions, 1); assert.equal(uploads, 1);
+  const recovered = await third.runOnce(); assert.equal(recovered.state, 'succeeded', JSON.stringify(recovered)); assert.equal(submissions, 1); assert.equal(uploads, 1);
   assert.ok(reads.includes(holderB)); assert.equal(reads.includes(holderA.scope.deviceId), false);
 });
 test('uncertain recovery confirmation and cancellation authorize no paid external work', async (t) => {
