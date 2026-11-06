@@ -13,6 +13,9 @@ from unittest.mock import patch
 spec = importlib.util.spec_from_file_location('paperquay_ops', Path(__file__).resolve().parents[1] / 'deploy/ops.py')
 ops = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ops)
+rehearsal_spec = importlib.util.spec_from_file_location('paperquay_rehearsal', Path(__file__).with_name('operations_docker.py'))
+rehearsal = importlib.util.module_from_spec(rehearsal_spec)
+rehearsal_spec.loader.exec_module(rehearsal)
 
 
 class OperationsTests(unittest.TestCase):
@@ -53,6 +56,13 @@ class OperationsTests(unittest.TestCase):
                       [dict(known[0], checksum='0' * 64), *known[1:]], None]:
             with self.assertRaisesRegex(ops.OpsError, 'SCHEMA_UNSUPPORTED'):
                 ops.schema_status(wrong, known)
+
+    def test_identity_health_checks_http_status_and_json_without_whitespace_assumptions(self):
+        self.assertTrue(rehearsal.identity_ready('HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n\r\n{"status":"UP"}'))
+        self.assertTrue(rehearsal.identity_ready('HTTP/1.1 200 OK\n\n{\n  "status": "UP"\n}'))
+        for response in ('HTTP/1.1 503 Unavailable\r\n\r\n{"status":"UP"}',
+                         'HTTP/1.0 200 OK\r\n\r\n{"status":"DOWN"}', 'HTTP/1.0 200 OK\r\n\r\nnot-json', ''):
+            self.assertFalse(rehearsal.identity_ready(response))
 
     def test_full_archive_checks_all_files_including_images_and_configuration(self):
         archive, target = self.archive()
