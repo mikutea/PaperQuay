@@ -66,7 +66,7 @@ export function createPrivacyRuntime(config:AppConfig,auth:AuthSession,store:Acc
         clearAi:async scope=>{const {getAiArchiveStore}=await import('../ai/archiveStore.ts');check();await getAiArchiveStore().clear(scope,{guard:current,accountErasure:true});},
         clearExports:async scope=>{await clearScopedNativeExports(scope);check();await clearPrivateExportCache(scope);},
         acknowledge:(id,token)=>{if(!token)throw new PrivacyError('AUTH_REQUIRED');return client.acknowledge(id,new AbortController().signal,token);},
-        clearSession:afterPersisted=>auth.clearLocalSession({afterPersisted}),
+        clearSession:(afterPersisted,renewForErasure)=>auth.clearLocalSession({afterPersisted,renewForErasure}),
       },{explicitLocalConsent});
       erasureRecovery=null;
     },
