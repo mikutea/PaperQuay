@@ -20,12 +20,13 @@ import {ZoteroClient,zoteroSecretNamespace,ZOTERO_SECRET_KEY} from '../src/libra
 import {RadarClient,radarSecretNamespace} from '../src/radar/client.ts';
 import {config as radarTopic,at as radarTime} from './radarFixtures.ts';
 import {authSubject} from '../src/auth/subject.ts';
+import {openPersonalExportSink,type PersonalSaveRuntime} from '../src/privacy/saveExport.ts';
 
 const config=parseAppConfig({apiBaseUrl:'https://sync.example.test',oidcAuthority:'https://id.example.test/realms/paperquay',oidcClientId:'mobile'},'https://app.example.test');
 const now='2026-11-06T00:00:00.000Z',factory=new IDBFactory();
 const identity=(accountId:string,deviceId:string):AccountIdentity=>({accountId,device:{id:deviceId,name:'Synthetic browser',platform:'web',createdAt:now,lastSeenAt:now,revokedAt:null}});
 function context(coordinator:BrowserErasureCoordinator,databaseName:string,bindingName:string,accountId:string,deviceId:string,token:string,
-  configStorage?:Pick<Storage,'getItem'|'setItem'|'removeItem'>){
+  configStorage?:Pick<Storage,'getItem'|'setItem'|'removeItem'>,openExportSink?:typeof openPersonalExportSink){
   const who=(id:string)=>authSubject({iss:config.oidcAuthority,sub:id,sid:token},config.oidcAuthority);
   let subject:AuthSubject|null=who(accountId),account=identity(accountId,deviceId),blocked=false;
   let snapshot:AuthSnapshot={status:'signed-in'};
@@ -42,7 +43,7 @@ function context(coordinator:BrowserErasureCoordinator,databaseName:string,bindi
   const api={register:async()=>account,push:async()=>{throw Error('No automatic network');},pull:async()=>{throw Error('No automatic network');},
     conflicts:async()=>({conflicts:[],nextCursor:'',hasMore:false}),devices:async()=>[],revokeDevice:async()=>{},resolveConflict:async()=>{throw Error('No conflicts');}};
   controller=new WorkspaceController({api,apiBaseUrl:config.apiBaseUrl,store,binding:{...binding,guard:lease.guard,activate:lease.activate}});
-  const privacy=createPrivacyRuntime(config,auth,store,secrets,controller,binding,lease.privacyOptions);
+  const privacy=createPrivacyRuntime(config,auth,store,secrets,controller,binding,{...lease.privacyOptions,openExportSink});
   return {auth,secrets,binding,store,controller,privacy,lease,api,
     async bind(){controller.setOnline(true);await controller.bind('Synthetic browser');assert.equal(controller.getSnapshot().status,'ready',controller.getSnapshot().error?.code);controller.setOnline(false);},
     changeOwner(id:string){subject=who(id);account=identity(id,crypto.randomUUID());blocked=false;listeners.forEach(fn=>fn());},
@@ -206,6 +207,49 @@ test('a peer accepts only the server-verified account and closure request, then 
     response={accountId:replacementId,state:'active',closedAt:null,closureRequestId:null,deviceErasure:{requested:false,pending:0,acknowledged:0,thisDevicePending:false}};
     assert.deepEqual(await peer.privacy.client.status(new AbortController().signal),response);assert.equal(queries,4);
   }finally{await peer.close();ca.detach();cb.detach();}
+});
+
+for(const mode of ['local','server','picker'])test(`failed temporary-export cleanup stays pending until an explicit successful retry (${mode})`,{timeout:15000},async t=>{
+  const locks=new LockHub(),storage=new StorageHub(),one=storage.port(),two=storage.port(),previous=new Map<string,PropertyDescriptor|undefined>();
+  for(const [key,value] of Object.entries({indexedDB:factory,localStorage:one.storage})){
+    previous.set(key,Object.getOwnPropertyDescriptor(globalThis,key));Object.defineProperty(globalThis,key,{configurable:true,value});
+  }
+  t.after(()=>{for(const [key,descriptor] of previous){if(descriptor)Object.defineProperty(globalThis,key,descriptor);else Reflect.deleteProperty(globalThis,key);}});
+  const ca=new BrowserErasureCoordinator({...one,locks:locks.port('initiator'),timeoutMs:20}),cb=new BrowserErasureCoordinator({...two,locks:locks.port('peer')});
+  const accountId=crypto.randomUUID(),deviceId=crypto.randomUUID(),scope={apiBaseUrl:config.apiBaseUrl,accountId},requestId=crypto.randomUUID(),owner={};
+  const writeEntered=deferred(),writeRelease=deferred();let failed=true,temporary=true,aborts=0,confirmed=0,peerAcks=0,statusCalls=0,finished=0;
+  const abort=async()=>{aborts++;if(failed)throw Error('Synthetic temporary destination deletion failed');temporary=false;};
+  const save={native:false,pick:async()=>{writeEntered.resolve();await writeRelease.promise;return {write:async()=>{},close:async()=>{finished++;},abort};}} as unknown as PersonalSaveRuntime;
+  const picker:typeof openPersonalExportSink=(scope,current,_runtime,cleanup)=>openPersonalExportSink(scope,current,save,cleanup);
+  const peer=context(cb,crypto.randomUUID(),crypto.randomUUID(),accountId,deviceId,'peer-token',undefined,mode==='picker'?picker:undefined);
+  const closed:AccountPrivacyStatus={accountId,state:'closed',closedAt:now,closureRequestId:requestId,deviceErasure:{requested:true,pending:1,acknowledged:0,thisDevicePending:true}};
+  t.mock.method(globalThis,'fetch',async(input:RequestInfo|URL)=>{
+    const url=String(input);
+    if(url.endsWith('/export')){
+      assert.equal(mode,'server');const header=new TextEncoder().encode(JSON.stringify({kind:'header',format:'paperquay-personal-data',version:1,accountId,
+        consistency:'repeatable-read',scope:'application-server'})+'\n');
+      return new Response(new ReadableStream({start(controller){controller.enqueue(header);}}),{headers:{'Content-Type':'application/x-ndjson'}});
+    }
+    if(url.endsWith('/status')){statusCalls++;return Response.json(closed);}
+    assert(url.endsWith('/erasure-ack'));assert.equal(temporary,false);peerAcks++;return Response.json({acknowledged:true});
+  });
+  try{
+    await peer.bind();const sink={write:async()=>{writeEntered.resolve();await writeRelease.promise;},finish:async()=>{finished++;return 'saved' as const;},abort};
+    const exporting=assert.rejects(mode==='picker'?peer.privacy.exportData(scope,false,new AbortController().signal)
+      :mode==='local'?peer.privacy.localExport(scope,sink,new AbortController().signal):peer.privacy.client.exportData(scope,sink,new AbortController().signal));
+    await writeEntered.promise;ca.publish(scope,requestId,owner);
+    const acknowledge=async()=>{confirmed++;assert.equal(temporary,false);};
+    await assert.rejects(ca.complete(scope,requestId,owner,acknowledge),{code:'BROWSER_ERASURE_PENDING'});
+    writeRelease.resolve();await exporting;await waitForPeer(peer.privacy);assert.equal(peer.privacy.getPeerErasure()?.failed,true);assert.equal(aborts,1);
+    await assert.rejects(ca.complete(scope,requestId,owner,acknowledge),{code:'BROWSER_ERASURE_PENDING'});assert.equal(confirmed,0);assert.equal(peerAcks,0);
+    ca.publish(scope,requestId,owner);await assert.rejects(ca.complete(scope,requestId,owner,acknowledge),{code:'BROWSER_ERASURE_PENDING'});
+    assert.equal(aborts,1,'Repeated storage signals must not silently retry failed deletion');
+    await assert.rejects(peer.privacy.finishPeerErasure(new AbortController().signal),{code:'FAILED'});assert.equal(aborts,2);
+    assert.equal(statusCalls,0);assert.equal(confirmed,0);assert.equal(peerAcks,0);assert(temporary);
+    failed=false;await peer.privacy.finishPeerErasure(new AbortController().signal);
+    assert.equal(aborts,3);assert.equal(temporary,false);assert.equal(finished,0);assert.equal(peerAcks,1);assert.equal(statusCalls,1);
+    await ca.complete(scope,requestId,owner,acknowledge);assert.equal(confirmed,1);
+  }finally{failed=false;writeRelease.resolve();await peer.close();ca.detach();cb.detach();}
 });
 
 test('the durable fence aborts in-flight model, Zotero and keyed radar requests after their secrets have already been read',async()=>{

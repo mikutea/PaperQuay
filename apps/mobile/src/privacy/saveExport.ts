@@ -5,6 +5,7 @@ import {sha256} from '@noble/hashes/sha2.js';
 import {bytesToHex} from '@noble/hashes/utils.js';
 import {accountScopeKey,type AccountScope} from '../storage/accountStore.ts';
 import {PrivacyExportError,type PersonalExportSink} from './exportStream.ts';
+import type {PrivateExportCleanup} from './exportCleanup.ts';
 
 export interface BrowserExportWriter {write(bytes:Uint8Array):Promise<void>;close():Promise<void>;abort():Promise<void>}
 export interface PersonalSaveRuntime {
@@ -29,7 +30,9 @@ const platform:PersonalSaveRuntime={
   canShare:async()=>(await Share.canShare()).value,
   create:async path=>(await Filesystem.writeFile({path,directory:Directory.Cache,data:'',encoding:Encoding.UTF8,recursive:true})).uri,
   append:async(path,data)=>{await Filesystem.appendFile({path,directory:Directory.Cache,data,encoding:Encoding.UTF8});},
-  remove:async path=>{await Filesystem.deleteFile({path,directory:Directory.Cache});},
+  remove:async path=>{try{await Filesystem.deleteFile({path,directory:Directory.Cache});}catch(error){
+    if(!error||typeof error!=='object'||!('code'in error)||error.code!=='OS-PLUG-FILE-0008')throw error;
+  }},
   share:async uri=>{await Share.share({files:[uri],dialogTitle:'保存 PaperQuay 个人数据'});},
   ...(typeof browser?.showSaveFilePicker==='function'?{pick:async()=>{
     const handle=await browser.showSaveFilePicker!({suggestedName:name,types:[{description:'PaperQuay 个人数据',accept:{'application/x-ndjson':['.jsonl']}}]});
@@ -49,15 +52,16 @@ export function privateExportDirectory(scope:AccountScope):string {
 
 /** Call directly from the user's click so a supported browser can open its
  * save picker before token/network awaits. Nothing is promoted before finish. */
-export async function openPersonalExportSink(scope:AccountScope,current:()=>boolean,runtime:PersonalSaveRuntime=platform):Promise<PersonalExportSink> {
+export async function openPersonalExportSink(scope:AccountScope,current:()=>boolean,runtime:PersonalSaveRuntime=platform,
+  cleanup?:Pick<PrivateExportCleanup,'track'>):Promise<PersonalExportSink> {
+  const track=(sink:PersonalExportSink)=>cleanup?.track(sink)??sink;
   const guard=()=>{if(!current())throw new PrivacyExportError('CHANGED');};guard();
   if(runtime.native) {
     if(!runtime.available()||!await runtime.canShare())throw new PrivacyExportError('UNAVAILABLE');guard();
     const id=runtime.id();if(!/^[0-9a-f-]{36}$/.test(id))throw new PrivacyExportError('FAILED');
     const path=privateExportDirectory(scope)+'/'+id+'/'+name;
-    const uri=await runtime.create(path);let opened=false,finished=false;
-    try{guard();}catch(error){await runtime.remove(path).catch(()=>undefined);throw error;}
-    return {
+    let uri='',opened=false,finished=false;
+    const sink=track({
       write:async bytes=>{guard();if(opened||finished)throw new PrivacyExportError('FAILED');
         await runtime.append(path,new TextDecoder('utf-8',{fatal:true}).decode(bytes));guard();},
       finish:async()=>{guard();if(opened||finished)throw new PrivacyExportError('FAILED');opened=true;
@@ -65,23 +69,24 @@ export async function openPersonalExportSink(scope:AccountScope,current:()=>bool
       // Once the OS share UI has opened, its recipient may still be reading.
       // Keep that account-scoped cache; an explicit account wipe removes it.
       abort:async()=>{if(!opened&&!finished)await runtime.remove(path);},
-    };
+    });
+    try{uri=await runtime.create(path);guard();return sink;}catch(error){await sink.abort().catch(()=>undefined);throw error;}
   }
   if(runtime.pick) {
     const writer=await runtime.pick();
-    try{guard();}catch(error){await writer.abort().catch(()=>undefined);throw error;}
     let finished=false;
-    return {write:async bytes=>{guard();if(finished)throw new PrivacyExportError('FAILED');await writer.write(bytes);guard();},
+    const sink=track({write:async bytes=>{guard();if(finished)throw new PrivacyExportError('FAILED');await writer.write(bytes);guard();},
       finish:async()=>{guard();await writer.close();finished=true;guard();return 'saved';},
-      abort:async()=>{if(!finished)await writer.abort();}};
+      abort:async()=>{if(!finished)await writer.abort();}});
+    try{guard();return sink;}catch(error){await sink.abort().catch(()=>undefined);throw error;}
   }
   const parts:Uint8Array[]=[];let size=0,finished=false;
-  return {
+  return track({
     write:async bytes=>{guard();if(finished)throw new PrivacyExportError('FAILED');size+=bytes.length;
       if(size>16*1024*1024)throw new PrivacyExportError('TOO_LARGE');parts.push(new Uint8Array(bytes));},
     finish:async()=>{guard();if(finished)throw new PrivacyExportError('FAILED');runtime.download(parts);finished=true;parts.length=0;return 'download';},
     abort:async()=>{parts.length=0;},
-  };
+  });
 }
 
 export async function clearPrivateExportCache(scope:AccountScope):Promise<void> {
