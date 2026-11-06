@@ -423,7 +423,7 @@ def restore_drill(stack, backup_path, expected_hash, identity_path):
              '--network', 'none', '--security-opt', 'no-new-privileges:true', '--memory', '768m',
              '--mount', 'type=volume,source=' + name + ',target=/var/lib/postgresql',
              '--mount', 'type=bind,source=' + str(password) + ',target=/run/secrets/bootstrap,readonly',
-             '-e', 'POSTGRES_USER=paperquay_restore_bootstrap', '-e', 'POSTGRES_DB=postgres',
+             '-e', 'POSTGRES_USER=paperquay_restore_bootstrap', '-e', 'POSTGRES_DB=paperquay_restore_bootstrap',
              '-e', 'POSTGRES_PASSWORD_FILE=/run/secrets/bootstrap', image],
             stdout=subprocess.DEVNULL)
         # Failure intentionally retains the labelled, network-isolated clone for
@@ -438,7 +438,15 @@ def restore_drill(stack, backup_path, expected_hash, identity_path):
             raise OpsError('RESTORE_DATABASE_NOT_READY')
         with open(stage / 'cluster.sql', 'rb') as sql:
             run(['docker', 'exec', '-i', name, 'psql', '-X', '-v', 'ON_ERROR_STOP=1', '-U',
-                 'paperquay_restore_bootstrap', '-d', 'template1'], stdin=sql, stdout=subprocess.DEVNULL)
+                 'paperquay_restore_bootstrap', '-d', 'paperquay_restore_bootstrap'], stdin=sql, stdout=subprocess.DEVNULL)
+        # pg_dumpall --clean can drop both postgres and template1. Restore from
+        # a fresh maintenance DB outside the admitted source-cluster names,
+        # then remove only that clone-local bootstrap DB after psql has exited.
+        run(['docker', 'exec', name, 'dropdb', '-U', 'paperquay_restore_bootstrap',
+             '--maintenance-db=postgres', 'paperquay_restore_bootstrap'], stdout=subprocess.DEVNULL)
+        restored_databases = json.loads(capture(psql(name, 'postgres',
+            'SELECT json_agg(datname ORDER BY datname) FROM pg_database WHERE NOT datistemplate')))
+        require(restored_databases == sorted(['postgres', *DATABASES]), 'RESTORE_DATABASE_SCOPE_MISMATCH')
         require(current_schema(name) == manifest['schema'], 'RESTORE_SCHEMA_MISMATCH')
         require(fingerprints(name) == manifest['fingerprints'], 'RESTORE_DATA_MISMATCH')
         result = {'status': 'restored_and_verified', 'sha256': expected_hash, 'quiescedAt': manifest['quiescedAt'],
