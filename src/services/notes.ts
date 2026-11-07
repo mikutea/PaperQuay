@@ -1,5 +1,6 @@
 import { invoke } from '../platform/electron/core';
 import { emitNoteChanged } from '../app/appEvents';
+import { clearNoteEditorDraftsForNote } from '../features/notes/noteEditorUtils';
 import type {
   CreateNoteRequest,
   ListNotesRequest,
@@ -93,6 +94,7 @@ export async function updateNote(
 export async function deleteNote(id: string, options: NoteMutationOptions = {}): Promise<void> {
   try {
     await invoke('notes_delete', { id });
+    clearNoteEditorDraftsForNote(id);
     if (!options.silent) {
       emitNoteChanged({
         action: 'deleted',

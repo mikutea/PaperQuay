@@ -35,6 +35,7 @@ import { getCurrentWindow } from '../platform/electron/window';
 import { invoke } from '../platform/electron/core';
 import { listen } from '../platform/electron/event';
 import { flushReaderConfigWrites } from '../services/readerConfig';
+import { hasUnsavedNoteEditorDrafts } from '../features/notes/noteEditorUtils';
 import { useThemeStore } from '../stores/useThemeStore';
 import { HOME_TAB_ID, useTabsStore } from '../stores/useTabsStore';
 
@@ -180,7 +181,10 @@ function App() {
     let unlisten: (() => void) | undefined;
     void listen<{ requestId: string }>('app:before-close', ({ payload }) => {
       void flushReaderConfigWrites().then(
-        () => invoke('app_window_save_complete', { requestId: payload.requestId }),
+        () => invoke('app_window_save_complete', {
+          requestId: payload.requestId,
+          ...(hasUnsavedNoteEditorDrafts() ? { error: true, reason: 'unsaved-notes' } : {}),
+        }),
         () => invoke('app_window_save_complete', { requestId: payload.requestId, error: true }),
       ).catch(console.error);
     }).then((stop) => {

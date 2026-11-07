@@ -23,7 +23,14 @@ These downloads are desktop prerelease packages. Native mobile distribution requ
 
 The startup database-path P2 from [#26](https://github.com/mikutea/PaperQuay/pull/26#discussion_r4214657505) is fixed by [#42](https://github.com/mikutea/PaperQuay/pull/42): SQLite connections and WAL/SHM/journal operations retain a no-follow directory capability, and registered library roots preserve their approved paths through startup. The fix passed 1,560 tests, all eight CI jobs, code/security reviews, and isolated Electron/ASAR persistence checks.
 
-## Changes since app-v0.1.26-mikutea.15
+## Changes in .18 (since .17)
+
+- Warns before closing a window with unsaved note edits. Cancel is the default so the editor stays available for Save or Ctrl / Cmd + S; discarding still requires an explicit close-anyway choice.
+- Blocks application-update installation and library switching while note edits remain unsaved, including edits made while Reader settings are being flushed.
+- Clears retained editor drafts only after a note deletion is confirmed. Failed deletions retain the drafts.
+- Finishes note hydration before the editable frame is presented, so first edits remain saveable when an editor is opened or recreated.
+
+## Changes already included in .16/.17 (since .15)
 
 - Updates Electron certificate-chain protections, Node CI runtimes, KaTeX and affected build dependencies. See the [dependency maintenance notes](https://github.com/mikutea/PaperQuay/blob/app-v{{VERSION}}/docs/dependency-security.md) for upstream advisories and verification requirements.
 - Verifies update metadata against built packages, includes macOS ZIP update payloads, and merges both Mac architectures before publishing the release.

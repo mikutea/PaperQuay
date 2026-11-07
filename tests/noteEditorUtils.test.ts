@@ -5,6 +5,9 @@ import {
   acknowledgeNoteEditorDraftSave,
   canPersistNoteEditorDraft,
   clearNoteEditorDraft,
+  clearNoteEditorDraftsForNote,
+  hasUnsavedNoteEditorDrafts,
+  assertNoteEditorDraftsSaved,
   componentBlockNode,
   getImageFilesFromDataTransfer,
   headingNode,
@@ -23,6 +26,33 @@ import {
   writeNoteEditorDraft,
 } from '../src/features/notes/noteEditorUtils.ts';
 import type { Note, NoteAnchor } from '../src/types/notes.ts';
+
+test('close protection tracks dirty drafts across editors and clears only confirmed saves or deleted notes', () => {
+  const draft = {
+    noteId: 'close-guard-note', baseUpdatedAt: 1, savedSignature: 'saved',
+    draftSignature: 'dirty', title: 'Private draft', tagText: '', color: '#ffffff',
+    snapshot: snapshotFromNote(note()), pendingAnchors: [], updatedAt: 2,
+  };
+  try {
+    assert.equal(hasUnsavedNoteEditorDrafts(), false);
+    writeNoteEditorDraft('close-guard-one', draft);
+    writeNoteEditorDraft('close-guard-two', { ...draft, noteId: 'other-close-note' });
+    assert.equal(hasUnsavedNoteEditorDrafts(), true);
+    assert.throws(assertNoteEditorDraftsSaved, /Save unsaved notes/);
+    acknowledgeNoteEditorDraftSave('close-guard-one', {
+      noteId: draft.noteId, updatedAt: 3, submittedSignature: 'dirty', savedSignature: 'dirty',
+    });
+    assert.equal(hasUnsavedNoteEditorDrafts(), true);
+    clearNoteEditorDraftsForNote('other-close-note');
+    assert.equal(hasUnsavedNoteEditorDrafts(), false);
+    assert.doesNotThrow(assertNoteEditorDraftsSaved);
+    writeNoteEditorDraft('close-guard-clean', { ...draft, draftSignature: 'saved' });
+    assert.equal(hasUnsavedNoteEditorDrafts(), false);
+  } finally {
+    clearNoteEditorDraftsForNote(draft.noteId);
+    clearNoteEditorDraftsForNote('other-close-note');
+  }
+});
 
 test('draft persistence waits for the loaded note fields to render', () => {
   assert.equal(canPersistNoteEditorDraft('alpha', null, 'empty', 'loaded'), false);

@@ -6,7 +6,7 @@ import test from 'node:test';
 const require = createRequire(import.meta.url);
 const ts = require('typescript');
 
-function service(file, flush, invoke) {
+function service(file, flush, invoke, assertNotesSaved = () => {}) {
   const source = readFileSync(new URL('../src/services/' + file, import.meta.url), 'utf8');
   const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS } });
   const exports = {};
@@ -15,6 +15,7 @@ function service(file, flush, invoke) {
     require(name) {
       if (name === '../platform/electron/core') return { invoke };
       if (name === './readerConfig') return { flushReaderConfigWrites: flush };
+      if (name === '../features/notes/noteEditorUtils') return { assertNoteEditorDraftsSaved: assertNotesSaved };
       throw new Error('Unexpected dependency: ' + name);
     },
   });
@@ -43,6 +44,24 @@ for (const [file, method, command, args] of [
     let calls = 0;
     const commands = service(file, async () => { throw new Error('fixture disk full'); }, async () => { calls++; });
     await assert.rejects(commands[method](...args), /fixture disk full/);
+    assert.equal(calls, 0);
+  });
+
+  test(`${method} refuses to restart with an unsaved note`, async () => {
+    let calls = 0;
+    const commands = service(file, async () => { calls++; }, async () => { calls++; }, () => { throw new Error('unsaved note'); });
+    await assert.rejects(commands[method](...args), /unsaved note/);
+    assert.equal(calls, 0);
+  });
+
+  test(`${method} rechecks notes edited while settings are being saved`, async () => {
+    let finish, dirty = false, calls = 0;
+    const saving = new Promise(resolve => { finish = resolve; });
+    const commands = service(file, () => saving, async () => { calls++; }, () => { if (dirty) throw new Error('new note edit'); });
+    const pending = commands[method](...args);
+    dirty = true;
+    finish();
+    await assert.rejects(pending, /new note edit/);
     assert.equal(calls, 0);
   });
 }
