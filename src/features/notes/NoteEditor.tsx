@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -1156,7 +1157,7 @@ export function NoteEditor({
   const dirty = Boolean(note && currentSignature !== lastSavedSignatureRef.current);
   const currentTags = useMemo(() => normalizeTagInput(tagText), [tagText]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     dirtyRef.current = dirty;
   }, [dirty]);
 
@@ -1248,7 +1249,7 @@ export function NoteEditor({
     }
   }, [color, externalUpdateNote, note, setExternalUpdateState, tagText, title]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const incomingSnapshot = snapshotFromNote(note);
     const nextTitle = note?.title ?? '';
     const nextTagText = note?.tags.join(', ') ?? '';
@@ -1364,7 +1365,7 @@ export function NoteEditor({
     setRevision((value) => value + 1);
   }, [color, editor, note, note?.id, note?.updatedAt, setExternalUpdateState, tagText, title]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!note || !lastSavedSignatureRef.current || !canPersistNoteEditorDraft(
       note.id, loadedNoteIdRef.current, currentSignature, pendingHydrationSignatureRef.current,
     )) {

@@ -94,3 +94,31 @@ test('a window that has not loaded the UI can still close without a save round t
   assert.equal(f.window.isDestroyed(), true);
   assert.equal(f.sent.length, 0);
 });
+
+test('unsaved notes cancel closing by default and a later saved close succeeds', async () => {
+  const f = fixture();
+  f.barrier.ready(f.window.webContents);
+  f.window.close();
+  f.complete({ error: true, reason: 'unsaved-notes' });
+  await settled();
+  assert.equal(f.window.isDestroyed(), false);
+  assert.equal(f.canceled(), 1);
+  assert.match(f.dialogs[0].title, /Unsaved notes/);
+  assert.match(f.dialogs[0].message, /will be lost/);
+  assert.equal(f.dialogs[0].defaultId, 0);
+  assert.equal(f.dialogs[0].cancelId, 0);
+  f.window.close();
+  f.complete();
+  await settled();
+  assert.equal(f.window.isDestroyed(), true);
+});
+
+test('discarding unsaved notes requires the explicit close-anyway choice', async () => {
+  const f = fixture({ response: 1 });
+  f.barrier.ready(f.window.webContents);
+  f.window.close();
+  f.complete({ error: true, reason: 'unsaved-notes' });
+  await settled();
+  assert.equal(f.window.isDestroyed(), true);
+  assert.equal(f.dialogs.length, 1);
+});

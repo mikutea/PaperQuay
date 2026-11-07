@@ -1,5 +1,6 @@
 import { invoke } from '../platform/electron/core';
 import { flushReaderConfigWrites } from './readerConfig';
+import { assertNoteEditorDraftsSaved } from '../features/notes/noteEditorUtils';
 
 export interface LibraryLocation {
   profileDirectory: string;
@@ -22,6 +23,8 @@ export interface LibraryLocationCandidate {
 export const getLibraryLocation = () => invoke<LibraryLocation>('library_location_status');
 export const selectLibraryLocation = () => invoke<LibraryLocationCandidate | null>('library_location_select');
 export const activateLibraryLocation = async (token: string) => {
+  assertNoteEditorDraftsSaved();
   await flushReaderConfigWrites();
+  assertNoteEditorDraftsSaved();
   return invoke<{ restarting?: boolean; canceled?: boolean; unchanged?: boolean }>('library_location_activate', { token });
 };

@@ -39,6 +39,22 @@ export interface NoteEditorDraft {
 
 const noteEditorDrafts = new Map<string, NoteEditorDraft>();
 
+export function hasUnsavedNoteEditorDrafts(): boolean {
+  return Array.from(noteEditorDrafts.values()).some((draft) => draft.draftSignature !== draft.savedSignature);
+}
+
+export function assertNoteEditorDraftsSaved(): void {
+  if (hasUnsavedNoteEditorDrafts()) {
+    throw new Error('请先保存尚未保存的笔记，再重启应用或切换文库。 / Save unsaved notes before restarting or switching libraries.');
+  }
+}
+
+export function clearNoteEditorDraftsForNote(noteId: string): void {
+  for (const [key, draft] of noteEditorDrafts) {
+    if (draft.noteId === noteId) noteEditorDrafts.delete(key);
+  }
+}
+
 export function canPersistNoteEditorDraft(
   noteId: string,
   loadedNoteId: string | null,
