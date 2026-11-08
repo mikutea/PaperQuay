@@ -70,7 +70,12 @@ jobs:
               exactMatches[0] ??
               untaggedVersionMatches[0];
 
-            if (release) {
+            if (release && !release.draft) {
+              if (release.tag_name !== tagName || release.target_commitish !== targetCommitish) {
+                throw new Error('Published release identity differs; create a new version.');
+              }
+              core.info('Existing published release is preserved.');
+            } else if (release) {
               const { data } = await github.rest.repos.updateRelease({
                 owner,
                 repo,
@@ -216,6 +221,9 @@ jobs:
       - name: Verify update metadata against built packages
         run: node packaging/mergeUpdateManifests.cjs verify release "${{ needs.create-release.outputs.version }}" "${{ matrix.updateTarget }}"
 
+      - name: Bind update metadata to the final package bytes
+        run: node packaging/releasePublication.cjs release "${{ needs.create-release.outputs.version }}" "${{ matrix.updateTarget }}" "${{ github.sha }}"
+
       - name: Report Electron build failure
         if: failure()
         shell: bash
@@ -251,13 +259,7 @@ jobs:
             release/*.blockmap
             release/SHA256SUMS.txt
             release/stable*.yml
-          if-no-files-found: error
-
-      - name: Upload update metadata for final merge
-        uses: actions/upload-artifact@v4
-        with:
-          name: paperquay-update-${{ matrix.name }}
-          path: release/stable*.yml
+            release/publication-*.json
           if-no-files-found: error
 
       - name: Upload release assets
@@ -266,8 +268,14 @@ jobs:
           script: |
             const fs = require('fs');
             const path = require('path');
+            const { assertDraftIdentity, proofName } = require('./packaging/releasePublication.cjs');
 
             const releaseId = Number('${{ needs.create-release.outputs.release_id }}');
+            const tagName = '${{ needs.create-release.outputs.tag_name }}';
+            const { data: draft } = await github.rest.repos.getRelease({
+              owner: context.repo.owner, repo: context.repo.repo, release_id: releaseId,
+            });
+            assertDraftIdentity(draft, releaseId, tagName, context.sha);
             const releaseDir = path.join(process.cwd(), 'release');
             const assetPatterns = [
               /\.exe$/i,
@@ -292,6 +300,12 @@ jobs:
               core.setFailed('No release assets were generated.');
               return;
             }
+
+            // A retry replaces its proof only after all of that target's files
+            // upload successfully. No same-name workflow artifacts are selected.
+            const proofPath = path.join(releaseDir, proofName('${{ matrix.updateTarget }}'));
+            if (!fs.existsSync(proofPath)) throw new Error('Publication proof missing.');
+            assets.push(proofPath);
 
             const owner = context.repo.owner;
             const repo = context.repo.repo;
@@ -387,22 +401,22 @@ jobs:
           cache: npm
       - name: Install metadata tooling without runtime scripts
         run: npm ci --ignore-scripts
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: paperquay-update-*
-          path: update-manifests
-      - name: Merge all platform update metadata
-        run: node packaging/mergeUpdateManifests.cjs merge update-manifests release-metadata "${{ needs.create-release.outputs.version }}"
-      - name: Publish draft release
+      - name: Verify uploaded packages, merge metadata and publish
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
             const path = require('path');
+            const assert = require('node:assert/strict');
+            const crypto = require('node:crypto');
+            const { SPECS, manifestNames, proofName, getPublicationAsset, MAX_PROOF_BYTES,
+              decodePublicationProof, publicationFingerprint, prepareReleaseManifests,
+              assertDraftIdentity } = require('./packaging/releasePublication.cjs');
             const releaseId = Number('${{ needs.create-release.outputs.release_id }}');
             const tagName = '${{ needs.create-release.outputs.tag_name }}';
             const owner = context.repo.owner;
             const repo = context.repo.repo;
+            const version = '${{ needs.create-release.outputs.version }}';
 
             const { data: release } = await github.rest.repos.getRelease({
               owner,
@@ -410,18 +424,40 @@ jobs:
               release_id: releaseId,
             });
 
-            if (!release.draft && release.tag_name === tagName) {
-              core.info(`Release ${release.tag_name} is already published.`);
-              return;
-            }
-
-            if (!release.draft || release.tag_name !== tagName || release.target_commitish !== context.sha) {
+            if (release.id !== releaseId || release.tag_name !== tagName || release.target_commitish !== context.sha) {
               throw new Error('Release identity changed before metadata publication.');
             }
             const assets = await github.paginate(github.rest.repos.listReleaseAssets, {
               owner, repo, release_id: releaseId, per_page: 100,
             });
-            for (const name of ['stable.yml', 'stable-linux.yml', 'stable-mac.yml']) {
+            const proofs = [];
+            for (const target of Object.keys(SPECS)) {
+              const asset = getPublicationAsset(assets, proofName(target));
+              assert.ok(asset.size <= MAX_PROOF_BYTES, 'Oversized publication proof.');
+              const response = await github.rest.repos.getReleaseAsset({
+                owner, repo, asset_id: asset.id, headers: { accept: 'application/octet-stream' },
+                request: { timeout: 30000 },
+              });
+              proofs.push(decodePublicationProof(asset, response.data));
+            }
+            const fingerprint = publicationFingerprint(proofs, assets, version, context.sha);
+            prepareReleaseManifests(proofs, assets, version, context.sha, 'publication-input', 'release-metadata');
+            function verifyMetadata(currentAssets) {
+              for (const name of manifestNames) {
+                const data = fs.readFileSync(path.join('release-metadata', name));
+                const actual = getPublicationAsset(currentAssets, name);
+                assert.equal(actual.size, data.length, 'Uploaded update metadata size differs.');
+                assert.equal(actual.digest, 'sha256:' + crypto.createHash('sha256').update(data).digest('hex'),
+                  'Uploaded update metadata checksum differs.');
+              }
+            }
+            if (!release.draft) {
+              verifyMetadata(assets);
+              core.info('Already published release verified and preserved.');
+              return;
+            }
+            assertDraftIdentity(release, releaseId, tagName, context.sha);
+            for (const name of manifestNames) {
               const data = fs.readFileSync(path.join('release-metadata', name));
               for (const existing of assets.filter(asset => asset.name === name)) {
                 await github.rest.repos.deleteReleaseAsset({ owner, repo, asset_id: existing.id });
@@ -431,6 +467,15 @@ jobs:
                 headers: { 'content-type': 'application/octet-stream', 'content-length': data.length },
               });
             }
+
+            const finalAssets = await github.paginate(github.rest.repos.listReleaseAssets, {
+              owner, repo, release_id: releaseId, per_page: 100,
+            });
+            assert.equal(publicationFingerprint(proofs, finalAssets, version, context.sha), fingerprint,
+              'Publication assets changed while metadata was prepared.');
+            verifyMetadata(finalAssets);
+            const { data: finalDraft } = await github.rest.repos.getRelease({ owner, repo, release_id: releaseId });
+            assertDraftIdentity(finalDraft, releaseId, tagName, context.sha);
 
             await github.rest.repos.updateRelease({
               owner,
