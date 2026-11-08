@@ -12,6 +12,12 @@ concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
+env:
+  ELECTRON_MIRROR: https://github.com/electron/electron/releases/download/
+
 jobs:
   build:
     name: Build and test
@@ -31,7 +37,15 @@ jobs:
         run: npm ci
 
       - name: Install Electron before parallel tests
-        run: node node_modules/electron/install.js
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node .github/scripts/cache-electron-runtime.cjs
+          node node_modules/electron/install.js
+
+      - name: Test pinned artifact cache helpers
+        run: python -B -m unittest discover -s .github/scripts/tests -p 'test_*.py'
 
       - name: Typecheck and build frontend
         run: npm run build
@@ -56,7 +70,13 @@ jobs:
           node-version: 24.22.1
           cache: npm
       - run: npm ci
-      - run: node node_modules/electron/install.js
+      - name: Install pinned Electron runtime
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node .github/scripts/cache-electron-runtime.cjs
+          node node_modules/electron/install.js
       - run: npm run native:build
       - run: node --test tests/nativeFs.test.mjs tests/sourceAccess.test.mjs tests/databaseRestoreBoundary.test.mjs tests/migrationReadBoundary.test.mjs tests/directoryListingBoundary.test.mjs tests/sqliteOpenBoundary.test.mjs
       - run: node electron/native/smoke.cjs
