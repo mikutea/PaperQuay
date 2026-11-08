@@ -49,7 +49,7 @@ jobs:
         run: |
           npx cap sync android
           cd android
-          bash gradlew --no-daemon assembleDebug lintDebug testDebugUnitTest
+          bash gradlew --no-daemon assembleDebug assembleDebugAndroidTest lintDebug testDebugUnitTest
 
   ios:
     name: iOS simulator compile
