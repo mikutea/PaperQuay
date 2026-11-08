@@ -9,8 +9,9 @@ interface WorkspaceSnapshot {
 }
 
 /** updateWorkspaceNote already applies its confirmed record and refreshes tags.
- * Queries and link targets still need a database read to refresh membership or
- * backlink metadata; ordinary editor saves do not need the entire library. */
+ * It also refreshes backlinks on the old and new link targets. Queries still
+ * need a database read to refresh membership; editor saves do not need the
+ * entire library when the previous and confirmed link lists are known. */
 export function canUseWorkspaceNoteUpdate(
   detail: NoteChangedEventDetail,
   state: WorkspaceSnapshot,
@@ -22,6 +23,6 @@ export function canUseWorkspaceNoteUpdate(
   if (updated.id !== detail.noteId || typeof updated.updatedAt !== 'number' || !Number.isFinite(updated.updatedAt) || updated.deletedAt != null) return false;
   const previous = state.notes.find((note) => note.id === detail.noteId);
   return Boolean(previous
-    && Array.isArray(previous.linkedNoteIds) && previous.linkedNoteIds.length === 0
-    && Array.isArray(updated.linkedNoteIds) && updated.linkedNoteIds.length === 0);
+    && Array.isArray(previous.linkedNoteIds)
+    && Array.isArray(updated.linkedNoteIds));
 }

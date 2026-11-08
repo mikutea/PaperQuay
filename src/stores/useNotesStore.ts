@@ -4,6 +4,7 @@ import {
   createNote,
   deleteNote,
   listNoteTags,
+  listNoteBacklinks,
   listAllNotes,
   listNotes,
   type NoteMutationOptions,
@@ -16,6 +17,7 @@ export const GLOBAL_NOTES_PAPER_ID = 'global-notes';
 // or a write commits, so a delayed snapshot cannot replace newer state.
 let notesReadGeneration = 0;
 let tagsReadGeneration = 0;
+const backlinkReads = new Map<string, symbol>();
 
 interface NotesState {
   notes: Note[];
@@ -31,6 +33,7 @@ interface NotesState {
   setTag: (tag: string | null) => void;
   loadNotes: (request?: ListNotesRequest) => Promise<void>;
   refreshTags: () => Promise<void>;
+  refreshBacklinks: (noteIds: string[]) => Promise<void>;
   createWorkspaceNote: (draft?: Partial<CreateNoteRequest>, options?: NoteMutationOptions) => Promise<Note>;
   updateWorkspaceNote: (noteId: string, patch: UpdateNoteRequest, options?: NoteMutationOptions) => Promise<Note>;
   deleteWorkspaceNote: (noteId: string, options?: NoteMutationOptions) => Promise<void>;
@@ -101,6 +104,30 @@ export const useNotesStore = create<NotesState>()((set, get) => ({
     }
   },
 
+  async refreshBacklinks(noteIds) {
+    const targets = new Set(noteIds);
+    if (targets.size === 0) return;
+    const notes = get().notes.filter((note) => targets.has(note.id));
+    await Promise.all(notes.map(async (target) => {
+      const token = Symbol();
+      backlinkReads.set(target.id, token);
+      // A newer request for this target or a replaced note (e.g. a full list
+      // read) owns its metadata. Unrelated saves keep this target usable.
+      const isCurrent = () => backlinkReads.get(target.id) === token && get().notes.includes(target);
+      try {
+        const backlinks = await listNoteBacklinks(target.id);
+        if (!isCurrent()) return;
+        set((state) => ({notes: state.notes.map((note) => note === target ? {...note, backlinks} : note)}));
+      } catch {
+        // The write already committed. Recover metadata without reporting a
+        // failed save or discarding the confirmed editor contents.
+        if (isCurrent()) void get().loadNotes();
+      } finally {
+        if (backlinkReads.get(target.id) === token) backlinkReads.delete(target.id);
+      }
+    }));
+  },
+
   async createWorkspaceNote(draft = {}, options = {}) {
     set({ saving: true, error: '' });
 
@@ -150,6 +177,7 @@ export const useNotesStore = create<NotesState>()((set, get) => ({
 
   async updateWorkspaceNote(noteId, patch, options = {}) {
     set({ saving: true, error: '' });
+    const previous = get().notes.find((note) => note.id === noteId);
 
     try {
       const note = await updateNote(noteId, patch, options);
@@ -162,6 +190,7 @@ export const useNotesStore = create<NotesState>()((set, get) => ({
           .sort((left, right) => Number(right.isPinned) - Number(left.isPinned) || right.updatedAt - left.updatedAt),
         activeNoteId: state.activeNoteId ?? note.id,
       }));
+      void get().refreshBacklinks([...(previous?.linkedNoteIds ?? []), ...(note.linkedNoteIds ?? [])]);
       void get().refreshTags();
       return note;
     } catch (error) {
