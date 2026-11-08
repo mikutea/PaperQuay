@@ -23,7 +23,12 @@ These downloads are desktop prerelease packages. Native mobile distribution requ
 
 The startup database-path P2 from [#26](https://github.com/mikutea/PaperQuay/pull/26#discussion_r4214657505) is fixed by [#42](https://github.com/mikutea/PaperQuay/pull/42): SQLite connections and WAL/SHM/journal operations retain a no-follow directory capability, and registered library roots preserve their approved paths through startup. The fix passed 1,560 tests, all eight CI jobs, code/security reviews, and isolated Electron/ASAR persistence checks.
 
-## Changes in .19 (since .18)
+## Changes in .20 (since .18)
+
+- Publishes update metadata only after its paired checksums match the final uploaded package bytes. Each platform includes a small `publication-*.json` integrity proof; rerunning one build cannot select an older same-name workflow artifact.
+- Preserves already published package assets on workflow reruns. The withdrawn .19 release is superseded because its Intel Mac update metadata referenced a previous build attempt; its tags and package bytes were preserved.
+
+## Notes changes included from .19 (since .18)
 
 - Reuses the confirmed workspace note after ordinary editor saves without active search/tag filters or outgoing note links, avoiding a repeated full-library read.
 - Keeps database refreshes for filtered results, link/backlink changes, other editors, create/delete events and incomplete update records.
