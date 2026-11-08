@@ -24,15 +24,15 @@ test('a save during an in-flight list read requests a fresh post-save view', () 
   assert.equal(canUseWorkspaceNoteUpdate(event(), {...snapshot(), loading:true}, editorSourceId), false);
 });
 
-test('a newly added outgoing link refreshes its target backlinks', () => {
+test('a newly added outgoing link uses the store and its targeted backlink refresh', () => {
   const changed = event({note:{id:'alpha', updatedAt:42, linkedNoteIds:['target']}});
-  assert.equal(canUseWorkspaceNoteUpdate(changed, snapshot(), editorSourceId), false);
+  assert.equal(canUseWorkspaceNoteUpdate(changed, snapshot(), editorSourceId), true);
 });
 
-test('removing a link or changing an existing link source refreshes old target metadata', () => {
+test('removing a link or editing its source uses the targeted store refresh', () => {
   const linked = {...snapshot(), notes:[{id:'alpha', linkedNoteIds:['old-target']}]};
-  assert.equal(canUseWorkspaceNoteUpdate(event(), linked, editorSourceId), false);
-  assert.equal(canUseWorkspaceNoteUpdate(event({note:{id:'alpha', updatedAt:42, linkedNoteIds:['old-target']}}), linked, editorSourceId), false);
+  assert.equal(canUseWorkspaceNoteUpdate(event(), linked, editorSourceId), true);
+  assert.equal(canUseWorkspaceNoteUpdate(event({note:{id:'alpha', updatedAt:42, linkedNoteIds:['old-target']}}), linked, editorSourceId), true);
 });
 
 test('foreign editors and create/delete events still reload the workspace', () => {

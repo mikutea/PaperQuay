@@ -184,3 +184,114 @@ test('a failed workspace save leaves the record and selection unchanged and allo
     assert.equal(store.getState().notes.find(note => note.id === 'alpha').title, 'Retried Alpha');
   });
 });
+
+const linkedNote = (id, linkedNoteIds = [], backlinks = []) => ({id, title:id, updatedAt:1, linkedNoteIds, backlinks});
+const backlink = (sourceNoteId, targetNoteId, sourceTitle) => ({sourceNoteId, targetNoteId, sourceTitle, sourceUpdatedAt:2, createdAt:1, linkText:targetNoteId});
+const settleBacklinks = () => new Promise(resolve => setImmediate(resolve));
+
+test('moving a link refreshes both targets without reading unrelated note bodies', async () => {
+  const reads = [], previous = backlink('alpha','beta','Before');
+  const current = backlink('alpha','gamma','After');
+  await withNotesStore(async (command, args) => {
+    if (command === 'notes_tags') return [];
+    if (command === 'notes_update') return {...linkedNote('alpha',['gamma','unloaded']),title:'After',updatedAt:2};
+    assert.equal(command,'notes_backlinks'); reads.push(args.noteId);
+    return args.noteId === 'beta' ? [] : [current];
+  }, async store => {
+    const unrelated = linkedNote('unrelated');
+    store.setState({notes:[linkedNote('alpha',['beta']),linkedNote('beta',[],[previous]),linkedNote('gamma'),unrelated]});
+    await store.getState().updateWorkspaceNote('alpha',{title:'After'});
+    await settleBacklinks();
+    assert.deepEqual(reads.sort(),['beta','gamma']);
+    assert.deepEqual(store.getState().notes.find(n=>n.id==='beta').backlinks,[]);
+    assert.deepEqual(store.getState().notes.find(n=>n.id==='gamma').backlinks,[current]);
+    assert.equal(store.getState().notes.find(n=>n.id==='unrelated'),unrelated);
+    assert.equal(store.getState().notes.length,4);
+  });
+});
+
+for (const oldFails of [false,true]) {
+  test(`an obsolete backlink ${oldFails ? 'failure' : 'reply'} cannot undo a newer source save`, async () => {
+    const old=deferred(), current=deferred(); let writes=0, reads=0;
+    await withNotesStore(async command => {
+      if(command==='notes_tags')return [];
+      if(command==='notes_update')return {...linkedNote('alpha',['beta']),title:'Save '+(++writes),updatedAt:writes+1};
+      assert.equal(command,'notes_backlinks');return ++reads===1 ? old.promise : current.promise;
+    }, async store => {
+      store.setState({notes:[linkedNote('alpha',['beta']),linkedNote('beta')]});
+      await store.getState().updateWorkspaceNote('alpha',{title:'Save 1'});
+      await store.getState().updateWorkspaceNote('alpha',{title:'Save 2'});
+      current.resolve([backlink('alpha','beta','Save 2')]);await settleBacklinks();
+      if(oldFails)old.reject(new Error('Obsolete backlink read failed'));
+      else old.resolve([backlink('alpha','beta','Save 1')]);
+      await settleBacklinks();
+      assert.equal(store.getState().notes.find(n=>n.id==='beta').backlinks[0].sourceTitle,'Save 2');
+      assert.equal(store.getState().notes.find(n=>n.id==='alpha').title,'Save 2');
+      assert.equal(store.getState().error,'');
+    });
+  });
+}
+
+test('an unrelated source save does not retire another target refresh', async () => {
+  const first=deferred(), second=deferred();
+  await withNotesStore(async (command,args) => {
+    if(command==='notes_tags')return [];
+    if(command==='notes_update')return {...linkedNote(args.id,[args.id==='alpha'?'beta':'gamma']),title:'Saved '+args.id,updatedAt:2};
+    assert.equal(command,'notes_backlinks');return args.noteId==='beta'?first.promise:second.promise;
+  }, async store => {
+    store.setState({notes:[linkedNote('alpha',['beta']),linkedNote('delta',['gamma']),linkedNote('beta'),linkedNote('gamma')]});
+    await store.getState().updateWorkspaceNote('alpha',{});
+    await store.getState().updateWorkspaceNote('delta',{});
+    second.resolve([backlink('delta','gamma','Saved delta')]);await settleBacklinks();
+    first.resolve([backlink('alpha','beta','Saved alpha')]);await settleBacklinks();
+    assert.equal(store.getState().notes.find(n=>n.id==='beta').backlinks[0].sourceTitle,'Saved alpha');
+    assert.equal(store.getState().notes.find(n=>n.id==='gamma').backlinks[0].sourceTitle,'Saved delta');
+  });
+});
+
+for (const removeTarget of [false,true]) {
+  test(`a delayed backlink reply cannot ${removeTarget?'resurrect a removed target':'replace a newer full-list snapshot'}`, async () => {
+    const old=deferred(), latest=backlink('alpha','beta','Latest database source');
+    await withNotesStore(async command => {
+      if(command==='notes_backlinks')return old.promise;
+      assert.equal(command,'notes_list_all');
+      return removeTarget ? [] : [linkedNote('beta',[],[latest])];
+    }, async store => {
+      store.setState({notes:[linkedNote('beta')]});
+      const reading=store.getState().refreshBacklinks(['beta','beta']);
+      await store.getState().loadNotes();
+      const confirmed=store.getState().notes;
+      old.resolve([backlink('alpha','beta','Obsolete source')]);await reading;
+      assert.equal(store.getState().notes,confirmed);
+      if(!removeTarget)assert.deepEqual(confirmed[0].backlinks,[latest]);
+    });
+  });
+}
+
+test('a backlink read failure recovers metadata without turning a committed save into a failed save', async () => {
+  const recovery=deferred(), saved={...linkedNote('alpha',['beta']),title:'Confirmed',updatedAt:2};
+  let fullReads=0;
+  await withNotesStore(async command => {
+    if(command==='notes_tags')return [];
+    if(command==='notes_update')return saved;
+    if(command==='notes_backlinks')throw new Error('Temporary metadata failure');
+    assert.equal(command,'notes_list_all');fullReads++;return recovery.promise;
+  }, async store => {
+    store.setState({notes:[linkedNote('alpha',['beta']),linkedNote('beta')]});
+    assert.equal(await store.getState().updateWorkspaceNote('alpha',{title:'Confirmed'}),saved);
+    await settleBacklinks();
+    assert.equal(fullReads,1);assert.equal(store.getState().saving,false);assert.equal(store.getState().error,'');
+    assert.equal(store.getState().notes.find(n=>n.id==='alpha').title,'Confirmed');
+    recovery.resolve([saved,linkedNote('beta',[],[backlink('alpha','beta','Confirmed')])]);await settleBacklinks();
+    assert.equal(store.getState().notes.find(n=>n.id==='beta').backlinks[0].sourceTitle,'Confirmed');
+  });
+});
+
+test('a failed linked-note write leaves target metadata unchanged', async () => {
+  await withNotesStore(async command => {assert.equal(command,'notes_update');throw new Error('Write refused');}, async store => {
+    const target=linkedNote('beta',[],[backlink('alpha','beta','Original')]);
+    store.setState({notes:[linkedNote('alpha',['beta']),target]});
+    await assert.rejects(store.getState().updateWorkspaceNote('alpha',{title:'Uncommitted'}),/Write refused/);
+    await settleBacklinks();assert.equal(store.getState().notes.find(n=>n.id==='beta'),target);
+  });
+});
