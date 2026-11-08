@@ -27,6 +27,7 @@ The startup database-path P2 from [#26](https://github.com/mikutea/PaperQuay/pul
 
 - Reuses the confirmed workspace note after ordinary editor saves without active search/tag filters or outgoing note links, avoiding a repeated full-library read.
 - Keeps database refreshes for filtered results, link/backlink changes, other editors, create/delete events and incomplete update records.
+- Ignores superseded note/tag queries and pre-write snapshots after confirmed saves, creations or deletions, keeping newer results and records visible.
 
 ## Changes in .18 (since .17)
 

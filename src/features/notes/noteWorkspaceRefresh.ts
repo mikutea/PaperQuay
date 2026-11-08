@@ -5,6 +5,7 @@ interface WorkspaceSnapshot {
   notes: Pick<Note, 'id' | 'linkedNoteIds'>[];
   search: string;
   tag: string | null;
+  loading: boolean;
 }
 
 /** updateWorkspaceNote already applies its confirmed record and refreshes tags.
@@ -15,7 +16,7 @@ export function canUseWorkspaceNoteUpdate(
   state: WorkspaceSnapshot,
   editorSourceId: string,
 ): boolean {
-  if (detail.action !== 'updated' || detail.sourceId !== editorSourceId || state.search || state.tag) return false;
+  if (detail.action !== 'updated' || detail.sourceId !== editorSourceId || state.search || state.tag || state.loading) return false;
   if (!detail.note || typeof detail.note !== 'object') return false;
   const updated = detail.note as Partial<Note>;
   if (updated.id !== detail.noteId || typeof updated.updatedAt !== 'number' || !Number.isFinite(updated.updatedAt) || updated.deletedAt != null) return false;

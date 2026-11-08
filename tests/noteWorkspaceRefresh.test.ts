@@ -9,7 +9,7 @@ const event = (changes: Partial<NoteChangedEventDetail> = {}): NoteChangedEventD
   note: { id: 'alpha', title: 'Confirmed edit', updatedAt: 42, linkedNoteIds: [], deletedAt: null },
   ...changes,
 });
-const snapshot = () => ({notes: [{id: 'alpha', linkedNoteIds: [] as string[]}], search: '', tag: null as string | null});
+const snapshot = () => ({notes: [{id: 'alpha', linkedNoteIds: [] as string[]}], search: '', tag: null as string | null, loading: false});
 
 test('ordinary confirmed workspace saves use the record already applied by the store', () => {
   assert.equal(canUseWorkspaceNoteUpdate(event(), snapshot(), editorSourceId), true);
@@ -18,6 +18,10 @@ test('ordinary confirmed workspace saves use the record already applied by the s
 test('search and tag membership are rechecked after editing a matching note', () => {
   assert.equal(canUseWorkspaceNoteUpdate(event(), {...snapshot(), search:'previous text'}, editorSourceId), false);
   assert.equal(canUseWorkspaceNoteUpdate(event(), {...snapshot(), tag:'previous tag'}, editorSourceId), false);
+});
+
+test('a save during an in-flight list read requests a fresh post-save view', () => {
+  assert.equal(canUseWorkspaceNoteUpdate(event(), {...snapshot(), loading:true}, editorSourceId), false);
 });
 
 test('a newly added outgoing link refreshes its target backlinks', () => {
