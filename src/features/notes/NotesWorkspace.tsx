@@ -39,6 +39,7 @@ import {
   type NotesContextMenuEntry,
 } from './NotesContextMenu';
 import { extractOutline, noteContentToTiptap } from './notesTiptap';
+import { canUseWorkspaceNoteUpdate } from './noteWorkspaceRefresh';
 
 const NOTE_FOLDERS_STORAGE_KEY = 'paperquay:note-folders:v1';
 const UNCATEGORIZED_FOLDER_ID = '__uncategorized__';
@@ -878,6 +879,8 @@ export function NotesWorkspace() {
       if (detail.action === 'deleted') {
         setNoteTabExternalUpdate(detail.noteId, false);
       }
+
+      if (canUseWorkspaceNoteUpdate(detail, useNotesStore.getState(), NOTES_WORKSPACE_EDITOR_SOURCE_ID)) return;
 
       window.setTimeout(() => {
         void loadNotes();

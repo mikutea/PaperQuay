@@ -72,15 +72,19 @@ jobs:
           export PAPERQUAY_NATIVE_LINK_SETTINGS="$RUNNER_TEMP/native-links-ios/native-build.settings.json"
           npm run build --prefix apps/mobile
       - name: Sync native plugins and compile without signing
+        env:
+          GH_TOKEN: ${{ github.token }}
         working-directory: apps/mobile
         run: |
           xcodebuild -version
           npx cap sync ios
+          python3 ../../.github/scripts/cache-ios-artifacts.py --cache-root "$RUNNER_TEMP/paperquay-spm-cache"
           xcodebuild -project ios/App/App.xcodeproj -scheme App \
             -xcconfig "$RUNNER_TEMP/native-links-ios/NativeLinks.xcconfig" \
             -configuration Debug -sdk iphonesimulator \
             -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath "$RUNNER_TEMP/paperquay-ios-build" \
+            -packageCachePath "$RUNNER_TEMP/paperquay-spm-cache" \
             CODE_SIGNING_ALLOWED=NO build
 
   integration:

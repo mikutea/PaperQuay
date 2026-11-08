@@ -23,6 +23,12 @@ These downloads are desktop prerelease packages. Native mobile distribution requ
 
 The startup database-path P2 from [#26](https://github.com/mikutea/PaperQuay/pull/26#discussion_r4214657505) is fixed by [#42](https://github.com/mikutea/PaperQuay/pull/42): SQLite connections and WAL/SHM/journal operations retain a no-follow directory capability, and registered library roots preserve their approved paths through startup. The fix passed 1,560 tests, all eight CI jobs, code/security reviews, and isolated Electron/ASAR persistence checks.
 
+## Changes in .19 (since .18)
+
+- Reuses the confirmed workspace note after ordinary editor saves without active search/tag filters or outgoing note links, avoiding a repeated full-library read.
+- Keeps database refreshes for filtered results, link/backlink changes, other editors, create/delete events and incomplete update records.
+- Ignores superseded note/tag queries and pre-write snapshots after confirmed saves, creations or deletions, keeping newer results and records visible.
+
 ## Changes in .18 (since .17)
 
 - Warns before closing a window with unsaved note edits. Cancel is the default so the editor stays available for Save or Ctrl / Cmd + S; discarding still requires an explicit close-anyway choice.

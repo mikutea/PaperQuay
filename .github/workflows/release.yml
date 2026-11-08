@@ -117,6 +117,8 @@ jobs:
     runs-on: ${{ matrix.platform }}
     permissions:
       contents: write
+    env:
+      ELECTRON_MIRROR: https://github.com/electron/electron/releases/download/
     strategy:
       fail-fast: false
       matrix:
@@ -158,7 +160,12 @@ jobs:
         run: npm ci
 
       - name: Install Electron runtime
-        run: node node_modules/electron/install.js
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node .github/scripts/cache-electron-runtime.cjs
+          node node_modules/electron/install.js
 
       - name: Build frontend
         run: npm run build
@@ -167,7 +174,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          node electron/build.cjs ${{ matrix.args }} 2>&1 | tee electron-build.log
+          node electron/build.cjs --config .github/electron-ci.cjs ${{ matrix.args }} 2>&1 | tee electron-build.log
 
       - name: Verify packaged runtime dependencies
         shell: bash

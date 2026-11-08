@@ -12,6 +12,11 @@ import {
 
 export const GLOBAL_NOTES_PAPER_ID = 'global-notes';
 
+// This renderer has one notes store. Retire old reads when its query changes
+// or a write commits, so a delayed snapshot cannot replace newer state.
+let notesReadGeneration = 0;
+let tagsReadGeneration = 0;
+
 interface NotesState {
   notes: Note[];
   tags: NoteTagSummary[];
@@ -42,10 +47,19 @@ export const useNotesStore = create<NotesState>()((set, get) => ({
   error: '',
 
   setActiveNoteId: (noteId) => set({ activeNoteId: noteId }),
-  setSearch: (search) => set({ search }),
-  setTag: (tag) => set({ tag }),
+  setSearch: (search) => {
+    if (get().search === search) return;
+    notesReadGeneration += 1;
+    set({ search, loading: false });
+  },
+  setTag: (tag) => {
+    if (get().tag === tag) return;
+    notesReadGeneration += 1;
+    set({ tag, loading: false });
+  },
 
   async loadNotes(request = {}) {
+    const generation = ++notesReadGeneration;
     const { search, tag } = get();
     set({ loading: true, error: '' });
 
@@ -56,6 +70,7 @@ export const useNotesStore = create<NotesState>()((set, get) => ({
         ...request,
       };
       const notes = request.limit === undefined ? await listAllNotes(query) : await listNotes(query);
+      if (generation !== notesReadGeneration) return;
 
       set((state) => ({
         notes,
@@ -65,21 +80,24 @@ export const useNotesStore = create<NotesState>()((set, get) => ({
             : notes[0]?.id ?? null,
       }));
     } catch (error) {
+      if (generation !== notesReadGeneration) return;
       set({
         notes: [],
         activeNoteId: null,
         error: error instanceof Error ? error.message : '加载笔记失败',
       });
     } finally {
-      set({ loading: false });
+      if (generation === notesReadGeneration) set({ loading: false });
     }
   },
 
   async refreshTags() {
+    const generation = ++tagsReadGeneration;
     try {
-      set({ tags: await listNoteTags() });
+      const tags = await listNoteTags();
+      if (generation === tagsReadGeneration) set({ tags });
     } catch {
-      set({ tags: [] });
+      if (generation === tagsReadGeneration) set({ tags: [] });
     }
   },
 
@@ -113,7 +131,9 @@ export const useNotesStore = create<NotesState>()((set, get) => ({
         options,
       );
 
+      notesReadGeneration += 1;
       set((state) => ({
+        loading: false,
         notes: [note, ...state.notes.filter((item) => item.id !== note.id)],
         activeNoteId: note.id,
       }));
@@ -134,7 +154,9 @@ export const useNotesStore = create<NotesState>()((set, get) => ({
     try {
       const note = await updateNote(noteId, patch, options);
 
+      notesReadGeneration += 1;
       set((state) => ({
+        loading: false,
         notes: state.notes
           .map((item) => (item.id === note.id ? note : item))
           .sort((left, right) => Number(right.isPinned) - Number(left.isPinned) || right.updatedAt - left.updatedAt),
@@ -156,9 +178,11 @@ export const useNotesStore = create<NotesState>()((set, get) => ({
 
     try {
       await deleteNote(noteId, options);
+      notesReadGeneration += 1;
       set((state) => {
         const notes = state.notes.filter((note) => note.id !== noteId);
         return {
+          loading: false,
           notes,
           activeNoteId: state.activeNoteId === noteId ? notes[0]?.id ?? null : state.activeNoteId,
         };

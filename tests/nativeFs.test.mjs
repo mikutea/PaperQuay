@@ -77,7 +77,11 @@ test('repeated ancestor replacement races never overwrite or delete outside vict
     try {
       fs.renameSync(f.inside, original); moved = true;
       fs.symlinkSync(f.outside, f.inside, process.platform === 'win32' ? 'junction' : 'dir');
-    } catch (error) { if (!['EBUSY', 'EPERM', 'EACCES', 'EEXIST'].includes(error.code)) throw error; }
+    } catch (error) {
+      // Windows may report ENOTEMPTY when the competing operation recreated
+      // the directory before the attacker's junction could be installed.
+      if (!['EBUSY', 'EPERM', 'EACCES', 'EEXIST', 'ENOTEMPTY'].includes(error.code)) throw error;
+    }
     await operation;
     if (moved) {
       // The competing mkdir/open can make link creation fail after rename;
