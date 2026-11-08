@@ -9,6 +9,8 @@ import android.view.ViewGroup;
 
 public class MainActivity extends BridgeActivity {
     private View privacyCover;
+    private boolean resumed;
+    private boolean windowFocused;
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         registerPlugin(PaperQuayIncomingSharePlugin.class);
@@ -19,8 +21,27 @@ public class MainActivity extends BridgeActivity {
     }
 
     @Override public void onPause() {
-        // Native cover also supports API 24-32, before JS suspension. This does
-        // not prohibit the user's explicit screenshots of the active reader.
+        resumed = false;
+        showPrivacyCover();
+        super.onPause();
+    }
+
+    @Override public void onWindowFocusChanged(boolean hasFocus) {
+        windowFocused = hasFocus;
+        // Overview can show a live task while the Activity is still RESUMED.
+        // Cover on focus loss too; a later resume without focus stays covered.
+        if (!hasFocus || !resumed) showPrivacyCover();
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus && resumed) hidePrivacyCover();
+    }
+
+    @Override public void onResume() {
+        super.onResume();
+        resumed = true;
+        if (windowFocused) hidePrivacyCover();
+    }
+
+    private void showPrivacyCover() {
         ViewGroup decor = (ViewGroup) getWindow().getDecorView();
         if (privacyCover == null) {
             privacyCover = new View(this);
@@ -32,11 +53,9 @@ public class MainActivity extends BridgeActivity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         }
         privacyCover.bringToFront();
-        super.onPause();
     }
 
-    @Override public void onResume() {
-        super.onResume();
+    private void hidePrivacyCover() {
         if (privacyCover != null) {
             ViewGroup parent = (ViewGroup) privacyCover.getParent();
             if (parent != null) parent.removeView(privacyCover);
