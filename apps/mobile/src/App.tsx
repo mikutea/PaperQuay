@@ -34,6 +34,7 @@ import { Icon } from './components/Icon.tsx';
 import { MobileSettings, type AccountSettingsPage } from './components/MobileSettings.tsx';
 import { ClientError, describeError } from './errors.ts';
 import { assertPlatformReady, getPlatformCapabilities } from './platform.ts';
+import { initialOnline, observeConnectivity } from './platform/connectivity.ts';
 import { accountScopeKey, createAccountStorage } from './storage/accountStore.ts';
 import { createSecretStore, type SecretStore } from './platform/secretStore.ts';
 import { createVerifiedBinding } from './storage/verifiedBinding.ts';
@@ -163,7 +164,7 @@ async function makeRuntime(input: PublicConfigInput): Promise<Runtime> {
     apiBaseUrl: config.apiBaseUrl,
     api,
     store,
-    online: navigator.onLine,
+    online: initialOnline(),
     supportsPaperOrganization: () => api.supportsPaperOrganization,
     supportsRichNotes:()=>api.supportsRichNotes,
     supportsAiConversations:()=>api.supportsAiConversations,
@@ -422,20 +423,14 @@ function ConnectedWorkspace({
       if (current) await controller.syncNow();
     };
     resumeSync.current = resume;
-    const onOnline = () => { controller.setOnline(true); void resume(); };
-    const onOffline = () => controller.setOnline(false);
-    const onFocus = () => {
-      if (document.visibilityState === 'visible' && controller.getSnapshot().online) void resume();
-    };
-    window.addEventListener('online', onOnline);
-    window.addEventListener('offline', onOffline);
-    document.addEventListener('visibilitychange', onFocus);
+    const stopConnectivity = observeConnectivity(online => {
+      if (controller.getSnapshot().online !== online) controller.setOnline(online);
+      if (online) void resume();
+    });
     return () => {
       current = false;
       resumeSync.current = async () => {};
-      window.removeEventListener('online', onOnline);
-      window.removeEventListener('offline', onOffline);
-      document.removeEventListener('visibilitychange', onFocus);
+      stopConnectivity();
       controller.deactivate();
     };
   }, [auth, controller]);
