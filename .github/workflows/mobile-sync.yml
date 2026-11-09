@@ -32,7 +32,7 @@ jobs:
       - uses: android-actions/setup-android@v3
         with:
           # The default "tools" package is absent from the SDK repository used by CI.
-          packages: 'platform-tools platforms;android-36'
+          packages: 'platform-tools platforms;android-36 build-tools;35.0.0'
       - uses: gradle/actions/setup-gradle@v4
       - name: Install and compile the mobile web bundle
         run: |
@@ -57,6 +57,18 @@ jobs:
           bash gradlew --no-daemon :app:assembleRelease :app:bundleRelease
           test -s app/build/outputs/apk/release/app-release-unsigned.apk
           test -s app/build/outputs/bundle/release/app-release.aab
+      - name: Verify signed APK and reject mismatched release artifacts
+        run: |
+          python3 -m unittest discover -s apps/mobile/tests -p android_release_test.py -v
+          # Only a short-lived synthetic CI signer is created; no release secrets are used.
+          python3 apps/mobile/scripts/check-android-signing-ci.py \
+            --apk apps/mobile/android/app/build/outputs/apk/release/app-release-unsigned.apk \
+            --debug-apk apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk \
+            --web-bundle apps/mobile/android/app/src/main/assets/public \
+            --settings "$RUNNER_TEMP/native-links-android/native-build.settings.json" \
+            --association "$RUNNER_TEMP/native-links-android/.well-known/assetlinks.json" \
+            --build-tools "$ANDROID_HOME/build-tools/35.0.0" --java "$JAVA_HOME/bin/java" \
+            --version-code 1 --version-name 1.0
 
   ios:
     name: iOS simulator compile

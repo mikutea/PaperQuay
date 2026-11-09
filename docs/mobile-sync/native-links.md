@@ -79,4 +79,22 @@ xcodebuild -project ios/App/App.xcodeproj -scheme App \
 
 CI 的合成域名和证书标识不用于公网发布。四类设备、辅助技术、冷启动及签名分发继续按 [验收标准](acceptance.md) 记录。
 
+## Android 签名产物核对
+
+签名后、分发前，用 Python 3.11+ 和 Android SDK Build Tools 35.0.0 核对最终 APK。实际设置和关联文档使用同一次生成的 Git 外文件；`web-bundle` 指向该次 `cap sync android` 复制的资源目录：
+
+```sh
+python3 apps/mobile/scripts/verify-android-release.py \
+  --apk /private/operator/PaperQuay-release.apk \
+  --settings /private/operator/native-android/native-build.settings.json \
+  --association /private/operator/native-android/.well-known/assetlinks.json \
+  --web-bundle apps/mobile/android/app/src/main/assets/public \
+  --build-tools "$ANDROID_HOME/build-tools/35.0.0" --java "$JAVA_HOME/bin/java" \
+  --version-code 1 --version-name 1.0
+```
+
+版本参数应改为该次发行的预期值。工具使用 SDK 校验密码学签名及对齐，拒绝调试签名，核对分发证书、包名、版本、HTTPS 回调及完整 Web 资源字节，并拒绝开启调试、备份或明文流量的包。输出包括 APK SHA-256 和实际证书指纹，不读取私钥，也不发起网络请求或开通客户端。Play App Signing 分发的 APK 须使用应用签名证书对应的关联文档。
+
+CI 使用临时签名身份，执行真实签名验证及未签名、错证书、错版本、调试签名和签名后篡改的拒绝检查。这些结果只证明本地产物核对流程；系统域名关联、真实登录、签名保管和分发验收仍需各自的记录。
+
 平台依据：[Capacitor Universal/App Links](https://capacitorjs.com/docs/guides/deep-links)、[Android 系统关联验证](https://developer.android.com/training/app-links/verify-applinks)、[Apple 关联域名](https://developer.apple.com/documentation/xcode/supporting-associated-domains)。
