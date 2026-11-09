@@ -6,6 +6,7 @@ import type { PdfRuntime } from './engine.ts';
 import { bundledPdfResources } from './bundledResources.ts';
 import { createBundledImageDecoderUrl } from './bundledImageDecoders.ts';
 import { createOwnedPdfWorker } from './ownedWorker.ts';
+import { assertPdfRuntimeSupported } from './runtimeSupport.ts';
 
 // The lazy reader chunk includes this finite, version-matched resource set. Later pages and
 // new document workers must also work after the browser goes offline, without a service worker.
@@ -22,6 +23,7 @@ let workerUrl: string | undefined;
 let decoderUrl: string | undefined;
 
 export function browserPdfRuntime(): PdfRuntime {
+  assertPdfRuntimeSupported();
   const bundled = bundledPdfResources(resources);
   // These three module URLs also live for the loaded app page, including offline reopens.
   decoderUrl ??= createBundledImageDecoderUrl({
