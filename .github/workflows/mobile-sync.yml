@@ -50,6 +50,13 @@ jobs:
           npx cap sync android
           cd android
           bash gradlew --no-daemon assembleDebug :app:assembleDebugAndroidTest lintDebug testDebugUnitTest
+      - name: Compile unsigned Android Release packages
+        working-directory: apps/mobile/android
+        run: |
+          # Exercise the Release variant without creating a signing identity.
+          bash gradlew --no-daemon :app:assembleRelease :app:bundleRelease
+          test -s app/build/outputs/apk/release/app-release-unsigned.apk
+          test -s app/build/outputs/bundle/release/app-release.aab
 
   ios:
     name: iOS simulator compile
@@ -86,6 +93,19 @@ jobs:
             -derivedDataPath "$RUNNER_TEMP/paperquay-ios-build" \
             -packageCachePath "$RUNNER_TEMP/paperquay-spm-cache" \
             CODE_SIGNING_ALLOWED=NO build
+      - name: Archive unsigned iOS device Release
+        working-directory: apps/mobile
+        run: |
+          # Synthetic native-link settings only; this does not establish device trust.
+          xcodebuild -project ios/App/App.xcodeproj -scheme App \
+            -xcconfig "$RUNNER_TEMP/native-links-ios/NativeLinks.xcconfig" \
+            -configuration Release -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/paperquay-ios-release/App.xcarchive" \
+            -derivedDataPath "$RUNNER_TEMP/paperquay-ios-release-build" \
+            -packageCachePath "$RUNNER_TEMP/paperquay-spm-cache" \
+            CODE_SIGNING_ALLOWED=NO archive
+          test -d "$RUNNER_TEMP/paperquay-ios-release/App.xcarchive/Products/Applications/App.app"
 
   integration:
     name: PostgreSQL, OIDC and mobile foundation
