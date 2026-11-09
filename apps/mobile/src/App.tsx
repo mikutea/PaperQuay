@@ -415,7 +415,10 @@ function ConnectedWorkspace({
     let reconnecting = false;
     const resume = async () => {
       if (reconnecting || !current || unsaved.current) return;
-      if (controller.getSnapshot().needsLogin && auth.getSnapshot().status === 'signed-in') {
+      const snapshot = controller.getSnapshot();
+      if (!snapshot.online || snapshot.status === 'binding') return;
+      const unboundOffline = snapshot.status === 'error' && snapshot.error?.code === 'NETWORK_UNAVAILABLE';
+      if ((snapshot.needsLogin || unboundOffline) && auth.getSnapshot().status === 'signed-in') {
         reconnecting = true;
         try { await controller.bind(deviceName, true); }
         finally { reconnecting = false; }
@@ -436,9 +439,18 @@ function ConnectedWorkspace({
   }, [auth, controller]);
 
   useEffect(() => {
-    if (authState.status === 'signed-in')
-      void controller.bind(deviceName).then(() => controller.syncNow());
-    else if (authState.status === 'error') controller.requireLogin(authState.error);
+    if (authState.status === 'signed-in') {
+      let current = true;
+      const initiallyOffline = !controller.getSnapshot().online;
+      void controller.bind(deviceName).then(() => {
+        if (!current) return;
+        // Connectivity can arrive while the offline cache read is still
+        // pending. Finish that attempt before retrying this unbound session.
+        return initiallyOffline && controller.getSnapshot().online
+          ? resumeSync.current() : controller.syncNow();
+      });
+      return () => { current = false; };
+    } else if (authState.status === 'error') controller.requireLogin(authState.error);
     else if (authState.status === 'signed-out' || authState.status === 'signing-in') {
       controller.deactivate();
       setSelection(null);
