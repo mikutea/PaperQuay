@@ -7,6 +7,7 @@ import { boundedCanvasScale, intersectRect, normalizedPointToViewport, quadToVie
 import { capturePageSelection } from './selection.ts';
 import { PdfError, pdfError } from './errors.ts';
 import { boundedTextContent } from './textContent.ts';
+import { observePdfTextScale } from './textScale.ts';
 
 export interface PageAnnotation { entityId: string; data: AnnotationData }
 interface Props {
@@ -55,6 +56,7 @@ export function PdfPageView(props: Props) {
     let page: PDFPageProxy | undefined;
     let rendering: RenderTask | undefined;
     let textLayer: TextLayer | undefined;
+    let stopTextScale: (() => void) | undefined;
     const previous = work.current;
     setReady(false); setFailure(null); setViewport(null);
     const job = (async () => {
@@ -78,6 +80,7 @@ export function PdfPageView(props: Props) {
       if (!active) return;
       if (content.items.length > 20_000 || content.items.reduce((count, item) => count + ('str' in item ? item.str.length : 0), 0)
         > PDF_LIMITS.maxTextPageCharacters) throw new PdfError('TEXT_LIMIT');
+      stopTextScale = observePdfTextScale(textRoot);
       textLayer = new runtime.library.TextLayer({ textContentSource: content, container: textRoot, viewport: view });
       // Explicit dimensions also work on WebViews without the CSS round() function.
       textRoot.style.width = `${(page.view[2] - page.view[0]) * view.scale * page.userUnit}px`;
@@ -87,6 +90,7 @@ export function PdfPageView(props: Props) {
       if (resourceError) throw resourceError;
       if (active) setReady(true);
     })().catch((error) => {
+      stopTextScale?.(); stopTextScale = undefined;
       rendering?.cancel(); textLayer?.cancel();
       if (!active) return;
       const safe = runtime.resourceError?.() ?? (error instanceof PdfError ? error : new PdfError('PAGE_RENDER'));
@@ -94,6 +98,7 @@ export function PdfPageView(props: Props) {
     });
     work.current = job;
     return () => {
+      stopTextScale?.(); stopTextScale = undefined;
       active = false; abort.abort(); rendering?.cancel(); textLayer?.cancel();
       if (canvas.current) { canvas.current.width = 0; canvas.current.height = 0; }
       layer.current?.replaceChildren();
