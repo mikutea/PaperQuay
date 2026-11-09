@@ -28,7 +28,7 @@ export async function refreshZoteroLibrary(client: ZoteroClient, config: ZoteroL
     const parsed = downloaded.records.length ? parseExternalLibrary(JSON.stringify(downloaded.records))
       : parseExternalLibrary(JSON.stringify({ format: 'paperquay-external-library', version: 1, source, items: [] }));
     snapshot = { ...parsed.snapshot, source: { ...parsed.snapshot.source, name: downloaded.config.name } }; warnings = parsed.warnings;
-  } catch { throw new ZoteroClientError('INVALID_RESPONSE'); }
+  } catch { throw new ZoteroClientError('INVALID_METADATA'); }
   const imported = new Set(snapshot.items.map(item => item.key));
   const ignored: ZoteroIgnoredItem[] = downloaded.records.filter(record => !imported.has(record.key)).map(record => ({ key: record.key,
     reason: record.data.deleted === 1 || record.data.deleted === true ? 'trashed'

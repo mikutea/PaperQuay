@@ -129,14 +129,26 @@ test('a concurrently adopted cursor requires a fresh network round rather than r
 });
 
 test('304 and deletion-only updates have distinct behavior: unchanged does not adopt, deletion notices still require a click', async t => {
-  const unchanged = await setup(t, [zoteroResponse(null, 1, { status: 304 })], { conflict: true });
+  const unchanged = await setup(t, [new Response(null, { status: 304 }), zoteroResponse([], 1)], { conflict: true });
   await unchanged.click('读取 Zotero 更新'); assert.equal(unchanged.previewCalls(), 0); assert.equal(unchanged.adoptions.length, 0);
-  assert.match(text(unchanged.view.root), /没有新的变化/);
+  assert.match(text(unchanged.view.root), /没有新的变化/); assert.equal(unchanged.state.cursor, 1);
+  assert.equal(unchanged.requests.length, 2);
   const deletion = await setup(t, [zoteroResponse([], 2), zoteroDeleted(['00000001'], 2)], { conflict: true });
   await deletion.click('读取 Zotero 更新');
   assert.match(text(deletion.view.root), /远端删除，本地保留/); assert.equal(deletion.state.entities.length, 1);
   assert.equal(deletion.adoptions.length, 0); await deletion.click('确认采用这轮更新');
   assert.equal(deletion.state.entities.length, 1); assert.equal(deletion.state.cursor, 2); assert.equal(deletion.adoptions.length, 1);
+});
+
+test('invalid source metadata explains the repair while preserving existing papers, mappings and cursor', async t => {
+  const ui = await setup(t, [zoteroResponse([zoteroItem(2, 2), zoteroItem(3, 2, zoteroConfig, { title: '' })], 2), zoteroDeleted([], 2)], { conflict: true });
+  const before = JSON.stringify(ui.state);
+  await ui.click('读取 Zotero 更新');
+  assert.match(text(ui.view.root), /在 Zotero 中补全空标题/);
+  assert.match(text(ui.view.root), /本轮未采用，来源版本未变/);
+  assert.equal(ui.previewCalls(), 0); assert.equal(ui.adoptions.length, 0);
+  assert.equal(JSON.stringify(ui.state), before);
+  assert.doesNotMatch(text(ui.view.root), /Study 2/);
 });
 
 test('scope changes abort pending reads and suppress late prior-account results even after returning to the same scope', async t => {

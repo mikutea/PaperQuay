@@ -42,6 +42,7 @@ function errorMessage(error: unknown): string {
       NETWORK: '无法连接 Zotero，请检查网络后重试。', AUTHORIZATION: 'Zotero 拒绝访问，请核对文库 ID 和密钥的读取权限。',
       NOT_FOUND: 'Zotero 未找到此文库，请核对文库 ID。', HTTP_ERROR: 'Zotero 暂未完成本次请求，请稍后重试。',
       INVALID_RESPONSE: '来源数据或分页版本无法完整核验，本轮内容已丢弃。', LIMIT: '本轮超过 500 条变更、4 MiB 或请求上限，不能部分采用。',
+      INVALID_METADATA: '来源题录不符合文献规范，请先在 Zotero 中补全空标题、修正 DOI 或作者后重试。本轮未采用，来源版本未变。',
       VERSION_CHANGED: '读取期间 Zotero 文库持续变化，有界重试后仍不一致；本轮内容已丢弃。',
       RATE_LIMIT: 'Zotero 要求暂缓请求，请在提示时间后重试。', INVALID_RESULT: '此预览已不可用，请重新读取来源。',
     };
