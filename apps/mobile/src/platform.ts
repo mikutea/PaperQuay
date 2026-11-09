@@ -16,7 +16,7 @@ export function getPlatformCapabilities() {
 }
 
 export function assertPlatformReady(): void {
-  if (Capacitor.isNativePlatform() && ['App', 'Browser', 'SecureStorage', 'CapacitorSQLite', 'Filesystem']
+  if (Capacitor.isNativePlatform() && ['App', 'Browser', 'SecureStorage', 'CapacitorSQLite', 'Filesystem', 'Network']
     .some((name) => !Capacitor.isPluginAvailable(name))) throw new ClientError('NATIVE_NOT_READY');
 }
 

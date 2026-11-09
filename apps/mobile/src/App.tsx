@@ -34,6 +34,7 @@ import { Icon } from './components/Icon.tsx';
 import { MobileSettings, type AccountSettingsPage } from './components/MobileSettings.tsx';
 import { ClientError, describeError } from './errors.ts';
 import { assertPlatformReady, getPlatformCapabilities } from './platform.ts';
+import { initialOnline, observeConnectivity } from './platform/connectivity.ts';
 import { accountScopeKey, createAccountStorage } from './storage/accountStore.ts';
 import { createSecretStore, type SecretStore } from './platform/secretStore.ts';
 import { createVerifiedBinding } from './storage/verifiedBinding.ts';
@@ -163,7 +164,7 @@ async function makeRuntime(input: PublicConfigInput): Promise<Runtime> {
     apiBaseUrl: config.apiBaseUrl,
     api,
     store,
-    online: navigator.onLine,
+    online: initialOnline(),
     supportsPaperOrganization: () => api.supportsPaperOrganization,
     supportsRichNotes:()=>api.supportsRichNotes,
     supportsAiConversations:()=>api.supportsAiConversations,
@@ -414,7 +415,10 @@ function ConnectedWorkspace({
     let reconnecting = false;
     const resume = async () => {
       if (reconnecting || !current || unsaved.current) return;
-      if (controller.getSnapshot().needsLogin && auth.getSnapshot().status === 'signed-in') {
+      const snapshot = controller.getSnapshot();
+      if (!snapshot.online || snapshot.status === 'binding') return;
+      const unboundOffline = snapshot.status === 'error' && snapshot.error?.code === 'NETWORK_UNAVAILABLE';
+      if ((snapshot.needsLogin || unboundOffline) && auth.getSnapshot().status === 'signed-in') {
         reconnecting = true;
         try { await controller.bind(deviceName, true); }
         finally { reconnecting = false; }
@@ -422,28 +426,31 @@ function ConnectedWorkspace({
       if (current) await controller.syncNow();
     };
     resumeSync.current = resume;
-    const onOnline = () => { controller.setOnline(true); void resume(); };
-    const onOffline = () => controller.setOnline(false);
-    const onFocus = () => {
-      if (document.visibilityState === 'visible' && controller.getSnapshot().online) void resume();
-    };
-    window.addEventListener('online', onOnline);
-    window.addEventListener('offline', onOffline);
-    document.addEventListener('visibilitychange', onFocus);
+    const stopConnectivity = observeConnectivity(online => {
+      if (controller.getSnapshot().online !== online) controller.setOnline(online);
+      if (online) void resume();
+    });
     return () => {
       current = false;
       resumeSync.current = async () => {};
-      window.removeEventListener('online', onOnline);
-      window.removeEventListener('offline', onOffline);
-      document.removeEventListener('visibilitychange', onFocus);
+      stopConnectivity();
       controller.deactivate();
     };
   }, [auth, controller]);
 
   useEffect(() => {
-    if (authState.status === 'signed-in')
-      void controller.bind(deviceName).then(() => controller.syncNow());
-    else if (authState.status === 'error') controller.requireLogin(authState.error);
+    if (authState.status === 'signed-in') {
+      let current = true;
+      const initiallyOffline = !controller.getSnapshot().online;
+      void controller.bind(deviceName).then(() => {
+        if (!current) return;
+        // Connectivity can arrive while the offline cache read is still
+        // pending. Finish that attempt before retrying this unbound session.
+        return initiallyOffline && controller.getSnapshot().online
+          ? resumeSync.current() : controller.syncNow();
+      });
+      return () => { current = false; };
+    } else if (authState.status === 'error') controller.requireLogin(authState.error);
     else if (authState.status === 'signed-out' || authState.status === 'signing-in') {
       controller.deactivate();
       setSelection(null);
