@@ -1,6 +1,7 @@
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
+import { setTimeout as delay } from 'node:timers/promises';
 import { createElement } from 'react';
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer';
 import { IDBFactory } from 'fake-indexeddb';
@@ -25,11 +26,12 @@ async function click(renderer: ReactTestRenderer, label: string) {
   await act(async () => { found.props.onClick(); });
 }
 async function until(check: () => boolean) {
-  for (let index = 0; index < 150; index++) {
+  const deadline = performance.now() + 5_000;
+  while (performance.now() < deadline) {
     if (check()) return;
-    await act(async () => { await new Promise<void>(resolve => setImmediate(resolve)); });
+    await act(async () => { await delay(5); });
   }
-  assert.fail('Research UI did not settle');
+  assert.fail('Research UI did not settle within 5 seconds');
 }
 async function setup(t: TestContext, configured = false) {
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'localStorage'), values = new Map<string, string>();
@@ -70,6 +72,12 @@ async function setup(t: TestContext, configured = false) {
 
 test('research configures AI in place and keeps the question and source without sending a request', async t => {
   const ui = await setup(t);
+  const nativeDigest = crypto.subtle.digest.bind(crypto.subtle);
+  let firstDigest = true;
+  t.mock.method(crypto.subtle, 'digest', async (...args: Parameters<typeof nativeDigest>) => {
+    if (firstDigest) { firstDigest = false; await delay(200); }
+    return nativeDigest(...args);
+  });
   await click(ui.renderer, '准备并预览发送内容');
   await until(() => ui.renderer.root.findAllByProps({ 'aria-label': '实际发送内容' }).length === 1);
   await click(ui.renderer, '设置 AI');
