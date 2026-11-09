@@ -85,6 +85,61 @@ test('304 is accepted only for the exact requested library cursor and causes no 
   }
 });
 
+test('a headerless conditional 304 confirms its cursor with one unconditional read', async () => {
+  const fixture = zoteroTransport([new Response(null, { status: 304 }), zoteroResponse([], 7)]);
+  const result = await refreshZoteroLibrary(fixture.client, zoteroConfig, { ...publicRead, expectedCursor: 7 });
+  assert.equal(result.unchanged, true); assert.equal(result.nextCursor, 7);
+  assert.deepEqual(result.snapshot.items, []); assert.deepEqual(result.deletedKeys, []);
+  assert.equal(fixture.requests.length, 2);
+  assert.equal(fixture.requests[0].url.href, fixture.requests[1].url.href);
+  assert.equal(fixture.requests[0].headers.get('If-Modified-Since-Version'), '7');
+  assert.equal(fixture.requests[1].headers.has('If-Modified-Since-Version'), false);
+});
+
+test('a 304 may omit its API header when its explicit library version is exact', async () => {
+  const fixture = zoteroTransport([new Response(null, { status: 304, headers: { 'Last-Modified-Version': '7' } })]);
+  const result = await fixture.client.download(zoteroConfig, { ...publicRead, expectedCursor: 7 });
+  assert.equal(result.unchanged, true); assert.equal(result.nextCursor, 7); assert.equal(fixture.requests.length, 1);
+});
+
+test('a changed library during headerless 304 confirmation uses the complete normal download', async () => {
+  const fixture = zoteroTransport([new Response(null, { status: 304 }), zoteroResponse([zoteroItem(1, 8)], 8), zoteroDeleted([], 8)]);
+  const result = await refreshZoteroLibrary(fixture.client, zoteroConfig, { ...publicRead, expectedCursor: 7 });
+  assert.equal(result.unchanged, false); assert.equal(result.nextCursor, 8);
+  assert.equal(result.snapshot.items[0].data.title, 'Study 1'); assert.equal(fixture.requests.length, 3);
+});
+
+test('headerless 304 confirmation rejects rollback, contradictory metadata and another 304', async () => {
+  const cases: [Response, number, ZoteroClientErrorCode][] = [
+    [zoteroResponse([], 6), 7, 'INVALID_CURSOR'],
+    [new Response(null, { status: 304 }), 7, 'INVALID_RESPONSE'],
+    [zoteroResponse([], 7, { headers: { 'Zotero-API-Version': '2' } }), 7, 'INVALID_RESPONSE'],
+    [new Response('[]', { headers: { 'Zotero-API-Version': '3', 'Total-Results': '0', 'Content-Type': 'application/json' } }), 7, 'INVALID_RESPONSE'],
+    [zoteroResponse([zoteroItem(1, 0)], 0), 0, 'INVALID_RESPONSE'],
+  ];
+  for (const [probe, cursor, code] of cases) {
+    const fixture = zoteroTransport([new Response(null, { status: 304 }), probe]);
+    await assert.rejects(fixture.client.download(zoteroConfig, { ...publicRead, expectedCursor: cursor }), errorCode(code));
+    assert.equal(fixture.requests.length, 2);
+  }
+  const invalidHeaders: Record<string, string>[] = [{ 'Zotero-API-Version': '2' }, { 'Last-Modified-Version': 'invalid' }];
+  for (const headers of invalidHeaders) {
+    const fixture = zoteroTransport([new Response(null, { status: 304, headers })]);
+    await assert.rejects(fixture.client.download(zoteroConfig, { ...publicRead, expectedCursor: 7 }), errorCode('INVALID_RESPONSE'));
+    assert.equal(fixture.requests.length, 1);
+  }
+});
+
+test('an unconditional or later-page 304 never uses the confirmation fallback', async () => {
+  const first = zoteroTransport([new Response(null, { status: 304 })]);
+  await assert.rejects(first.client.download(zoteroConfig, publicRead), errorCode('INVALID_RESPONSE'));
+  assert.equal(first.requests.length, 1);
+  const records = Array.from({ length: 100 }, (_, index) => zoteroItem(index + 1, 10));
+  const later = zoteroTransport([zoteroResponse(records, 10, { total: 101 }), new Response(null, { status: 304 })]);
+  await assert.rejects(later.client.download(zoteroConfig, { ...publicRead, expectedCursor: 7 }), errorCode('INVALID_RESPONSE'));
+  assert.equal(later.requests.length, 2);
+});
+
 test('deletion-only and unsupported/trash-only rounds preserve explicit ignored records without synthesizing local deletes', async () => {
   const deletion = zoteroTransport([zoteroResponse([], 11), zoteroDeleted(['00000009'], 11)]);
   const removed = await refreshZoteroLibrary(deletion.client, zoteroConfig, { ...publicRead, expectedCursor: 10 });
@@ -288,7 +343,7 @@ test('successful Backoff applies to subsequent pages and subsequent refreshes on
 
 test('conversion failure discards the entire download and never treats invalid paper metadata as ignored success', async () => {
   for (const data of [{ title: '' }, { DOI: 'not a doi' }, { creators: [{ creatorType: 'author', firstName: '', lastName: '' }] }]) {
-    const fixture = zoteroTransport([zoteroResponse([zoteroItem(1, 10, zoteroConfig, data)]), zoteroDeleted()]);
-    await assert.rejects(refreshZoteroLibrary(fixture.client, zoteroConfig, publicRead), errorCode('INVALID_RESPONSE'));
+    const fixture = zoteroTransport([zoteroResponse([zoteroItem(1), zoteroItem(2, 10, zoteroConfig, data)]), zoteroDeleted()]);
+    await assert.rejects(refreshZoteroLibrary(fixture.client, zoteroConfig, publicRead), errorCode('INVALID_METADATA'));
   }
 });

@@ -15,7 +15,7 @@ export type ZoteroCredential = { mode: 'public' } | { mode: 'memory'; apiKey: st
   | { mode: 'stored'; store: SecretStore; accountScope: ZoteroAccountScope };
 export type ZoteroClientErrorCode = 'INVALID_CONFIG' | 'INVALID_CURSOR' | 'INVALID_KEY' | 'MISSING_KEY' | 'SECRET_UNAVAILABLE'
   | 'CANCELLED' | 'CHANGED' | 'TIMEOUT' | 'NETWORK' | 'AUTHORIZATION' | 'NOT_FOUND' | 'HTTP_ERROR'
-  | 'INVALID_RESPONSE' | 'LIMIT' | 'VERSION_CHANGED' | 'RATE_LIMIT' | 'INVALID_RESULT';
+  | 'INVALID_RESPONSE' | 'INVALID_METADATA' | 'LIMIT' | 'VERSION_CHANGED' | 'RATE_LIMIT' | 'INVALID_RESULT';
 /** Never attach response bodies, request headers, URLs, original errors, or credentials. */
 export class ZoteroClientError extends Error {
   constructor(readonly code: ZoteroClientErrorCode, readonly retryAt: number | null = null) {
@@ -210,7 +210,8 @@ export class ZoteroClient {
             if (response.status === 401 || response.status === 403) fail('AUTHORIZATION');
             if (response.status === 404) fail('NOT_FOUND');
             if (response.status !== 200 && response.status !== 304) fail('HTTP_ERROR');
-            if (response.headers.get('Zotero-API-Version') !== '3') fail();
+            const apiVersion = response.headers.get('Zotero-API-Version');
+            if (apiVersion !== '3' && !(response.status === 304 && apiVersion === null)) fail();
             return response;
           } catch (error) { cancelBody(response); throw error; }
         }
@@ -242,6 +243,10 @@ export class ZoteroClient {
           operation.guard(); fail();
         }
       };
+      const unchanged = (current: number): ZoteroDownload => {
+        operation.guard(); retry.notBefore = this.notBefore > this.now() ? this.notBefore : null;
+        return { config, expectedCursor, nextCursor: current, unchanged: true, records: [], deletedKeys: [], retry, stats };
+      };
       for (;;) {
         retry.attempts++; stats.itemPages = 0; stats.downloadedItems = 0;
         const records: ZoteroApiItem[] = [], known = new Set<string>();
@@ -258,21 +263,33 @@ export class ZoteroClient {
             const url = new URL(`${prefix}/items`);
             for (const [key, value] of Object.entries({ format: 'json', include: 'data', includeTrashed: '1', since: String(expectedCursor ?? 0),
               limit: String(ZOTERO_LIMITS.pageSize), start: String(start), sort: 'dateModified', direction: 'asc' })) url.searchParams.set(key, value);
-            const response = await request(url, start === 0);
+            let response = await request(url, start === 0);
             try {
-              const current = checkVersion(response);
+              let confirming304 = false;
               if (response.status === 304) {
-                if (start !== 0 || expectedCursor === null || current !== expectedCursor) fail();
-                cancelBody(response); operation.guard();
-                retry.notBefore = this.notBefore > this.now() ? this.notBefore : null;
-                return { config, expectedCursor, nextCursor: current, unchanged: true, records: [], deletedKeys: [], retry, stats };
+                if (start !== 0 || expectedCursor === null) fail();
+                if (response.headers.get('Last-Modified-Version') !== null) {
+                  const current = checkVersion(response);
+                  if (current !== expectedCursor) fail();
+                  cancelBody(response); return unchanged(current);
+                }
+                // Zotero can omit both version headers on 304. Confirm the
+                // cursor with a normal read, including rollback detection.
+                cancelBody(response); response = await request(url);
+                if (response.status !== 200) fail();
+                confirming304 = true;
               }
+              const current = checkVersion(response);
               const count = integerHeader(response.headers, 'Total-Results');
               if (count > ZOTERO_LIMITS.maxItems) fail('LIMIT');
               if (total !== null && total !== count) throw new LibraryChanged();
               total = count;
               const raw = await readJson(response);
               if (!Array.isArray(raw) || raw.length !== Math.min(ZOTERO_LIMITS.pageSize, total - start)) fail();
+              if (confirming304 && current === expectedCursor) {
+                if (count !== 0) fail();
+                return unchanged(current);
+              }
               for (const record of raw) {
                 if (!plain(record) || !plain(record.library) || !plain(record.data) || typeof record.key !== 'string'
                   || !itemKey.test(record.key) || known.has(record.key) || !Number.isSafeInteger(record.version)
