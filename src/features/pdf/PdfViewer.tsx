@@ -911,6 +911,12 @@ function PdfViewer({
     }
 
     try {
+      const scaleValue = pdfViewer.currentScaleValue;
+      // PDF.js does not recompute a fit preset when its container is resized.
+      // Keep explicit user zoom levels unchanged while refitting responsive layouts.
+      if (scaleValue && !Number.isFinite(Number(scaleValue))) {
+        pdfViewer.currentScaleValue = scaleValue;
+      }
       pdfViewer.update?.();
     } catch {
       // PDF.js can throw while a document is still being attached.
@@ -1620,9 +1626,14 @@ function PdfViewer({
       return undefined;
     }
 
-    const observer = new ResizeObserver(() => {
+    const observer = new ResizeObserver((entries) => {
       window.requestAnimationFrame(() => {
         if (!activeRef.current) {
+          return;
+        }
+
+        if (entries.some((entry) => entry.target === containerRef.current)) {
+          refreshPdfViewerLayout();
           return;
         }
 
@@ -1645,6 +1656,9 @@ function PdfViewer({
 
     resizeObserverRef.current = observer;
     mutationObserverRef.current = mutationObserver;
+    if (containerRef.current) {
+      observer.observe(containerRef.current);
+    }
     syncPageHosts();
     refreshPdfViewerLayout();
 
