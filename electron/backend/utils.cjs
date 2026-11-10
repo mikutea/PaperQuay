@@ -240,9 +240,18 @@ function mergeChatCompletionChunks(chunks) {
 }
 
 function mergeResponsesChunks(chunks) {
-  const outputParts = [];
+  const outputParts = new Map();
   const reasoningSummaryParts = [];
   let base = null;
+  let hasCompletedOutput = false;
+  const updateOutputPart = (chunk, text, finalized = false) => {
+    if (typeof text !== 'string') return;
+    const outputIndex = Number.isInteger(chunk.output_index) && chunk.output_index >= 0 ? chunk.output_index : 0;
+    const contentIndex = Number.isInteger(chunk.content_index) && chunk.content_index >= 0 ? chunk.content_index : 0;
+    const key = `${outputIndex}:${contentIndex}`;
+    const previous = outputParts.get(key)?.text ?? '';
+    outputParts.set(key, { outputIndex, contentIndex, text: finalized ? text : previous + text });
+  };
 
   for (const chunk of chunks) {
     if (!base) {
@@ -260,30 +269,37 @@ function mergeResponsesChunks(chunks) {
       eventType === 'response.text.delta' ||
       (!eventType && typeof chunk.delta === 'string')
     ) {
-      outputParts.push(chunk.delta);
+      updateOutputPart(chunk, chunk.delta);
+    } else if (eventType === 'response.output_text.done' || eventType === 'response.text.done') {
+      // A done event contains the full text for this part, not another delta.
+      updateOutputPart(chunk, chunk.text, true);
     } else if (
       eventType === 'response.reasoning_summary_text.delta' ||
       eventType === 'response.reasoning_summary.delta'
     ) {
       reasoningSummaryParts.push(chunk.delta);
     } else if (typeof chunk.output_text === 'string') {
-      outputParts.push(chunk.output_text);
+      updateOutputPart(chunk, chunk.output_text);
     } else if (typeof chunk.text === 'string' && !eventType.includes('reason')) {
-      outputParts.push(chunk.text);
+      updateOutputPart(chunk, chunk.text);
     }
 
     if ((chunk.type === 'response.completed' || chunk.type === 'response.done') && chunk.response) {
       base = chunk.response;
+      hasCompletedOutput = Array.isArray(base.output) || typeof base.output_text === 'string';
     }
   }
 
-  const outputText = outputParts.join('');
+  const outputText = [...outputParts.values()]
+    .sort((left, right) => left.outputIndex - right.outputIndex || left.contentIndex - right.contentIndex)
+    .map((part) => part.text)
+    .join('');
   const reasoningSummaryText = reasoningSummaryParts.join('');
 
-  if (Array.isArray(base?.output) && base.output.length > 0) {
+  if (hasCompletedOutput) {
     return {
       ...base,
-      output_text: cleanString(base.output_text) || outputText,
+      output_text: pickChatText(base, 'responses'),
     };
   }
 
