@@ -15,7 +15,8 @@ export function androidAuthReturn(value:string):AndroidAuthReturn|null {
   try {
     if(url.protocol!=='https:')throw Error();
     nativeCallback(value,`${url.origin}${url.pathname}`,action==='logout');
+    // Let Android enforce domain association; an explicit package could bypass it.
     return {status:url.searchParams.has('error')?'error':'ready',action,
-      href:`intent:${url.href.slice('https:'.length)}#Intent;scheme=https;package=dev.paperquay.mobile;end`};
+      href:`intent:${url.href.slice('https:'.length)}#Intent;scheme=https;action=android.intent.action.VIEW;category=android.intent.category.DEFAULT;category=android.intent.category.BROWSABLE;end`};
   } catch {return {status:'invalid'};}
 }

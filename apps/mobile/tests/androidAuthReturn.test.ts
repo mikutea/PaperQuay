@@ -11,10 +11,11 @@ const state='synthetic_public_callback_state_123';
 const base=`${origin}/auth/native/android/callback`;
 const callback=`${base}?code=synthetic-code&state=${state}&iss=${encodeURIComponent(origin+'/identity/realm')}`;
 
-test('a browser-held native callback offers a user-initiated handoff of the same HTTPS URL to the fixed package',()=>{
+test('a browser-held native callback offers a user-initiated HTTPS handoff resolved by OS app-link policies',()=>{
   const result=androidAuthReturn(callback);
   assert(result&&result.status==='ready');
-  assert.equal(result.href,`intent:${callback.slice('https:'.length)}#Intent;scheme=https;package=dev.paperquay.mobile;end`);
+  assert.equal(result.href,`intent:${callback.slice('https:'.length)}#Intent;scheme=https;action=android.intent.action.VIEW;category=android.intent.category.DEFAULT;category=android.intent.category.BROWSABLE;end`);
+  assert.doesNotMatch(result.href,/[;#](?:package|component|S\.browser_fallback_url)=/);
   const delivered='https:'+result.href.slice('intent:'.length).split('#Intent;')[0];
   assert.equal(delivered,callback);
   assert.deepEqual(nativeCallback(delivered,base),{state});
