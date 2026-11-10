@@ -14,6 +14,8 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import { cn } from '../../utils/cn';
+import {PdfPaperAppearanceControl} from './PdfPaperAppearanceControl';
+import type {PdfPaperAppearance} from './pdfPaperAppearance';
 import {
   getPdfAnnotationColorValue,
   PDF_ANNOTATION_COLOR_PRESETS,
@@ -59,6 +61,8 @@ interface PdfViewerToolbarProps {
   onZoomIn: () => void;
   onZoomOut: () => void;
   pageCount: number;
+  paperAppearance: PdfPaperAppearance;
+  onPaperAppearanceChange: (value: PdfPaperAppearance) => void;
   readingHeatmapToggleLabel: string;
   saveMessage: string;
   saving: boolean;
@@ -91,6 +95,8 @@ export function PdfViewerToolbar({
   onZoomIn,
   onZoomOut,
   pageCount,
+  paperAppearance,
+  onPaperAppearanceChange,
   readingHeatmapToggleLabel,
   saveMessage,
   saving,
@@ -231,6 +237,7 @@ export function PdfViewerToolbar({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          <PdfPaperAppearanceControl value={paperAppearance} onChange={onPaperAppearanceChange} l={l} />
           <div className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-500 dark:border-white/10 dark:bg-[var(--pq-surface-1)] dark:text-[var(--pq-text-faint)]">
             {l(`Page ${currentPage}/${Math.max(pageCount, 1)}`, `Page ${currentPage}/${Math.max(pageCount, 1)}`)}
           </div>

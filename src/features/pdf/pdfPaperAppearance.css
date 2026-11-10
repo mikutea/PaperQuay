@@ -1,0 +1,16 @@
+.pdf-paper-appearance { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; font-size: .8125rem; color: var(--theme-text,var(--pq-text,#1e293b)); }
+.pdf-paper-appearance > span { white-space: nowrap; }
+.pdf-paper-appearance select { min-height: 40px; max-width: 100%; padding: 8px 10px; border: 1px solid var(--line,var(--pq-border-soft,#cbd5e1)); border-radius: 10px; color: inherit; background: var(--theme-surface,var(--pq-surface-1,#fff)); font: inherit; }
+
+[data-pdf-paper-appearance] { --pdf-paper-filter: none; --pdf-paper-background: #fff; }
+[data-pdf-paper-appearance='soft-original'] { --pdf-paper-filter: brightness(.78); --pdf-paper-background: #c7c7c7; }
+.dark .paperquay-pdf-linked[data-pdf-paper-appearance='theme'] { --pdf-paper-filter: invert(.9) hue-rotate(180deg); --pdf-paper-background: #1a1a1a; }
+@media (prefers-color-scheme: dark) {
+  .pr-reader[data-pdf-paper-appearance='theme'] { --pdf-paper-filter: invert(.9) hue-rotate(180deg); --pdf-paper-background: #1a1a1a; }
+}
+[data-pdf-paper-appearance] :is(.pdfViewer .canvasWrapper canvas,.pr-page > canvas,[data-pdf-paper-thumbnail]) { filter: var(--pdf-paper-filter); }
+[data-pdf-paper-appearance] :is(.pdfViewer .page,.pr-page) { --page-bg-color: var(--pdf-paper-background); background-color: var(--pdf-paper-background); }
+[data-pdf-paper-appearance] .pdfViewer .page { border-image: none; border-color: var(--pdf-paper-background); }
+@media (forced-colors: active) {
+  [data-pdf-paper-appearance] { --pdf-paper-filter: none !important; --pdf-paper-background: Canvas !important; }
+}

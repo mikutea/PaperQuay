@@ -143,8 +143,7 @@ h1 { font-size: 2rem; font-weight: 700; line-height: 1.25; }
 /* A PDF remains a light document in either chrome appearance. */
 .pr-page { color-scheme: only light; color: #1c1917; background: #fff; }
 .pr-text-layer ::selection { color: transparent; background: #0d94884d; }
-.pr-reader--compact .pr-title { color: #27322d; text-shadow: 0 1px 4px #fff, 0 0 10px #fff; }
-.pr-reader--compact[data-document-loaded=false] .pr-title { color: var(--theme-text); text-shadow: none; }
+.pr-reader--compact .pr-title { color: var(--theme-text); text-shadow: none; }
 .pr-reader-sheet .pr-feedback { color: var(--success); background: var(--success-soft); border-color: var(--success-line); }
 .pr-reader-sheet .pr-feedback-error { color: var(--danger); background: var(--danger-soft); border-color: var(--danger-line); }
 @media (min-width: 1500px) { .workspace-grid { grid-template-columns: 420px minmax(0,1fr); } }
