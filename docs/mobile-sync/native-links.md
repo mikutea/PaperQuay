@@ -67,6 +67,8 @@ xcodebuild -project ios/App/App.xcodeproj -scheme App \
 
 原生客户端使用 Code + S256 PKCE、精确回调和 API audience；生产 realm 继续使用单次刷新令牌策略。客户端模板将 `offline_access` 配为可选授权范围，与原生登录请求一致；已有客户端也须补齐这一范围，否则 Keycloak 会在显示登录页前返回 `invalid_scope`。禁止密码授权、隐式授权和私有 scheme 的生产回调。
 
+部分 Android 浏览器会将同域 HTTPS 回调留在浏览器内。此时回调页显示“返回 PaperQuay”按钮，由用户点击后通过 Android intent 将原始 HTTPS URL 交给固定应用包；应用继续验证原有 state、PKCE、nonce 和 issuer。网页不消费授权码，也不把回调误当成新的 Web 登录。无效回调只提示从应用重试。
+
 ## 验收证据
 
 | 范围 | 需要证明的结果 |

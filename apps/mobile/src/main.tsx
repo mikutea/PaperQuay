@@ -1,5 +1,8 @@
 import ReactDOM from 'react-dom/client';
+import {Capacitor} from '@capacitor/core';
 import { App } from './App.tsx';
+import {androidAuthReturn} from './auth/androidReturn.ts';
+import {AndroidAuthReturn} from './components/AndroidAuthReturn.tsx';
 import { loadRuntimeConfig } from './runtimeConfig.ts';
 import './styles.css';
 import './components/paperReader.css';
@@ -11,9 +14,10 @@ import './components/noteExport.css';
 import './components/richNoteEditor.css';
 import './theme.css';
 
-void loadRuntimeConfig(location.origin).then(defaults => {
-  ReactDOM.createRoot(document.getElementById('root')!).render(<App defaults={defaults} />);
-});
+const returnState=Capacitor.isNativePlatform()?null:androidAuthReturn(location.href);
+const root=ReactDOM.createRoot(document.getElementById('root')!);
+if(returnState)root.render(<AndroidAuthReturn result={returnState} />);
+else void loadRuntimeConfig(location.origin).then(defaults => root.render(<App defaults={defaults} />));
 
 import './components/incomingShare.css';
 

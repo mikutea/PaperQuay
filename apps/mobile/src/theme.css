@@ -92,6 +92,8 @@ h1 { font-size: 2rem; font-weight: 700; line-height: 1.25; }
 .login-page { max-width: 1100px; padding: calc(32px + env(safe-area-inset-top)) max(28px,env(safe-area-inset-right)) max(48px,env(safe-area-inset-bottom)) max(28px,env(safe-area-inset-left)); }
 .login-page > .brand { margin-bottom: clamp(36px,6vh,72px); }
 .login-panel { width: 100%; max-width: 440px; }
+.native-auth-return a.primary { display: flex; justify-content: center; align-items: center; text-decoration: none; min-height: 48px; }
+.native-auth-return a:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 3px; }
 .connection-art { position: relative; width: 84px; height: 88px; margin: 0 0 28px; color: var(--accent); }
 .connection-art > span { position: absolute; inset: 5px 12px 5px 6px; border: 1px solid var(--line); border-radius: 16px; background: var(--theme-surface); box-shadow: 0 6px 18px rgb(24 32 50 / 6%); }
 .connection-art > span:first-child { transform: rotate(-10deg) translate(-5px,2px); background: var(--theme-soft); }
