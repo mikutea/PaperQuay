@@ -239,7 +239,7 @@ function AgentReasoningPicker({
         className={[
           'pq-icon-button h-10 w-10 border bg-white/60',
           value === 'auto'
-            ? 'border-[var(--pq-border)] text-slate-400 dark:bg-white/5 dark:text-[var(--pq-text-faint)]'
+            ? 'border-[var(--pq-border)] text-[var(--pq-text-muted)] dark:bg-white/5 dark:text-[var(--pq-text-muted)]'
             : 'border-[var(--pq-accent)] bg-[var(--pq-accent-soft)] text-[var(--pq-accent)]',
         ].join(' ')}
       >
@@ -464,7 +464,7 @@ export default function AgentWorkspaceView({
                             >
                               {session.title}
                             </span>
-                            <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-[var(--pq-text-faint)]">
+                            <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-[var(--pq-text-muted)]">
                               <span
                                 className={[
                                   'h-1.5 w-1.5 shrink-0 rounded-full',
@@ -489,7 +489,7 @@ export default function AgentWorkspaceView({
                               event.stopPropagation();
                               handleDeleteHistorySession(session.id);
                             }}
-                            className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--pq-radius-sm)] text-slate-400 opacity-0 transition hover:bg-rose-50 hover:text-rose-600 group-hover:opacity-100 focus:opacity-100 dark:hover:bg-rose-400/10 dark:hover:text-rose-300"
+                            className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--pq-radius-sm)] text-[var(--pq-text-muted)] opacity-0 transition hover:bg-rose-50 hover:text-rose-600 group-hover:opacity-100 focus:opacity-100 dark:hover:bg-rose-400/10 dark:hover:text-rose-300"
                             aria-label={l('删除历史对话', 'Delete history item')}
                             title={l('删除历史对话', 'Delete history item')}
                           >
@@ -504,7 +504,7 @@ export default function AgentWorkspaceView({
                   <button
                     type="button"
                     onClick={handleClearAgentHistory}
-                    className="flex h-8 w-full items-center rounded-[var(--pq-radius-sm)] px-2.5 text-left text-xs font-medium text-[var(--pq-text-faint)] transition hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-400/10 dark:hover:text-rose-300"
+                    className="flex h-8 w-full items-center rounded-[var(--pq-radius-sm)] px-2.5 text-left text-xs font-medium text-[var(--pq-text-muted)] transition hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-400/10 dark:hover:text-rose-300"
                   >
                     {l('清空历史记录', 'Clear history')}
                   </button>
@@ -633,7 +633,7 @@ export default function AgentWorkspaceView({
                             <div className="max-w-[180px] truncate font-medium text-slate-700 dark:text-[var(--pq-text-muted)]">
                               {attachment.name}
                             </div>
-                            <div className="mt-0.5 text-[11px] text-slate-400 dark:text-[var(--pq-text-faint)]">
+                            <div className="mt-0.5 text-[11px] text-[var(--pq-text-muted)] dark:text-[var(--pq-text-muted)]">
                               {formatFileSize(attachment.size)}
                             </div>
                           </div>
@@ -662,7 +662,7 @@ export default function AgentWorkspaceView({
                             {agentRagEnabled ? 'RAG on' : 'RAG off'}
                           </span>
                         </div>
-                        <div className="mt-1 text-xs text-slate-500 dark:text-[var(--pq-text-faint)]">
+                        <div className="mt-1 text-xs text-[var(--pq-text-muted)] dark:text-[var(--pq-text-muted)]">
                           {l(
                             `手动选择 ${selectedPaperIds.size} · 搜索结果 ${filteredPapers.length} · 全库 ${papers.length}。未选择时，RAG 自动使用全库候选。`,
                             `Manual ${selectedPaperIds.size} · Results ${filteredPapers.length} · Library ${papers.length}. When none are selected, RAG automatically uses the full library.`,
@@ -707,12 +707,12 @@ export default function AgentWorkspaceView({
                     <div className="p-4">
                       <div className="mb-3 flex flex-wrap items-center gap-2">
                         <label className="pq-input flex min-w-[240px] flex-1 items-center gap-2 px-3 py-2.5 text-sm text-[var(--pq-text-muted)]">
-                          <Search className="h-4 w-4 shrink-0 text-slate-400 dark:text-[var(--pq-text-faint)]" strokeWidth={2} />
+                          <Search className="h-4 w-4 shrink-0 text-[var(--pq-text-muted)] dark:text-[var(--pq-text-muted)]" strokeWidth={2} />
                           <input
                             value={paperSearchQuery}
                             onChange={(event) => onPaperSearchQueryChange(event.target.value)}
                             placeholder={l('搜索标题、作者、年份、标签...', 'Search title, author, year, tags...')}
-                            className="min-w-0 flex-1 bg-transparent text-sm text-slate-800 outline-none placeholder:text-slate-400 dark:text-[var(--pq-text)] dark:placeholder:text-[var(--pq-text-faint)]"
+                            className="min-w-0 flex-1 bg-transparent text-sm text-slate-800 outline-none placeholder:text-[var(--pq-text-muted)] dark:text-[var(--pq-text)] dark:placeholder:text-[var(--pq-text-muted)]"
                           />
                         </label>
                         <button
@@ -734,7 +734,7 @@ export default function AgentWorkspaceView({
 
                       {selectedTags.length > 0 ? (
                         <div className="mb-3 flex items-center gap-2 overflow-x-auto pb-1">
-                          <Tags className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                          <Tags className="h-3.5 w-3.5 shrink-0 text-[var(--pq-text-muted)]" />
                           {selectedTags.map((tag) => (
                             <span key={tag} className={agentTagClass}>
                               {tag}
@@ -748,7 +748,7 @@ export default function AgentWorkspaceView({
                         className="max-h-72 overflow-y-auto overscroll-y-contain rounded-xl border border-[var(--pq-border)] bg-[var(--pq-surface-1)]"
                       >
                         {loading ? (
-                          <div className="flex h-40 items-center justify-center text-sm text-slate-500">
+                          <div className="flex h-40 items-center justify-center text-sm text-[var(--pq-text-muted)]">
                             <Loader2 className="mr-2 h-4 w-4 animate-spin" strokeWidth={2} />
                             {l('正在加载文库...', 'Loading library...')}
                           </div>
@@ -794,11 +794,11 @@ export default function AgentWorkspaceView({
                                     <span className="truncate text-sm font-semibold text-[var(--pq-text)]">
                                       {paper.title}
                                     </span>
-                                    <span className="mt-1 block truncate text-xs text-slate-500 dark:text-[var(--pq-text-faint)]">
+                                    <span className="mt-1 block truncate text-xs text-[var(--pq-text-muted)] dark:text-[var(--pq-text-muted)]">
                                       {formatPaperMeta(paper, locale) || l('暂无元数据', 'No metadata')}
                                     </span>
                                   </span>
-                                  <span className="hidden shrink-0 text-xs text-slate-400 sm:inline">
+                                  <span className="hidden shrink-0 text-xs text-[var(--pq-text-muted)] sm:inline">
                                     {paper.year || ''}
                                   </span>
                                 </button>
@@ -840,8 +840,8 @@ export default function AgentWorkspaceView({
                     }}
                     className={
                       isFreshAgentSession
-                        ? 'min-h-[72px] w-full resize-none rounded-xl border-0 bg-transparent px-1 py-1 text-sm leading-7 text-[var(--pq-text)] outline-none placeholder:text-[var(--pq-text-faint)]'
-                        : 'min-h-[96px] w-full resize-none rounded-xl border-0 bg-transparent px-1 py-1 text-sm leading-7 text-[var(--pq-text)] outline-none placeholder:text-[var(--pq-text-faint)]'
+                        ? 'min-h-[72px] w-full resize-none rounded-xl border-0 bg-transparent px-1 py-1 text-sm leading-7 text-[var(--pq-text)] outline-none placeholder:text-[var(--pq-text-muted)]'
+                        : 'min-h-[96px] w-full resize-none rounded-xl border-0 bg-transparent px-1 py-1 text-sm leading-7 text-[var(--pq-text)] outline-none placeholder:text-[var(--pq-text-muted)]'
                     }
                     placeholder={l('在此处发送消息...', 'Send a message here...')}
                   />
@@ -888,7 +888,7 @@ export default function AgentWorkspaceView({
                           'pq-icon-button relative h-10 w-10 shrink-0 border transition',
                           agentRagEnabled
                             ? 'border-emerald-300 bg-emerald-50 text-emerald-700 shadow-[0_0_0_3px_rgba(16,185,129,0.12)] dark:border-emerald-400/40 dark:bg-emerald-400/12 dark:text-emerald-200'
-                            : 'border-[var(--pq-border)] bg-white/60 text-slate-400 dark:bg-white/5 dark:text-[var(--pq-text-faint)]',
+                            : 'border-[var(--pq-border)] bg-white/60 text-[var(--pq-text-muted)] dark:bg-white/5 dark:text-[var(--pq-text-muted)]',
                         ].join(' ')}
                       >
                         <Database className="h-4 w-4" strokeWidth={1.8} />

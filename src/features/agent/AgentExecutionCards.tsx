@@ -26,7 +26,7 @@ function statusTone(status: AgentStepStatus): string {
     case 'error':
       return 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-300/20 dark:bg-rose-400/10 dark:text-rose-200';
     default:
-      return 'border-slate-200 bg-slate-50 text-slate-500 dark:border-white/10 dark:bg-chrome-900 dark:text-chrome-400';
+      return 'border-slate-200 bg-slate-50 text-[var(--pq-text-muted)] dark:border-white/10 dark:bg-[var(--pq-surface-2)] dark:text-[var(--pq-text-muted)]';
   }
 }
 
@@ -78,7 +78,7 @@ export function PlanDiffCard({
         'group rounded-[22px] border p-3.5 transition',
         approved
           ? 'border-teal-200 bg-teal-50/70 shadow-[0_14px_35px_rgba(20,184,166,0.10)] dark:border-teal-300/20 dark:bg-teal-300/10'
-          : 'border-slate-200 bg-white/74 opacity-75 dark:border-white/10 dark:bg-chrome-900/62',
+          : 'border-slate-200 bg-white/74 dark:border-white/10 dark:bg-[var(--pq-surface-2)]',
       ].join(' ')}
     >
       <div className="flex items-start gap-3">
@@ -89,7 +89,7 @@ export function PlanDiffCard({
             'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border transition',
             approved
               ? 'border-teal-500 bg-teal-500 text-white'
-              : 'border-slate-300 bg-white text-transparent dark:border-white/20 dark:bg-chrome-950',
+              : 'border-slate-300 bg-white text-transparent dark:border-white/20 dark:bg-[var(--pq-surface-1)]',
           ].join(' ')}
         >
           <Check className="h-3.5 w-3.5" strokeWidth={2.2} />
@@ -98,28 +98,28 @@ export function PlanDiffCard({
           <div className="line-clamp-2 text-sm font-bold text-slate-950 dark:text-white">
             {item.paperTitle}
           </div>
-          <div className="mt-1 text-xs leading-5 text-slate-500 dark:text-chrome-400">
+          <div className="mt-1 text-sm leading-6 text-[var(--pq-text-muted)] dark:text-[var(--pq-text-muted)]">
             {item.description}
           </div>
 
           {item.before || item.after ? (
-            <div className="mt-3 grid gap-2 text-xs leading-5">
-              <div className="rounded-2xl border border-slate-200 bg-white px-3 py-2 dark:border-white/10 dark:bg-chrome-950">
-                <div className="mb-1 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">
+            <div className="mt-3 grid gap-2 text-sm leading-6">
+              <div className="rounded-2xl border border-slate-200 bg-white px-3 py-2 dark:border-white/10 dark:bg-[var(--pq-surface-1)]">
+                <div className="mb-1 text-[10px] font-bold uppercase tracking-[0.16em] text-[var(--pq-text-muted)]">
                   Before
                 </div>
-                <div className="line-clamp-3 text-slate-600 dark:text-chrome-300">
+                <div className="line-clamp-3 text-slate-600 dark:text-[var(--pq-text)]">
                   {item.before || l('空', 'Empty')}
                 </div>
               </div>
               <div className="flex justify-center text-teal-600 dark:text-teal-300">
                 <ArrowRight className="h-4 w-4" strokeWidth={2} />
               </div>
-              <div className="rounded-2xl border border-teal-200 bg-white px-3 py-2 dark:border-teal-300/20 dark:bg-chrome-950">
+              <div className="rounded-2xl border border-teal-200 bg-white px-3 py-2 dark:border-teal-300/20 dark:bg-[var(--pq-surface-1)]">
                 <div className="mb-1 text-[10px] font-bold uppercase tracking-[0.16em] text-teal-600 dark:text-teal-300">
                   After
                 </div>
-                <div className="line-clamp-3 text-slate-900 dark:text-chrome-100">
+                <div className="line-clamp-3 text-slate-900 dark:text-[var(--pq-text)]">
                   {item.after || l('空', 'Empty')}
                 </div>
               </div>
@@ -154,15 +154,15 @@ export function TraceTimeline({
   const locale = useAppLocale();
 
   return (
-    <div className="rounded-[26px] border border-slate-200 bg-slate-50/70 p-4 dark:border-white/10 dark:bg-chrome-950/54">
+    <div className="rounded-[26px] border border-slate-200 bg-slate-50/70 p-4 dark:border-white/10 dark:bg-[var(--pq-surface-1)]">
       <div className="mb-4 flex items-center justify-between gap-3">
         <div>
           <div className="text-sm font-black text-slate-950 dark:text-white">{l('执行轨迹', 'Execution Trace')}</div>
-          <div className="mt-1 text-xs text-slate-500 dark:text-chrome-400">
+          <div className="mt-1 text-xs text-[var(--pq-text-muted)] dark:text-[var(--pq-text-muted)]">
             {l('意图 · 计划 · 工具调用 · 结果 · 最终回答', 'Intent · Plan · Tool call · Result · Final')}
           </div>
         </div>
-        <div className="rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] font-bold text-slate-500 dark:border-white/10 dark:bg-chrome-900 dark:text-chrome-400">
+        <div className="rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] font-bold text-[var(--pq-text-muted)] dark:border-white/10 dark:bg-[var(--pq-surface-2)] dark:text-[var(--pq-text-muted)]">
           {steps.filter((step) => step.status === 'success').length}/{steps.length} {l('已完成', 'completed')}
         </div>
       </div>
@@ -196,23 +196,23 @@ export function TraceTimeline({
                         {statusLabel(step.status)}
                       </span>
                       {step.durationMs ? (
-                        <span className="inline-flex items-center gap-1 text-[11px] text-slate-400 dark:text-chrome-500">
+                        <span className="inline-flex items-center gap-1 text-[11px] text-[var(--pq-text-muted)] dark:text-[var(--pq-text-muted)]">
                           <Clock3 className="h-3 w-3" />
                           {durationLabel(step.durationMs, locale)}
                         </span>
                       ) : null}
                     </span>
-                    <span className="mt-1 block text-xs leading-5 text-slate-500 dark:text-chrome-400">
+                    <span className="mt-1 block text-sm leading-6 text-[var(--pq-text-muted)] dark:text-[var(--pq-text-muted)]">
                       {step.summary}
                     </span>
                   </span>
-                  <span className="mt-1 text-slate-400 dark:text-chrome-500">
+                  <span className="mt-1 text-[var(--pq-text-muted)] dark:text-[var(--pq-text-muted)]">
                     {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                   </span>
                 </button>
 
                 {expanded && step.detail ? (
-                  <div className="mt-2 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs leading-5 text-slate-600 dark:border-white/10 dark:bg-chrome-900 dark:text-chrome-300">
+                  <div className="mt-2 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm leading-6 text-slate-600 dark:border-white/10 dark:bg-[var(--pq-surface-2)] dark:text-[var(--pq-text)]">
                     {step.detail}
                   </div>
                 ) : null}
@@ -244,7 +244,7 @@ export function ToolCallCard({
   const Icon = capability.icon;
 
   return (
-    <section className="rounded-[26px] border border-slate-200 bg-white p-4 shadow-[0_18px_45px_rgba(15,23,42,0.06)] dark:border-white/10 dark:bg-chrome-900/78 dark:shadow-none">
+    <section className="rounded-[26px] border border-slate-200 bg-white p-4 shadow-[0_18px_45px_rgba(15,23,42,0.06)] dark:border-white/10 dark:bg-[var(--pq-surface-2)] dark:shadow-none">
       <div className="flex items-start justify-between gap-4">
         <div className="flex min-w-0 items-start gap-3">
           <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-slate-950 text-white dark:bg-teal-300 dark:text-slate-950">
@@ -259,37 +259,37 @@ export function ToolCallCard({
                 {statusLabel(toolCall.status)}
               </span>
             </div>
-            <div className="mt-1 font-mono text-[11px] text-slate-400 dark:text-chrome-500">
+            <div className="mt-1 font-mono text-[11px] text-[var(--pq-text-muted)] dark:text-[var(--pq-text-muted)]">
               {toolCall.functionName}
             </div>
           </div>
         </div>
-        <div className="shrink-0 rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-bold text-slate-500 dark:border-white/10 dark:bg-chrome-950 dark:text-chrome-400">
+        <div className="shrink-0 rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-bold text-[var(--pq-text-muted)] dark:border-white/10 dark:bg-[var(--pq-surface-1)] dark:text-[var(--pq-text-muted)]">
           {durationLabel(toolCall.durationMs, locale)}
         </div>
       </div>
 
       <div className="mt-4 grid gap-3 md:grid-cols-2">
-        <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-3 dark:border-white/10 dark:bg-chrome-950/70">
-          <div className="mb-1 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">
+        <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-3 dark:border-white/10 dark:bg-[var(--pq-surface-1)]">
+          <div className="mb-1 text-[10px] font-bold uppercase tracking-[0.16em] text-[var(--pq-text-muted)]">
             {l('参数摘要', 'Parameter Summary')}
           </div>
-          <div className="text-xs leading-5 text-slate-600 dark:text-chrome-300">
+          <div className="text-sm leading-6 text-slate-600 dark:text-[var(--pq-text)]">
             {toolCall.parameterSummary}
           </div>
         </div>
-        <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-3 dark:border-white/10 dark:bg-chrome-950/70">
-          <div className="mb-1 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">
+        <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-3 dark:border-white/10 dark:bg-[var(--pq-surface-1)]">
+          <div className="mb-1 text-[10px] font-bold uppercase tracking-[0.16em] text-[var(--pq-text-muted)]">
             {l('返回摘要', 'Result Summary')}
           </div>
-          <div className="text-xs leading-5 text-slate-600 dark:text-chrome-300">
+          <div className="text-sm leading-6 text-slate-600 dark:text-[var(--pq-text)]">
             {toolCall.resultSummary}
           </div>
         </div>
       </div>
 
       {expanded ? (
-        <pre className="mt-3 max-h-56 overflow-auto rounded-2xl border border-slate-200 bg-slate-950 p-3 text-xs leading-5 text-slate-100 dark:border-white/10">
+        <pre className="mt-3 max-h-56 overflow-auto rounded-2xl border border-slate-200 bg-slate-950 p-3 text-sm leading-6 text-slate-100 dark:border-white/10">
           {JSON.stringify(toolCall.rawParameters, null, 2)}
         </pre>
       ) : null}
@@ -298,7 +298,7 @@ export function ToolCallCard({
         <button
           type="button"
           onClick={onToggle}
-          className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-600 transition hover:bg-slate-50 dark:border-white/10 dark:bg-chrome-950 dark:text-chrome-300"
+          className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-600 transition hover:bg-slate-50 dark:border-white/10 dark:bg-[var(--pq-surface-1)] dark:text-[var(--pq-text)]"
         >
           <Braces className="h-3.5 w-3.5" />
           {expanded ? l('收起详情', 'Collapse Details') : l('查看详情', 'View Details')}
@@ -306,7 +306,7 @@ export function ToolCallCard({
         <button
           type="button"
           onClick={onCopyParameters}
-          className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-600 transition hover:bg-slate-50 dark:border-white/10 dark:bg-chrome-950 dark:text-chrome-300"
+          className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-600 transition hover:bg-slate-50 dark:border-white/10 dark:bg-[var(--pq-surface-1)] dark:text-[var(--pq-text)]"
         >
           <Copy className="h-3.5 w-3.5" />
           {l('复制参数', 'Copy Parameters')}
@@ -314,7 +314,7 @@ export function ToolCallCard({
         <button
           type="button"
           onClick={onRetry}
-          className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-600 transition hover:bg-slate-50 dark:border-white/10 dark:bg-chrome-950 dark:text-chrome-300"
+          className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-600 transition hover:bg-slate-50 dark:border-white/10 dark:bg-[var(--pq-surface-1)] dark:text-[var(--pq-text)]"
         >
           <RotateCcw className="h-3.5 w-3.5" />
           {l('重试工具', 'Retry Tool')}
