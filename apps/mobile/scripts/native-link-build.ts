@@ -134,7 +134,7 @@ export function prepareNativeLinks(value:unknown,platform:string,output:string):
   writeFileSync(join(target,'NativeLinks.xcconfig'),'PAPERQUAY_NATIVE_LINK_HOST = '+new URL(binding.origin).hostname+'\n',{flag:'wx',mode:0o600});
   write('oidc-client.disabled.json',{clientId:binding.clientId,enabled:false,protocol:'openid-connect',publicClient:true,standardFlowEnabled:true,
     directAccessGrantsEnabled:false,implicitFlowEnabled:false,serviceAccountsEnabled:false,fullScopeAllowed:false,
-    redirectUris:[binding.redirectUri],webOrigins:[platform==='ios'?'capacitor://localhost':'https://localhost'],defaultClientScopes:['basic','profile','email'],optionalClientScopes:[],
+    redirectUris:[binding.redirectUri],webOrigins:[platform==='ios'?'capacitor://localhost':'https://localhost'],defaultClientScopes:['basic','profile','email'],optionalClientScopes:['offline_access'],
     attributes:{'pkce.code.challenge.method':'S256','client.use.lightweight.access.token.enabled':'false','post.logout.redirect.uris':binding.logoutRedirectUri},
     protocolMappers:[{name:'paperquay-sync-audience',protocol:'openid-connect',protocolMapper:'oidc-audience-mapper',consentRequired:false,
       config:{'included.custom.audience':'paperquay-sync','access.token.claim':'true','id.token.claim':'false','lightweight.claim':'true'}}]});

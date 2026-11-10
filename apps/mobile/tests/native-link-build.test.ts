@@ -25,6 +25,7 @@ test('private settings generate independent association documents, matching nati
     assert.equal(client.enabled,false);assert.equal(client.clientId,'paperquay-'+platform);assert.equal(client.directAccessGrantsEnabled,false);
     assert.deepEqual(client.redirectUris,[fixture.origin+'/auth/native/'+platform+'/callback']);
     assert.equal(client.attributes['pkce.code.challenge.method'],'S256');
+    assert.deepEqual(client.optionalClientScopes,['offline_access']);
     assert.deepEqual(client.webOrigins,[platform==='ios'?'capacitor://localhost':'https://localhost']);
     const required=JSON.parse(readFileSync(join(output,'verification-required.json'),'utf8'));
     assert.equal(required.signatureVerified,false);assert.equal(required.osDomainAssociationVerified,false);
