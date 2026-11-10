@@ -173,7 +173,7 @@ export default function AgentMarkdown({
     <AgentMarkdownBoundary resetKey={normalizedContent} fallback={fallback}>
       <ReactMarkdown
         className={[
-          'max-w-none text-sm leading-7 text-[var(--pq-text-muted)]',
+          'max-w-none text-[15px] leading-7 text-[var(--pq-text)]',
           '[&>*:first-child]:mt-0 [&>*:last-child]:mb-0',
           '[&_h1]:mb-3 [&_h1]:mt-5 [&_h1]:border-b [&_h1]:border-[var(--pq-border)] [&_h1]:pb-2 [&_h1]:text-2xl [&_h1]:font-semibold [&_h1]:tracking-tight [&_h1]:text-[var(--pq-text)]',
           '[&_h2]:mb-3 [&_h2]:mt-5 [&_h2]:text-xl [&_h2]:font-semibold [&_h2]:tracking-tight [&_h2]:text-[var(--pq-text)]',

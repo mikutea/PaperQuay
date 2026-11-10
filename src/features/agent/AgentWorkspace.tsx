@@ -981,7 +981,6 @@ function AgentWorkspace() {
         window.clearTimeout(streamCommitTimer);
       }
 
-      commitStreamedAgentMessage();
       setAgentSessionRunning(sessionId, false);
     }
   };
