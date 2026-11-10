@@ -53,7 +53,7 @@ import {
 } from './sync/workspace.ts';
 import { getIncomingShareClient } from './platform/incomingShare.ts';
 import { assertPreparedIncomingShareSource, type PreparedSource } from './library/incomingShare.ts';
-import { entityStatus, hasEntityConflict } from './viewState.ts';
+import { entityStatus, hasEntityConflict, syncSummary } from './viewState.ts';
 
 const DEVICE_NAME_KEY = 'paperquay.mobile.device-name.v1';
 type Section = 'library' | 'notes' | 'account' | 'conflicts';
@@ -833,7 +833,7 @@ function ConnectedWorkspace({
           <MobileSettings key={incomingKey}
             displayName={authState.displayName}
             accountStatus={!state.online ? '离线使用中' : state.needsLogin ? '需要重新登录' : '账号与设备'}
-            syncStatus={state.needsLogin ? '需要重新登录' : conflictCount ? `${conflictCount} 处需要处理` : state.syncing ? '正在同步…' : state.workspace?.sync.outbox.length ? `${state.workspace.sync.outbox.length} 项待同步` : state.lastSyncedAt ? '已同步' : '等待首次同步'}
+            syncStatus={syncSummary(state, conflictCount).label}
             openAi={aiSettings} onAiOpened={() => setAiSettings(false)}
             renderAccount={page => <AccountView page={page}
             state={state}
@@ -1013,45 +1013,17 @@ function SyncStatus({
   onSync: () => void;
   onConflicts: () => void;
 }) {
-  const pending =
-    (state.workspace?.sync.outbox.length ?? 0) +
-    Object.keys(state.workspace?.pendingResolutions ?? {}).length;
-  const blocked = state.workspace?.sync.outbox.some(
-    (entry) => entry.status === 'rejected' || entry.status === 'device-blocked',
-  );
-  const label = !state.online
-    ? pending ? `离线 · ${pending} 项待同步` : '离线 · 本地内容可用'
-    : state.needsLogin
-      ? '请重新登录'
-      : conflicts
-      ? `${conflicts} 项冲突待处理`
-        : state.syncing
-          ? '同步中'
-          : blocked
-            ? '部分改动同步受阻'
-            : pending
-              ? `${pending} 项待同步`
-              : state.lastSyncedAt
-                ? '已同步'
-                : '等待首次同步';
+  const summary = syncSummary(state, conflicts);
   return (
     <div
-      className={`sync-status ${conflicts || blocked || state.needsLogin ? 'needs-attention' : ''}`}
+      className={`sync-status ${summary.needsAttention ? 'needs-attention' : ''}`}
     >
       <span role="status">
         <Icon
-          name={
-            !state.online
-              ? 'offline'
-              : conflicts || blocked
-                ? 'warning'
-                : state.syncing
-                  ? 'sync'
-                  : 'check'
-          }
-          className={state.syncing ? 'spin' : ''}
+          name={summary.icon}
+          className={summary.icon === 'sync' ? 'spin' : ''}
         />
-        {label}
+        {summary.label}
       </span>
       <button
         className="text-button"
@@ -1363,10 +1335,7 @@ function AccountView({
     setBusy(true);
     void task().finally(() => setBusy(false));
   };
-  const blocked =
-    state.workspace?.sync.outbox.filter((entry) =>
-      ['rejected', 'device-blocked'].includes(entry.status),
-    ) ?? [];
+  const { blocked, retained } = syncSummary(state, conflicts);
   return (
     <div className="account-page">
       {page === 'account' && <div className="account-profile">
@@ -1384,6 +1353,11 @@ function AccountView({
           <button className="primary" onClick={onLogin}>
             {state.error?.code === 'SESSION_REVOKED' ? '退出旧会话' : '重新登录'}
           </button>
+        )}
+        {retained.length > 0 && (
+          <p className="muted">
+            重新登录前的 {retained.length} 项阅读位置已保留在本机。继续阅读会为当前登录保存新进度。
+          </p>
         )}
         {blocked.map((entry) => (
           <p key={entry.operation.opId} className="inline-error">
