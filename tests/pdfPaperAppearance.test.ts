@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {PDF_PAPER_APPEARANCE_KEY, pdfPaperAppearance, readPdfPaperAppearance, writePdfPaperAppearance} from '../src/features/pdf/pdfPaperAppearance.ts';
+import {PDF_PAPER_APPEARANCE_KEY, pdfPaperAppearance, readPdfPaperAppearance, writePdfPaperAppearance} from '../apps/mobile/src/pdf/pdfPaperAppearance.ts';
 
 test('PDF appearance defaults to the app theme and only accepts known display choices', () => {
   for (const value of [null, undefined, '', 'dark', 'url(private)', {}]) assert.equal(pdfPaperAppearance(value), 'theme');

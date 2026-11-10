@@ -15,7 +15,7 @@ import {
   getDocument,
 } from 'pdfjs-dist';
 import 'pdfjs-dist/web/pdf_viewer.css';
-import './pdfPaperAppearance.css';
+import '../../../apps/mobile/src/pdf/pdfPaperAppearance.css';
 import EmptyState from '../../components/EmptyState';
 import { ContextMenu, type ContextMenuEntry } from '../../components/ContextMenu';
 import { useWheelScrollDelegate } from '../../hooks/useWheelScrollDelegate';
@@ -102,7 +102,7 @@ import {
   PdfViewerToolbar,
   type AnnotationEditorTool,
 } from './PdfViewerToolbar';
-import {readPdfPaperAppearance, writePdfPaperAppearance} from './pdfPaperAppearance';
+import {readPdfPaperAppearance, writePdfPaperAppearance} from '../../../apps/mobile/src/pdf/pdfPaperAppearance';
 
 GlobalWorkerOptions.workerSrc = new URL(
   'pdfjs-dist/build/pdf.worker.min.mjs',

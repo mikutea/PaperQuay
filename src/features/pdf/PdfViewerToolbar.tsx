@@ -14,8 +14,8 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import { cn } from '../../utils/cn';
-import {PdfPaperAppearanceControl} from './PdfPaperAppearanceControl';
-import type {PdfPaperAppearance} from './pdfPaperAppearance';
+import {PdfPaperAppearanceControl} from '../../../apps/mobile/src/pdf/PdfPaperAppearanceControl';
+import type {PdfPaperAppearance} from '../../../apps/mobile/src/pdf/pdfPaperAppearance';
 import {
   getPdfAnnotationColorValue,
   PDF_ANNOTATION_COLOR_PRESETS,

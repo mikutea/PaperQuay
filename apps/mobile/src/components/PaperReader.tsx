@@ -25,8 +25,8 @@ import { openVerifiedPdf, type PdfOutlineItem, type PdfRuntime, type PdfSearchMa
 import { PdfError, throwIfAborted } from '../pdf/errors.ts';
 import { pageWindow, quadBounds } from '../pdf/geometry.ts';
 import { PdfPageView, pageDisplaySize } from '../pdf/PdfPageView.tsx';
-import {PdfPaperAppearanceControl} from '../../../../src/features/pdf/PdfPaperAppearanceControl.tsx';
-import {readPdfPaperAppearance, writePdfPaperAppearance} from '../../../../src/features/pdf/pdfPaperAppearance.ts';
+import {PdfPaperAppearanceControl} from '../pdf/PdfPaperAppearanceControl.tsx';
+import {readPdfPaperAppearance, writePdfPaperAppearance} from '../pdf/pdfPaperAppearance.ts';
 import { ownReadingPosition, positionOwner, readerIdentity, ReadingCheckpointWriter, sameReaderIdentity,
   type PositionStatus, type ReaderIdentity, type ReadingPoint } from '../pdf/position.ts';
 import { PDF_LIMITS, type PaperReaderProps, type PdfAiContext, type PdfCacheEntry, type PdfCitationTarget, type PdfVersion } from '../pdf/types.ts';
