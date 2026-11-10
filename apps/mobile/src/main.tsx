@@ -4,6 +4,7 @@ import { App } from './App.tsx';
 import {androidAuthReturn} from './auth/androidReturn.ts';
 import {AndroidAuthReturn} from './components/AndroidAuthReturn.tsx';
 import { loadRuntimeConfig } from './runtimeConfig.ts';
+import {observeSystemBarTheme} from './platform/systemBarTheme.ts';
 import './styles.css';
 import './components/paperReader.css';
 import './components/cloudPdf.css';
@@ -13,6 +14,9 @@ import './components/aiSyncPanel.css';
 import './components/noteExport.css';
 import './components/richNoteEditor.css';
 import './theme.css';
+
+const stopSystemBarTheme = observeSystemBarTheme();
+if (import.meta.hot) import.meta.hot.dispose(stopSystemBarTheme);
 
 const returnState=Capacitor.isNativePlatform()?null:androidAuthReturn(location.href);
 const root=ReactDOM.createRoot(document.getElementById('root')!);
