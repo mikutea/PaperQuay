@@ -65,7 +65,7 @@ xcodebuild -project ios/App/App.xcodeproj -scheme App \
 
 关联文档公开后，部署方须检查实际签名产物和 OS 关联状态，再明确开通对应 Keycloak 客户端，并把该客户端 ID、精确 WebView origin 加入 API 白名单。iOS 默认 origin 为 `capacitor://localhost`，Android 为 `https://localhost`。关联设置不会自动修改 OAuth 客户端、API 客户端白名单或 CORS。
 
-原生客户端使用 Code + S256 PKCE、精确回调和 API audience；生产 realm 继续使用单次刷新令牌策略。禁止密码授权、隐式授权和私有 scheme 的生产回调。
+原生客户端使用 Code + S256 PKCE、精确回调和 API audience；生产 realm 继续使用单次刷新令牌策略。客户端模板将 `offline_access` 配为可选授权范围，与原生登录请求一致；已有客户端也须补齐这一范围，否则 Keycloak 会在显示登录页前返回 `invalid_scope`。禁止密码授权、隐式授权和私有 scheme 的生产回调。
 
 ## 验收证据
 
