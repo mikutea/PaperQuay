@@ -612,10 +612,10 @@ function BlockViewer({
             <span className="hidden sm:inline">{l('Structured Reading', 'Structured Reading')}</span>
           </div>
 
-          <span className="pq-badge-neutral rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-500">
+          <span className="pq-badge-neutral rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-500 dark:border-white/10 dark:bg-[var(--pq-surface-2)] dark:text-[var(--pq-text-muted)]">
             {l(`${visibleBlocks.length} 个块`, `${visibleBlocks.length} blocks`)}
           </span>
-          <span className="pq-badge-state rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-500">
+          <span className="pq-badge-state rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-500 dark:border-white/10 dark:bg-[var(--pq-surface-2)] dark:text-[var(--pq-text-muted)]">
             {l(`${translatedCount} 个译文块`, `${translatedCount} translated blocks`)}
           </span>
 

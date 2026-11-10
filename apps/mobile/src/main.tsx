@@ -7,6 +7,7 @@ import { loadRuntimeConfig } from './runtimeConfig.ts';
 import {observeSystemBarTheme} from './platform/systemBarTheme.ts';
 import './styles.css';
 import './components/paperReader.css';
+import './pdf/pdfPaperAppearance.css';
 import './components/cloudPdf.css';
 import './components/aiWorkspace.css';
 import './components/aiArchive.css';

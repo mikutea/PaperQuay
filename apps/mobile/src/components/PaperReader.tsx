@@ -25,6 +25,8 @@ import { openVerifiedPdf, type PdfOutlineItem, type PdfRuntime, type PdfSearchMa
 import { PdfError, throwIfAborted } from '../pdf/errors.ts';
 import { pageWindow, quadBounds } from '../pdf/geometry.ts';
 import { PdfPageView, pageDisplaySize } from '../pdf/PdfPageView.tsx';
+import {PdfPaperAppearanceControl} from '../pdf/PdfPaperAppearanceControl.tsx';
+import {readPdfPaperAppearance, writePdfPaperAppearance} from '../pdf/pdfPaperAppearance.ts';
 import { ownReadingPosition, positionOwner, readerIdentity, ReadingCheckpointWriter, sameReaderIdentity,
   type PositionStatus, type ReaderIdentity, type ReadingPoint } from '../pdf/position.ts';
 import { PDF_LIMITS, type PaperReaderProps, type PdfAiContext, type PdfCacheEntry, type PdfCitationTarget, type PdfVersion } from '../pdf/types.ts';
@@ -114,6 +116,7 @@ export function PaperReader(props: PaperReaderProps) {
   const [pageIndex, setPageIndex] = useState(0);
   const [pageInput, setPageInput] = useState('1');
   const [zoom, setZoom] = useState(1);
+  const [paperAppearance, setPaperAppearance] = useState(readPdfPaperAppearance);
   const [rotation, setRotation] = useState(0);
   const [continuous, setContinuous] = useState(true);
   const [fitWidth, setFitWidth] = useState(640);
@@ -804,6 +807,7 @@ export function PaperReader(props: PaperReaderProps) {
   const chromeHidden = compact && !toolsVisible && Boolean(loaded);
   const footerHidden = chromeHidden && !selection && !areaMode;
   return <section ref={readerRoot} className={`pr-reader${compact ? ' pr-reader--compact' : ''}${chromeHidden ? ' pr-reader--immersive' : ''}`}
+    data-pdf-paper-appearance={paperAppearance}
     style={compact ? { '--reader-content-top': `${chromeInsets.top}px`, '--reader-content-bottom': `${chromeInsets.bottom}px` } as CSSProperties : undefined}
     aria-label="PDF 阅读器" data-tools-visible={toolsVisible} data-document-loaded={Boolean(loaded)} onKeyDown={(event) => {
     const target = event.target as HTMLElement;
@@ -823,6 +827,7 @@ export function PaperReader(props: PaperReaderProps) {
       {pageControls}{zoomControl}
       <button type="button" onClick={() => { setSelection(null); setRotation((value) => (value + 90) % 360); }} aria-label={`旋转页面，当前 ${rotation} 度`}>旋转</button>
       {modeControl}
+      <PdfPaperAppearanceControl value={paperAppearance} onChange={value => { writePdfPaperAppearance(value); setPaperAppearance(value); }} />
       <button type="button" aria-pressed={panel === 'contents'} onClick={() => setPanel(panel === 'contents' ? null : 'contents')}>目录</button>
       <button type="button" aria-pressed={panel === 'search'} onClick={() => setPanel(panel === 'search' ? null : 'search')}>搜索</button>
       <button type="button" aria-pressed={panel === 'annotations'} onClick={() => setPanel(panel === 'annotations' ? null : 'annotations')}>批注 {annotationRecords.length || ''}</button>
@@ -865,6 +870,8 @@ export function PaperReader(props: PaperReaderProps) {
         {panel === 'more' && <div className="pr-panel-content pr-options">
           {loaded && <section className="pr-option-section" aria-label="阅读显示"><h3>阅读显示</h3>
             <div className="pr-option-controls">{zoomControl}{modeControl}</div>
+            <PdfPaperAppearanceControl value={paperAppearance} onChange={value => { writePdfPaperAppearance(value); setPaperAppearance(value); }} />
+            <p className="pr-muted">夜间纸张用于文字阅读；彩图可选柔和原图，核对颜色时选原始颜色。</p>
             <button type="button" onClick={() => { setSelection(null); setRotation((value) => (value + 90) % 360); }} aria-label={`旋转页面，当前 ${rotation} 度`}>旋转页面 <span>{rotation}°</span></button>
             <button type="button" onClick={() => setPanel('annotations')}>批注 <span>{annotationRecords.length}</span></button>
             <button type="button" onClick={() => setPanel('parsed')}>解析阅读</button></section>}

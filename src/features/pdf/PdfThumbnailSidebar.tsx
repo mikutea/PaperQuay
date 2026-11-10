@@ -105,6 +105,7 @@ export const PdfThumbnailSidebar = memo(forwardRef<HTMLElement, PdfThumbnailSide
                         <div className="overflow-hidden rounded-lg border border-slate-200 bg-slate-100 dark:border-white/10 dark:bg-[var(--pq-surface-1)]">
                           {thumbnailUrl ? (
                             <img
+                              data-pdf-paper-thumbnail
                               src={thumbnailUrl}
                               alt={l(
                                 `第 ${pageIndex + 1} 页缩略图`,

@@ -21,6 +21,12 @@ macOS ZIP archives provide update payloads for each architecture. The final upda
 
 These downloads are desktop prerelease packages. Native mobile distribution requires deployment-specific HTTPS callbacks, platform signing and OS association checks; device and external-provider acceptance remain separate requirements. Connection settings and signing material are supplied outside the repository.
 
+## Changes in .25 (since .24)
+
+- Shares a page-appearance preference across desktop and mobile readers: follow the theme, soften the original without inversion, or show original colors for illustrations and color checks.
+- Removes the bright outer frame and leftover light gradient around dark desktop PDF pages. Compact mobile titles use solid theme colors instead of a white glow.
+- Keeps page geometry, text selection and annotations separate from the display filter. The preference stays local to each client.
+
 The startup database-path P2 from [#26](https://github.com/mikutea/PaperQuay/pull/26#discussion_r4214657505) is fixed by [#42](https://github.com/mikutea/PaperQuay/pull/42): SQLite connections and WAL/SHM/journal operations retain a no-follow directory capability, and registered library roots preserve their approved paths through startup. The fix passed 1,560 tests, all eight CI jobs, code/security reviews, and isolated Electron/ASAR persistence checks.
 
 ## Changes in .20 (since .18)

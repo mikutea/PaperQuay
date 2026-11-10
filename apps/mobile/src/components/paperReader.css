@@ -122,10 +122,9 @@
 .pr-reader--compact .pr-heading {
   position: absolute; z-index: 7; inset: 0 0 auto; min-height: 60px;
   padding: calc(8px + var(--reader-safe-top, env(safe-area-inset-top))) max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left));
-  gap: 12px; border: 0; background: none; pointer-events: none;
+  gap: 12px; border: 0; background: var(--theme-surface, #fff); pointer-events: none;
 }
-.pr-reader--compact .pr-title { color: #27322d; text-shadow: 0 1px 4px #fff, 0 0 10px #fff; }
-.pr-reader--compact[data-document-loaded="false"] .pr-title { color: var(--theme-text, #27322d); text-shadow: none; }
+.pr-reader--compact .pr-title { color: var(--theme-text, #27322d); text-shadow: none; }
 .pr-reader--compact .pr-title h2 { font-size: 1rem; line-height: 1.35; font-weight: 500; letter-spacing: normal; text-align: center; }
 .pr-reader--compact .pr-heading > button {
   display: grid; place-items: center; width: 44px; height: 44px; padding: 10px; border-radius: 50%;

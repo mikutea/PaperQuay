@@ -13,6 +13,7 @@ test('PDF annotation colors can wrap inside a narrow panel without removing any 
     const html = renderToStaticMarkup(createElement(PdfViewerToolbar, {
       editorTool: 'none', annotationColors: { highlight: '#fff080', freetext: '#000000', ink: '#000000' },
       currentPage: 1, pageCount: 4, l: (zh) => zh,
+      paperAppearance: 'theme', onPaperAppearanceChange() {},
       translationProgressCompleted: 0, translationProgressTotal: 0,
     }));
     const nodes = [];
@@ -37,6 +38,7 @@ test('PDF toolbar offers highlight before selecting text and restores the highli
     const render = editorTool => renderToStaticMarkup(createElement(PdfViewerToolbar, {
       editorTool, annotationColors: { highlight: '#86efac', freetext: '#0d9488', ink: '#ca8a04' },
       hasLiveTextSelection: false, currentPage: 1, pageCount: 1, l: (zh) => zh,
+      paperAppearance: 'theme', onPaperAppearanceChange() {},
       translationProgressCompleted: 0, translationProgressTotal: 0,
     }));
     assert.match(render('ink'), /手写颜色 · 黄色/);

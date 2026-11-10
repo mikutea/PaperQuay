@@ -15,6 +15,7 @@ import {
   getDocument,
 } from 'pdfjs-dist';
 import 'pdfjs-dist/web/pdf_viewer.css';
+import '../../../apps/mobile/src/pdf/pdfPaperAppearance.css';
 import EmptyState from '../../components/EmptyState';
 import { ContextMenu, type ContextMenuEntry } from '../../components/ContextMenu';
 import { useWheelScrollDelegate } from '../../hooks/useWheelScrollDelegate';
@@ -101,6 +102,7 @@ import {
   PdfViewerToolbar,
   type AnnotationEditorTool,
 } from './PdfViewerToolbar';
+import {readPdfPaperAppearance, writePdfPaperAppearance} from '../../../apps/mobile/src/pdf/pdfPaperAppearance';
 
 GlobalWorkerOptions.workerSrc = new URL(
   'pdfjs-dist/build/pdf.worker.min.mjs',
@@ -300,6 +302,7 @@ function PdfViewer({
   const lastUserScrollAtRef = useRef(0);
 
   const [editorTool, setEditorTool] = useState<AnnotationEditorTool>('none');
+  const [paperAppearance, setPaperAppearance] = useState(readPdfPaperAppearance);
   const [loadedPageCount, setLoadedPageCount] = useState<{
     documentInit: PdfJsDocumentInit;
     count: number;
@@ -2744,8 +2747,9 @@ function PdfViewer({
 
   return (
     <div
-      className="paperquay-pdf-linked flex h-full min-h-0 flex-col bg-[linear-gradient(180deg,#eff4fb,#e9f0f7)] dark:bg-[var(--pq-bg-primary)]"
+      className="paperquay-pdf-linked flex h-full min-h-0 flex-col bg-[linear-gradient(180deg,#eff4fb,#e9f0f7)] dark:bg-none dark:bg-[var(--pq-bg-primary)]"
       data-soft-shadow={softPageShadow ? 'true' : 'false'}
+      data-pdf-paper-appearance={paperAppearance}
     >
       <PdfViewerToolbar
         annotationColors={annotationColors}
@@ -2769,6 +2773,8 @@ function PdfViewer({
         onZoomIn={() => pdfViewerRef.current?.increaseScale?.()}
         onZoomOut={() => pdfViewerRef.current?.decreaseScale?.()}
         pageCount={pageCount}
+        paperAppearance={paperAppearance}
+        onPaperAppearanceChange={value => { writePdfPaperAppearance(value); setPaperAppearance(value); }}
         readingHeatmapToggleLabel={readingHeatmapToggleLabel}
         saveMessage={saveMessage}
         saving={saving}
