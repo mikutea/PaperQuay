@@ -21,6 +21,11 @@ macOS ZIP archives provide update payloads for each architecture. The final upda
 
 These downloads are desktop prerelease packages. Native mobile distribution requires deployment-specific HTTPS callbacks, platform signing and OS association checks; device and external-provider acceptance remain separate requirements. Connection settings and signing material are supplied outside the repository.
 
+## Changes in .27 (since .26)
+
+- The Windows portable app follows the managed updater's existing GitHub CLI preference when checking for releases.
+- Update checks show a clear message when GitHub limits anonymous requests.
+
 ## Changes in .26 (since .25)
 
 - Save an AI model to your account and use it on your signed-in devices. The account service encrypts the API key. Each device confirms the destination before use and after configuration changes.
