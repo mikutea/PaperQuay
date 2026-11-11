@@ -126,10 +126,11 @@ export class AccountModelSession {
     }
   }
 
-  async write(connection: AccountModelConnection | null): Promise<void> {
+  async write(connection: AccountModelConnection | null, expectedRevision: number): Promise<void> {
     if (!this.#isCurrent()) throw new ClientError('ACCOUNT_CHANGED');
     if (!this.#snapshot.available || this.#writing) throw new ClientError('ACCOUNT_MODEL_UNAVAILABLE');
-    const settings = parseAccountModelSettings({ revision: this.#snapshot.revision, connection });
+    if (expectedRevision !== this.#snapshot.revision) throw new ClientError('ACCOUNT_MODEL_CHANGED');
+    const settings = parseAccountModelSettings({ revision: expectedRevision, connection });
     const sequence = ++this.#sequence;
     this.#writing = true;
     try {

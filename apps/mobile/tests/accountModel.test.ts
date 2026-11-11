@@ -43,7 +43,7 @@ test('a model saved by one signed-in workspace is usable by the other while loca
     const localConfig = { ...defaultAiProvider(), model: 'local-fixture' };
     store.save(scope, localConfig);
     await writer.refresh();
-    await writer.write(connection);
+    await writer.write(connection, 0);
     await reader.refresh();
     assert.equal(reader.getSnapshot().approved, false);
     assert.equal(store.load(scope).model, localConfig.model);
@@ -66,7 +66,7 @@ test('a model saved by one signed-in workspace is usable by the other while loca
     assert.equal(store.load(scope).model, localConfig.model);
     store.useAccount(scope);
     assert.equal(store.load(scope).id, ACCOUNT_MODEL_ID);
-    await writer.write(null);
+    await writer.write(null, writer.getSnapshot().revision);
     await assert.rejects(secrets.get(namespace, AI_SECRET_KEY), { code: 'ACCOUNT_MODEL_CHANGED' });
     assert.equal(store.load(scope).model, localConfig.model);
     store.clear(scope);
@@ -101,7 +101,7 @@ test('a remotely replaced account endpoint cannot receive document text before l
   });
   try {
     await writer.refresh();
-    await writer.write(connection);
+    await writer.write(connection, 0);
     await reader.refresh();
     await assert.rejects(generate(), { code: 'ACCOUNT_MODEL_APPROVAL_REQUIRED' });
     assert.equal(calls, 0);
@@ -123,6 +123,23 @@ test('a remotely replaced account endpoint cannot receive document text before l
     writer.close();
     reader.close();
   }
+});
+
+test('a draft pins its original revision when background refresh observes another device update', async () => {
+  const { api } = fixture();
+  const session = new AccountModelSession(scope, api, () => true);
+  try {
+    await session.refresh();
+    await session.write(connection, 0);
+    const editingRevision = session.getSnapshot().revision;
+    const rotated = { ...connection, apiKey: 'new-fixture-key-from-another-device' };
+    await api.writeAccountModel({ revision: editingRevision, connection: rotated });
+    await session.refresh();
+    await assert.rejects(session.write(connection, editingRevision), { code: 'ACCOUNT_MODEL_CHANGED' });
+    await assert.rejects(session.write(null, editingRevision), { code: 'ACCOUNT_MODEL_CHANGED' });
+    assert.equal((await api.readAccountModel()).connection?.apiKey, rotated.apiKey);
+    assert.equal(session.getSnapshot().revision, editingRevision + 1);
+  } finally { session.close(); }
 });
 
 test('a credential response in flight is discarded when the workspace owner changes', async () => {

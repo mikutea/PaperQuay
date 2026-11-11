@@ -41,6 +41,7 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
   const [savedConfigIdentity, setSavedConfigIdentity] = useState(() => JSON.stringify(config));
   const savedConfig = useRef(config);
   const editingBaseline = useRef(JSON.stringify(config));
+  const editingRevision = useRef<number | null>(accountModel?.snapshot.available ? accountModel.snapshot.revision : null);
   const [settingsOpen, setSettingsOpen] = useState(!config.model || !props.context);
   const [settingsView, setSettingsView] = useState<'overview' | 'external' | 'shared' | 'account'>('overview');
   const editingAccount = settingsView === 'account';
@@ -219,6 +220,11 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
   }, [settingsOnly, props.onSettingsDirty, unsavedSettings]);
   useEffect(() => () => { if (settingsOnly) props.onSettingsDirty?.(false); }, [settingsOnly, props.onSettingsDirty]);
   useEffect(() => {
+    if (settingsView === 'overview' && !unsavedSettings) {
+      editingRevision.current = accountModel?.snapshot.available ? accountModel.snapshot.revision : null;
+    }
+  }, [settingsView, unsavedSettings, accountModel?.snapshot.available, accountModel?.snapshot.revision]);
+  useEffect(() => {
     if (!settingsOnly) return;
     settingsHeading.current?.focus({ preventScroll: true });
     settingsHeading.current?.closest('.main-content, .reader-sheet-content')?.scrollTo?.({ top: 0 });
@@ -234,6 +240,7 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
     const next = config.execution || config.id === ACCOUNT_MODEL_ID
       ? store?.loadExternal(props.accountScope) ?? defaultAiProvider() : config;
     editingBaseline.current = JSON.stringify(next); setConfig(next);
+    editingRevision.current = accountModel?.snapshot.available ? accountModel.snapshot.revision : null;
     setSettingsView('external');
   }
   function cancelSettingsEdit() {
@@ -313,6 +320,7 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
     setLocalFailure(null);
     setNotice('');
     editingBaseline.current = JSON.stringify(next);
+    editingRevision.current = accountModel?.snapshot.revision ?? null;
     setConfig(next);
     setSettingsView('account');
   }
@@ -324,8 +332,10 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
     const generation = lifecycle.current;
     setSecretBusy(true);
     try {
+      const revision = editingRevision.current;
+      if (revision === null || revision !== session.getSnapshot().revision) throw new ClientError('ACCOUNT_MODEL_CHANGED');
       if (remove) {
-        await session.write(null);
+        await session.write(null, revision);
         if (lifecycle.current !== generation) return;
         const next = store?.loadLocal(props.accountScope) ?? defaultAiProvider();
         selectAccountProvider(next);
@@ -337,7 +347,7 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
           : await props.secretStore.get(await aiSecretNamespace(props.accountScope, provider), AI_SECRET_KEY);
         if (lifecycle.current !== generation) return;
         if (provider.requiresKey && !apiKey) throw new AiError('KEY_MISSING');
-        await session.write({ provider, apiKey });
+        await session.write({ provider, apiKey }, revision);
         if (lifecycle.current !== generation) return;
         const next = session.getSnapshot().provider;
         if (!next) throw new AiError('CONFIG_INVALID');
