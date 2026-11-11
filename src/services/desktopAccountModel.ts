@@ -41,11 +41,18 @@ export function isAccountModelPreset<T extends QaModelPreset>(preset: T | null |
 }
 
 export async function loadDesktopAccountModelPreset(scope?: number): Promise<AccountModelPreset | null> {
-  const result = await invoke<{ scope: number; settings: AccountModelSettings } | null>(
-    'desktop_account_model_read', { includeKey: true, scope },
-  );
-  const connection = result?.settings.connection;
-  return result && connection ? toPreset(connection.provider, result.scope, connection.apiKey ?? '') : null;
+  try {
+    const result = await invoke<{ scope: number; settings: AccountModelSettings } | null>(
+      'desktop_account_model_read', { includeKey: true, scope },
+    );
+    const connection = result?.settings.connection;
+    return result && connection ? toPreset(connection.provider, result.scope, connection.apiKey ?? '') : null;
+  } catch (error) {
+    // Optional discovery keeps local workflows available during a service outage.
+    // An explicit account-model selection supplies its captured owner scope.
+    if (scope !== undefined) throw error;
+    return null;
+  }
 }
 
 export async function saveDesktopAccountModel(status: AccountModelStatus, presetId: string | null) {
