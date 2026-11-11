@@ -27,11 +27,6 @@ export function accountModelProvider(scope: AiAccountScope): AiProviderConfig | 
   return providers.get(aiAccountKey(scope))?.provider;
 }
 
-export function accountModelIsApproved(scope: AiAccountScope): boolean {
-  const entry = providers.get(aiAccountKey(scope));
-  return Boolean(entry && entry.owner.accepts(entry.provider));
-}
-
 export function assertAccountModelApproved(scope: AiAccountScope, provider: AiProviderConfig): void {
   if (provider.id !== ACCOUNT_MODEL_ID) return;
   const entry = providers.get(aiAccountKey(scope));

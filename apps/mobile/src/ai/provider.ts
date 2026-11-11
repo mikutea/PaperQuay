@@ -3,7 +3,7 @@ import {accountScopeAvailable} from '../privacy/browserErasure.ts';
 import {aiAccountKey,defaultAiProvider,parseAiProvider} from '../../../../packages/ai-core/src/provider.ts';
 import type {AiAccountScope,AiProviderConfig} from './types.ts';
 import { ACCOUNT_MODEL_ID } from '../../../../packages/ai-core/src/accountModel.ts';
-import { ACCOUNT_MODEL_APPROVAL_PREFIX, accountModelIsApproved, accountModelProvider } from './accountModelSession.ts';
+import { ACCOUNT_MODEL_APPROVAL_PREFIX, accountModelProvider } from './accountModelSession.ts';
 export * from '../../../../packages/ai-core/src/provider.ts';
 const PUBLIC_CONFIG_PREFIX='paperquay.mobile.ai-config.v1.';
 export class LocalAiConfigStore {
@@ -12,9 +12,11 @@ export class LocalAiConfigStore {
   load(scope: AiAccountScope): AiProviderConfig {
     try {
       const key = encodeURIComponent(aiAccountKey(scope));
-      const provider = accountModelProvider(scope);
       const mode = this.#storage.getItem(PUBLIC_CONFIG_PREFIX + 'mode.' + key);
-      if (provider && mode !== 'local' && (mode === 'account' || accountModelIsApproved(scope))) return provider;
+      if (mode === 'account') {
+        const provider = accountModelProvider(scope);
+        if (provider) return provider;
+      }
     } catch { /* Local settings remain available. */ }
     return this.loadLocal(scope);
   }
@@ -49,7 +51,7 @@ export class LocalAiConfigStore {
       if(!safe.execution&&(previous.execution||hasExternal))this.#storage.setItem(PUBLIC_CONFIG_PREFIX+'external.'+key,JSON.stringify(safe));
       else if(safe.execution&&!previous.execution)this.#storage.setItem(PUBLIC_CONFIG_PREFIX+'external.'+key,JSON.stringify(previous));
       this.#storage.setItem(PUBLIC_CONFIG_PREFIX+key,JSON.stringify(safe));
-      this.#storage.setItem(PUBLIC_CONFIG_PREFIX + 'mode.' + key, 'local');
+      this.#storage.removeItem(PUBLIC_CONFIG_PREFIX + 'mode.' + key);
     }
     catch { throw new AiError('SETTINGS_STORAGE_FAILED'); }
   }
