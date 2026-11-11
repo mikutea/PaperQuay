@@ -71,6 +71,27 @@ test('desktop helper is explicitly enabled, guards consent/configuration and nev
   assert.notEqual(restarted.status().configurationToken, original.configurationToken);
   assert.ok(f.calls.some((item) => item.withdraw));
 });
+test('an empty remote task configuration does not notify again on a status refresh', async (t) => {
+  const f = await managerFixture(t);
+  f.config = {};
+  let notifications = 0;
+  const manager = f.create({ onChange: () => { notifications++; } });
+  await manager.refreshStatus();
+  const initial = manager.status();
+  assert.deepEqual(initial.profiles, []);
+  assert.equal(notifications, 1);
+
+  await manager.refreshStatus();
+  assert.equal(manager.status().configurationToken, initial.configurationToken);
+  assert.equal(notifications, 1);
+
+  f.config = config();
+  await manager.refreshStatus();
+  assert.equal(manager.status().profiles.length, 2);
+  assert.notEqual(manager.status().configurationToken, initial.configurationToken);
+  assert.equal(notifications, 2);
+});
+
 test('remote profile negotiation omits unknown dimensions and unsupported embedding input formats', async (t) => {
   const f = await managerFixture(t); f.config.settings.embeddingDimensions = null; const manager = f.create(); await manager.refreshStatus();
   assert.deepEqual(manager.status().profiles.map((item) => item.kind), ['parse']); assert.equal(manager.status().unavailable.index, 'REMOTE_INDEX_DIMENSION_REQUIRED');
