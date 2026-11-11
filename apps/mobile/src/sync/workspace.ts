@@ -1320,6 +1320,8 @@ export class WorkspaceController {
         this.publish({ status: 'error', error: new ClientError('ACCOUNT_CHANGED') });
         return;
       }
+      // Authentication already supplied the reason before aborting this request.
+      if (signal.aborted && this.snapshot.needsLogin) return;
       const safe = safeError(error);
       if(safe.code==='ACCOUNT_CLOSED'){this.deactivate();this.publish({status:'error',error:safe});return;}
       if (

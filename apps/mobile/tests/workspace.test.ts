@@ -1371,6 +1371,25 @@ for (const status of ['conflict', 'rejected'] as const) {
   });
 }
 
+test('an interrupted request preserves the login-expiry reason already reported by authentication', async () => {
+  const env = setup();
+  await env.controller.bind('A');
+  await env.controller.save(edit('keep the expired-session draft'));
+  env.api.pull = async () => {
+    env.controller.requireLogin(new ClientError('AUTH_REQUIRED'));
+    throw new ClientError('ACCOUNT_CHANGED');
+  };
+  env.controller.setOnline(true);
+  await env.controller.syncNow();
+  const snapshot = env.controller.getSnapshot();
+  assert.equal(snapshot.needsLogin, true);
+  assert.equal(snapshot.error?.code, 'AUTH_REQUIRED');
+  assert.equal(snapshot.status, 'ready');
+  assert.equal((getVisibleEntity(snapshot.workspace!.sync, 'note', NOTE)!.data as NoteData).body,
+    'keep the expired-session draft');
+  await env.store.close();
+});
+
 test('revoking this session preserves local edits and requires a new login', async () => {
   const env = setup();
   await env.controller.bind('A');
