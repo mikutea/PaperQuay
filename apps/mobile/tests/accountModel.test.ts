@@ -5,6 +5,8 @@ import { AccountModelSession } from '../src/ai/accountModelSession.ts';
 import { AI_SECRET_KEY, LocalAiConfigStore, aiSecretNamespace, defaultAiProvider } from '../src/ai/provider.ts';
 import { ClientError } from '../src/errors.ts';
 import { MemorySecretStore } from '../src/platform/secretStore.ts';
+import { AiClient } from '../src/ai/client.ts';
+import { prepareAiContext } from '../src/ai/context.ts';
 
 const scope = { apiBaseUrl: 'https://sync.example.test', accountId: '77777777-7777-4777-8777-777777777777' };
 const other = { ...scope, accountId: '88888888-8888-4888-8888-888888888888' };
@@ -23,17 +25,18 @@ function fixture() {
     },
   };
   const values = new Map<string, string>();
-  const store = new LocalAiConfigStore({
+  const storage = {
     getItem: key => values.get(key) ?? null, setItem: (key, value) => { values.set(key, value); },
     removeItem: key => { values.delete(key); },
-  });
-  return { api, store, values };
+  } satisfies Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
+  const store = new LocalAiConfigStore(storage);
+  return { api, store, values, storage };
 }
 
 test('a model saved by one signed-in workspace is usable by the other while local presets stay editable', async () => {
-  const { api, store, values } = fixture();
+  const { api, store, values, storage } = fixture();
   const writer = new AccountModelSession(scope, api, () => true);
-  const reader = new AccountModelSession(scope, api, () => true);
+  const reader = new AccountModelSession(scope, api, () => true, storage);
   const local = new MemorySecretStore();
   const secrets = reader.secretStore(local);
   try {
@@ -42,6 +45,12 @@ test('a model saved by one signed-in workspace is usable by the other while loca
     await writer.refresh();
     await writer.write(connection);
     await reader.refresh();
+    assert.equal(reader.getSnapshot().approved, false);
+    assert.equal(store.load(scope).model, localConfig.model);
+    const shared = reader.getSnapshot().provider!;
+    await assert.rejects(secrets.get(await aiSecretNamespace(scope, shared), AI_SECRET_KEY),
+      { code: 'ACCOUNT_MODEL_APPROVAL_REQUIRED' });
+    reader.approve(reader.getSnapshot().revision);
     const active = store.load(scope);
     assert.equal(active.id, ACCOUNT_MODEL_ID);
     assert.equal(active.model, provider.model);
@@ -60,6 +69,56 @@ test('a model saved by one signed-in workspace is usable by the other while loca
     await writer.write(null);
     await assert.rejects(secrets.get(namespace, AI_SECRET_KEY), { code: 'ACCOUNT_MODEL_CHANGED' });
     assert.equal(store.load(scope).model, localConfig.model);
+    store.clear(scope);
+    assert.equal(values.size, 0);
+  } finally {
+    writer.close();
+    reader.close();
+  }
+});
+
+test('a remotely replaced account endpoint cannot receive document text before local revision approval, including keyless models', async () => {
+  const { api } = fixture();
+  const writer = new AccountModelSession(scope, api, () => true);
+  const reader = new AccountModelSession(scope, api, () => true);
+  let calls = 0;
+  const client = new AiClient(reader.secretStore(new MemorySecretStore()), {
+    kind: 'fetch', redirectPolicy: 'error', supportsStreaming: false,
+    async request() {
+      calls++;
+      return Response.json({ status: 'completed', output_text: 'Synthetic answer [P1]' });
+    },
+  });
+  const context = prepareAiContext({
+    paperId: '99999999-9999-4999-8999-999999999999',
+    attachmentVersionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    sha256: 'a'.repeat(64), scope: 'page', totalPages: 1,
+    pages: [{ pageIndex: 0, text: 'Private fixture text' }], complete: true, label: 'Private fixture',
+  });
+  const generate = () => client.generate({
+    accountScope: scope, config: reader.getSnapshot().provider!, context,
+    action: 'explain', question: '', onText: () => {},
+  });
+  try {
+    await writer.refresh();
+    await writer.write(connection);
+    await reader.refresh();
+    await assert.rejects(generate(), { code: 'ACCOUNT_MODEL_APPROVAL_REQUIRED' });
+    assert.equal(calls, 0);
+    reader.approve(reader.getSnapshot().revision);
+    await generate();
+    assert.equal(calls, 1);
+    await api.writeAccountModel({
+      revision: reader.getSnapshot().revision,
+      connection: { provider: { ...provider, requiresKey: false, endpoint: 'https://replacement.example.test/v1' }, apiKey: null },
+    });
+    await assert.rejects(generate(), { code: 'ACCOUNT_MODEL_CHANGED' });
+    await assert.rejects(generate(), { code: 'ACCOUNT_MODEL_APPROVAL_REQUIRED' });
+    assert.equal(calls, 1);
+    assert.equal(reader.getSnapshot().approved, false);
+    reader.approve(reader.getSnapshot().revision);
+    await generate();
+    assert.equal(calls, 2);
   } finally {
     writer.close();
     reader.close();

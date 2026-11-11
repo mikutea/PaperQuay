@@ -3,7 +3,7 @@ import {accountScopeAvailable} from '../privacy/browserErasure.ts';
 import {aiAccountKey,defaultAiProvider,parseAiProvider} from '../../../../packages/ai-core/src/provider.ts';
 import type {AiAccountScope,AiProviderConfig} from './types.ts';
 import { ACCOUNT_MODEL_ID } from '../../../../packages/ai-core/src/accountModel.ts';
-import { accountModelProvider } from './accountModelSession.ts';
+import { ACCOUNT_MODEL_APPROVAL_PREFIX, accountModelIsApproved, accountModelProvider } from './accountModelSession.ts';
 export * from '../../../../packages/ai-core/src/provider.ts';
 const PUBLIC_CONFIG_PREFIX='paperquay.mobile.ai-config.v1.';
 export class LocalAiConfigStore {
@@ -13,7 +13,8 @@ export class LocalAiConfigStore {
     try {
       const key = encodeURIComponent(aiAccountKey(scope));
       const provider = accountModelProvider(scope);
-      if (provider && this.#storage.getItem(PUBLIC_CONFIG_PREFIX + 'mode.' + key) !== 'local') return provider;
+      const mode = this.#storage.getItem(PUBLIC_CONFIG_PREFIX + 'mode.' + key);
+      if (provider && mode !== 'local' && (mode === 'account' || accountModelIsApproved(scope))) return provider;
     } catch { /* Local settings remain available. */ }
     return this.loadLocal(scope);
   }
@@ -30,12 +31,12 @@ export class LocalAiConfigStore {
   }
   useAccount(scope: AiAccountScope): void {
     if (!accountScopeAvailable(scope)) throw new AiError('CANCELLED');
-    try { this.#storage.removeItem(PUBLIC_CONFIG_PREFIX + 'mode.' + encodeURIComponent(aiAccountKey(scope))); }
+    try { this.#storage.setItem(PUBLIC_CONFIG_PREFIX + 'mode.' + encodeURIComponent(aiAccountKey(scope)), 'account'); }
     catch { throw new AiError('SETTINGS_STORAGE_FAILED'); }
   }
   clear(scope:AiAccountScope):void {
     const key=encodeURIComponent(aiAccountKey(scope));
-    try{this.#storage.removeItem(PUBLIC_CONFIG_PREFIX+key);this.#storage.removeItem(PUBLIC_CONFIG_PREFIX+'external.'+key);this.#storage.removeItem(PUBLIC_CONFIG_PREFIX+'mode.'+key);}
+    try{this.#storage.removeItem(PUBLIC_CONFIG_PREFIX+key);this.#storage.removeItem(PUBLIC_CONFIG_PREFIX+'external.'+key);this.#storage.removeItem(PUBLIC_CONFIG_PREFIX+'mode.'+key);this.#storage.removeItem(ACCOUNT_MODEL_APPROVAL_PREFIX+key);}
     catch{throw new AiError('SETTINGS_STORAGE_FAILED');}
   }
   save(scope: AiAccountScope, config: AiProviderConfig): void {

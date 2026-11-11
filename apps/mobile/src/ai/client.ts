@@ -6,6 +6,8 @@ import { buildResearchMessages, type ResearchContext } from '../research/context
 import { AI_SECRET_KEY, aiAccountKey, aiSecretNamespace, checkedApiKey, parseAiProvider } from './provider.ts';
 import { AiSseParser, ChatOutput, type ChatCompletionResult } from './stream.ts';
 import { responsesCompletion, responsesEvent, responsesRequest } from './responses.ts';
+import { ACCOUNT_MODEL_ID } from '../../../../packages/ai-core/src/accountModel.ts';
+import { assertAccountModelApproved } from './accountModelSession.ts';
 import { AiRequestGuard, boundedAiLimits, cancelResponseBody, ensureDirectResponse, fetchAiTransport, readAiBody } from './transport.ts';
 import type { AiAccountScope, AiAction, AiLimits, AiProviderConfig, AiTransport, AiUsage, PreparedAiContext, SecretStore } from './types.ts';
 import {accountScopeAvailable,subscribeAccountFence} from '../privacy/browserErasure.ts';
@@ -43,12 +45,14 @@ export class AiClient {
   }
   async #key(scope: AiAccountScope, config: AiProviderConfig, guard: AiRequestGuard, checkCurrent:()=>void=()=>{}): Promise<string | null> {
     aiAccountKey(scope);
-    if (!config.requiresKey) return null;
+    assertAccountModelApproved(scope, config);
+    if (!config.requiresKey && config.id !== ACCOUNT_MODEL_ID) return null;
     try {
       const namespace = await guard.wait(aiSecretNamespace(scope, config));
       guard.check(); checkCurrent();
       const key = await guard.wait(this.#secrets.get(namespace, AI_SECRET_KEY));
       guard.check(); checkCurrent();
+      if (!config.requiresKey) return null;
       if (!key) throw new AiError('KEY_MISSING');
       return checkedApiKey(key);
     } catch (error) {

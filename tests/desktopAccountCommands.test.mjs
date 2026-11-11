@@ -357,13 +357,32 @@ test('desktop shares a Responses preset from disk and scopes reads and writes to
   assert.equal(settings.connection.apiKey, preset.apiKey);
   const publicView = await command.desktop_account_model_read();
   assert.equal(publicView.provider.model, preset.model);
+  assert.equal(publicView.approved, true);
   assert.ok(!JSON.stringify(publicView).includes(preset.apiKey));
   assert.equal((await command.desktop_account_model_read({ scope: initial.scope, includeKey: true })).settings.connection.apiKey, preset.apiKey);
   await assert.rejects(command.desktop_account_model_write({ scope: initial.scope, revision: 0, presetId: null }),
     { code: 'ACCOUNT_MODEL_CHANGED' });
+  settings = { ...settings, revision: 2, connection: {
+    ...settings.connection, provider: { ...settings.connection.provider, endpoint: 'https://replacement.example.test/v1' },
+  } };
+  const pending = await command.desktop_account_model_read();
+  assert.equal(pending.approved, false);
+  await assert.rejects(command.desktop_account_model_read({ scope: initial.scope, includeKey: true }),
+    { code: 'ACCOUNT_MODEL_APPROVAL_REQUIRED' });
+  await assert.rejects(command.desktop_account_model_approve({ ...pending, revision: 1 }), { code: 'ACCOUNT_MODEL_CHANGED' });
+  await command.desktop_account_model_approve(pending);
+  assert.equal((await command.desktop_account_model_read()).approved, true);
+  assert.equal((await command.desktop_account_model_read({ scope: initial.scope, includeKey: true })).settings.revision, 2);
+  settings = { ...settings, revision: 3, connection: { ...settings.connection, apiKey: 'replacement-fixture-key' } };
+  assert.equal((await command.desktop_account_model_read()).approved, false);
+  await assert.rejects(command.desktop_account_model_read({ scope: initial.scope, includeKey: true }),
+    { code: 'ACCOUNT_MODEL_APPROVAL_REQUIRED' });
   await command.desktop_account_sign_out();
   await assert.rejects(command.desktop_account_model_read({ scope: initial.scope, includeKey: true }), { code: 'ACCOUNT_MODEL_CHANGED' });
   assert.equal(await command.desktop_account_model_read(), null);
+  f.service.accountId = randomUUID();
+  await f.login();
+  assert.equal((await command.desktop_account_model_read()).approved, false);
   assert.deepEqual(JSON.parse(fs.readFileSync(f.appPaths.configPath, 'utf8')).secrets.qaModelPresets, [preset]);
 });
 

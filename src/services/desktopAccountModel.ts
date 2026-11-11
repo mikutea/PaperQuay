@@ -12,6 +12,7 @@ interface AccountModelStatus {
   scope: number;
   revision: number;
   provider: AiProviderConfig | null;
+  approved: boolean;
 }
 
 interface AccountModelPreset extends QaModelPreset {
@@ -33,7 +34,7 @@ function toPreset(provider: AiProviderConfig, scope: number, apiKey = ''): Accou
 }
 
 export function accountModelPreset(status: AccountModelStatus | null): AccountModelPreset | null {
-  return status?.provider ? toPreset(status.provider, status.scope) : null;
+  return status?.provider && status.approved ? toPreset(status.provider, status.scope) : null;
 }
 
 export function isAccountModelPreset<T extends QaModelPreset>(preset: T | null | undefined): preset is T & AccountModelPreset {
@@ -58,6 +59,12 @@ export async function loadDesktopAccountModelPreset(scope?: number): Promise<Acc
 export async function saveDesktopAccountModel(status: AccountModelStatus, presetId: string | null) {
   if (presetId !== null) await flushReaderConfigWrites();
   await invoke('desktop_account_model_write', { scope: status.scope, revision: status.revision, presetId });
+}
+
+export async function approveDesktopAccountModel(status: AccountModelStatus) {
+  await invoke('desktop_account_model_approve', {
+    scope: status.scope, revision: status.revision, provider: status.provider,
+  });
 }
 
 type ModelChange = { scope: number | null; version: number };

@@ -133,7 +133,7 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
       finally { guard.close(); }
     })();
     return () => { abort.abort(); guard.close(); };
-  }, [props.secretStore, props.accountScope.accountId, props.accountScope.apiBaseUrl, parsed?.endpoint, parsed?.id, secretRevision, accountModel?.snapshot.revision]);
+  }, [props.secretStore, props.accountScope.accountId, props.accountScope.apiBaseUrl, parsed?.endpoint, parsed?.id, secretRevision, accountModel?.snapshot.revision, accountModel?.snapshot.approved]);
 
   function editConfig(change: Partial<AiProviderConfig>) {
     controller.credentialsChanged();
@@ -274,7 +274,13 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
 
   function selectAccountProvider(next: AiProviderConfig) {
     if (!store) throw new AiError('SETTINGS_STORAGE_FAILED');
-    store.useAccount(props.accountScope);
+    if (next.id === ACCOUNT_MODEL_ID) {
+      if (!accountModel?.session || JSON.stringify(next) !== JSON.stringify(accountModel.snapshot.provider)) {
+        throw new AiError('ACCOUNT_MODEL_CHANGED');
+      }
+      accountModel.session.approve(accountModel.snapshot.revision);
+      store.useAccount(props.accountScope);
+    } else store.save(props.accountScope, next);
     controller.credentialsChanged();
     clearKeyDraft();
     setConfig(next);
@@ -359,6 +365,11 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
     picker={settingsOnly} onExternal={useExternal} onChange={useShared} />;
   const settingsContent = <div className="ai-settings-content">
     {!settingsOnly && routingContent}
+    {config.id === ACCOUNT_MODEL_ID && !accountModel?.snapshot.approved && <div className="ai-field-help">
+      <p>账号模型已更新。确认下方服务地址后，文献内容将发送到此服务。</p>
+      <button type="button" className="secondary" disabled={busy || secretBusy || unsavedSettings || !accountModel?.snapshot.provider}
+        onClick={() => { try { selectAccountProvider(accountModel!.snapshot.provider!); } catch (error) { setLocalFailure(aiFailure(error)); } }}>确认并使用账号模型</button>
+    </div>}
     {!config.execution&&<>
       <label htmlFor={id + '-endpoint'}>服务地址</label>
       <input id={id + '-endpoint'} type="url" inputMode="url" autoCapitalize="none" autoCorrect="off" spellCheck={false}
@@ -444,9 +455,11 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
       </div></div>
       <h2 className="settings-section-label">连接方式</h2>
       {accountModel?.snapshot.provider && <div className="ai-key-actions">
-        {config.id !== ACCOUNT_MODEL_ID && <button type="button" className="secondary" disabled={busy || secretBusy}
+        <p className="ai-field-help">账号模型 {accountModel.snapshot.provider.model}<br />{accountModel.snapshot.provider.endpoint}</p>
+        {!accountModel.snapshot.approved && <p className="ai-field-help">使用后，文献内容将发送到以上服务地址。配置更新后会再次确认。</p>}
+        {(config.id !== ACCOUNT_MODEL_ID || !accountModel.snapshot.approved) && <button type="button" className="secondary" disabled={busy || secretBusy}
           onClick={() => { try { selectAccountProvider(accountModel.snapshot.provider!); props.onSettingsSaved?.(); }
-            catch (error) { setLocalFailure(aiFailure(error)); } }}>使用账号模型</button>}
+            catch (error) { setLocalFailure(aiFailure(error)); } }}>{accountModel.snapshot.approved ? '使用账号模型' : '确认并使用账号模型'}</button>}
         <button type="button" className="secondary" disabled={busy || secretBusy} onClick={openAccountSettings}>编辑账号模型</button>
       </div>}
       {accountModel?.snapshot.error && <p className="ai-field-help" role="status">{accountModel.snapshot.error}</p>}

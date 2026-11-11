@@ -23,7 +23,7 @@ These downloads are desktop prerelease packages. Native mobile distribution requ
 
 ## Changes in .26 (since .25)
 
-- Save an AI model to your account and use it on your signed-in devices. The account service encrypts the API key and each client connects to the configured provider.
+- Save an AI model to your account and use it on your signed-in devices. The account service encrypts the API key. Each device confirms the destination before use and after configuration changes.
 - Web and mobile support Responses alongside Chat Completions, including streamed answers.
 - Web remembers the validated deployment settings so returning from sign-in can recover when the configuration request fails.
 

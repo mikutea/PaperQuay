@@ -4,6 +4,10 @@ import type { AiProviderConfig } from './types.ts';
 
 export const ACCOUNT_MODEL_ID = 'account-model';
 
+export function accountModelApproval(revision: number, provider: AiProviderConfig): string {
+  return JSON.stringify([revision, parseAiProvider(provider, true)]);
+}
+
 export interface AccountModelConnection {
   provider: AiProviderConfig;
   apiKey: string | null;

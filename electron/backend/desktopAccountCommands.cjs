@@ -35,6 +35,7 @@ const KNOWN_ERRORS = new Set(['AUTHENTICATION_REQUIRED', 'AUTH_REQUIRED', 'AUTH_
   'DESKTOP_PDF_DIRECT_FALLBACK', 'IDENTITY_PROVIDER_UNAVAILABLE', 'SERVICE_UNAVAILABLE', 'RATE_LIMITED', 'NETWORK_UNAVAILABLE', 'REQUEST_TIMEOUT',
   'ACCOUNT_STORAGE_LIMIT', 'ACCOUNT_ENTITY_LIMIT', 'ACCOUNT_CHANGE_LIMIT', 'ACCOUNT_RECEIPT_LIMIT', 'CONFLICT',
   'ACCOUNT_MODEL_CHANGED', 'ACCOUNT_MODEL_INVALID', 'ACCOUNT_MODEL_UNAVAILABLE',
+  'ACCOUNT_MODEL_APPROVAL_REQUIRED',
   'LOCAL_CAPACITY_EXCEEDED', 'ENTITY_ALREADY_EXISTS', 'INVALID_DESKTOP_SOURCE', 'INVALID_PAPER_METADATA', 'INVALID_ATTACHMENT_METADATA', 'INVALID_GRAPH_MAPPING', 'INVALID_DESKTOP_GRAPH_RELATION', 'UNMAPPED_GRAPH_ENDPOINT',
   'UNMAPPED_NOTE_PAPER', 'SOURCE_TOO_LARGE', 'INVALID_NOTE_SELECTION', 'INVALID_SAVED_SOURCE']);
 function publicError(error) {
@@ -127,6 +128,10 @@ function createDesktopAccountCommands(context, options = {}) {
   function requireAccount() { if (!account || !currentLibrary() || !auth || auth.getSnapshot().status !== 'signed-in') fail('AUTHENTICATION_REQUIRED'); }
   function modelScope() {
     return !closed && account && currentLibrary() && auth?.getSnapshot().status === 'signed-in' ? epoch : null;
+  }
+  function modelApprovalPath() {
+    requireAccount();
+    return path.join(privateRoot, 'model-approvals', sha(JSON.stringify([serviceKey(config), account.accountId])) + '.json');
   }
   function ensureAuth() {
     if (!auth) auth = require('./desktopOidc.cjs').createDesktopOidcSession({
@@ -864,9 +869,27 @@ function createDesktopAccountCommands(context, options = {}) {
       let settings;
       try { settings = syncCore().parseAccountModelSettings(value); }
       catch { fail('ACCOUNT_MODEL_UNAVAILABLE'); }
+      const expected = settings.connection
+        ? syncCore().accountModelApproval(settings.revision, settings.connection.provider) : null;
+      const approval = await privateRead(modelApprovalPath(), MAX_ACCOUNT_MODEL_BYTES);
+      assertEpoch(scope);
+      const approved = expected !== null && approval?.value === expected;
+      if (includeKey === true && settings.connection && !approved) fail('ACCOUNT_MODEL_APPROVAL_REQUIRED');
       return includeKey === true ? { scope, settings } : {
-        scope, revision: settings.revision, provider: settings.connection?.provider ?? null,
+        scope, revision: settings.revision, provider: settings.connection?.provider ?? null, approved,
       };
+    },
+    async desktop_account_model_approve({ scope, revision, provider }) {
+      requireAccount();
+      const current = await handlers.desktop_account_model_read({ scope });
+      if (!current?.provider || current.revision !== revision ||
+          JSON.stringify(current.provider) !== JSON.stringify(provider)) fail('ACCOUNT_MODEL_CHANGED');
+      assertEpoch(scope);
+      await privateWrite(modelApprovalPath(), { value: syncCore().accountModelApproval(revision, current.provider) });
+      assertEpoch(scope);
+      accountModelVersion++;
+      lastError = null;
+      notify();
     },
     async desktop_account_model_write({ scope, revision, presetId }) {
       requireAccount();
@@ -893,6 +916,11 @@ function createDesktopAccountCommands(context, options = {}) {
       try { body = syncCore().parseAccountModelSettings({ revision, connection }); }
       catch { fail('ACCOUNT_MODEL_INVALID'); }
       const result = await request('/v1/account-model', { method: 'PUT', body, maxResponseBytes: MAX_ACCOUNT_MODEL_BYTES });
+      if (!Number.isInteger(result?.revision) || result.revision !== body.revision + 1) fail('ACCOUNT_MODEL_UNAVAILABLE');
+      await privateWrite(modelApprovalPath(), {
+        value: body.connection ? syncCore().accountModelApproval(result.revision, body.connection.provider) : null,
+      });
+      assertEpoch(scope);
       accountModelVersion++;
       lastError = null;
       notify();

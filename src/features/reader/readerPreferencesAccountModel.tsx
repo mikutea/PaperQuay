@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { saveDesktopAccountModel, useDesktopAccountModel } from '../../services/desktopAccountModel';
+import { approveDesktopAccountModel, saveDesktopAccountModel, useDesktopAccountModel } from '../../services/desktopAccountModel';
 import type { QaModelPreset } from '../../types/reader';
 import { SettingsField, SettingsSelect } from './readerPreferencesPrimitives';
 import type { ReaderPreferencesLocalizer } from './readerPreferencesTypes';
@@ -18,12 +18,13 @@ export function ReaderPreferencesAccountModel({ l, presets, activePresetId }: {
 
   if (!status) return null;
 
-  const save = async (presetId: string | null) => {
+  const save = async (presetId: string | null, approve = false) => {
     setBusy(true);
     setFeedback(undefined);
     try {
-      await saveDesktopAccountModel(status, presetId);
-      setFeedback({ error: false, text: presetId === null
+      if (approve) await approveDesktopAccountModel(status);
+      else await saveDesktopAccountModel(status, presetId);
+      setFeedback({ error: false, text: approve ? l('已确认，此设备可以使用账号模型。', 'Confirmed. This device can use the account model.') : presetId === null
         ? l('账号模型已移除。', 'Account model removed.')
         : l('模型已保存到账号。', 'Model saved to your account.') });
     } catch (error) {
@@ -43,6 +44,12 @@ export function ReaderPreferencesAccountModel({ l, presets, activePresetId }: {
   >
     <div className="space-y-2">
       {status.provider && <p className="break-words text-sm text-[var(--pq-text)]">{status.provider.model}</p>}
+      {status.provider && <p className="break-all text-sm text-[var(--pq-text-muted)]">{status.provider.endpoint}</p>}
+      {status.provider && !status.approved && <div className="space-y-2">
+        <p className="text-sm text-[var(--pq-text-muted)]">{l('使用后，文献内容将发送到以上地址。配置更新后会再次确认。', 'Paper content will be sent to this address. Confirm again after the configuration changes.')}</p>
+        <button type="button" className={buttonClass} disabled={busy}
+          onClick={() => void save(null, true)}>{l('确认并使用账号模型', 'Confirm and use account model')}</button>
+      </div>}
       <SettingsSelect
         aria-label={l('选择要保存到账号的本机预设', 'Choose a local preset to save to your account')}
         value={selected?.id ?? ''} disabled={busy || !selected}
