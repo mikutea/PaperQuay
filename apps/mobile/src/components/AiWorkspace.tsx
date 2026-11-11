@@ -279,13 +279,15 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
     }
   }
 
-  function selectAccountProvider(next: AiProviderConfig) {
+  function selectAccountProvider(next: AiProviderConfig, revision: number | null = null) {
     if (!store) throw new AiError('SETTINGS_STORAGE_FAILED');
     if (next.id === ACCOUNT_MODEL_ID) {
-      if (!accountModel?.session || JSON.stringify(next) !== JSON.stringify(accountModel.snapshot.provider)) {
+      const session = accountModel?.session;
+      const current = session?.getSnapshot();
+      if (!session || !current || revision !== current.revision || JSON.stringify(next) !== JSON.stringify(current.provider)) {
         throw new AiError('ACCOUNT_MODEL_CHANGED');
       }
-      accountModel.session.approve(accountModel.snapshot.revision);
+      session.approve(revision);
       store.useAccount(props.accountScope);
     } else store.save(props.accountScope, next);
     controller.credentialsChanged();
@@ -347,11 +349,11 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
           : await props.secretStore.get(await aiSecretNamespace(props.accountScope, provider), AI_SECRET_KEY);
         if (lifecycle.current !== generation) return;
         if (provider.requiresKey && !apiKey) throw new AiError('KEY_MISSING');
-        await session.write({ provider, apiKey }, revision);
+        const savedRevision = await session.write({ provider, apiKey }, revision);
         if (lifecycle.current !== generation) return;
         const next = session.getSnapshot().provider;
         if (!next) throw new AiError('CONFIG_INVALID');
-        selectAccountProvider(next);
+        selectAccountProvider(next, savedRevision);
         setNotice('模型已保存到账号。');
         props.onSettingsSaved?.();
       }
@@ -378,7 +380,7 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
     {config.id === ACCOUNT_MODEL_ID && !accountModel?.snapshot.approved && <div className="ai-field-help">
       <p>账号模型已更新。确认下方服务地址后，文献内容将发送到此服务。</p>
       <button type="button" className="secondary" disabled={busy || secretBusy || unsavedSettings || !accountModel?.snapshot.provider}
-        onClick={() => { try { selectAccountProvider(accountModel!.snapshot.provider!); } catch (error) { setLocalFailure(aiFailure(error)); } }}>确认并使用账号模型</button>
+        onClick={() => { try { selectAccountProvider(accountModel!.snapshot.provider!, accountModel!.snapshot.revision); } catch (error) { setLocalFailure(aiFailure(error)); } }}>确认并使用账号模型</button>
     </div>}
     {!config.execution&&<>
       <label htmlFor={id + '-endpoint'}>服务地址</label>
@@ -468,7 +470,7 @@ function AccountAiWorkspace(props: AiWorkspaceProps) {
         <p className="ai-field-help">账号模型 {accountModel.snapshot.provider.model}<br />{accountModel.snapshot.provider.endpoint}</p>
         {!accountModel.snapshot.approved && <p className="ai-field-help">使用后，文献内容将发送到以上服务地址。配置更新后会再次确认。</p>}
         {(config.id !== ACCOUNT_MODEL_ID || !accountModel.snapshot.approved) && <button type="button" className="secondary" disabled={busy || secretBusy}
-          onClick={() => { try { selectAccountProvider(accountModel.snapshot.provider!); props.onSettingsSaved?.(); }
+          onClick={() => { try { selectAccountProvider(accountModel.snapshot.provider!, accountModel.snapshot.revision); props.onSettingsSaved?.(); }
             catch (error) { setLocalFailure(aiFailure(error)); } }}>{accountModel.snapshot.approved ? '使用账号模型' : '确认并使用账号模型'}</button>}
         <button type="button" className="secondary" disabled={busy || secretBusy} onClick={openAccountSettings}>编辑账号模型</button>
       </div>}

@@ -86,6 +86,38 @@ async function setup(options: { key?: boolean; mode?: AiWorkspaceProps['mode']; 
   return { renderer, button, input, update, updateAccountModel, submit, close, password, secrets, requests, saved, jumps, values, storage, openSettings };
 }
 
+test('saving a model to the account activates the revision returned by that save', async () => {
+  let settings = parseAccountModelSettings({ revision: 0, connection: null });
+  let saves = 0;
+  const session = new AccountModelSession(SCOPE, {
+    readAccountModel: async () => structuredClone(settings),
+    writeAccountModel: async (draft) => {
+      assert.equal(draft.revision, settings.revision);
+      settings = parseAccountModelSettings({ ...draft, revision: draft.revision + 1 });
+      return settings.revision;
+    },
+  }, () => true);
+  await session.refresh();
+  const ui = await setup({
+    mode: 'settings', accountModel: { session, snapshot: session.getSnapshot() },
+    onSettingsSaved: () => { saves++; },
+  });
+  try {
+    ui.openSettings();
+    await act(async () => { ui.button('保存到账号').props.onClick(); await tick(); });
+    await until(() => saves === 1 || text(ui.renderer.root).includes('账号模型已更新'), 'account save outcome');
+    assert.equal(saves, 1);
+    assert.equal(settings.revision, 1);
+    assert.equal(settings.connection?.provider.model, CONFIG.model);
+    assert.equal(session.getSnapshot().approved, true);
+    assert.equal(ui.requests.length, 0);
+    assert.ok(!JSON.stringify([...ui.values]).includes(KEY));
+  } finally {
+    ui.close();
+    session.close();
+  }
+});
+
 test('account settings keep the edit-start revision when a background refresh rotates the model key', async () => {
   let settings = parseAccountModelSettings({ revision: 1, connection: { provider: CONFIG, apiKey: KEY } });
   let writes = 0;
