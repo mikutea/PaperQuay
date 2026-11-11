@@ -115,7 +115,8 @@ function createDesktopRemoteTasks(context, options) {
       const current = base(), currentScope = scope(current), scopeKey = scopeDigest(currentScope);
       const config = remoteConfiguration(await readConfig()); options.checkContext(current);
       const nextSignature = sha(JSON.stringify(config));
-      if (signature === nextSignature && scoped === scopeKey && credentialRevision) return;
+      // An empty profile list is also a completed configuration read.
+      if (signature === nextSignature && scoped === scopeKey) return;
       const manifest = publicDescriptors(config);
       const identity = manifest.descriptors.length ? await revisions.update(currentScope, nextSignature, manifest.descriptors)
         : { revision: null, profiles: [], devices: await revisions.devices?.(currentScope).catch(() => []) || [] };

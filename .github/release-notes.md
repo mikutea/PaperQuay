@@ -21,6 +21,10 @@ macOS ZIP archives provide update payloads for each architecture. The final upda
 
 These downloads are desktop prerelease packages. Native mobile distribution requires deployment-specific HTTPS callbacks, platform signing and OS association checks; device and external-provider acceptance remain separate requirements. Connection settings and signing material are supplied outside the repository.
 
+## Changes in .28 (since .27)
+
+- Keep the desktop account settings responsive when the signed-in device has no remote processing profiles.
+
 ## Changes in .27 (since .26)
 
 - The Windows portable app follows the managed updater's existing GitHub CLI preference when checking for releases.
