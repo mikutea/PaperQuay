@@ -37,3 +37,68 @@ test('native and already configured clients do not wait for or replace public de
   try { assert.deepEqual(await loadRuntimeConfig(origin, fetcher), {}); assert.equal(requests, 0); }
   finally { if (before) Object.defineProperty(globalThis, 'localStorage', before); else Reflect.deleteProperty(globalThis, 'localStorage'); }
 });
+
+async function withPublicConfigStorage(
+  storage: Pick<Storage, 'getItem' | 'setItem'>,
+  run: () => Promise<void>,
+): Promise<void> {
+  const before = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage });
+  try {
+    await run();
+  } finally {
+    if (before) Object.defineProperty(globalThis, 'localStorage', before);
+    else Reflect.deleteProperty(globalThis, 'localStorage');
+  }
+}
+
+test('first-run public defaults survive an unavailable config file on the login return', async () => {
+  let saved: string | null = null;
+  const expected = { ...input, apiBaseUrl: origin + '/api' };
+  await withPublicConfigStorage({
+    getItem(key) {
+      assert.equal(key, PUBLIC_CONFIG_STORAGE_KEY);
+      return saved;
+    },
+    setItem(key, value) {
+      assert.equal(key, PUBLIC_CONFIG_STORAGE_KEY);
+      saved = value;
+    },
+  }, async () => {
+    assert.deepEqual(await loadRuntimeConfig(origin, async () => Response.json(input)), expected);
+    assert.equal(saved, JSON.stringify(expected));
+    let callbackRequests = 0;
+    assert.deepEqual(await loadRuntimeConfig(origin, async () => {
+      callbackRequests++;
+      throw new Error('config file temporarily unavailable');
+    }), {});
+    assert.equal(callbackRequests, 0);
+    assert.equal(saved, JSON.stringify(expected));
+  });
+});
+
+test('public defaults preserve connection settings saved while the file is loading', async () => {
+  let saved: string | null = null;
+  const selected = JSON.stringify({ ...input, oidcClientId: 'another-reader' });
+  await withPublicConfigStorage({
+    getItem: () => saved,
+    setItem: (_key, value) => { saved = value; },
+  }, async () => {
+    await loadRuntimeConfig(origin, async () => {
+      saved = selected;
+      return Response.json(input);
+    });
+    assert.equal(saved, selected);
+  });
+});
+
+test('unavailable public settings storage still permits the fetched login defaults', async () => {
+  await withPublicConfigStorage({
+    getItem: () => null,
+    setItem() { throw new Error('storage quota exceeded'); },
+  }, async () => {
+    assert.deepEqual(await loadRuntimeConfig(origin, async () => Response.json(input)), {
+      ...input, apiBaseUrl: origin + '/api',
+    });
+  });
+});
