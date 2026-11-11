@@ -49,7 +49,7 @@ export class LocalAiConfigStore {
       if(!safe.execution&&(previous.execution||hasExternal))this.#storage.setItem(PUBLIC_CONFIG_PREFIX+'external.'+key,JSON.stringify(safe));
       else if(safe.execution&&!previous.execution)this.#storage.setItem(PUBLIC_CONFIG_PREFIX+'external.'+key,JSON.stringify(previous));
       this.#storage.setItem(PUBLIC_CONFIG_PREFIX+key,JSON.stringify(safe));
-      if (accountModelProvider(scope)) this.#storage.setItem(PUBLIC_CONFIG_PREFIX + 'mode.' + key, 'local');
+      this.#storage.setItem(PUBLIC_CONFIG_PREFIX + 'mode.' + key, 'local');
     }
     catch { throw new AiError('SETTINGS_STORAGE_FAILED'); }
   }

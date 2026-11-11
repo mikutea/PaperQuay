@@ -905,10 +905,13 @@ function createDesktopAccountCommands(context, options = {}) {
         if (!preset || typeof preset.baseUrl !== 'string' || !preset.baseUrl.trim()) fail('ACCOUNT_MODEL_INVALID');
         const apiMode = preset.apiMode === 'responses' ? 'responses' : 'chat_completions';
         const endpoint = completionEndpoint({ baseUrl: preset.baseUrl, apiMode }).replace(/\/(?:chat\/completions|responses)$/i, '');
+        const model = preset.model?.trim();
+        const tokenParameter = apiMode === 'chat_completions' && /^(?:openai\/)?o\d+(?:-|$)/i.test(model)
+          ? 'max_completion_tokens' : 'max_tokens';
         connection = {
-          provider: { version: 1, id: 'account-model', endpoint, model: preset.model?.trim(), apiMode,
+          provider: { version: 1, id: 'account-model', endpoint, model, apiMode,
             stream: true, includeUsage: false, requiresKey: Boolean(preset.apiKey?.trim()),
-            maxOutputTokens: 2048, tokenParameter: 'max_tokens' },
+            maxOutputTokens: 2048, tokenParameter },
           apiKey: preset.apiKey?.trim() || null,
         };
       }

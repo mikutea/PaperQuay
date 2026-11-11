@@ -51,6 +51,8 @@ test('a model saved by one signed-in workspace is usable by the other while loca
     await assert.rejects(secrets.get(await aiSecretNamespace(scope, shared), AI_SECRET_KEY),
       { code: 'ACCOUNT_MODEL_APPROVAL_REQUIRED' });
     reader.approve(reader.getSnapshot().revision);
+    assert.equal(store.load(scope).model, localConfig.model);
+    store.useAccount(scope);
     const active = store.load(scope);
     assert.equal(active.id, ACCOUNT_MODEL_ID);
     assert.equal(active.model, provider.model);
@@ -75,6 +77,29 @@ test('a model saved by one signed-in workspace is usable by the other while loca
     writer.close();
     reader.close();
   }
+});
+
+test('saving a local model before account discovery keeps it selected after the account model loads', async () => {
+  const { api, store, storage } = fixture();
+  const previous = new AccountModelSession(scope, api, () => true, storage);
+  try {
+    await previous.refresh();
+    await previous.write(connection, 0);
+    store.useAccount(scope);
+    assert.equal(store.load(scope).id, ACCOUNT_MODEL_ID);
+  } finally { previous.close(); }
+
+  const next = new AccountModelSession(scope, api, () => true, storage);
+  const localConfig = { ...defaultAiProvider(), model: 'new-local-fixture' };
+  try {
+    assert.equal(next.getSnapshot().provider, null);
+    store.save(scope, localConfig);
+    await next.refresh();
+    assert.equal(next.getSnapshot().approved, true);
+    assert.deepEqual(store.load(scope), localConfig);
+    store.useAccount(scope);
+    assert.equal(store.load(scope).id, ACCOUNT_MODEL_ID);
+  } finally { next.close(); }
 });
 
 test('a remotely replaced account endpoint cannot receive document text before local revision approval, including keyless models', async () => {

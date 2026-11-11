@@ -386,6 +386,33 @@ test('desktop shares a Responses preset from disk and scopes reads and writes to
   assert.deepEqual(JSON.parse(fs.readFileSync(f.appPaths.configPath, 'utf8')).secrets.qaModelPresets, [preset]);
 });
 
+test('desktop shares a compatible token limit for reasoning and legacy Chat Completions presets', async (t) => {
+  const f = await fixture(t);
+  await f.login();
+  let revision = 0;
+  const providers = [];
+  f.service.onRoute = (url, options, body) => {
+    if (url.pathname !== '/v1/account-model') return null;
+    if (options.method === 'GET') return Response.json({ revision, connection: null });
+    providers.push(body.connection.provider);
+    return Response.json({ revision: ++revision });
+  };
+  const presets = [
+    { id: 'reasoning', baseUrl: 'https://model.example.test/v1', model: 'o4-mini' },
+    { id: 'legacy', baseUrl: 'https://model.example.test/v1', model: 'fixture-chat' },
+  ];
+  fs.writeFileSync(f.appPaths.configPath, JSON.stringify({ secrets: { qaModelPresets: presets } }));
+  const command = f.manager.commands;
+  const { scope } = await command.desktop_account_model_read();
+  for (const preset of presets) {
+    await command.desktop_account_model_write({ scope, revision, presetId: preset.id });
+  }
+  assert.deepEqual(providers.map(({ model, tokenParameter }) => [model, tokenParameter]), [
+    ['o4-mini', 'max_completion_tokens'],
+    ['fixture-chat', 'max_tokens'],
+  ]);
+});
+
 test('service capability extensions do not block login or escape the validated desktop projection', async (t) => {
   const f = await fixture(t); await f.login();
   assert.deepEqual(f.manager.getStatus().capability, {
