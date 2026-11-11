@@ -18,8 +18,9 @@ export async function loadRuntimeConfig(origin: string, fetcher: typeof fetch = 
   // Native containers keep explicit connection settings. Existing/offline web
   // users open their local library without waiting for a deployment defaults file.
   if (!['https:', 'http:'].includes(base.protocol) || globalThis.navigator?.onLine === false) return {};
+  let saved: string | null | undefined;
   try {
-    const saved = globalThis.localStorage?.getItem(PUBLIC_CONFIG_STORAGE_KEY);
+    saved = globalThis.localStorage?.getItem(PUBLIC_CONFIG_STORAGE_KEY);
     if (saved) { parseAppConfig(JSON.parse(saved), origin); return {}; }
   } catch { /* Invalid/unavailable public settings do not prevent first-run defaults. */ }
   const controller = new AbortController();
@@ -43,7 +44,18 @@ export async function loadRuntimeConfig(origin: string, fetcher: typeof fetch = 
     const bytes = new Uint8Array(size);
     let offset = 0;
     for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
-    return checkedRuntimeConfig(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)), origin);
+    const defaults = checkedRuntimeConfig(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)), origin);
+    if (Object.keys(defaults).length) {
+      try {
+        const storage = globalThis.localStorage;
+        // Keep the public connection settings through login navigation without
+        // replacing a connection the user selected while this file was loading.
+        if (storage && storage.getItem(PUBLIC_CONFIG_STORAGE_KEY) === saved) {
+          storage.setItem(PUBLIC_CONFIG_STORAGE_KEY, JSON.stringify(defaults));
+        }
+      } catch { /* Fetched defaults remain usable when public settings cannot be saved. */ }
+    }
+    return defaults;
   } catch {
     // The ordinary explicit connection form remains available on older hosts,
     // native containers, and when an operator supplied an invalid document.
