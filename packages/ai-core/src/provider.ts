@@ -4,7 +4,7 @@ import { AiError } from './errors.ts';
 import type { AiAccountScope, AiProviderConfig } from './types.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-const CONFIG_FIELDS = ['version', 'id', 'endpoint', 'model', 'stream', 'includeUsage', 'requiresKey', 'maxOutputTokens', 'tokenParameter','execution'];
+const CONFIG_FIELDS = ['version', 'id', 'endpoint', 'model', 'stream', 'includeUsage', 'requiresKey', 'maxOutputTokens', 'tokenParameter', 'apiMode', 'execution'];
 export const AI_SECRET_KEY = 'api-key';
 
 export function canonicalAiEndpoint(input: string): string {
@@ -41,13 +41,21 @@ export function parseAiProvider(input: unknown, requireModel = false): AiProvide
     || typeof data.requiresKey !== 'boolean' || !Number.isSafeInteger(data.maxOutputTokens)
     || Number(data.maxOutputTokens) < 64 || Number(data.maxOutputTokens) > 8192
     || (typeof data.tokenParameter!=='string'||!['max_completion_tokens', 'max_tokens'].includes(data.tokenParameter))) throw new AiError('CONFIG_INVALID');
-  const endpoint=canonicalAiEndpoint(data.endpoint),execution=Object.hasOwn(data,'execution')?validateAiModelExecution(data.execution):undefined;
+  if (data.apiMode !== undefined && data.apiMode !== 'chat_completions' && data.apiMode !== 'responses') {
+    throw new AiError('CONFIG_INVALID');
+  }
+  const endpointUrl = new URL(canonicalAiEndpoint(data.endpoint));
+  if (data.apiMode === 'responses') endpointUrl.pathname = endpointUrl.pathname.replace(/\/responses$/i, '');
+  const endpoint = endpointUrl.href.replace(/\/$/, '');
+  const execution = Object.hasOwn(data, 'execution') ? validateAiModelExecution(data.execution) : undefined;
+  if (execution && data.apiMode === 'responses') throw new AiError('CONFIG_INVALID');
   if(execution&&(!/^remote_[0-9a-f]{40}$/.test(data.id)||!endpoint.endsWith('/v1/model-inference')||!data.model||data.stream||data.includeUsage||data.requiresKey||data.tokenParameter!=='max_tokens'))throw new AiError('CONFIG_INVALID');
   return {
     version: 1, id: data.id, endpoint, model: data.model,
     stream: data.stream, includeUsage: data.includeUsage, requiresKey: data.requiresKey,
     maxOutputTokens: Number(data.maxOutputTokens),
     tokenParameter: data.tokenParameter as AiProviderConfig['tokenParameter'],
+    ...(data.apiMode === 'responses' ? { apiMode: 'responses' as const } : {}),
     ...(execution?{execution}:{}),
   };
 }

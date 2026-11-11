@@ -562,7 +562,7 @@ async function openAiChat(options, messages, extra = {}) {
   const response = await fetch(completionEndpoint(options), {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${options.apiKey}`,
+      ...(options.apiKey ? { Authorization: `Bearer ${options.apiKey}` } : {}),
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),

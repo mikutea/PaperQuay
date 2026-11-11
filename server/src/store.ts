@@ -1,4 +1,5 @@
 import {GRAPH_RELATION_LIMITS} from '../../packages/sync-core/src/graphRelation.ts';
+import { createAccountModelRepository, type AccountModelRepository } from './account-model.ts';
 import {createModelInferenceRepository,type ModelInferenceRepository,type ModelInferenceRepositoryOptions} from './model-inference-store.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import pg from 'pg';
@@ -196,6 +197,10 @@ export class PostgresSyncStore implements SyncRepository, CloudPdfRepository, De
 
   remoteRetrieval():RemoteRetrievalRepository{
     return createRemoteRetrievalRepository({withAccount:(identity,work)=>this.withAccount(identity,false,context=>work(context))});
+  }
+
+  accountModel(key: Uint8Array): AccountModelRepository {
+    return createAccountModelRepository((identity, work) => this.withAccount(identity, false, work), key);
   }
 
   privacy(): AccountPrivacyRepository {

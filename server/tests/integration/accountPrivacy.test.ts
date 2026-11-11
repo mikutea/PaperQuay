@@ -6,8 +6,11 @@ import { PostgresSyncStore } from '../../src/store.ts';
 import type { VerifiedIdentity } from '../../src/auth.ts';
 import type { AccountClosureRequest } from '../../src/account-privacy.ts';
 import { buildApp } from '../../src/app.ts';
+import { ApiError } from '../../src/errors.ts';
 import { identity, operation, paper, version, testConfig } from '../fixtures.ts';
 import { retrievalFixture } from '../../../tests/remoteRetrievalFixtures.ts';
+import { ACCOUNT_MODEL_ID, type AccountModelConnection } from '../../../packages/ai-core/src/accountModel.ts';
+import { defaultAiProvider } from '../../../packages/ai-core/src/provider.ts';
 
 const databaseUrl=process.env.PAPERQUAY_DATABASE_URL;
 if(!databaseUrl||process.env.PAPERQUAY_TEST_ALLOW_DATABASE_WRITES!=='1')throw new Error('Use the explicitly owned isolated migrated test database.');
@@ -42,6 +45,62 @@ async function inAccount<T>(who:VerifiedIdentity,accountId:string,work:(client:p
     const result=await work(client);await client.query('COMMIT');return result;
   } catch(error) {await client.query('ROLLBACK');throw error;} finally {client.release();}
 }
+
+test('account model settings are shared by active devices, encrypted at rest and erased on closure', async () => {
+  const owner = await account();
+  const other = await account();
+  const accountModels = store.accountModel(Buffer.alloc(32, 14));
+  const connection: AccountModelConnection = {
+    provider: { ...defaultAiProvider(), id: ACCOUNT_MODEL_ID, endpoint: 'https://model.example.test/v1',
+      apiMode: 'responses', model: 'synthetic-response-model' },
+    apiKey: 'fixture-account-model-key',
+  };
+  const session = { primary: owner.who, peer: owner.second, other: other.who };
+  const app = await buildApp({ config: testConfig(), repository: store, accountModelRepository: accountModels,
+    verifyToken: async (header) => {
+      const who = Object.entries(session).find(([name]) => header === 'Bearer ' + name)?.[1];
+      if (!who) throw new ApiError('AUTH_REQUIRED', 401);
+      return who;
+    },
+  });
+  const read = (who: keyof typeof session) => app.inject({
+    method: 'GET', url: '/v1/account-model', headers: { authorization: 'Bearer ' + who },
+  });
+  const save = (who: keyof typeof session, revision: number, next: AccountModelConnection | null) => app.inject({
+    method: 'PUT', url: '/v1/account-model', headers: { authorization: 'Bearer ' + who },
+    payload: { revision, connection: next },
+  });
+  try {
+    assert.equal((await app.inject({ url: '/v1/account-model' })).statusCode, 401);
+    assert.deepEqual((await read('peer')).json(), { revision: 0, connection: null });
+    const saved = await save('primary', 0, connection);
+    assert.equal(saved.statusCode, 200);
+    assert.equal(saved.headers['cache-control'], 'no-store');
+    assert.deepEqual(saved.json(), { revision: 1 });
+    const peer = await read('peer');
+    assert.equal(peer.headers['cache-control'], 'no-store');
+    assert.deepEqual(peer.json(), { revision: 1, connection });
+    assert.deepEqual((await read('other')).json(), { revision: 0, connection: null });
+    await inAccount(owner.who, owner.view.accountId, async client => {
+      const { rows } = await client.query('SELECT sealed FROM paperquay.account_model_settings');
+      assert.equal(rows.length, 1);
+      assert.ok(rows[0].sealed);
+      const stored = Buffer.from(rows[0].sealed, 'base64url');
+      assert.ok(!stored.includes(connection.apiKey!) && !stored.includes(connection.provider.endpoint));
+    });
+    const racing = await Promise.all([save('primary', 1, null), save('peer', 1, connection)]);
+    assert.deepEqual(racing.map(reply => reply.statusCode).sort(), [200, 409]);
+    assert.equal(racing.find(reply => reply.statusCode === 409)?.json().error.code, 'ACCOUNT_MODEL_CHANGED');
+    assert.equal((await save('peer', 2, connection)).statusCode, 200);
+    await store.revokeDevice(owner.who, owner.peer.device.id);
+    assert.equal((await read('peer')).json().error.code, 'SESSION_REVOKED');
+    await privacy.close(owner.who, closure(owner));
+    assert.equal((await read('primary')).json().error.code, 'ACCOUNT_CLOSED');
+    await inAccount(owner.who, owner.view.accountId, async client => {
+      assert.equal((await client.query('SELECT 1 FROM paperquay.account_model_settings')).rowCount, 0);
+    });
+  } finally { await app.close(); }
+});
 async function seed(a:Fixture) {
   const parent=operation('paper',paper('Private export sentinel'));
   const content=Buffer.from('%PDF-1.7\n'+'synthetic-private-byte-sentinel'.repeat(6000)+'\n%%EOF');

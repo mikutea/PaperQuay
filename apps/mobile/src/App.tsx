@@ -5,6 +5,7 @@ import {flushSync} from 'react-dom';
 import {MobileModelRouter} from './modelRouting/router.ts';
 import type {ModelInvocationApi} from './modelRouting/api.ts';
 import {fetchAiTransport} from './ai/transport.ts';
+import { AccountModelContext, AccountModelSession, emptyAccountModel } from './ai/accountModelSession.ts';
 import {
   lazy,
   Suspense,
@@ -114,6 +115,7 @@ interface Runtime {
   auth: AuthSession;
   controller: WorkspaceController;
   secretStore?: SecretStore;
+  accountModelApi?: Pick<SyncApi, 'readAccountModel' | 'writeAccountModel'>;
   privacy?:PrivacyRuntime;
   cloudPdf?: CloudPdfContext;
   desktopPdf?: DesktopPdfContext;
@@ -174,7 +176,7 @@ async function makeRuntime(input: PublicConfigInput): Promise<Runtime> {
     },
   });
   const privacy=createPrivacyRuntime(config,auth,store,secretStore,controller,binding,browserContext.privacyOptions);
-  return { config, auth, controller, secretStore, privacy, modelInvocations:api.modelInvocations, inspectCapabilities:signal=>api.inspectCapabilities(signal),
+  return { config, auth, controller, secretStore, privacy, accountModelApi: api, modelInvocations:api.modelInvocations, inspectCapabilities:signal=>api.inspectCapabilities(signal),
     cloudPdf: { apiBaseUrl: config.apiBaseUrl, getAccessToken: auth.getAccessToken, getCloudPdfCapability: () => api.cloudPdfCapability },
     desktopPdf: { apiBaseUrl: config.apiBaseUrl, getAccessToken: auth.getAccessToken, getDesktopPdfCapability: () => api.desktopPdfCapability },
     remoteTasks: { apiBaseUrl: config.apiBaseUrl, getAccessToken: auth.getAccessToken, getCapability: () => api.remoteTaskCapability,
@@ -533,9 +535,26 @@ function ConnectedWorkspace({
   const notes = entities.filter((entity) => entity.entityType === 'note');
   const readingPaper = papers.find((paper) => paper.entityId === readingId && !paper.deleted);
   const scope = state.identity ? { apiBaseUrl: runtime.config.apiBaseUrl, accountId: state.identity.accountId } : null;
-  const accountSecrets=useMemo(()=>scope&&runtime.secretStore
+  const localAccountSecrets=useMemo(()=>scope&&runtime.secretStore
     ?runtime.privacy?.scopedSecrets(scope)??runtime.secretStore:undefined,
     [runtime.secretStore,runtime.privacy,scope?.accountId,authSubjectKey,authState.status]);
+  const accountModelSession = useMemo(() => {
+    if (!scope || !runtime.accountModelApi || state.status !== 'ready' || state.needsLogin || authState.status !== 'signed-in') return undefined;
+    const owner = controller.captureModelOwner(scope);
+    return new AccountModelSession(scope, runtime.accountModelApi, () =>
+      owner.current() && auth.getSnapshot().status === 'signed-in' && !controller.getSnapshot().needsLogin);
+  }, [scope?.accountId, scope?.apiBaseUrl, runtime.accountModelApi, state.status, state.needsLogin, transferScope, authSubjectKey, authState.status, controller, auth]);
+  useEffect(() => () => accountModelSession?.close(), [accountModelSession]);
+  useEffect(() => {
+    if (state.online) void accountModelSession?.refresh();
+  }, [accountModelSession, state.online, state.lastSyncedAt]);
+  const accountModelSnapshot = useSyncExternalStore(
+    accountModelSession?.subscribe ?? noPeerErasureUpdates,
+    accountModelSession?.getSnapshot ?? (() => emptyAccountModel),
+  );
+  const accountSecrets = useMemo(() => accountModelSession && localAccountSecrets
+    ? accountModelSession.secretStore(localAccountSecrets) : localAccountSecrets,
+    [accountModelSession, localAccountSecrets]);
   const modelRouter=useMemo(()=>scope&&state.status==='ready'&&runtime.modelInvocations?new MobileModelRouter({api:runtime.modelInvocations,scope,owner:controller.captureModelOwner(scope)}):undefined,[runtime.modelInvocations,controller,state.identity,state.status,transferScope,authSubjectKey]);
   const aiTransport=useMemo(()=>modelRouter?{...fetchAiTransport,modelRouting:modelRouter}:fetchAiTransport,[modelRouter]);
   const incomingOwner = scope ? accountScopeKey(scope) : null;
@@ -662,6 +681,7 @@ function ConnectedWorkspace({
     );
 
   return (
+    <AccountModelContext.Provider value={{ session: accountModelSession, snapshot: accountModelSnapshot }}>
     <div className={`app-shell${readingId ? ' reading-active' : ''}`}>
       <aside className="sidebar">
         <Brand />
@@ -975,6 +995,7 @@ function ConnectedWorkspace({
         {nav}
       </nav>
     </div>
+    </AccountModelContext.Provider>
   );
 }
 

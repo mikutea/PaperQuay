@@ -18,6 +18,7 @@ import {
 } from '../../services/libraryAgent';
 import { listAllNotes } from '../../services/notes';
 import { readReaderConfigFile } from '../../services/readerConfig';
+import { isAccountModelPreset, loadDesktopAccountModelPreset } from '../../services/desktopAccountModel';
 import {
   exportReviewDocx,
   generateReviewBlueprint,
@@ -160,7 +161,9 @@ async function loadReviewModelPreset(): Promise<ReviewModelPreset | null> {
     ...storedSecrets,
   };
   const presets = normalizeQaModelPresets(secrets.qaModelPresets);
-  const preset =
+  const dedicated = presets.find(preset => preset.id === settings.reviewModelPresetId
+    && preset.id !== settings.qaActivePresetId && preset.baseUrl.trim() && preset.apiKey.trim() && preset.model.trim());
+  const preset = dedicated ?? await loadDesktopAccountModelPreset() ??
     resolveModelPreset(presets, settings.reviewModelPresetId) ??
     resolveModelPreset(presets, settings.summaryModelPresetId) ??
     resolveModelPreset(presets, settings.agentModelPresetId) ??
@@ -1002,7 +1005,7 @@ export default function ReviewWritingWorkspace() {
   const buildReviewModelOptions = async () => {
     const preset = await loadReviewModelPreset();
 
-    if (!preset?.baseUrl.trim() || !preset.apiKey.trim() || !preset.model.trim()) {
+    if (!preset?.baseUrl.trim() || (!isAccountModelPreset(preset) && !preset.apiKey.trim()) || !preset.model.trim()) {
       throw new Error(l('请先在设置中配置可用的大模型预设。', 'Configure a usable model preset in Settings first.'));
     }
 

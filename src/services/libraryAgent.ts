@@ -13,6 +13,7 @@ import {
   uniqueTags,
 } from './libraryAgentPlanHelpers';
 import { readReaderConfigFile } from './readerConfig';
+import { ACCOUNT_MODEL_ID, isAccountModelPreset, loadDesktopAccountModelPreset } from './desktopAccountModel';
 import {
   buildMineruMarkdownDocument,
   extractPdfTextByPdfJs,
@@ -503,6 +504,7 @@ export async function loadLibraryAgentModelPreset(): Promise<LibraryAgentModelPr
 
 export async function loadLibraryAgentModelPresetById(
   preferredPresetId?: string | null,
+  accountModelScope?: number,
 ): Promise<LibraryAgentModelPreset | null> {
   const persistedConfig = await loadPersistedReaderConfig();
   const storedSettings = readStorageJson<ReaderSettings>(SETTINGS_STORAGE_KEY);
@@ -526,7 +528,9 @@ export async function loadLibraryAgentModelPresetById(
     settings.translationModelPresetId ||
     presets[0]?.id;
 
-  const preset = presets.find((item) => item.id === preferredId) ?? presets[0] ?? null;
+  const preset = preferredPresetId === ACCOUNT_MODEL_ID
+    ? await loadDesktopAccountModelPreset(accountModelScope)
+    : presets.find((item) => item.id === preferredId) ?? presets[0] ?? null;
 
   if (!preset) {
     return null;
@@ -2072,7 +2076,7 @@ export async function buildToolUseLibraryAgentPlan({
   instruction?: string;
   preset: LibraryAgentModelPreset;
 }): Promise<LibraryAgentPlan> {
-  if (!preset.baseUrl.trim() || !preset.apiKey.trim() || !preset.model.trim()) {
+  if (!preset.baseUrl.trim() || (!isAccountModelPreset(preset) && !preset.apiKey.trim()) || !preset.model.trim()) {
     throw new Error('请先在设置里配置支持 tool/function calling 的 OpenAI-compatible 模型。');
   }
 
@@ -2121,7 +2125,7 @@ export async function runConversationalLibraryAgent({
   responseLanguage?: string;
   ragEnabled?: boolean;
 }): Promise<LibraryAgentRunResult> {
-  if (!preset.baseUrl.trim() || !preset.apiKey.trim() || !preset.model.trim()) {
+  if (!preset.baseUrl.trim() || (!isAccountModelPreset(preset) && !preset.apiKey.trim()) || !preset.model.trim()) {
     throw new Error('请先在设置里配置支持 tool/function calling 的 OpenAI-compatible 模型。');
   }
 

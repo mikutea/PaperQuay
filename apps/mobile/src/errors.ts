@@ -7,6 +7,9 @@ export type ClientErrorCode =
   | 'NETWORK_UNAVAILABLE'
   | 'REQUEST_TIMEOUT'
   | 'INVALID_RESPONSE'
+  | 'ACCOUNT_MODEL_CHANGED'
+  | 'ACCOUNT_MODEL_INVALID'
+  | 'ACCOUNT_MODEL_UNAVAILABLE'
   | 'STORAGE_UNAVAILABLE'
   | 'STORAGE_FAILED'
   | 'STORAGE_CORRUPT'
@@ -40,6 +43,9 @@ const messages: Record<ClientErrorCode, string> = {
   NETWORK_UNAVAILABLE: '暂时无法连接服务。已保存的改动会在恢复连接后同步。',
   REQUEST_TIMEOUT: '连接超时，请稍后重试。已保存的改动不会丢失。',
   INVALID_RESPONSE: '服务返回了无法识别的数据，请检查服务版本后重试。',
+  ACCOUNT_MODEL_CHANGED: '账号模型已在另一端更新。请重新同步后再保存。',
+  ACCOUNT_MODEL_INVALID: '模型地址、接口类型或密钥无效，请检查连接设置。',
+  ACCOUNT_MODEL_UNAVAILABLE: '暂时无法读取账号模型。请稍后同步。',
   STORAGE_UNAVAILABLE: '此设备暂时无法打开本地安全存储或数据库，请检查设备状态后重试。',
   STORAGE_FAILED: '未能保存到此设备，请检查存储空间后重试。',
   STORAGE_CORRUPT: '此设备的缓存格式无法读取。请保留本地数据并联系维护者。',

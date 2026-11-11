@@ -17,6 +17,7 @@ import {
   type OpenPreferencesEventDetail,
 } from '../../app/appEvents';
 import { selectDirectory } from '../../services/desktop';
+import { ACCOUNT_MODEL_ID, accountModelPreset, useDesktopAccountModel } from '../../services/desktopAccountModel';
 import { listAllLibraryPapers } from '../../services/library';
 import { AppLocaleProvider } from '../../i18n/uiLanguage';
 import { getHomeTabTitle, HOME_TAB_ID, type ReaderTab, useTabsStore } from '../../stores/useTabsStore';
@@ -189,7 +190,13 @@ function Reader({ workspaceActive = true }: ReaderProps) {
   );
   const [readerQaInput, setReaderQaInput] = useState('');
   const [readerQaAttachments, setReaderQaAttachments] = useState<DocumentChatAttachment[]>([]);
-  const [readerSelectedQaPresetId, setReaderSelectedQaPresetId] = useState(settings.qaActivePresetId);
+  const { status: accountModel } = useDesktopAccountModel();
+  const accountPreset = useMemo(() => accountModelPreset(accountModel), [accountModel]);
+  const readerQaPresets = useMemo(() => accountPreset ? [...qaModelPresets, accountPreset] : qaModelPresets, [accountPreset, qaModelPresets]);
+  const [qaPresetChoice, setReaderSelectedQaPresetId] = useState('');
+  const [preferAccountModel, setPreferAccountModel] = useState(true);
+  const readerSelectedQaPresetId = (preferAccountModel ? accountPreset?.id : undefined)
+    ?? readerQaPresets.find(preset => preset.id === qaPresetChoice)?.id ?? settings.qaActivePresetId;
   const [readerQaRagEnabled, setReaderQaRagEnabled] = useState(true);
   const [readerQaAnswerRenderMode, setReaderQaAnswerRenderMode] = useState<DocumentChatRenderMode>('markdown');
   const [readerQaReasoningEffort, setReaderQaReasoningEffort] = useState<ModelReasoningEffort>(
@@ -296,23 +303,6 @@ function Reader({ workspaceActive = true }: ReaderProps) {
       nativeLibraryLoadGenerationRef.current += 1;
     };
   }, [configHydrated, loadNativeLibraryBatchItems, settings.uiLanguage]);
-
-  useEffect(() => {
-    const fallbackPresetId =
-      qaModelPresets.find((preset) => preset.id === settings.qaActivePresetId)?.id ??
-      qaModelPresets[0]?.id ??
-      '';
-
-    if (!fallbackPresetId) {
-      return;
-    }
-
-    if (qaModelPresets.some((preset) => preset.id === readerSelectedQaPresetId)) {
-      return;
-    }
-
-    setReaderSelectedQaPresetId(fallbackPresetId);
-  }, [qaModelPresets, readerSelectedQaPresetId, settings.qaActivePresetId]);
 
   useEffect(() => {
     if (readerQaSessions.length === 0) {
@@ -548,7 +538,10 @@ function Reader({ workspaceActive = true }: ReaderProps) {
   );
 
   const handleReaderQaActivePresetChange = useCallback(
-    (presetId: string) => updateSetting('qaActivePresetId', presetId),
+    (presetId: string) => {
+      setPreferAccountModel(presetId === ACCOUNT_MODEL_ID);
+      if (presetId !== ACCOUNT_MODEL_ID) updateSetting('qaActivePresetId', presetId);
+    },
     [updateSetting],
   );
 
@@ -864,7 +857,7 @@ function Reader({ workspaceActive = true }: ReaderProps) {
                     translationApiKey={translationApiKey}
                     summaryApiKey={summaryApiKey}
                     embeddingApiKey={embeddingApiKey}
-                    qaModelPresets={qaModelPresets}
+                    qaModelPresets={readerQaPresets}
                     zoteroApiKey={zoteroApiKey}
                     zoteroUserId={zoteroUserId}
                     onZoteroUserIdChange={handleReaderZoteroUserIdChange}

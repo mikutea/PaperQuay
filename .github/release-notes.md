@@ -21,6 +21,12 @@ macOS ZIP archives provide update payloads for each architecture. The final upda
 
 These downloads are desktop prerelease packages. Native mobile distribution requires deployment-specific HTTPS callbacks, platform signing and OS association checks; device and external-provider acceptance remain separate requirements. Connection settings and signing material are supplied outside the repository.
 
+## Changes in .26 (since .25)
+
+- Save an AI model to your account and use it on your signed-in devices. The account service encrypts the API key and each client connects to the configured provider.
+- Web and mobile support Responses alongside Chat Completions, including streamed answers.
+- Web remembers the validated deployment settings so returning from sign-in can recover when the configuration request fails.
+
 ## Changes in .25 (since .24)
 
 - Shares a page-appearance preference across desktop and mobile readers: follow the theme, soften the original without inversion, or show original colors for illustrations and color checks.

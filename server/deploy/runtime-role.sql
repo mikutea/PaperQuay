@@ -28,6 +28,7 @@ GRANT UPDATE (job_id) ON paperquay.remote_task_requests TO paperquay_runtime;
 -- can clear content by UPDATE but cannot delete billing/dispatch identities.
 GRANT SELECT, INSERT, UPDATE, DELETE ON paperquay.model_inference_providers TO paperquay_runtime;
 GRANT SELECT, INSERT, UPDATE ON paperquay.model_inference_jobs TO paperquay_runtime;
+GRANT SELECT, INSERT, UPDATE ON paperquay.account_model_settings TO paperquay_runtime;
 
 -- Retrieval content may be cleared, but neither old request identities nor results can be rewritten or deleted.
 GRANT SELECT, INSERT ON paperquay.remote_retrieval_requests TO paperquay_runtime;

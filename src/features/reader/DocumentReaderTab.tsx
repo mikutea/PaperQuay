@@ -34,6 +34,7 @@ import {
   resolveMineruBlockContentSource,
 } from '../../services/mineru';
 import { askDocumentOpenAICompatibleStream } from '../../services/qa';
+import { isAccountModelPreset, loadDesktopAccountModelPreset } from '../../services/desktopAccountModel';
 import { resolveLocalRag } from '../../services/localRag';
 import { summarizeDocumentOpenAICompatible } from '../../services/summary';
 import {
@@ -490,7 +491,7 @@ function DocumentReaderTab({
       summaryModelPreset.model.trim(),
   );
   const qaConfigured = Boolean(
-    activeQaPreset?.apiKey.trim() &&
+    activeQaPreset && (isAccountModelPreset(activeQaPreset) || activeQaPreset.apiKey.trim()) &&
       activeQaPreset.baseUrl.trim() &&
       activeQaPreset.model.trim(),
   );
@@ -3120,12 +3121,16 @@ function DocumentReaderTab({
         );
       };
 
+      const preset = isAccountModelPreset(activeQaPreset)
+        ? await loadDesktopAccountModelPreset(activeQaPreset.accountModelScope)
+        : activeQaPreset;
+      if (!preset) throw new Error(lRef.current('账号模型已移除，请重新选择模型。', 'The account model was removed. Select a model to continue.'));
       const answer = await askDocumentOpenAICompatibleStream(
         {
-          baseUrl: activeQaPreset.baseUrl,
-          apiKey: activeQaPreset.apiKey.trim(),
-          model: activeQaPreset.model,
-          apiMode: activeQaPreset.apiMode,
+          baseUrl: preset.baseUrl,
+          apiKey: preset.apiKey.trim(),
+          model: preset.model,
+          apiMode: preset.apiMode,
           answerRenderMode: qaAnswerRenderMode,
           temperature: getModelRuntimeConfig(settings, 'qa').temperature,
           reasoningEffort: qaReasoningEffort,

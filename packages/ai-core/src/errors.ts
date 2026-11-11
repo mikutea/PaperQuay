@@ -1,6 +1,7 @@
 import type { AiErrorCode, AiFailure } from './types.ts';
 
 const messages: Record<AiErrorCode, string> = {
+  ACCOUNT_MODEL_CHANGED: '账号模型已更新，请重新核对发送预览。',
   REMOTE_UNAVAILABLE:'所选网关或在线电脑当前不可用，请查看模型路由；本次没有改用其他服务。',
   REMOTE_PENDING:'上一条远程模型请求尚未结束。请先在模型执行记录中查看原请求。',
   REMOTE_UNCONFIRMED:'远程结果的保存尚未确认。请在模型执行记录中备份或仅重试保存。',

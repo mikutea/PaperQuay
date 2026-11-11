@@ -7,7 +7,7 @@ const esbuild = require('esbuild');
 const directory = path.join(__dirname, 'generated');
 const output = path.join(directory, 'desktopSyncCore.cjs');
 const result = esbuild.buildSync({
-  entryPoints: [path.join(__dirname, '..', 'packages', 'sync-core', 'src', 'index.ts')],
+  entryPoints: [path.join(__dirname, 'desktopSyncCoreEntry.ts')],
   bundle: true, platform: 'node', format: 'cjs', target: 'node22',
   write: false, sourcemap: false, legalComments: 'none',
 });
