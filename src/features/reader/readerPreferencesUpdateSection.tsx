@@ -70,6 +70,22 @@ function updateSupportText(status: AppUpdateStatus | null, l: ReaderPreferencesL
   return l('当前平台需要手动下载新版', 'This platform requires manual downloads');
 }
 
+function updateErrorText(error: string, l: ReaderPreferencesLocalizer): string {
+  if (error === 'GITHUB_RELEASE_RATE_LIMITED') {
+    return l('GitHub 暂时限制了匿名更新检查。请稍后重试，或打开下载页查看版本。',
+      'GitHub temporarily limited anonymous update checks. Try again later or open the downloads page.');
+  }
+  if (error === 'GITHUB_CLI_MISSING') {
+    return l('更新器已配置 GitHub CLI，但未找到 gh.exe。可打开下载页查看版本。',
+      'The updater is configured to use GitHub CLI, but gh.exe was not found. You can open the downloads page.');
+  }
+  if (error === 'GITHUB_CLI_RELEASE_CHECK_FAILED') {
+    return l('GitHub CLI 未能读取版本。请检查 GitHub CLI 登录状态和网络，或打开下载页。',
+      'GitHub CLI could not read the release. Check its sign-in and network connection or open the downloads page.');
+  }
+  return error;
+}
+
 function updateHeadline(status: AppUpdateStatus | null, l: ReaderPreferencesLocalizer): string {
   if (!status) {
     return l('尚未检查更新', 'No update check yet');
@@ -297,7 +313,7 @@ export function ReaderPreferencesUpdateSection({
 
         {message || status?.error ? (
           <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-xs leading-5 text-slate-600 dark:border-white/10 dark:bg-[var(--pq-surface-1)] dark:text-[var(--pq-text-muted)]">
-            {status?.error || message}
+            {status?.error ? updateErrorText(status.error, l) : message}
           </div>
         ) : null}
 

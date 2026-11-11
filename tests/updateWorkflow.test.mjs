@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -75,6 +75,65 @@ test('offline startup is non-blocking and reports no misleading update notice', 
   assert.equal(status.showStartupNotice, false);
   assert.equal(status.error, 'offline');
   assert.equal(status.canDownload, false);
+});
+
+test('managed portable update checks honor the existing GitHub CLI preference', async (t) => {
+  const anonymous = t.mock.method(globalThis, 'fetch', async () => new Response('fixture private response', {
+    status: 403, headers: { 'x-ratelimit-remaining': '0' },
+  }));
+  const calls = [];
+  let cliFailure = false;
+  const f = fixture(t, {
+    fetchLatestRelease: undefined,
+    updateMetadata: {
+      locateGitHubCli: () => path.resolve('fixture-gh.exe'),
+      async runGitHubCli(file, args, options) {
+        calls.push({ file, args, options });
+        if (cliFailure) throw new Error('fixture private CLI diagnostics');
+        return { stdout: JSON.stringify([{
+          tag_name: 'app-v0.1.26-mikutea.13', prerelease: true, draft: false,
+          html_url: 'https://github.com/mikutea/PaperQuay/releases/tag/app-v0.1.26-mikutea.13',
+          assets: [{ name: 'stable.yml' }, { name: 'PaperQuay-0.1.26-mikutea.13-win-x64.exe' }],
+        }]) };
+      },
+    },
+  });
+  const root = path.join(f.root, 'managed');
+  mkdirSync(path.join(root, 'App'), { recursive: true });
+  mkdirSync(path.join(root, 'Updater'));
+  writeFileSync(path.join(root, 'Updater', 'api-preferences.json'), '\uFEFF' + JSON.stringify({
+    formatVersion: 1, authentication: 'GitHubCli',
+  }));
+  const commands = createUpdateCommands({ ...f.context, updateRuntime: {
+    platform: 'win32', executablePath: path.join(root, 'App', 'PaperQuay.exe'),
+  } });
+  const checked = await commands.app_update_check();
+  assert.equal(checked.error, '');
+  assert.equal(checked.latestVersion, f.version);
+  assert.equal(checked.hasUpdate, true);
+  assert.equal(checked.canDownload, false);
+  assert.equal(anonymous.mock.callCount(), 0);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].file, path.resolve('fixture-gh.exe'));
+  assert.deepEqual(calls[0].args.slice(0, 5), ['api', '--hostname', 'github.com', '--method', 'GET']);
+  assert.equal(calls[0].args.at(-1), 'repos/mikutea/PaperQuay/releases?per_page=100');
+  assert.equal(calls[0].options.windowsHide, true);
+  assert.equal(calls[0].options.env.GH_PROMPT_DISABLED, '1');
+
+  cliFailure = true;
+  assert.equal((await commands.app_update_check()).error, 'GITHUB_CLI_RELEASE_CHECK_FAILED');
+  assert.equal(anonymous.mock.callCount(), 0);
+});
+
+test('anonymous update rate limits report a bounded error without exposing the response body', async (t) => {
+  const fetch = t.mock.method(globalThis, 'fetch', async () => new Response('fixture private response', {
+    status: 403, headers: { 'x-ratelimit-remaining': '0' },
+  }));
+  const { commands } = fixture(t, { fetchLatestRelease: undefined });
+  const checked = await commands.app_update_check();
+  assert.equal(checked.error, 'GITHUB_RELEASE_RATE_LIMITED');
+  assert.equal(checked.canDownload, false);
+  assert.equal(fetch.mock.callCount(), 1);
 });
 
 test('concurrent checks are deduplicated and do not discard a downloaded update', async (t) => {

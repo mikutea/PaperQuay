@@ -1,5 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const { execFile } = require('node:child_process');
+const { promisify } = require('node:util');
 const { createUpdatePreferences } = require('./updatePreferences.cjs');
 
 const UPDATE_REPOSITORY = {
@@ -7,7 +9,10 @@ const UPDATE_REPOSITORY = {
   repo: 'PaperQuay',
 };
 const UPDATE_CHANNEL = 'stable';
-const RELEASES_API_URL = `https://api.github.com/repos/${UPDATE_REPOSITORY.owner}/${UPDATE_REPOSITORY.repo}/releases?per_page=100`;
+const RELEASES_API_ROUTE = `repos/${UPDATE_REPOSITORY.owner}/${UPDATE_REPOSITORY.repo}/releases?per_page=100`;
+const RELEASES_API_URL = `https://api.github.com/${RELEASES_API_ROUTE}`;
+const GITHUB_ACCEPT = 'application/vnd.github+json';
+const execFileAsync = promisify(execFile);
 const FORK_TAG_PATTERN = /^app-v\d+\.\d+\.\d+-mikutea\.\d+$/;
 const NSIS_INSTALL_MARKER = '.paperquay-nsis-install';
 const MSI_INSTALL_MARKER = '.paperquay-msi-install';
@@ -141,21 +146,71 @@ function normalizeRelease(release) {
   };
 }
 
-async function fetchLatestRelease() {
+function managedUpdaterUsesGitHubCli(executablePath) {
+  const executableDirectory = path.dirname(executablePath);
+  if (path.basename(executableDirectory).toLowerCase() !== 'app') return false;
+  const preferences = path.join(executableDirectory, '..', 'Updater', 'api-preferences.json');
+  try {
+    const info = fs.lstatSync(preferences);
+    if (!info.isFile() || info.size > 4096) return false;
+    const saved = JSON.parse(fs.readFileSync(preferences, 'utf8').replace(/^\uFEFF/, ''));
+    return saved?.formatVersion === 1 && saved.authentication === 'GitHubCli';
+  } catch {
+    return false;
+  }
+}
+
+function findGitHubCli() {
+  const directories = (process.env.Path || process.env.PATH || '').split(path.delimiter).filter(path.isAbsolute);
+  const programs = process.env.ProgramW6432 || process.env.ProgramFiles;
+  if (programs && path.isAbsolute(programs)) directories.unshift(path.join(programs, 'GitHub CLI'));
+  return directories.map((directory) => path.join(directory, 'gh.exe')).find((file) => fs.existsSync(file));
+}
+
+async function fetchGitHubCliReleases({
+  locateGitHubCli = findGitHubCli,
+  runGitHubCli = execFileAsync,
+} = {}) {
+  const executable = locateGitHubCli();
+  if (!executable) throw new Error('GITHUB_CLI_MISSING');
+  try {
+    const { stdout } = await runGitHubCli(executable, [
+      'api', '--hostname', 'github.com', '--method', 'GET',
+      '-H', `Accept: ${GITHUB_ACCEPT}`, RELEASES_API_ROUTE,
+    ], {
+      cwd: path.dirname(executable), windowsHide: true, timeout: 15_000, maxBuffer: 16 * 1024 * 1024,
+      env: { ...process.env, GH_PROMPT_DISABLED: '1', GH_NO_UPDATE_NOTIFIER: '1',
+        GH_NO_EXTENSION_UPDATE_NOTIFIER: '1', GH_DEBUG: '', NO_COLOR: '1' },
+    });
+    return JSON.parse(stdout);
+  } catch {
+    throw new Error('GITHUB_CLI_RELEASE_CHECK_FAILED');
+  }
+}
+
+async function fetchAnonymousReleases() {
   const response = await fetch(RELEASES_API_URL, {
     signal: AbortSignal.timeout(15_000),
     headers: {
-      Accept: 'application/vnd.github+json',
+      Accept: GITHUB_ACCEPT,
       'User-Agent': 'PaperQuay-Updater',
     },
   });
 
   if (!response.ok) {
-    const text = await response.text().catch(() => '');
-    throw new Error(`GitHub release check failed: HTTP ${response.status}${text ? ` ${text}` : ''}`);
+    if (response.status === 429 || (response.status === 403 &&
+        (response.headers.get('x-ratelimit-remaining') === '0' || response.headers.has('retry-after')))) {
+      throw new Error('GITHUB_RELEASE_RATE_LIMITED');
+    }
+    throw new Error(`GitHub release check failed: HTTP ${response.status}.`);
   }
 
-  const release = selectLatestForkRelease(await response.json());
+  return response.json();
+}
+
+async function fetchLatestRelease(useGitHubCli, metadata) {
+  const releases = useGitHubCli ? await fetchGitHubCliReleases(metadata) : await fetchAnonymousReleases();
+  const release = selectLatestForkRelease(releases);
   if (!release) {
     throw new Error('No complete published PaperQuay fork prerelease was found.');
   }
@@ -194,8 +249,13 @@ function createUpdateCommands(context) {
   const { app } = context;
   const shell = context.shell ?? require('electron').shell;
   const autoUpdater = context.autoUpdater ?? require('electron-updater').autoUpdater;
-  const runtime = context.updateRuntime;
-  const releaseFetcher = context.fetchLatestRelease ?? fetchLatestRelease;
+  const runtime = context.updateRuntime ?? { platform: process.platform, executablePath: process.execPath };
+  const releaseFetcher = context.fetchLatestRelease ?? (() => {
+    // The managed portable updater already records the user's authentication choice.
+    const useGitHubCli = getAutoUpdateSupport(app, runtime).reason === 'windows-portable' &&
+      managedUpdaterUsesGitHubCli(runtime.executablePath);
+    return fetchLatestRelease(useGitHubCli, context.updateMetadata);
+  });
   const preferences = context.updatePreferences ?? createUpdatePreferences(
     typeof app.getPath === 'function' ? path.join(app.getPath('userData'), 'paperquay-update-preferences.json') : null,
   );
