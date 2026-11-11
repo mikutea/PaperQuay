@@ -12,6 +12,7 @@ const { createDesktopNoteExchange } = require('./desktopNoteExchange.cjs');
 const { createDesktopPaperExchange } = require('./desktopPaperExchange.cjs');
 const { createDesktopGraphEvidence } = require('./desktopGraphEvidence.cjs');
 const { createDesktopReadingPosition } = require('./desktopReadingPosition.cjs');
+const { completionEndpoint } = require('./utils.cjs');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const HASH = /^[0-9a-f]{64}$/;
@@ -19,6 +20,7 @@ const MAX_STATE_BYTES = 16 * 1024 * 1024;
 const MAX_BINDINGS = 512;
 const MAX_LIBRARIES = 16;
 const MAX_JSON_BYTES = 2 * 1024 * 1024;
+const MAX_ACCOUNT_MODEL_BYTES = 16 * 1024;
 const fail = (code) => { const error = new Error(code); error.code = code; throw error; };
 const plain = (value) => Boolean(value && typeof value === 'object' && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype);
 const exactKeys = (value, keys) => plain(value) && Object.keys(value).sort().join(',') === [...keys].sort().join(',');
@@ -32,6 +34,8 @@ const KNOWN_ERRORS = new Set(['AUTHENTICATION_REQUIRED', 'AUTH_REQUIRED', 'AUTH_
   'DESKTOP_PDF_TRANSFER_BUSY', 'REQUEST_TOO_LARGE', 'PDF_INTEGRITY_MISMATCH', 'INVALID_PDF', 'DESKTOP_PDF_TIMEOUT',
   'DESKTOP_PDF_DIRECT_FALLBACK', 'IDENTITY_PROVIDER_UNAVAILABLE', 'SERVICE_UNAVAILABLE', 'RATE_LIMITED', 'NETWORK_UNAVAILABLE', 'REQUEST_TIMEOUT',
   'ACCOUNT_STORAGE_LIMIT', 'ACCOUNT_ENTITY_LIMIT', 'ACCOUNT_CHANGE_LIMIT', 'ACCOUNT_RECEIPT_LIMIT', 'CONFLICT',
+  'ACCOUNT_MODEL_CHANGED', 'ACCOUNT_MODEL_INVALID', 'ACCOUNT_MODEL_UNAVAILABLE',
+  'ACCOUNT_MODEL_APPROVAL_REQUIRED',
   'LOCAL_CAPACITY_EXCEEDED', 'ENTITY_ALREADY_EXISTS', 'INVALID_DESKTOP_SOURCE', 'INVALID_PAPER_METADATA', 'INVALID_ATTACHMENT_METADATA', 'INVALID_GRAPH_MAPPING', 'INVALID_DESKTOP_GRAPH_RELATION', 'UNMAPPED_GRAPH_ENDPOINT',
   'UNMAPPED_NOTE_PAPER', 'SOURCE_TOO_LARGE', 'INVALID_NOTE_SELECTION', 'INVALID_SAVED_SOURCE']);
 function publicError(error) {
@@ -93,11 +97,22 @@ function createDesktopAccountCommands(context, options = {}) {
   const allocateId = options.randomUUID || randomUUID;
   const now = options.now || Date.now;
   let reading;
-  const notify = () => { try { options.onChange?.({ readingScopeKey: reading?.status().scopeKey ?? null }); } catch {} try { options.onGraphChange?.(); } catch {} };
+  const notify = () => {
+    try { options.onChange?.({ readingScopeKey: reading?.status().scopeKey ?? null }); } catch {}
+    const scope = modelScope();
+    if (scope !== lastModelScope || accountModelVersion !== lastModelVersion) {
+      lastModelScope = scope;
+      lastModelVersion = accountModelVersion;
+      try { options.onAccountModelChange?.({ scope, version: accountModelVersion }); } catch {}
+    }
+    try { options.onGraphChange?.(); } catch {}
+  };
   const privateRoot = path.join(path.dirname(context.appPaths.configPath), 'account-sync');
   const configPath = path.join(privateRoot, 'config.json');
   let config = null, account = null, capability = null, enabled = false, lastError = null, closed = false;
   let epoch = 1, sessionController = new AbortController(), auth = options.auth || null, authUnsubscribe = null;
+  let accountModelVersion = 0;
+  let lastModelScope = null, lastModelVersion = 0;
   let document = null, scopePath = null, libraryBindingId = null, busy = 0, loginTask = null, loginStarting = null, lock = null;
   let mutations = Promise.resolve(), actions = Promise.resolve(), shutdownTask = null, pendingCleanup = Promise.resolve();
   let providerIntent = 0, stoppingProvider = Promise.resolve();
@@ -111,6 +126,13 @@ function createDesktopAccountCommands(context, options = {}) {
   const currentLibrary = () => document?.libraries.find((entry) => entry.libraryBindingId === libraryBindingId) || null;
   const assertEpoch = (captured) => { if (closed || captured !== epoch || sessionController.signal.aborted) fail('DESKTOP_OPERATION_CANCELLED'); };
   function requireAccount() { if (!account || !currentLibrary() || !auth || auth.getSnapshot().status !== 'signed-in') fail('AUTHENTICATION_REQUIRED'); }
+  function modelScope() {
+    return !closed && account && currentLibrary() && auth?.getSnapshot().status === 'signed-in' ? epoch : null;
+  }
+  function modelApprovalPath() {
+    requireAccount();
+    return path.join(privateRoot, 'model-approvals', sha(JSON.stringify([serviceKey(config), account.accountId])) + '.json');
+  }
   function ensureAuth() {
     if (!auth) auth = require('./desktopOidc.cjs').createDesktopOidcSession({
       openExternal: (url) => require('electron').shell.openExternal(url), fetch: fetcher,
@@ -832,6 +854,81 @@ function createDesktopAccountCommands(context, options = {}) {
       });
     },
     async desktop_account_status() { await initialization; await Promise.all([remoteTasks.refreshStatus(), models.refreshStatus()]); return getStatus(); },
+    async desktop_account_model_read({ includeKey = false, scope: expectedScope } = {}) {
+      await initialization;
+      const scope = modelScope();
+      if (expectedScope !== undefined && expectedScope !== scope) fail('ACCOUNT_MODEL_CHANGED');
+      if (scope === null) return null;
+      let value;
+      try {
+        value = await request('/v1/account-model', { maxResponseBytes: MAX_ACCOUNT_MODEL_BYTES });
+      } catch (error) {
+        if (error.code === 'NOT_FOUND') return null;
+        throw error;
+      }
+      let settings;
+      try { settings = syncCore().parseAccountModelSettings(value); }
+      catch { fail('ACCOUNT_MODEL_UNAVAILABLE'); }
+      const expected = settings.connection
+        ? syncCore().accountModelApproval(settings.revision, settings.connection.provider) : null;
+      const approval = await privateRead(modelApprovalPath(), MAX_ACCOUNT_MODEL_BYTES);
+      assertEpoch(scope);
+      const approved = expected !== null && approval?.value === expected;
+      if (includeKey === true && settings.connection && !approved) fail('ACCOUNT_MODEL_APPROVAL_REQUIRED');
+      return includeKey === true ? { scope, settings } : {
+        scope, revision: settings.revision, provider: settings.connection?.provider ?? null, approved,
+      };
+    },
+    async desktop_account_model_approve({ scope, revision, provider }) {
+      requireAccount();
+      const current = await handlers.desktop_account_model_read({ scope });
+      if (!current?.provider || current.revision !== revision ||
+          JSON.stringify(current.provider) !== JSON.stringify(provider)) fail('ACCOUNT_MODEL_CHANGED');
+      assertEpoch(scope);
+      await privateWrite(modelApprovalPath(), { value: syncCore().accountModelApproval(revision, current.provider) });
+      assertEpoch(scope);
+      accountModelVersion++;
+      lastError = null;
+      notify();
+    },
+    async desktop_account_model_write({ scope, revision, presetId }) {
+      requireAccount();
+      if (scope !== modelScope()) fail('ACCOUNT_MODEL_CHANGED');
+      if (presetId !== null && !localId(presetId)) fail('ACCOUNT_MODEL_INVALID');
+      let connection = null;
+      if (presetId !== null) {
+        const saved = await privateRead(context.appPaths.configPath, 4 * 1024 * 1024)
+          ?? (context.appPaths.legacyConfigPath ? await privateRead(context.appPaths.legacyConfigPath, 4 * 1024 * 1024) : null);
+        assertEpoch(scope);
+        const presets = saved?.secrets?.qaModelPresets;
+        const preset = Array.isArray(presets) ? presets.find(item => item?.id === presetId) : null;
+        if (!preset || typeof preset.baseUrl !== 'string' || !preset.baseUrl.trim()) fail('ACCOUNT_MODEL_INVALID');
+        const apiMode = preset.apiMode === 'responses' ? 'responses' : 'chat_completions';
+        const endpoint = completionEndpoint({ baseUrl: preset.baseUrl, apiMode }).replace(/\/(?:chat\/completions|responses)$/i, '');
+        const model = preset.model?.trim();
+        const tokenParameter = apiMode === 'chat_completions' && /^(?:openai\/)?o\d+(?:-|$)/i.test(model)
+          ? 'max_completion_tokens' : 'max_tokens';
+        connection = {
+          provider: { version: 1, id: 'account-model', endpoint, model, apiMode,
+            stream: true, includeUsage: false, requiresKey: Boolean(preset.apiKey?.trim()),
+            maxOutputTokens: 2048, tokenParameter },
+          apiKey: preset.apiKey?.trim() || null,
+        };
+      }
+      let body;
+      try { body = syncCore().parseAccountModelSettings({ revision, connection }); }
+      catch { fail('ACCOUNT_MODEL_INVALID'); }
+      const result = await request('/v1/account-model', { method: 'PUT', body, maxResponseBytes: MAX_ACCOUNT_MODEL_BYTES });
+      if (!Number.isInteger(result?.revision) || result.revision !== body.revision + 1) fail('ACCOUNT_MODEL_UNAVAILABLE');
+      await privateWrite(modelApprovalPath(), {
+        value: body.connection ? syncCore().accountModelApproval(result.revision, body.connection.provider) : null,
+      });
+      assertEpoch(scope);
+      accountModelVersion++;
+      lastError = null;
+      notify();
+      return result;
+    },
     async desktop_remote_tasks_set_enabled(args) { await initialization;
       if (args?.enabled) { requireAccount(); await refreshCapability(sessionController.signal); }
       await remoteTasks.setEnabled(args); lastError = null; return getStatus();

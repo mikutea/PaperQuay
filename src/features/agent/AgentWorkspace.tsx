@@ -11,6 +11,7 @@ import {
   type LibraryAgentStreamHandlers,
 } from '../../services/libraryAgent';
 import { listLibraryCategories, listAllLibraryPapers } from '../../services/library';
+import { accountModelPreset, useDesktopAccountModel } from '../../services/desktopAccountModel';
 import type { LiteratureCategory, LiteraturePaper } from '../../types/library';
 import type { DocumentChatAttachment, ModelReasoningEffort, QaModelPreset } from '../../types/reader';
 import {
@@ -94,7 +95,12 @@ function AgentWorkspace() {
   const [paperSearchQuery, setPaperSearchQuery] = useState('');
   const [composerValue, setComposerValue] = useState('');
   const [lastInstruction, setLastInstruction] = useState('');
-  const [agentModelPresets, setAgentModelPresets] = useState<QaModelPreset[]>([]);
+  const [localAgentModelPresets, setAgentModelPresets] = useState<QaModelPreset[]>([]);
+  const { status: accountModel } = useDesktopAccountModel();
+  const accountPreset = useMemo(() => accountModelPreset(accountModel), [accountModel]);
+  const agentModelPresets = useMemo(() => accountPreset
+    ? [accountPreset, ...localAgentModelPresets] : localAgentModelPresets,
+  [accountPreset, localAgentModelPresets]);
   const [plan, setPlan] = useState<LibraryAgentPlan | null>(null);
   const [approvedItemIds, setApprovedItemIds] = useState<Set<string>>(() => new Set());
   const [expandedStepKeys, setExpandedStepKeys] = useState<Set<string>>(() => new Set());
@@ -104,7 +110,9 @@ function AgentWorkspace() {
   const [historySidebarCollapsed, setHistorySidebarCollapsed] = useState(false);
   const [agentAttachments, setAgentAttachments] = useState<DocumentChatAttachment[]>([]);
   const [agentRagEnabled, setAgentRagEnabled] = useState(true);
-  const [selectedAgentPresetId, setSelectedAgentPresetId] = useState<string | null>(null);
+  const [agentPresetChoice, setSelectedAgentPresetId] = useState<string | null>(null);
+  const selectedAgentPresetId = agentModelPresets.find(preset => preset.id === agentPresetChoice)?.id
+    ?? agentModelPresets[0]?.id ?? null;
   const [selectedAgentReasoningEffort, setSelectedAgentReasoningEffort] =
     useState<ModelReasoningEffort>('auto');
   const [capturingScreenshot, setCapturingScreenshot] = useState(false);
@@ -243,7 +251,6 @@ function AgentWorkspace() {
         }
 
         setAgentModelPresets(presets);
-        setSelectedAgentPresetId((current) => current ?? presets[0]?.id ?? null);
       } catch {
         if (!cancelled) {
           setAgentModelPresets([]);
@@ -792,7 +799,7 @@ function AgentWorkspace() {
     setApprovedItemIds(new Set());
 
     try {
-      const preset = await loadLibraryAgentModelPresetById(selectedAgentPresetId);
+      const preset = await loadLibraryAgentModelPresetById(selectedAgentPresetId, accountPreset?.accountModelScope);
 
       if (!preset) {
         throw new Error(l('请先在设置里配置 Agent 工具调用模型。', 'Configure the Agent tool-calling model in Settings first.'));

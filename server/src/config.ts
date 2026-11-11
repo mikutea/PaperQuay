@@ -14,6 +14,7 @@ export interface ServerConfig {
   oidcClientIds: string[];
   allowedOrigins: string[];
   cursorSecret: Uint8Array;
+  accountModelKey?: Uint8Array;
   bodyLimitBytes: number;
   responseLimitBytes: number;
   entityLimitBytes: number;
@@ -181,6 +182,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   if (cursorSecret.length < 32 || cursorSecret.length > 128 || cursorSecret.toString('base64') !== secret) {
     throw new ApiError('CONFIGURATION_INVALID', 500);
   }
+  const accountModelSecret = env.PAPERQUAY_ACCOUNT_MODEL_KEY;
+  const accountModelKey = accountModelSecret ? Buffer.from(accountModelSecret, 'base64') : undefined;
+  if (accountModelKey && (accountModelKey.length !== 32 || accountModelKey.toString('base64') !== accountModelSecret)) {
+    throw new ApiError('CONFIGURATION_INVALID', 500);
+  }
   const requestsPerMinute = Number(env.PAPERQUAY_REQUESTS_PER_MINUTE || 120);
   if (!Number.isInteger(requestsPerMinute) || requestsPerMinute < 1 || requestsPerMinute > 10000) {
     throw new ApiError('CONFIGURATION_INVALID', 500);
@@ -199,7 +205,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const modelInferenceEnabled=env.PAPERQUAY_MODEL_INFERENCE_ENABLED??'0';
   if(!['0','1'].includes(modelInferenceEnabled))throw new ApiError('CONFIGURATION_INVALID',500);
   return {
-    host, port, databaseUrl, erasureDatabaseUrl, privateMetricsIntervalSeconds, oidcIssuer, oidcAudience, oidcClientIds, allowedOrigins, cursorSecret,
+    host, port, databaseUrl, erasureDatabaseUrl, privateMetricsIntervalSeconds, oidcIssuer, oidcAudience, oidcClientIds, allowedOrigins, cursorSecret, accountModelKey,
     bodyLimitBytes: SERVER_LIMITS.bodyLimitBytes,
     responseLimitBytes: SERVER_LIMITS.responseLimitBytes,
     entityLimitBytes: SERVER_LIMITS.entityLimitBytes,

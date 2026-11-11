@@ -37,6 +37,7 @@ import {
   listenLibraryReferenceProgress,
 } from '../../services/library';
 import { readReaderConfigFile } from '../../services/readerConfig';
+import { isAccountModelPreset, loadDesktopAccountModelPreset } from '../../services/desktopAccountModel';
 import { useTabsStore } from '../../stores/useTabsStore';
 import { useThemeStore } from '../../stores/useThemeStore';
 import type {
@@ -299,7 +300,11 @@ async function loadGraphModelPreset(): Promise<QaModelPreset | null> {
     ...storedSecrets,
   };
   const presets = normalizeQaModelPresets(secrets.qaModelPresets);
+  const dedicated = presets.find(preset => preset.id === settings.agentModelPresetId
+    && preset.id !== settings.qaActivePresetId && preset.baseUrl.trim() && preset.apiKey.trim() && preset.model.trim());
   return (
+    dedicated ??
+    await loadDesktopAccountModelPreset() ??
     resolveModelPreset(presets, settings.agentModelPresetId) ??
     resolveModelPreset(presets, settings.summaryModelPresetId) ??
     resolveModelPreset(presets, settings.qaActivePresetId) ??
@@ -1141,7 +1146,7 @@ export default function KnowledgeGraphWorkspace() {
     try {
       const preset = await loadGraphModelPreset();
 
-      if (!preset?.apiKey.trim() || !preset.baseUrl.trim() || !preset.model.trim()) {
+      if (!preset?.baseUrl.trim() || (!isAccountModelPreset(preset) && !preset.apiKey.trim()) || !preset.model.trim()) {
         throw new Error(l('请先在设置中配置 Agent 或摘要模型。', 'Configure an Agent or summary model in settings first.'));
       }
 

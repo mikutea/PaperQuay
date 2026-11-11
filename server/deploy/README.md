@@ -28,6 +28,8 @@
 | `identity.env` | HTTPS `KC_HOSTNAME`、对应的 `KC_DB_PASSWORD`、首次引导使用的管理员设置。引导完成后按身份服务规则移除引导配置 |
 | `migration.env` | 仅迁移容器使用的 `PAPERQUAY_MIGRATION_DATABASE_URL` |
 | `sync.env` | 运行角色的 `PAPERQUAY_DATABASE_URL`、OIDC issuer/audience/client IDs、允许的客户端 origins、独立随机且固定保存的 `PAPERQUAY_CURSOR_SECRET`；按需开启文件或任务能力 |
+
+在受保护的 `sync.env` 设置 `PAPERQUAY_ACCOUNT_MODEL_KEY` 可启用账号模型同步。生成独立的 32 字节随机密钥并编码为 Base64。升级与恢复时使用原密钥，随运行配置一起加密备份。客户端登录后可读取同账号模型，由客户端连接所配置的模型服务。账号注销时删除模型设置。
 | `runtime-config.json` | 仅包含 `apiBaseUrl`、`oidcAuthority`、`oidcClientId` 三个公开连接字段，权限 `0644`。例如 API 使用所选 HTTPS origin 下的 `/api`，issuer 使用 `/identity/realms/paperquay` |
 
 环境文件每行使用 `NAME=literal-value`，不使用引号、`export`、命令替换或环境插值。

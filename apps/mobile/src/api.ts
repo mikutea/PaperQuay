@@ -1,6 +1,7 @@
 import {ModelInvocationApi} from './modelRouting/api.ts';
 import {ModelServiceError,isModelServiceCode} from './modelRouting/errors.ts';
 import {readModelResponse,waitForModelCall} from './modelRouting/wire.ts';
+import { parseAccountModelSettings, type AccountModelSettings } from '../../../packages/ai-core/src/accountModel.ts';
 import {validateModelInferenceCapability,type ModelInferenceCapability} from '../../../packages/sync-core/src/modelInference.ts';
 import {validateRemoteRetrievalCapability,type RemoteRetrievalCapability} from '../../../packages/sync-core/src/remoteRetrieval.ts';
 import {
@@ -178,7 +179,8 @@ export class SyncApi {
     method = 'GET',
     data?: unknown,
   ): Promise<unknown> {
-    const isModel=path.startsWith('/v1/model-inference/');
+    const accountModel = path === '/v1/account-model';
+    const isModel=accountModel || path.startsWith('/v1/model-inference/');
     if (signal.aborted) throw new ClientError('ACCOUNT_CHANGED');
     const identityKey = this.getIdentityKey?.();
     const checkIdentity = () => {
@@ -212,6 +214,10 @@ export class SyncApi {
       const response=await(isModel?waitForModelCall(pendingResponse.then(value=>{if(controller.signal.aborted)void value.body?.cancel().catch(()=>{});return value;}),controller.signal):pendingResponse);
       checkIdentity();
       if(isModel&&(response.redirected||['opaque','opaqueredirect','error'].includes(response.type)||response.url&&response.url!==this.baseUrl+path)){void response.body?.cancel().catch(()=>{});throw new ModelServiceError('MODEL_RESPONSE_INVALID',502);}
+      if (accountModel && method === 'GET' && response.status === 404) {
+        void response.body?.cancel().catch(() => undefined);
+        return null;
+      }
       let body: unknown;
       try {
         body = isModel?await readModelResponse(response,controller.signal):await boundedJson(response);
@@ -302,6 +308,19 @@ export class SyncApi {
     this.cloudPdfCapability=structuredClone(snapshot.cloudPdf);this.desktopPdfCapability=structuredClone(snapshot.desktopPdf);this.remoteTaskCapability=structuredClone(snapshot.remoteTasks);this.modelInferenceCapability=structuredClone(snapshot.modelInference);
     this.remoteRetrievalCapability=structuredClone(snapshot.remoteRetrieval??null);
     return structuredClone(snapshot);
+  }
+
+  async readAccountModel(signal: AbortSignal): Promise<AccountModelSettings | null> {
+    const body = await this.request('/v1/account-model', signal);
+    if (body === null) return null;
+    try { return parseAccountModelSettings(body); }
+    catch { throw new ClientError('INVALID_RESPONSE'); }
+  }
+
+  async writeAccountModel(settings: AccountModelSettings, signal: AbortSignal): Promise<number> {
+    const body = await this.request('/v1/account-model', signal, 'PUT', parseAccountModelSettings(settings));
+    if (!isObject(body) || body.revision !== settings.revision + 1) throw new ClientError('INVALID_RESPONSE');
+    return body.revision;
   }
 
   async register(name: string, signal: AbortSignal): Promise<AccountIdentity> {

@@ -20,6 +20,7 @@ export interface AiProviderConfig {
   requiresKey: boolean;
   maxOutputTokens: number;
   tokenParameter: 'max_completion_tokens' | 'max_tokens';
+  apiMode?: 'chat_completions' | 'responses';
   /** Device-private route reference; omitted for existing external API configurations. */
   execution?:AiModelExecution;
 }
@@ -77,7 +78,7 @@ export interface AiUsage {
 
 export const AI_REMOTE_ERROR_CODES=['REMOTE_UNAVAILABLE','REMOTE_PENDING','REMOTE_UNCONFIRMED','REMOTE_PROFILE_CHANGED','REMOTE_AUTH_REQUIRED','REMOTE_CAPACITY']as const;
 export type AiErrorCode =
-  | 'CONFIG_INVALID' | 'KEY_MISSING' | 'KEY_INVALID' | 'SECRET_STORAGE_FAILED'
+  | 'CONFIG_INVALID' | 'KEY_MISSING' | 'KEY_INVALID' | 'SECRET_STORAGE_FAILED' | 'ACCOUNT_MODEL_CHANGED' | 'ACCOUNT_MODEL_APPROVAL_REQUIRED'
   | 'CONTEXT_MISSING' | 'CONTEXT_INVALID' | 'CONTEXT_TOO_LARGE' | 'TEXT_MISSING'
   | 'QUESTION_REQUIRED' | 'INPUT_TOO_LARGE' | 'AUTHENTICATION_FAILED' | 'ACCESS_DENIED'
   | 'RATE_LIMITED' | 'QUOTA_EXCEEDED' | 'MODEL_OR_REQUEST_REJECTED' | 'ENDPOINT_NOT_FOUND'

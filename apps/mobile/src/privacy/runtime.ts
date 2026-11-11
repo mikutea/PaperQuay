@@ -176,7 +176,7 @@ export function createPrivacyRuntime(config:AppConfig,auth:AuthSession,store:Acc
           check();const [{LocalAiConfigStore,aiSecretNamespace,AI_SECRET_KEY},{zoteroSecretNamespace,ZOTERO_SECRET_KEY},{radarSecretNamespace}]=await Promise.all([
             import('../ai/provider.ts'),import('../library/zoteroClient.ts'),import('../radar/client.ts')]);
           check();const configStore=new LocalAiConfigStore(localStorage),registry=scopedSecrets(scope),addresses:[string,string][]=[];
-          for(const provider of[configStore.load(scope),configStore.loadExternal(scope)]){
+          for(const provider of[configStore.loadLocal(scope),configStore.loadExternal(scope)]){
             if(!provider.execution)addresses.push([await aiSecretNamespace(scope,provider),AI_SECRET_KEY]);check();
           }
           for(const entry of workspace?.zoteroLibraries?.entries??[])addresses.push([zoteroSecretNamespace(scope,entry.config),ZOTERO_SECRET_KEY]);

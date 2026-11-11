@@ -1,4 +1,5 @@
 import {GRAPH_RELATION_LIMITS} from '../../packages/sync-core/src/graphRelation.ts';
+import { createAccountModelRepository, type AccountModelRepository } from './account-model.ts';
 import {createModelInferenceRepository,type ModelInferenceRepository,type ModelInferenceRepositoryOptions} from './model-inference-store.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import pg from 'pg';
@@ -182,7 +183,7 @@ export class PostgresSyncStore implements SyncRepository, CloudPdfRepository, De
   async ready(): Promise<boolean> {
     try {
       const result = await this.pool.query<{ version: string }>('SELECT version FROM paperquay.schema_migrations ORDER BY version');
-      return result.rows.map((row) => row.version).join(',') === '001_initial.sql,002_receipt_quota.sql,003_retained_bytes_quota.sql,004_private_cloud_pdfs.sql,005_remote_tasks.sql,006_extended_sync_content.sql,007_remote_task_recovery.sql,008_remote_journal_holder.sql,009_remote_request_cancellation.sql,010_model_inference.sql,011_graph_relations.sql,012_remote_retrieval.sql,013_account_privacy.sql';
+      return result.rows.map((row) => row.version).join(',') === '001_initial.sql,002_receipt_quota.sql,003_retained_bytes_quota.sql,004_private_cloud_pdfs.sql,005_remote_tasks.sql,006_extended_sync_content.sql,007_remote_task_recovery.sql,008_remote_journal_holder.sql,009_remote_request_cancellation.sql,010_model_inference.sql,011_graph_relations.sql,012_remote_retrieval.sql,013_account_privacy.sql,014_account_model_settings.sql';
     } catch { return false; }
   }
 
@@ -196,6 +197,10 @@ export class PostgresSyncStore implements SyncRepository, CloudPdfRepository, De
 
   remoteRetrieval():RemoteRetrievalRepository{
     return createRemoteRetrievalRepository({withAccount:(identity,work)=>this.withAccount(identity,false,context=>work(context))});
+  }
+
+  accountModel(key: Uint8Array): AccountModelRepository {
+    return createAccountModelRepository((identity, work) => this.withAccount(identity, false, work), key);
   }
 
   privacy(): AccountPrivacyRepository {

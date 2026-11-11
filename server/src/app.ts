@@ -1,4 +1,5 @@
 import {registerModelInferenceRoutes,MODEL_INFERENCE_CAPABILITY} from './model-inference.ts';
+import { registerAccountModelRoutes, type AccountModelRepository } from './account-model.ts';
 import {registerNativeAssociationRoutes} from './native-links.ts';
 import type {ModelInferenceRepository} from './model-inference-store.ts';
 import type {ModelGatewayControl} from './model-inference.ts';
@@ -44,6 +45,7 @@ interface AppOptions {
   modelInferenceRepository?:ModelInferenceRepository;
   modelGatewayDriver?:ModelGatewayControl;
   accountPrivacyRepository?:AccountPrivacyRepository;
+  accountModelRepository?: AccountModelRepository;
   verifyToken: TokenVerifier;
   logger?: FastifyServerOptions['logger'];
   /** Used only by isolated tests, never set by process environment. */
@@ -315,5 +317,6 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   await registerRemoteRetrievalRoutes(app,{enabled:config.remoteRetrievalEnabled,repository:options.remoteRetrievalRepository,authenticate});
   await registerModelInferenceRoutes(app,{enabled:config.modelInferenceEnabled,gatewayEnabled:Boolean(config.modelGateway),repository:options.modelInferenceRepository,gateway:options.modelGatewayDriver,authenticate});
   if(options.accountPrivacyRepository)registerAccountPrivacyRoutes(app,options.accountPrivacyRepository,authenticate,identity=>options.modelGatewayDriver?.eraseAccount(identity));
+  if (options.accountModelRepository) registerAccountModelRoutes(app, options.accountModelRepository, authenticate);
   return app;
 }

@@ -111,12 +111,17 @@ function createBackend({ app, libraryLocation }) {
       if (!window.webContents.isDestroyed()) window.webContents.send('paperquay:event', 'knowledge-graph:changed', {});
     }
   }
-  const desktopAccount = createDesktopAccountCommands(context, { onGraphChange: notifyGraphProjection, onChange: (change = {}) => {
+  function emitAccountEvent(name, change) {
     const { BrowserWindow } = require('electron');
     for (const window of BrowserWindow.getAllWindows()) {
-      if (!window.webContents.isDestroyed()) window.webContents.send('paperquay:event', 'desktop-account:changed', change);
+      if (!window.webContents.isDestroyed()) window.webContents.send('paperquay:event', name, change);
     }
-  } });
+  }
+  const desktopAccount = createDesktopAccountCommands(context, {
+    onGraphChange: notifyGraphProjection,
+    onChange: (change = {}) => emitAccountEvent('desktop-account:changed', change),
+    onAccountModelChange: change => emitAccountEvent('desktop-account-model:changed', change),
+  });
 
   context.accountGraphProjection = () => desktopAccount.graphProjection();
   context.updateAccountGraphRelation = async request => {

@@ -29,6 +29,7 @@ import type {
   ReaderPreferencesLocalizer,
   ReaderSettingsChangeHandler,
 } from './readerPreferencesTypes';
+import { ReaderPreferencesAccountModel } from './readerPreferencesAccountModel';
 
 type ModelPresetSettingKey =
   | 'translationModelPresetId'
@@ -244,6 +245,7 @@ export function ReaderPreferencesModelsSection({
 
   return (
     <>
+      <ReaderPreferencesAccountModel l={l} presets={qaModelPresets} activePresetId={settings.qaActivePresetId} />
       <SettingsField
         label={l('Model Presets', 'Model Presets')}
         description={l('Maintain shared OpenAI-compatible model configurations for translation, overview, and QA.', 'Maintain shared OpenAI-compatible model configurations for translation, overview, and QA.',

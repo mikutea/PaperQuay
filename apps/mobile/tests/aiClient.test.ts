@@ -57,6 +57,63 @@ function generate(client: AiClient, config: AiProviderConfig, extra: Partial<Par
 }
 function code(expected: string) { return (error: unknown) => error instanceof AiError && error.code === expected && !JSON.stringify(error).includes(KEY); }
 
+test('Responses uses the configured endpoint and preserves the text and usage from the actual reply', async () => {
+  const endpoint = 'https://responses.example.invalid/v1';
+  const transport: AiTransport = {
+    kind: 'fetch', redirectPolicy: 'error', supportsStreaming: true,
+    async request(request) {
+      assert.equal(request.url, endpoint + '/responses');
+      const body = JSON.parse(request.body!);
+      assert.equal(body.store, false);
+      assert.equal(body.max_output_tokens, 2048);
+      assert.equal(body.stream, false);
+      assert.equal(body.messages, undefined);
+      assert.match(JSON.stringify(body.input), /Synthetic research text/);
+      return Response.json({
+        status: 'completed',
+        output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '差值 40 [P2] ' + KEY }] }],
+        usage: { input_tokens: 12, output_tokens: 9, total_tokens: 21 },
+      });
+    },
+  };
+  const { client, config } = await configured(endpoint, {}, transport);
+  const result = await generate(client, { ...config, apiMode: 'responses', endpoint: endpoint + '/responses', stream: false });
+  assert.equal(result.text, '差值 40 [P2] [已隐藏凭据]');
+  assert.deepEqual(result.usage, { promptTokens: 12, completionTokens: 9, totalTokens: 21 });
+});
+
+test('Responses streaming finishes on the completed event and uses the final text once', async () => {
+  const transport: AiTransport = {
+    kind: 'fetch', redirectPolicy: 'error', supportsStreaming: true,
+    async request() {
+      return new Response(
+        sse({ type: 'response.output_text.delta', delta: '正在生成' }) +
+        sse({ type: 'response.completed', response: { status: 'completed', output_text: '差值为 40 [P2]' } }),
+        { headers: { 'Content-Type': 'text/event-stream' } },
+      );
+    },
+  };
+  const { client, config } = await configured('https://responses.example.invalid/v1', {}, transport);
+  const seen: string[] = [];
+  const result = await generate(client, { ...config, apiMode: 'responses' }, { onText: text => seen.push(text) });
+  assert.deepEqual(seen, ['正在生成', '差值为 40 [P2]']);
+  assert.equal(result.text, seen.at(-1));
+});
+
+test('a Responses stream without a terminal response cannot be saved as complete', async () => {
+  const transport: AiTransport = {
+    kind: 'fetch', redirectPolicy: 'error', supportsStreaming: true,
+    async request() {
+      return new Response(
+        sse({ type: 'response.output_text.delta', delta: '未完成' }) + 'data: [DONE]\r\n\r\n',
+        { headers: { 'Content-Type': 'text/event-stream' } },
+      );
+    },
+  };
+  const { client, config } = await configured('https://responses.example.invalid/v1', {}, transport);
+  await assert.rejects(generate(client, { ...config, apiMode: 'responses' }), code('STREAM_INTERRUPTED'));
+});
+
 test('real HTTP continuation sends exact completed prior turns and common source once, rejecting changed source or budget before another paid request', async () => {
   const bodies: Record<string, any>[] = [];
   await provider(async (request, response) => {

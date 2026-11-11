@@ -5,6 +5,9 @@ import { AiError } from './errors.ts';
 import { buildResearchMessages, type ResearchContext } from '../research/context.ts';
 import { AI_SECRET_KEY, aiAccountKey, aiSecretNamespace, checkedApiKey, parseAiProvider } from './provider.ts';
 import { AiSseParser, ChatOutput, type ChatCompletionResult } from './stream.ts';
+import { responsesCompletion, responsesEvent, responsesRequest } from './responses.ts';
+import { ACCOUNT_MODEL_ID } from '../../../../packages/ai-core/src/accountModel.ts';
+import { assertAccountModelApproved } from './accountModelSession.ts';
 import { AiRequestGuard, boundedAiLimits, cancelResponseBody, ensureDirectResponse, fetchAiTransport, readAiBody } from './transport.ts';
 import type { AiAccountScope, AiAction, AiLimits, AiProviderConfig, AiTransport, AiUsage, PreparedAiContext, SecretStore } from './types.ts';
 import {accountScopeAvailable,subscribeAccountFence} from '../privacy/browserErasure.ts';
@@ -42,12 +45,14 @@ export class AiClient {
   }
   async #key(scope: AiAccountScope, config: AiProviderConfig, guard: AiRequestGuard, checkCurrent:()=>void=()=>{}): Promise<string | null> {
     aiAccountKey(scope);
-    if (!config.requiresKey) return null;
+    assertAccountModelApproved(scope, config);
+    if (!config.requiresKey && config.id !== ACCOUNT_MODEL_ID) return null;
     try {
       const namespace = await guard.wait(aiSecretNamespace(scope, config));
       guard.check(); checkCurrent();
       const key = await guard.wait(this.#secrets.get(namespace, AI_SECRET_KEY));
       guard.check(); checkCurrent();
+      if (!config.requiresKey) return null;
       if (!key) throw new AiError('KEY_MISSING');
       return checkedApiKey(key);
     } catch (error) {
@@ -174,7 +179,9 @@ export class AiClient {
     messages: { role: string; content: string }[], config: AiProviderConfig, purpose:'pdf'|'research'|'review'|'agent'): Promise<ChatCompletionResult> {
     if(config.execution)return this.#route(options,messages,config,purpose);
     const streaming = config.stream && this.#transport.supportsStreaming;
-    const body = JSON.stringify({ model: config.model, messages, n: 1, stream: streaming,
+    const responses = config.apiMode === 'responses';
+    const body = JSON.stringify(responses ? responsesRequest(config, messages, streaming) : {
+      model: config.model, messages, n: 1, stream: streaming,
       [config.tokenParameter]: config.maxOutputTokens,
       ...(streaming && config.includeUsage ? { stream_options: { include_usage: true } } : {}),
     });
@@ -183,22 +190,37 @@ export class AiClient {
     const check=()=>{guard.check();if(options.current&&!options.current())throw new AiError('CANCELLED');};
     try {
       check();const key = await this.#key(options.accountScope, config, guard,check);check();
-      const response = await this.#request(config, '/chat/completions', key, guard, body);
-      const output = new ChatOutput(key, this.#limits,
+      const response = await this.#request(config, responses ? '/responses' : '/chat/completions', key, guard, body);
+      const createOutput = () => new ChatOutput(key, this.#limits,
         (text) => { check(); options.onText(text); },
         (usage) => { check(); options.onUsage?.(usage); });
+      const output = createOutput();
+      let finalResponse: ChatCompletionResult | undefined;
       if (!streaming) {
         const text = await readAiBody(response, guard, this.#limits.streamBytes, this.#limits.idleTimeoutMs);
         let value: unknown;
         try { value = JSON.parse(text); } catch { throw new AiError('INVALID_RESPONSE'); }
-        output.accept(value, false);
+        output.accept(responses ? responsesCompletion(value) : value, false);
       } else {
         if (!response.headers.get('content-type')?.toLowerCase().startsWith('text/event-stream') || !response.body) {
           cancelResponseBody(response); throw new AiError('INVALID_RESPONSE');
         }
         const reader = response.body.getReader();
         const decoder = new TextDecoder('utf-8', { fatal: true });
-        const parser = new AiSseParser(this.#limits, (value) => output.accept(value, true));
+        const parser = new AiSseParser(this.#limits, (value) => {
+          if (!responses) {
+            output.accept(value, true);
+            return;
+          }
+          const event = responsesEvent(value);
+          if (event.delta) output.accept(event.delta, true);
+          if (event.completed) {
+            const terminal = createOutput();
+            terminal.accept(event.completed, false);
+            finalResponse = terminal.finish();
+            parser.done = true;
+          }
+        });
         let receivedBytes = 0;
         try {
           while (!parser.done) {
@@ -222,7 +244,8 @@ export class AiClient {
         }
       }
       check();
-      return output.finish();
+      if (responses && streaming && !finalResponse) throw new AiError('STREAM_INTERRUPTED');
+      return finalResponse ?? output.finish();
     } catch (error) {
       check();
       if (error instanceof AiError) throw error;

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createElement } from 'react';
+import { createElement, type ContextType } from 'react';
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer';
 import { AiWorkspace } from '../src/components/AiWorkspace.tsx';
 import { AI_SECRET_KEY, LocalAiConfigStore, aiSecretNamespace, defaultAiProvider } from '../src/ai/provider.ts';
@@ -10,6 +10,8 @@ import { createModelRouteProvider } from '../src/modelRouting/config.ts';
 import type { NoteData } from '../../../packages/sync-core/src/index.ts';
 import { createAiConversation, appendAiConversation } from '../../../packages/ai-core/src/conversation.ts';
 import { validateAiArchiveItem, type AiHistoryRecord } from '../src/ai/archiveTypes.ts';
+import { AccountModelContext, AccountModelSession } from '../src/ai/accountModelSession.ts';
+import { parseAccountModelSettings } from '../../../packages/ai-core/src/accountModel.ts';
 
 const KEY = 'ui-fixture-secret-never-live';
 const ACCOUNT = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -31,7 +33,7 @@ async function until(predicate: () => boolean, description: string): Promise<voi
   }
 }
 
-async function setup(options: { key?: boolean; mode?: AiWorkspaceProps['mode']; config?: AiProviderConfig; context?: PdfAiContext | null; transport?: AiTransport; onSaveNote?: AiWorkspaceProps['onSaveNote']; onSettingsDirty?: AiWorkspaceProps['onSettingsDirty']; onSettingsSaved?: AiWorkspaceProps['onSettingsSaved']; sync?:AiWorkspaceProps['sync']; modelRouter?:AiWorkspaceProps['modelRouter'] } = {}) {
+async function setup(options: { key?: boolean; mode?: AiWorkspaceProps['mode']; config?: AiProviderConfig; context?: PdfAiContext | null; transport?: AiTransport; onSaveNote?: AiWorkspaceProps['onSaveNote']; onSettingsDirty?: AiWorkspaceProps['onSettingsDirty']; onSettingsSaved?: AiWorkspaceProps['onSettingsSaved']; sync?:AiWorkspaceProps['sync']; modelRouter?:AiWorkspaceProps['modelRouter']; accountModel?: ContextType<typeof AccountModelContext> } = {}) {
   const original = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
   const values = new Map<string, string>();
   const storage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); }, removeItem: (key: string) => { values.delete(key); } };
@@ -51,9 +53,11 @@ async function setup(options: { key?: boolean; mode?: AiWorkspaceProps['mode']; 
     sync:options.sync, modelRouter:options.modelRouter, onSettingsDirty: options.onSettingsDirty, onSettingsSaved: options.onSettingsSaved,
     onSaveNote: options.onSaveNote ?? (async (note, source) => { saved.push({ note, source }); }), onNavigateCitation: (target) => { jumps.push(target); } };
   const password = { value: '' };
+  let accountModel = options.accountModel ?? null;
+  const render = () => createElement(AccountModelContext.Provider, { value: accountModel }, createElement(AiWorkspace, props));
   let renderer!: ReactTestRenderer;
   await act(async () => {
-    renderer = create(createElement(AiWorkspace, props), { createNodeMock: (element) => element.type === 'input' && element.props.type === 'password' ? password : null });
+    renderer = create(render(), { createNodeMock: (element) => element.type === 'input' && element.props.type === 'password' ? password : null });
     await tick(); await tick();
   });
   await until(() => !text(renderer.root).includes('正在检查存储…'), 'initial secret lookup');
@@ -67,7 +71,11 @@ async function setup(options: { key?: boolean; mode?: AiWorkspaceProps['mode']; 
   };
   const update = async (change: Partial<AiWorkspaceProps>) => {
     props = { ...props, ...change };
-    await act(async () => { renderer.update(createElement(AiWorkspace, props)); await tick(); await tick(); });
+    await act(async () => { renderer.update(render()); await tick(); await tick(); });
+  };
+  const updateAccountModel = async (value: ContextType<typeof AccountModelContext>) => {
+    accountModel = value;
+    await act(async () => { renderer.update(render()); await tick(); await tick(); });
   };
   const submit = async () => { await act(async () => { renderer.root.findByType('form').props.onSubmit({ preventDefault() {} }); await tick(); await tick(); }); };
   const close = () => {
@@ -75,8 +83,71 @@ async function setup(options: { key?: boolean; mode?: AiWorkspaceProps['mode']; 
     if (original) Object.defineProperty(globalThis, 'localStorage', original); else Reflect.deleteProperty(globalThis, 'localStorage');
   };
   const openSettings = () => act(() => button('连接自己的 AI 服务').props.onClick());
-  return { renderer, button, input, update, submit, close, password, secrets, requests, saved, jumps, values, storage, openSettings };
+  return { renderer, button, input, update, updateAccountModel, submit, close, password, secrets, requests, saved, jumps, values, storage, openSettings };
 }
+
+test('saving a model to the account activates the revision returned by that save', async () => {
+  let settings = parseAccountModelSettings({ revision: 0, connection: null });
+  let saves = 0;
+  const session = new AccountModelSession(SCOPE, {
+    readAccountModel: async () => structuredClone(settings),
+    writeAccountModel: async (draft) => {
+      assert.equal(draft.revision, settings.revision);
+      settings = parseAccountModelSettings({ ...draft, revision: draft.revision + 1 });
+      return settings.revision;
+    },
+  }, () => true);
+  await session.refresh();
+  const ui = await setup({
+    mode: 'settings', accountModel: { session, snapshot: session.getSnapshot() },
+    onSettingsSaved: () => { saves++; },
+  });
+  try {
+    ui.openSettings();
+    await act(async () => { ui.button('保存到账号').props.onClick(); await tick(); });
+    await until(() => saves === 1 || text(ui.renderer.root).includes('账号模型已更新'), 'account save outcome');
+    assert.equal(saves, 1);
+    assert.equal(settings.revision, 1);
+    assert.equal(settings.connection?.provider.model, CONFIG.model);
+    assert.equal(session.getSnapshot().approved, true);
+    assert.equal(ui.requests.length, 0);
+    assert.ok(!JSON.stringify([...ui.values]).includes(KEY));
+  } finally {
+    ui.close();
+    session.close();
+  }
+});
+
+test('account settings keep the edit-start revision when a background refresh rotates the model key', async () => {
+  let settings = parseAccountModelSettings({ revision: 1, connection: { provider: CONFIG, apiKey: KEY } });
+  let writes = 0;
+  const session = new AccountModelSession(SCOPE, {
+    readAccountModel: async () => structuredClone(settings),
+    writeAccountModel: async () => { writes++; throw new Error('Unexpected overwrite'); },
+  }, () => true);
+  await session.refresh();
+  const ui = await setup({ mode: 'settings', accountModel: { session, snapshot: session.getSnapshot() } });
+  try {
+    act(() => ui.button('编辑账号模型').props.onClick());
+    act(() => ui.input('model').props.onChange({ target: { value: 'unsaved-draft-model' } }));
+    ui.password.value = 'old-draft-fixture-key';
+    act(() => ui.input('key').props.onChange({ target: ui.password }));
+    settings = parseAccountModelSettings({
+      ...settings, revision: 2, connection: { ...settings.connection!, apiKey: 'rotated-fixture-key' },
+    });
+    await session.refresh();
+    await ui.updateAccountModel({ session, snapshot: session.getSnapshot() });
+    await act(async () => { await ui.button('保存到账号').props.onClick(); await tick(); });
+    assert.equal(writes, 0);
+    assert.equal(settings.connection?.apiKey, 'rotated-fixture-key');
+    assert.equal(ui.input('model').props.value, 'unsaved-draft-model');
+    assert.ok(text(ui.renderer.root).includes('账号模型已更新'));
+    assert.equal(ui.requests.length, 0);
+  } finally {
+    ui.close();
+    session.close();
+  }
+});
 
 test('workspace performs no automatic model request; explicit question, result, verified citation and note save stay scoped', async () => {
   const ui = await setup();

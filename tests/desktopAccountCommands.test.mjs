@@ -334,6 +334,85 @@ async function fixture(t) {
   return { root, profile, libraryRoot, appPaths, store, context, paper, attachment, service, manager, create, login, publish, privateState, imports, access };
 }
 
+test('desktop shares a Responses preset from disk and scopes reads and writes to the active account', async (t) => {
+  const f = await fixture(t);
+  let settings = { revision: 0, connection: null };
+  f.service.onRoute = (url, options, body) => {
+    if (url.pathname !== '/v1/account-model') return null;
+    if (options.method === 'GET') return Response.json(settings);
+    if (body.revision !== settings.revision) return Response.json({ error: { code: 'ACCOUNT_MODEL_CHANGED' } }, { status: 409 });
+    settings = { ...body, revision: body.revision + 1 };
+    return Response.json({ revision: settings.revision });
+  };
+  const command = f.manager.commands;
+  assert.equal(await command.desktop_account_model_read(), null);
+  await f.login();
+  const preset = { id: 'test-preset', baseUrl: 'https://model.example.test/prefix/responses',
+    model: 'fixture-model', apiMode: 'responses', apiKey: 'fixture-key-for-desktop' };
+  fs.writeFileSync(f.appPaths.configPath, JSON.stringify({ secrets: { qaModelPresets: [preset] } }));
+  const initial = await command.desktop_account_model_read();
+  await command.desktop_account_model_write({ scope: initial.scope, revision: initial.revision, presetId: preset.id });
+  assert.equal(settings.connection.provider.endpoint, 'https://model.example.test/prefix');
+  assert.equal(settings.connection.provider.apiMode, 'responses');
+  assert.equal(settings.connection.apiKey, preset.apiKey);
+  const publicView = await command.desktop_account_model_read();
+  assert.equal(publicView.provider.model, preset.model);
+  assert.equal(publicView.approved, true);
+  assert.ok(!JSON.stringify(publicView).includes(preset.apiKey));
+  assert.equal((await command.desktop_account_model_read({ scope: initial.scope, includeKey: true })).settings.connection.apiKey, preset.apiKey);
+  await assert.rejects(command.desktop_account_model_write({ scope: initial.scope, revision: 0, presetId: null }),
+    { code: 'ACCOUNT_MODEL_CHANGED' });
+  settings = { ...settings, revision: 2, connection: {
+    ...settings.connection, provider: { ...settings.connection.provider, endpoint: 'https://replacement.example.test/v1' },
+  } };
+  const pending = await command.desktop_account_model_read();
+  assert.equal(pending.approved, false);
+  await assert.rejects(command.desktop_account_model_read({ scope: initial.scope, includeKey: true }),
+    { code: 'ACCOUNT_MODEL_APPROVAL_REQUIRED' });
+  await assert.rejects(command.desktop_account_model_approve({ ...pending, revision: 1 }), { code: 'ACCOUNT_MODEL_CHANGED' });
+  await command.desktop_account_model_approve(pending);
+  assert.equal((await command.desktop_account_model_read()).approved, true);
+  assert.equal((await command.desktop_account_model_read({ scope: initial.scope, includeKey: true })).settings.revision, 2);
+  settings = { ...settings, revision: 3, connection: { ...settings.connection, apiKey: 'replacement-fixture-key' } };
+  assert.equal((await command.desktop_account_model_read()).approved, false);
+  await assert.rejects(command.desktop_account_model_read({ scope: initial.scope, includeKey: true }),
+    { code: 'ACCOUNT_MODEL_APPROVAL_REQUIRED' });
+  await command.desktop_account_sign_out();
+  await assert.rejects(command.desktop_account_model_read({ scope: initial.scope, includeKey: true }), { code: 'ACCOUNT_MODEL_CHANGED' });
+  assert.equal(await command.desktop_account_model_read(), null);
+  f.service.accountId = randomUUID();
+  await f.login();
+  assert.equal((await command.desktop_account_model_read()).approved, false);
+  assert.deepEqual(JSON.parse(fs.readFileSync(f.appPaths.configPath, 'utf8')).secrets.qaModelPresets, [preset]);
+});
+
+test('desktop shares a compatible token limit for reasoning and legacy Chat Completions presets', async (t) => {
+  const f = await fixture(t);
+  await f.login();
+  let revision = 0;
+  const providers = [];
+  f.service.onRoute = (url, options, body) => {
+    if (url.pathname !== '/v1/account-model') return null;
+    if (options.method === 'GET') return Response.json({ revision, connection: null });
+    providers.push(body.connection.provider);
+    return Response.json({ revision: ++revision });
+  };
+  const presets = [
+    { id: 'reasoning', baseUrl: 'https://model.example.test/v1', model: 'o4-mini' },
+    { id: 'legacy', baseUrl: 'https://model.example.test/v1', model: 'fixture-chat' },
+  ];
+  fs.writeFileSync(f.appPaths.configPath, JSON.stringify({ secrets: { qaModelPresets: presets } }));
+  const command = f.manager.commands;
+  const { scope } = await command.desktop_account_model_read();
+  for (const preset of presets) {
+    await command.desktop_account_model_write({ scope, revision, presetId: preset.id });
+  }
+  assert.deepEqual(providers.map(({ model, tokenParameter }) => [model, tokenParameter]), [
+    ['o4-mini', 'max_completion_tokens'],
+    ['fixture-chat', 'max_tokens'],
+  ]);
+});
+
 test('service capability extensions do not block login or escape the validated desktop projection', async (t) => {
   const f = await fixture(t); await f.login();
   assert.deepEqual(f.manager.getStatus().capability, {
