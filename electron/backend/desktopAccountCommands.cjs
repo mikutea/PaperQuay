@@ -97,7 +97,13 @@ function createDesktopAccountCommands(context, options = {}) {
   const now = options.now || Date.now;
   let reading;
   const notify = () => {
-    try { options.onChange?.({ readingScopeKey: reading?.status().scopeKey ?? null, accountModelScope: modelScope(), accountModelVersion }); } catch {}
+    try { options.onChange?.({ readingScopeKey: reading?.status().scopeKey ?? null }); } catch {}
+    const scope = modelScope();
+    if (scope !== lastModelScope || accountModelVersion !== lastModelVersion) {
+      lastModelScope = scope;
+      lastModelVersion = accountModelVersion;
+      try { options.onAccountModelChange?.({ scope, version: accountModelVersion }); } catch {}
+    }
     try { options.onGraphChange?.(); } catch {}
   };
   const privateRoot = path.join(path.dirname(context.appPaths.configPath), 'account-sync');
@@ -105,6 +111,7 @@ function createDesktopAccountCommands(context, options = {}) {
   let config = null, account = null, capability = null, enabled = false, lastError = null, closed = false;
   let epoch = 1, sessionController = new AbortController(), auth = options.auth || null, authUnsubscribe = null;
   let accountModelVersion = 0;
+  let lastModelScope = null, lastModelVersion = 0;
   let document = null, scopePath = null, libraryBindingId = null, busy = 0, loginTask = null, loginStarting = null, lock = null;
   let mutations = Promise.resolve(), actions = Promise.resolve(), shutdownTask = null, pendingCleanup = Promise.resolve();
   let providerIntent = 0, stoppingProvider = Promise.resolve();

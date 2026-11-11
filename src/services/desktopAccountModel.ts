@@ -53,7 +53,7 @@ export async function saveDesktopAccountModel(status: AccountModelStatus, preset
   await invoke('desktop_account_model_write', { scope: status.scope, revision: status.revision, presetId });
 }
 
-type ModelChange = { accountModelScope: number | null; accountModelVersion: number };
+type ModelChange = { scope: number | null; version: number };
 
 export function useDesktopAccountModel() {
   const [status, setStatus] = useState<AccountModelStatus | null>(null);
@@ -69,19 +69,18 @@ export function useDesktopAccountModel() {
   }, []);
 
   useEffect(() => {
+    if (typeof window === 'undefined' || !window.paperquay?.listen) return;
     let active = true;
     let stop: (() => void) | undefined;
-    let previous: ModelChange | undefined;
-    void listen<ModelChange>('desktop-account:changed', ({ payload }) => {
+    let previousScope: number | null | undefined;
+    void listen<ModelChange>('desktop-account-model:changed', ({ payload }) => {
       if (!active || !payload) return;
-      const scopeChanged = previous?.accountModelScope !== payload.accountModelScope;
-      const versionChanged = previous?.accountModelVersion !== payload.accountModelVersion;
-      previous = payload;
-      if (scopeChanged) {
+      if (previousScope !== payload.scope) {
         pending.current++;
         setStatus(null);
       }
-      if ((scopeChanged || versionChanged) && payload.accountModelScope !== null) void refresh();
+      previousScope = payload.scope;
+      if (payload.scope !== null) void refresh();
     }).then((unsubscribe) => {
       if (!active) unsubscribe();
       else stop = unsubscribe;
