@@ -1,5 +1,7 @@
+import './promiseWithResolvers.mjs';
 import * as library from 'pdfjs-dist/legacy/build/pdf.mjs';
 import workerSource from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?raw';
+import promiseWithResolversSource from './promiseWithResolvers.mjs?raw';
 import openjpegFallback from 'pdfjs-dist/wasm/openjpeg_nowasm_fallback.js?raw';
 import jbig2Fallback from 'pdfjs-dist/wasm/jbig2_nowasm_fallback.js?raw';
 import type { PdfRuntime } from './engine.ts';
@@ -33,7 +35,7 @@ export function browserPdfRuntime(): PdfRuntime {
   return {
     library,
     createWorker() {
-      workerUrl ??= URL.createObjectURL(new Blob([workerSource], { type: 'text/javascript' }));
+      workerUrl ??= URL.createObjectURL(new Blob([promiseWithResolversSource, '\n', workerSource], { type: 'text/javascript' }));
       return createOwnedPdfWorker(library, new Worker(workerUrl, { type: 'module' }));
     },
     resourceError: bundled.error,

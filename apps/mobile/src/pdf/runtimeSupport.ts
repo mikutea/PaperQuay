@@ -1,6 +1,6 @@
 import { PdfError } from './errors.ts';
 
-/** PDF.js needs this API even in its legacy build; a reload cannot supply it. */
+/** Report an unsupported runtime if it cannot provide the method after setup. */
 export function assertPdfRuntimeSupported(): void {
   if (typeof Reflect.get(Promise, 'withResolvers') !== 'function') {
     throw new PdfError('READER_UNSUPPORTED');
